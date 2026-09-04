@@ -1,0 +1,69 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "globalDependencies": [
+    "tsconfig.base.json",
+    "tsconfig.json",
+    "eslint.config.js",
+    "package.json",
+    "package-lock.json",
+    "vitest.shared.ts"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*",
+        "grammar/**/*",
+        "package.json",
+        "tsconfig.json",
+        "tsconfig.test.json",
+        "langium-config.json",
+        "webpack.config.js",
+        "esbuild.mjs",
+        "vitest.config.ts",
+        "jest.config.cjs",
+        "language-configuration.json"
+      ],
+      "outputs": [
+        "lib/**",
+        "out/**",
+        "src-gen/**",
+        "syntaxes/**",
+        "src/language-server/generated/**",
+        "src/language-server/generated-transfer/**",
+        "tsconfig.tsbuildinfo"
+      ]
+    },
+    "watch": {
+      "cache": false,
+      "persistent": true
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": [
+        "src/**/*",
+        "test/**/*",
+        "vitest.config.ts",
+        "jest.config.cjs",
+        "tsconfig.test.json"
+      ]
+    },
+    "typecheck:test": {
+      "dependsOn": ["build"],
+      "inputs": ["src/**/*", "test/**/*", "tsconfig.json", "tsconfig.test.json"]
+    },
+    "lint": {
+      "dependsOn": ["build"],
+      "inputs": ["src/**/*", "test/**/*", "eslint.config.js"]
+    },
+    "clean": {
+      "cache": false
+    },
+    "start": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

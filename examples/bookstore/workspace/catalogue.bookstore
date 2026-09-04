@@ -1,0 +1,8 @@
+/** The shop itself. Everything else hangs off it. */
+node Bookstore
+
+/** The fiction shelf. */
+node Fiction -> Bookstore
+
+/** The poetry shelf. */
+node Poetry -> Bookstore

@@ -1,0 +1,90 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Order Flow VS Code Extension — order-flow-workspace",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/examples/order-flow/vscode",
+        "${workspaceFolder}/examples/order-flow/workspace"
+      ],
+      "outFiles": ["${workspaceFolder}/examples/order-flow/vscode/out/**/*.js"],
+      "preLaunchTask": "order-flow-vscode: build:all"
+    },
+    {
+      "name": "Attach to Order Flow language server",
+      "type": "node",
+      "request": "attach",
+      "port": 6009,
+      "restart": true,
+      "outFiles": [
+        "${workspaceFolder}/packages/*/lib/**/*.js",
+        "${workspaceFolder}/examples/order-flow/server/lib/**/*.js"
+      ],
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "sourceMaps": true,
+      "smartStep": false
+    },
+    {
+      "name": "Start Order Flow Theia App (browser, order-flow-workspace)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/examples/order-flow/theia-app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "console": "integratedTerminal",
+      "preLaunchTask": "order-flow-theia: build:all",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": [
+        "${workspaceFolder}/packages/*/lib/**/*.js",
+        "${workspaceFolder}/examples/order-flow/server/lib/**/*.js",
+        "${workspaceFolder}/examples/order-flow/client/lib/**/*.js",
+        "${workspaceFolder}/examples/order-flow/theia/lib/**/*.js",
+        "${workspaceFolder}/examples/order-flow/vscode-servers/out/**/*.js",
+        "${workspaceFolder}/examples/order-flow/theia-app/lib/**/*.js"
+      ],
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
+    },
+    {
+      "//": "START HERE for the browser host. The static server runs as the debuggee so that stopping the session stops it too — a background task would outlive the session and the next launch would hit EADDRINUSE — and `serverReadyAction` chains the Chrome config off the server's own ready line, which is what removes the race a compound would have between opening the page and the first listen.",
+      "name": "Start Order Flow Browser Page (:3002)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/examples/order-flow/browser",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "console": "integratedTerminal",
+      "preLaunchTask": "order-flow-browser: build:all",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"],
+      "serverReadyAction": {
+        "action": "startDebugging",
+        "pattern": "http://localhost:([0-9]+)",
+        "name": "Debug Order Flow Browser Page (chrome)"
+      }
+    },
+    {
+      "//": "The one host whose code under debug runs in the BROWSER rather than in Node, so this is a `chrome` launch and not an `attach`. Normally started for you by the config above; run it directly only when a server is already listening. Breakpoints in the page bundle work as they read; the three heads run in a WEB WORKER, which js-debug attaches to as a separate target, so their breakpoints appear under a second entry in the call-stack view. Framework sources under `packages/` are reachable in devtools through the bundle's source map but do not resolve to disk here — the map's relative paths climb above the served package root.",
+      "name": "Debug Order Flow Browser Page (chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:3002/",
+      "webRoot": "${workspaceFolder}/examples/order-flow/browser",
+      "sourceMaps": true,
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run Order Flow VS Code Extension + Attach to Server",
+      "configurations": [
+        "Run Order Flow VS Code Extension — order-flow-workspace",
+        "Attach to Order Flow language server"
+      ],
+      "stopAll": true
+    }
+  ]
+}

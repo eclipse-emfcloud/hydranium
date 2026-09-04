@@ -1,0 +1,157 @@
+{
+  "name": "@hydranium/example-order-flow-vscode",
+  "displayName": "Order Flow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Thin VS Code extension hosting the order-flow server. The diagram and property form are mounted from the host-agnostic client; this package is the VS Code adapter, which the example supplies itself because the framework ships Theia client packages and no VS Code equivalents.",
+  "categories": [
+    "Programming Languages"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/vscode"
+  },
+  "license": "MIT",
+  "publisher": "eclipse-emfcloud",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:grammar && tsc && npm run typecheck:webview && npm run bundle:webview",
+    "build:all": "turbo run build --filter=@hydranium/example-order-flow-vscode...",
+    "bundle:webview": "node esbuild.mjs",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
+    "copy:grammar": "node -e \"const fs=require('fs');fs.mkdirSync('syntaxes',{recursive:true});for(const g of ['order-flow-domain','order-flow-process','order-flow-layout'])fs.copyFileSync('../server/syntaxes/'+g+'.tmLanguage.json','syntaxes/'+g+'.tmLanguage.json')\"",
+    "lint": "eslint src --max-warnings 0",
+    "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
+    "watch": "tsc --watch --preserveWatchOutput",
+    "watch:webview": "node esbuild.mjs --watch"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "order-flow.properties.show",
+        "title": "Order Flow: Show Properties",
+        "category": "Order Flow"
+      }
+    ],
+    "configuration": {
+      "title": "Order Flow",
+      "properties": {
+        "order-flow.log.level": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "default": "info",
+          "description": "Log level for the Order Flow language server, applied live. Messages below this level are not written to the output channel."
+        },
+        "order-flow.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between the editor and the Order Flow language server."
+        }
+      }
+    },
+    "customEditors": [
+      {
+        "viewType": "orderFlow.processDiagram",
+        "displayName": "Order Flow Process Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.process"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "order-flow-domain",
+        "scopeName": "source.order-flow-domain",
+        "path": "./syntaxes/order-flow-domain.tmLanguage.json"
+      },
+      {
+        "language": "order-flow-process",
+        "scopeName": "source.order-flow-process",
+        "path": "./syntaxes/order-flow-process.tmLanguage.json"
+      },
+      {
+        "language": "order-flow-layout",
+        "scopeName": "source.order-flow-layout",
+        "path": "./syntaxes/order-flow-layout.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "order-flow-domain",
+        "aliases": [
+          "Order Flow Domain"
+        ],
+        "extensions": [
+          ".domain"
+        ]
+      },
+      {
+        "id": "order-flow-process",
+        "aliases": [
+          "Order Flow Process"
+        ],
+        "extensions": [
+          ".process"
+        ]
+      },
+      {
+        "id": "order-flow-layout",
+        "aliases": [
+          "Order Flow Layout"
+        ],
+        "extensions": [
+          ".layout"
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguage:order-flow-domain",
+    "onLanguage:order-flow-process",
+    "onLanguage:order-flow-layout",
+    "onStartupFinished"
+  ],
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/vscode-integration": "2.7.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@hydranium/example-order-flow-client": "0.0.0",
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "@hydranium/example-order-flow-vscode-servers": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "inversify": "^6.1.3",
+    "vscode-jsonrpc": "~9.0.1",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-messenger": "^0.4.5",
+    "vscode-messenger-common": "^0.4.5",
+    "vscode-messenger-webview": "^0.4.5"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.101.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "//customEditors": "Note for contributes.customEditors, kept OUT of `contributes` because VS Code schema-validates that object and reports an unknown key there as an invalid contribution point. `viewType` must equal ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE in src/process-diagram-editor.ts, and `filenamePattern` must cover PROCESS_DIAGRAM_FILE_EXTENSIONS from the client's diagram types. VS Code reads `contributes` statically, so neither can be imported from the source and a mismatch is silent: Open With offers no diagram editor, and registerCustomEditorProvider binds a view type nothing opens. `priority: option` (not `default`) is deliberate — a `.process` file is primarily TEXT, and stealing the double-click from the text editor is not this example's call to make; the diagram is reached with Open With / Reopen Editor With."
+}

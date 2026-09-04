@@ -1,0 +1,154 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build:all",
+      "type": "shell",
+      "command": "npm run build:all",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "watch:all",
+      "type": "shell",
+      "command": "npm run watch:all",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "dev:order-flow",
+      "type": "shell",
+      "command": "npm run dev:order-flow",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "npm run lint",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-vscode: build:all",
+      "type": "shell",
+      "command": "npm run build:all",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/vscode" },
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "order-flow-vscode: watch",
+      "type": "shell",
+      "command": "npm run watch",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/vscode" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "order-flow-server: test",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/server" },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-theia: build:all",
+      "type": "shell",
+      "command": "npm run build:all",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "order-flow-theia: watch:all",
+      "type": "shell",
+      "command": "npm run watch:all",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "order-flow-theia: start",
+      "type": "shell",
+      "command": "npm start",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-theia: test:e2e",
+      "type": "shell",
+      "command": "npm run test:e2e",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "dependsOn": ["order-flow-theia: build:all"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-theia: test:e2e:ui",
+      "type": "shell",
+      "command": "npm run test:e2e:ui",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "dependsOn": ["order-flow-theia: build:all"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-theia: test:e2e:restart",
+      "type": "shell",
+      "command": "npm run test:e2e:restart",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
+      "dependsOn": ["order-flow-theia: build:all"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-browser: build:all",
+      "type": "shell",
+      "command": "npm run build:all",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/browser" },
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "order-flow-browser: watch",
+      "type": "shell",
+      "command": "npm run watch",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/browser" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "order-flow-browser: test:e2e",
+      "type": "shell",
+      "command": "npm run test:e2e",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/browser" },
+      "dependsOn": ["order-flow-browser: build:all"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "order-flow-browser: test:e2e:ui",
+      "type": "shell",
+      "command": "npm run test:e2e:ui",
+      "options": { "cwd": "${workspaceFolder}/examples/order-flow/browser" },
+      "dependsOn": ["order-flow-browser: build:all"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

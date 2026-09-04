@@ -1,0 +1,67 @@
+/********************************************************************************
+ * Copyright (c) 2026 CrossBreeze, EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/* Loading overlay shown by HydraniumGlspDiagramWidget until the diagram load
+   settles. Imported by the widget module itself, so an adopter cannot forget it;
+   every rule is overridable from an adopter stylesheet loaded afterwards.
+   Colours come from Theia theme variables, so light/dark follow the workbench. */
+
+.hydranium-diagram-loading {
+   position: absolute;
+   inset: 0;
+   z-index: 10;
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   justify-content: center;
+   gap: 12px;
+   background: var(--theia-editor-background);
+   color: var(--theia-descriptionForeground);
+   font-size: var(--theia-ui-font-size1);
+}
+
+.hydranium-diagram-loading-spinner {
+   width: 40px;
+   height: 40px;
+   border: 4px solid var(--theia-editorWidget-border);
+   border-top-color: var(--theia-button-background);
+   border-radius: 50%;
+   /* transform-only, so the animation runs on the compositor and keeps turning
+      through a synchronous phase that blocks the main thread — which is exactly
+      when the user most needs to see that something is still happening. */
+   animation: hydranium-diagram-loading-spin 0.9s linear infinite;
+   will-change: transform;
+}
+
+@keyframes hydranium-diagram-loading-spin {
+   from {
+      transform: rotate(0deg);
+   }
+
+   to {
+      transform: rotate(360deg);
+   }
+}
+
+/* Failure state: set only when the loader could NOT dispatch its error
+   StatusAction, so this overlay is the single remaining surface for the message.
+   The spinner goes (nothing is pending any more) and the text takes the error
+   colour. A load that failed and WAS reported never reaches this state — the
+   overlay is removed and GLSP's own status overlay shows it instead. */
+.hydranium-diagram-loading-failed .hydranium-diagram-loading-spinner {
+   display: none;
+}
+
+.hydranium-diagram-loading-failed .hydranium-diagram-loading-label {
+   /* Wrap rather than clip: a load failure message can be long (a connection
+      error carries a URI), and it is the only copy the user gets here. */
+   max-width: 80%;
+   text-align: center;
+   color: var(--theia-errorForeground);
+}

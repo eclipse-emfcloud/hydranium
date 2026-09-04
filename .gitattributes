@@ -1,0 +1,23 @@
+# Normalise line endings in the repository to LF, and check every text file out
+# as LF on every platform.
+#
+# `.editorconfig` and the prettier config govern what editors and formatters
+# WRITE; neither governs what `git checkout` materialises. Without this file a
+# Windows clone with the default `core.autocrlf=true` gets CRLF working-tree
+# files, and the byte-exact comparisons in the gates then report content drift
+# on files whose content is identical.
+* text=auto eol=lf
+
+# Binary, so never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.heapsnapshot binary
+*.heapprofile binary
+*.cpuprofile binary

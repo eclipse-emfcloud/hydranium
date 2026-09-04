@@ -1,0 +1,101 @@
+{
+  "name": "@hydranium/data-client-theia",
+  "version": "0.0.0",
+  "description": "Theia-coupled client primitives for the hydranium data-server protocol head; companion of @hydranium/data-server. Bridges framework typed errors (e.g. ConflictError) across Theia's RPC boundary so their code + data survive the wire.",
+  "keywords": [
+    "hydranium",
+    "langium",
+    "language-server",
+    "lsp",
+    "theia"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/data-client-theia",
+  "bugs": {
+    "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "packages/data-client-theia"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./common": {
+      "types": "./lib/common/index.d.ts",
+      "default": "./lib/common/index.js"
+    },
+    "./browser": {
+      "types": "./lib/browser/index.d.ts",
+      "default": "./lib/browser/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    },
+    "./lib/common": {
+      "types": "./lib/common/index.d.ts",
+      "default": "./lib/common/index.js"
+    },
+    "./lib/browser": {
+      "types": "./lib/browser/index.d.ts",
+      "default": "./lib/browser/index.js"
+    },
+    "./lib/node": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "eslint src test --max-warnings 0",
+    "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc -b -w --preserveWatchOutput"
+  },
+  "devDependencies": {
+    "@hydranium/client-theia": "0.0.0",
+    "@hydranium/core": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "@theia/core": "^1.71.0",
+    "@theia/workspace": "^1.71.0",
+    "@types/node": "^22.0.0",
+    "inversify": "6.2.2",
+    "reflect-metadata": "0.2.2",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vscode-jsonrpc": "9.0.1"
+  },
+  "peerDependencies": {
+    "@hydranium/client-theia": "^0.0.0",
+    "@hydranium/core": "^0.0.0",
+    "@hydranium/protocol": "^0.0.0",
+    "@theia/core": "^1.71.0",
+    "@theia/workspace": "^1.71.0",
+    "inversify": "^6.0.0",
+    "vscode-jsonrpc": "^8.0.0 || ^9.0.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
+}

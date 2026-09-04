@@ -1,0 +1,30 @@
+{
+  "projectName": "OrderFlow",
+  "languages": [
+    {
+      "id": "order-flow-domain",
+      "grammar": "src/grammar/domain.langium",
+      "fileExtensions": [".domain"],
+      "textMate": {
+        "out": "syntaxes/order-flow-domain.tmLanguage.json"
+      }
+    },
+    {
+      "id": "order-flow-process",
+      "grammar": "src/grammar/process.langium",
+      "fileExtensions": [".process"],
+      "textMate": {
+        "out": "syntaxes/order-flow-process.tmLanguage.json"
+      }
+    },
+    {
+      "id": "order-flow-layout",
+      "grammar": "src/grammar/layout.langium",
+      "fileExtensions": [".layout"],
+      "textMate": {
+        "out": "syntaxes/order-flow-layout.tmLanguage.json"
+      }
+    }
+  ],
+  "out": "src/language-server/generated"
+}

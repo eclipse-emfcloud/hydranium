@@ -1,0 +1,38 @@
+{
+  // Playwright-only tsconfig, passed via `--tsconfig` from the `test:e2e` script.
+  //
+  // Without it Playwright walks up from `playwright.config.mts`, reaches the repo
+  // root `tsconfig.json`, and fails to load it: that file is a solution-style
+  // config whose `references` entries are DIRECTORIES, which Playwright's own
+  // tsconfig reader does not resolve to the contained `tsconfig.json`. The failure
+  // happens while loading the Playwright config itself, so the `tsconfig` config
+  // property cannot help — only the `--tsconfig` CLI option applies early enough.
+  //
+  // This app is bundled by esbuild (see `esbuild.mjs`) and has no `tsc` build, so
+  // there is no project config to extend or reuse here.
+  //
+  // **The tier is ESM, and the `.mts` extensions are what make it so.** The app's
+  // own `package.json` has no `"type"`, so a `.ts` config would be loaded by
+  // Playwright's CommonJS path — and `@hydranium/core` is ESM-only. Playwright's
+  // `require` hook does not skip it the way it skips `node_modules` (the workspace
+  // symlink resolves back into `packages/core`), so it redirects to core's TS
+  // SOURCE and compiles it as CommonJS, which dies on `import.meta`. Marking these
+  // four files `.mts` makes Playwright `import()` them instead, so Node's real ESM
+  // loader serves core and `moduleResolution: "NodeNext"` honours its `exports`
+  // map — which is also why the imports below can name the published
+  // `./testing/playwright` subpath rather than reaching into `lib/`. Adding
+  // `"type": "module"` to the app package instead would have been the other way,
+  // and would have broken the CommonJS code `theia build` generates.
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["test", "playwright.config.mts"]
+}

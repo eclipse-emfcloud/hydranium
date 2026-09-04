@@ -1,0 +1,104 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/*
+ * What the VS Code SHELL contributes to the diagram's appearance, bundled into
+ * `out/webview/diagram.css` after `@eclipse-glsp/client`'s so these rules win on
+ * equal specificity.
+ *
+ * How the diagram LOOKS is not here — that is
+ * `@hydranium/example-order-flow-client/style/diagram.css`, shared with the
+ * Theia shell and imported alongside this file by `diagram.ts`. What is left
+ * here is the two things only a webview can answer: its size, and which
+ * `--vscode-*` colour stands behind each `--order-flow-*` role.
+ */
+
+/*
+ * The size, and it is not cosmetic. `glsp-sprotty.css` gives `.sprotty` padding
+ * and a font but no SIZE, because in Theia the widget's layout supplies it. A
+ * webview has no layout engine above the document, so without an explicit chain
+ * of heights from `html` down to the base div the SVG renders at zero height and
+ * the diagram is invisible with nothing in the console to say why.
+ */
+html,
+body {
+   height: 100%;
+   width: 100%;
+   margin: 0;
+   padding: 0;
+   /* The graph scrolls itself; a document scrollbar on top of it fights the
+      pan/zoom tools for the wheel event. */
+   overflow: hidden;
+}
+
+.order-flow-diagram-container,
+.order-flow-diagram-container > .sprotty,
+.order-flow-diagram-container > .sprotty > svg {
+   height: 100%;
+   width: 100%;
+   display: block;
+}
+
+/*
+ * The theme mapping.
+ *
+ * GLSP's own defaults are literal colours (`red`, `yellow`, `lightblue`) chosen
+ * to be legible on a light Theia canvas, so a dark VS Code theme gets a diagram
+ * that ignores it. Each mapping falls back to GLSP's own value, so a theme that
+ * defines none of these still renders exactly as upstream intends rather than
+ * transparent.
+ */
+:root {
+   --glsp-error-foreground: var(--vscode-editorError-foreground, red);
+   --glsp-warning-foreground: var(--vscode-editorWarning-foreground, yellow);
+   --glsp-info-foreground: var(--vscode-editorInfo-foreground, lightblue);
+   --glsp-issue-background: var(--vscode-editorHoverWidget-background, rgb(255 255 255 / 85%));
+
+   --order-flow-surface: var(--vscode-editor-background, #1f1f1f);
+   --order-flow-foreground: var(--vscode-editor-foreground, #cccccc);
+   --order-flow-muted-foreground: var(--vscode-descriptionForeground, var(--vscode-editor-foreground, #9d9d9d));
+   --order-flow-panel-background: var(--vscode-editorWidget-background, #202020);
+   --order-flow-panel-foreground: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground, #cccccc));
+   --order-flow-panel-border: var(--vscode-editorWidget-border, #2b2b2b);
+   --order-flow-hover-background: var(--vscode-list-hoverBackground, rgb(255 255 255 / 8%));
+   --order-flow-focus-border: var(--vscode-focusBorder, #0078d4);
+   --order-flow-invalid: var(--vscode-editorError-foreground, #f14c4c);
+
+   /*
+    * `--vscode-charts-*` is the right family to borrow for the element accents:
+    * VS Code defines it for data rendered ON the editor canvas, so every theme
+    * ships a set legible against that theme's editor background.
+    *
+    * **Not every entry in it is opaque, though.** Light Modern defines
+    * `--vscode-charts-orange` as `rgba(234, 92, 0, 0.33)`, because the family is
+    * meant for chart FILLS as much as for lines, and a 33%-alpha stroke on a
+    * white canvas is a line you cannot see. Blue and purple are opaque in both
+    * built-in themes; check any further borrowing from this family against a
+    * light theme before relying on it.
+    */
+   --order-flow-task-accent: var(--vscode-charts-blue, #4daafc);
+   --order-flow-gateway-accent: var(--vscode-charts-purple, #b180d7);
+   --order-flow-edge: var(--vscode-charts-foreground, var(--vscode-editor-foreground, #cccccc));
+}
+
+.sprotty {
+   background: var(--vscode-editor-background);
+   color: var(--vscode-editor-foreground);
+   /* Inherit the editor's font rather than the hardcoded Helvetica stack, so
+      node labels match the text editor the diagram sits beside. */
+   font-family: var(--vscode-font-family);
+   font-size: var(--vscode-font-size);
+}
+
+/* The palette is chrome rather than canvas, so it takes the shell's UI font
+   instead of the editor's. */
+.sprotty .tool-palette {
+   font-family: var(--vscode-font-family);
+   font-size: var(--vscode-font-size);
+}

@@ -1,0 +1,68 @@
+{
+  "name": "@hydranium/example-order-flow-theia",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia-extension shell for the order-flow example: mounts the `.process` GLSP diagram through @hydranium/glsp-client-theia and contributes a document-scoped properties panel into Theia's own property view, reusing the host-agnostic PropertiesForm and OrderFlowPropertiesModel.",
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/theia"
+  },
+  "license": "MIT",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "style"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "eslint src test --max-warnings 0",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc --watch --preserveWatchOutput"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/theia-integration": "2.7.0",
+    "@hydranium/client-theia": "0.0.0",
+    "@hydranium/data-client-theia": "0.0.0",
+    "@hydranium/example-order-flow-client": "0.0.0",
+    "@hydranium/glsp-client-theia": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "@theia/core": "^1.72.0",
+    "@theia/editor": "^1.72.0",
+    "@theia/filesystem": "^1.72.0",
+    "@theia/output": "^1.72.0",
+    "@theia/property-view": "^1.72.0",
+    "@theia/workspace": "^1.72.0",
+    "inversify": "^6.0.0",
+    "vscode-jsonrpc": "~9.0.1"
+  },
+  "devDependencies": {
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "@types/node": "^22.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/order-flow-process-diagram-frontend-module",
+      "backend": "lib/node/order-flow-glsp-backend-module"
+    },
+    {
+      "frontend": "lib/browser/order-flow-properties-frontend-module",
+      "backend": "lib/node/order-flow-data-server-backend-module"
+    },
+    {
+      "frontend": "lib/browser/order-flow-memory-diagnostics-frontend-module",
+      "backend": "lib/node/order-flow-host-diagnostics-backend-module"
+    }
+  ]
+}

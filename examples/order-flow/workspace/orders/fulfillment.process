@@ -1,0 +1,21 @@
+// The behavioural half of the `orders` project. `for Order` and every
+// `writes` / `reads` effect reaches across a GRAMMAR boundary into
+// `orders.domain`, resolved through the same shared index the LSP head serves.
+//
+// `writes Order.status = PAID` is the seam this example exists for: three
+// references, each scoped by the previous one. `status` is only offered
+// because `Order` resolved, and `PAID` is only offered because `status` is
+// typed `OrderStatus`. Rename `OrderStatus.PAID` in `.domain` and this file
+// follows; delete the field and the effect reports at a precise range.
+
+process Fulfillment for Order {
+   task Pay writes Order.status = PAID
+   gateway PaymentOk
+      yes -> Pick
+      no -> Cancel
+   task Pick reads Order.id
+   task Ship writes Order.status = SHIPPED
+   task Cancel writes Order.status = CANCELLED
+   transition Pay -> PaymentOk
+   transition Pick -> Ship
+}

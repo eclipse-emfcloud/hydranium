@@ -1,0 +1,20 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "One-off mutation-testing AUDIT for the testability initiative (item 6, Element E). It locates weak L1 spots: surviving mutants = behaviour the suite never asserts. This is NOT a CI gate and is deliberately not wired into turbo / npm test / npm run check. Re-run it on demand with: npm run audit:mutation -w @hydranium/core (full core, ~3 min) or npm run audit:mutation:quick -w @hydranium/core (just model-service, ~10 s to sanity-check the setup). Equivalent raw form: npm exec --workspace=@hydranium/core -- stryker run [--mutate 'src/<path>']. Needs the @stryker-mutator/core + @stryker-mutator/vitest-runner devDeps. Output: an HTML report at packages/core/stryker-report/mutation.html plus a clear-text summary; both are gitignored. inPlace is required: core is a workspace package, so a copy-sandbox would resolve @hydranium/* through the real symlinked node_modules (unmutated) and the ../../vitest.shared import would be missing; inPlace mutates the real tree and restores it on completion.",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "inPlace": true,
+  "mutate": ["src/**/*.ts", "!src/**/index.ts", "!src/testing/**"],
+  "concurrency": 4,
+  "coverageAnalysis": "perTest",
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": {
+    "fileName": "stryker-report/mutation.html"
+  },
+  "clearTextReporter": {
+    "maxTestsToLog": 1
+  }
+}

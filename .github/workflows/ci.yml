@@ -1,0 +1,356 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A superseded pull-request run is worthless, so cancel it; a superseded
+# push-to-main run is the ONLY signal that commit will ever get, so queue it
+# instead. Grouping on `github.ref` keeps the two branches of that rule from
+# ever sharing a group: a pull request is `refs/pull/N/merge`.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# This workflow clones, installs and runs gates. It writes nothing back — no
+# comment, no status, no release — so `contents: read` is the whole
+# requirement, and a top-level block sets every scope it omits to `none`.
+# Narrower than the repository default, which a maintainer can set to
+# read-write for every workflow at once.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # A backstop, not a target. Windows runs the same gate appreciably slower
+    # than Linux, so a ceiling tuned to Linux would cancel a healthy Windows run
+    # and report it as a failure of the change under test.
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows earns its place on a language-server framework rather than as
+        # generic coverage: path spelling, drive letters and `file://` URI
+        # construction are where this stack diverges, and identity comparisons
+        # on `URI` fail silently when it does. `.gitattributes` pins every text
+        # file to LF on checkout, so the byte-exact gates compare the same bytes
+        # on both — without that this matrix would redden on line endings alone
+        # and say nothing about the code.
+        os: [ubuntu-22.04, windows-latest]
+
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+      TURBO_UI: stream
+      FORCE_COLOR: 1
+
+    steps:
+      # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one is
+      # a standing grant to run whatever it is later moved to. The trailing
+      # comment carries the human-readable release, without which a reviewer
+      # cannot tell an intended bump from a substitution.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history, because a gate that resolves commit SHAs cited in
+          # documentation against git cannot do so under the default shallow
+          # clone. It is designed to WARN rather than fail on a SHA it cannot
+          # resolve, so that it stays usable in a fresh clone — which means a
+          # shallow checkout turns it into a silent no-op rather than a red.
+          fetch-depth: 0
+
+      # Both workflows run the same `npm run build:all` against the same
+      # toolchain, so anything that differs between them is drift, not a
+      # decision. Compared rather than duplicated so it fires in BOTH
+      # directions: change or drop either key in either file without the other
+      # and this reddens here, on a pull request, where it costs nothing. The
+      # same divergence discovered in release.yml lands after the version PR
+      # has merged and the tags are cut.
+      #
+      # This and the gate-ordering check below read the workflow FILES, so their
+      # verdict cannot vary by runner. Pinned to one leg of the matrix so a
+      # future divergence is reported once rather than once per platform.
+      - name: Release workflow carries the same build environment
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          compare() {
+            key="$1"
+            # DEDUPED, because this file declares more than one job and each
+            # sets the same keys: without `sort -u` the comparison is two
+            # identical lines against one, which differ as strings and would
+            # report a divergence that does not exist. Distinct values still
+            # survive dedup and still differ, which is the case it must catch.
+            from_ci=$(sed -n "s/^ *$key: *//p" .github/workflows/ci.yml | sort -u)
+            from_release=$(sed -n "s/^ *$key: *//p" .github/workflows/release.yml | sort -u)
+            # Two absent keys compare EQUAL, so renaming or deleting one on both
+            # sides turns this into a check that passes while reading nothing.
+            # That is the only failure mode a comparison cannot report itself.
+            if [ -z "$from_ci" ] && [ -z "$from_release" ]; then
+              echo "$key is set in neither workflow, so comparing it checks nothing." >&2
+              return 1
+            fi
+            if [ "$from_ci" != "$from_release" ]; then
+              echo "$key differs between the two workflows:" >&2
+              echo "  ci.yml:      ${from_ci:-<unset>}" >&2
+              echo "  release.yml: ${from_release:-<unset>}" >&2
+              return 1
+            fi
+          }
+          compare node-version-file
+          compare NODE_OPTIONS
+
+      # The release workflow gates itself, in its own file, because the two
+      # workflows share a `push: main` trigger with no dependency between them —
+      # so a red gate here cannot stop a publish and need not even finish
+      # first. Nothing but this assertion keeps that step in place, and a
+      # publish that has LOST its gate is indistinguishable from one that never
+      # had it until a bad version is on the registry, which npm does not let
+      # you take back. Line numbers are compared because order is the property:
+      # a gate after the publish is not a gate.
+      - name: Release workflow gates itself before publishing
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          # awk rather than a `grep | head` pipeline: a non-matching grep under
+          # `pipefail` aborts the step at the assignment, so the very case this
+          # exists to report would fail with no message at all. `index` keeps
+          # the match a fixed string, and awk exits 0 with nothing on stdout.
+          locate() {
+            awk -v needle="$1" 'index($0, needle) { print NR; exit }' .github/workflows/release.yml
+          }
+          gate=$(locate 'run: npm run check')
+          publish=$(locate 'uses: changesets/action@')
+          if [ -z "$gate" ]; then
+            echo "release.yml no longer runs the full gate: its publish path is ungated." >&2
+            exit 1
+          fi
+          if [ -z "$publish" ]; then
+            echo "release.yml no longer calls changesets/action, so this check cannot" >&2
+            echo "locate the publish step it is asserting against." >&2
+            exit 1
+          fi
+          if [ "$gate" -ge "$publish" ]; then
+            echo "release.yml runs the gate at line $gate, not before the publish at line $publish." >&2
+            exit 1
+          fi
+
+      # Read from `.nvmrc` rather than stated here, so one edit moves both
+      # workflows and a local `nvm use` together. A version literal repeated in
+      # three places is three chances to satisfy `engines.node` by coincidence:
+      # a major-only spec is a semver RANGE, and it clears the floor only for as
+      # long as the newest release in that major happens to be above it.
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # setup-node does not act on `packageManager`: its documented inputs cover
+      # a node-version spec and a cache hint, and the field is a hint about
+      # WHICH cache to use, never a version to install. Without this step CI
+      # runs whatever npm ships inside the Node image and the pin is decorative.
+      # The version is read out of the manifest rather than repeated here, so a
+      # bump to `packageManager` cannot leave the workflow behind.
+      #
+      # The two assertions are the point. A global install that lands off the
+      # front of PATH leaves the pin silently unapplied; and the Node the runner
+      # resolved is asserted against `engines.node` rather than trusted, because
+      # the version file is a spec and not a guarantee — whoever edits it is
+      # free to widen it back below the floor. Both otherwise surface much later
+      # as an unrelated error.
+      - name: Pin the toolchain
+        run: |
+          pinned=$(node -e "
+            const { packageManager } = require('./package.json');
+            if (typeof packageManager !== 'string' || !packageManager.startsWith('npm@')) {
+              console.error('Root packageManager is not an npm pin: ' + packageManager);
+              process.exit(1);
+            }
+            console.log(packageManager.slice(4));
+          ")
+          npm install -g "npm@$pinned" --no-fund --no-audit
+          if [ "$(npm --version)" != "$pinned" ]; then
+            echo "npm $(npm --version) is first on PATH, but package.json pins npm@$pinned." >&2
+            exit 1
+          fi
+          node -e "
+            const engines = require('./package.json').engines.node;
+            if (!engines.startsWith('>=')) {
+              console.error('engines.node is ' + engines + '; this check understands only a >=x.y[.z] floor.');
+              process.exit(1);
+            }
+            const pad = (version) => (version + '.0.0').split('.').slice(0, 3);
+            const rank = (version) => pad(version).reduce((acc, part) => acc * 1000 + Number(part), 0);
+            if (rank(process.versions.node) < rank(engines.slice(2).trim())) {
+              console.error('Node ' + process.versions.node + ' does not satisfy engines.node ' + engines + '.');
+              process.exit(1);
+            }
+          "
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      # `lib/` is build output and is not committed, so `packages/cli/lib/cli.js`
+      # is absent when `npm ci` runs and npm SILENTLY skips a workspace `bin`
+      # symlink whose target is missing. The first example to invoke
+      # `hydranium-cli` in its `generate` step then dies with exit 127, naming
+      # that example rather than the link that was never made — so the failure
+      # points at the example's grammar tooling and not at the install.
+      #
+      # Building first gives the symlink a target; the second install is what
+      # creates it. It cannot be collapsed into one step: npm offers no hook
+      # between dependency installation and workspace `prepare`, which is why
+      # the two-step is permanent rather than a bug awaiting a fix.
+      # `tsc -b`, and NOT a filtered turbo run, which was tried and measured
+      # worse: the `build:all` behind this one still reported `0 cached` — the
+      # install between them changes what turbo hashes — so nothing was reused
+      # and the step itself went 12s to 31s on turbo's overhead alone. Whatever
+      # this step costs is paid twice by construction; keep it the cheap one.
+      - name: Build the framework packages
+        run: npm run build
+
+      - name: Link the workspace bins
+        run: npm install --no-fund --no-audit
+
+      # Kept separate from the gate below so a plain compile failure is
+      # distinguishable at a glance, and so the gate's own turbo clause reuses
+      # this build from the local cache rather than repeating it.
+      - name: Build
+        run: npm run build:all
+
+      # The whole contributor gate, not a subset. Running individual clauses
+      # here let nine of them drift out of CI while the workflow still looked
+      # like it was gating: an unmatched lint glob or a missing SPDX header
+      # reddens locally and passed here.
+      - name: Full gate
+        run: npm run check
+
+      # The one piece of this that a reader sees without downloading anything:
+      # the artefact below is a zip, and GitHub renders no JUnit of its own. It
+      # is a REPORTER, so it never fails the job — `always()` and it swallows
+      # nothing but its own parsing.
+      - name: Summarize test results
+        if: always()
+        run: node scripts/summarize-test-results.mjs
+
+      # `always()`, because a report is worth most for the run that FAILED, and
+      # a step conditioned on success uploads only the ones nobody needs to
+      # read. The JUnit files carry a per-case duration, which is what turns
+      # "which test is nearest the timeout" from a guess into a query.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-${{ matrix.os }}
+          path: |
+            packages/*/test-results/
+            examples/*/*/test-results/
+            examples/*/*/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A SEPARATE JOB rather than more steps on the one above, for two reasons.
+  # It runs concurrently, and the e2e tiers took ~3m45s that used to wait behind
+  # a 6m30s gate they do not depend on; and it reports as its own check, so a
+  # browser failure is legible on the pull request without opening a log.
+  #
+  # The cost is honest: install and build run again here, about two minutes of
+  # duplicated work, because jobs get separate runners with empty workspaces.
+  # Wall clock still falls from roughly 12m20s to 8m35s.
+  #
+  # What is deliberately NOT split this way is the gate itself. Running its
+  # clauses as separate steps or jobs is how nine of them once drifted out of
+  # CI unnoticed, so `npm run check` stays one command in one job. The safe cut
+  # is between the gate and e2e, not inside the gate.
+  #
+  # Ubuntu only, and that is now expressed by the job rather than by an `if:`
+  # on every step: the browser and the Theia backend behave the same on both
+  # platforms, so a second leg buys coverage of the runner rather than of the
+  # code. The matrix above is what covers the platform differences that matter.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+      TURBO_UI: stream
+      FORCE_COLOR: 1
+
+    steps:
+      # No `fetch-depth: 0` here, unlike the gate job: full history exists for
+      # the commit-citation gate, which runs over there and not in this job.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      # The same two-step as the gate job, and for the same reason: `npm ci`
+      # skips a workspace `bin` symlink whose target does not exist yet, so the
+      # first example to invoke `hydranium-cli` dies with exit 127.
+      - name: Build the framework packages
+        run: npm run build
+
+      - name: Link the workspace bins
+        run: npm install --no-fund --no-audit
+
+      - name: Build
+        run: npm run build:all
+
+      # `--with-deps` rather than the package's own `test:e2e:install`: the
+      # shared runners carry no guarantee of Chromium's system libraries, and
+      # the failure is a browser that will not launch rather than a missing one.
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Each tier boots its own server through Playwright's `webServer`, which
+      # sets `reuseExistingServer: false` under CI — so every run here is a COLD
+      # start, the state a warm developer machine cannot reproduce and the one
+      # where the startup handshakes actually fail.
+      - name: Browser e2e
+        run: npm run test:e2e -w @hydranium/example-order-flow-browser
+
+      - name: Theia e2e
+        run: npm run test:e2e -w @hydranium/example-order-flow-theia-app
+
+      # Separated by the suite itself, at one worker: it kills and re-launches
+      # the backend, so anything sharing the run would be racing a server that
+      # is deliberately going away. `HYDRANIUM_PLAYWRIGHT_TIER` gives it its own
+      # subdirectory of `test-results/`, because Playwright CLEARS that
+      # directory on start and a shared one deletes the previous tier's report.
+      - name: Theia e2e (restart tier)
+        env:
+          HYDRANIUM_PLAYWRIGHT_TIER: restart
+        run: npm run test:e2e:restart -w @hydranium/example-order-flow-theia-app
+
+      # Each job summarizes what its own workspace holds — the runners are
+      # separate, so neither can see the other's reports. This one is therefore
+      # the e2e durations, and the gate job's is the unit tiers.
+      - name: Summarize test results
+        if: always()
+        run: node scripts/summarize-test-results.mjs
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-e2e
+          path: |
+            examples/*/*/test-results/
+            examples/*/*/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

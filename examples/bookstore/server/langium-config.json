@@ -1,0 +1,14 @@
+{
+  "projectName": "Bookstore",
+  "languages": [
+    {
+      "id": "bookstore",
+      "grammar": "src/grammar/bookstore.langium",
+      "fileExtensions": [".bookstore"],
+      "textMate": {
+        "out": "syntaxes/bookstore.tmLanguage.json"
+      }
+    }
+  ],
+  "out": "src/language-server/generated"
+}

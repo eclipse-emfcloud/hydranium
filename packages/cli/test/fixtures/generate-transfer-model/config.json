@@ -1,0 +1,8 @@
+{
+  "astFile": "src/generated/ast.ts",
+  "augmentationFile": "src/ast.ts",
+  "outFile": "src/transfer-model.ts",
+  "elementTypeName": "FixtureElement",
+  "skipTerminals": ["WS", "NEWLINE"],
+  "ignoredUnknownKey": "should be dropped"
+}

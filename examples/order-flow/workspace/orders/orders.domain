@@ -1,0 +1,26 @@
+// `orders` is the consuming project. `requires commerce-core` populates
+// `Project.dependencies`, which the framework's project-scope filter walks —
+// that is what lets the fields below reference `ID`, `Money` and `Address`
+// across a project boundary by their bare names.
+//
+// Nothing here is `public`: `orders` is a leaf project, so its declarations
+// only need to be visible to the `.process` files beside them, which is
+// exactly what the `project` tier gives them.
+
+project orders requires commerce-core
+
+entity Order {
+   id: ID
+   status: OrderStatus
+   total: Money
+   shipTo: Address
+   lines: LineItem[]
+}
+
+enum OrderStatus { NEW, PAID, SHIPPED, CANCELLED }
+
+entity LineItem {
+   sku: ID
+   quantity: Number
+   price: Money
+}

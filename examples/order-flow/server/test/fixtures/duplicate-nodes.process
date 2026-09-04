@@ -1,0 +1,11 @@
+// Test-only fixture. Three flow nodes called `Pay`, one of them a gateway:
+// tasks and gateways share one name space because a transition targets
+// `FlowNode`, so the collision spans both kinds.
+//
+// Loaded through a temp-directory copy — see `duplicate-names.domain`.
+
+process Ambiguous for Order {
+   task Pay
+   gateway Pay
+   task Pay
+}

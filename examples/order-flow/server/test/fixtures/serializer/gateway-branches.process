@@ -1,0 +1,17 @@
+process Dispatch for Shipment {
+   task Pack
+      writes Shipment.status = PACKED
+      writes Shipment.carrier = DHL
+   gateway Weighed
+      heavy -> Freight
+      light -> Courier
+   task Freight
+      writes Shipment.carrier = FEDEX
+   task Courier
+      writes Shipment.carrier = UPS
+   task Deliver
+      writes Shipment.status = DELIVERED
+   transition Pack -> Weighed
+   transition Freight -> Deliver
+   transition Courier -> Deliver
+}

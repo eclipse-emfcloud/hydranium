@@ -1,0 +1,76 @@
+{
+  "name": "@hydranium/example-order-flow-theia-app",
+  "displayName": "Order Flow — Theia Browser App",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimum Theia browser-app that mounts the order-flow Theia extension (diagram + properties view) and sideloads the servers-ONLY VS Code extension via @theia/plugin-ext for the LSP and its head-port commands. Hosting the full VS Code shell instead would register that shell's custom editor too, leaving `.process` with two Open With entries.",
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/theia-app"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "theia rebuild:browser --cacheRoot ../../.. && npm run link:plugin && theia build --mode development",
+    "build:all": "turbo run build --filter=@hydranium/example-order-flow-theia-app...",
+    "clean": "theia clean && rimraf src-gen plugins tsconfig.tsbuildinfo test-results playwright-report",
+    "link:plugin": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync('plugins',{recursive:true});const link=path.resolve('plugins/order-flow-vscode-servers');fs.rmSync(link,{force:true,recursive:true});fs.symlinkSync(path.resolve('../vscode-servers'),link,'junction')\"",
+    "lint": "eslint test --max-warnings 0",
+    "rebuild": "theia rebuild:browser --cacheRoot ../../..",
+    "start": "theia start --plugins=local-dir:./plugins --hostname=0.0.0.0 --port=3001 ../workspace",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart",
+    "test:e2e:headed": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --headed",
+    "test:e2e:install": "playwright install chromium",
+    "test:e2e:restart": "playwright test --tsconfig tsconfig.e2e.json --grep @restart --workers=1",
+    "test:e2e:ui": "playwright test --tsconfig tsconfig.e2e.json --ui",
+    "typecheck:test": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development",
+    "watch:all": "concurrently --kill-others --names \"server,client,theia,app\" --prefix-colors \"yellow,green,cyan,magenta\" \"npm --prefix ../server run watch\" \"npm --prefix ../client run watch\" \"npm --prefix ../theia run watch\" \"npm run watch\""
+  },
+  "dependencies": {
+    "@hydranium/example-order-flow-theia": "0.0.0",
+    "@theia/core": "^1.72.0",
+    "@theia/editor": "^1.72.0",
+    "@theia/filesystem": "^1.72.0",
+    "@theia/markers": "^1.72.0",
+    "@theia/messages": "^1.72.0",
+    "@theia/monaco": "^1.72.0",
+    "@theia/navigator": "^1.72.0",
+    "@theia/output": "^1.72.0",
+    "@theia/plugin-ext": "^1.72.0",
+    "@theia/plugin-ext-vscode": "^1.72.0",
+    "@theia/preferences": "^1.72.0",
+    "@theia/process": "^1.72.0",
+    "@theia/property-view": "^1.72.0",
+    "@theia/workspace": "^1.72.0"
+  },
+  "devDependencies": {
+    "@hydranium/core": "0.0.0",
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "@hydranium/example-order-flow-vscode-servers": "0.0.0",
+    "@playwright/test": "^1.49.0",
+    "@theia/bundle-plugin": "^1.72.0",
+    "@theia/cli": "^1.72.0",
+    "@theia/playwright": "^1.72.0",
+    "concurrently": "^9.0.0",
+    "esbuild-plugins-node-modules-polyfill": "^1.6.7",
+    "rimraf": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "//link:plugin": "The link is REPLACED on every build, not preserved when present. `existsSync` follows a symlink, so it answers false for a DANGLING one — and then `symlinkSync` fails EEXIST on the link file that is sitting right there, with a message naming the target rather than the link. That is what a moved or renamed extension directory leaves behind, and the failure blames the wrong path. `plugins/` is generated output in full (`clean` removes it, the ignore rules cover it), so unconditional removal costs nothing a build does not rebuild.",
+  "//lint": "Only `test`: this app has no `src` — `theia build` assembles it from `src-gen`, which is generated and ignored. The e2e specs are the whole hand-written surface here, and they were linted by NOTHING until this script existed, which is how a phantom dependency on the example server (resolving through workspace hoisting alone) survived in a spec. The Playwright tier is deliberately outside `check`, so the `src`-block argument that a phantom import 'fails the test run on the spot' does not hold for it.",
+  "theia": {
+    "target": "browser",
+    "frontend": {
+      "config": {
+        "applicationName": "Order Flow — Theia Demo",
+        "preferences": {
+          "security.workspace.trust.enabled": false
+        }
+      }
+    }
+  }
+}

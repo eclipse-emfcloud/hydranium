@@ -1,0 +1,85 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/* Themed off Theia's own CSS variables rather than fixed colours, so the panel
+   follows the workbench theme the way the surrounding views do. The DOM this
+   styles is built by `PropertiesForm`, which is shared with the VS Code
+   webview — hence class names rather than element selectors. */
+
+.order-flow-properties {
+   overflow: auto;
+   height: 100%;
+}
+
+.order-flow-properties-body {
+   padding: 6px 12px;
+   font-family: var(--theia-ui-font-family);
+   font-size: var(--theia-ui-font-size1);
+   color: var(--theia-foreground);
+}
+
+.order-flow-properties-body h1 {
+   font-size: var(--theia-ui-font-size2);
+   font-weight: 600;
+   margin: 4px 0 10px;
+}
+
+.order-flow-properties-body .field {
+   display: flex;
+   flex-direction: column;
+   margin-bottom: 8px;
+}
+
+.order-flow-properties-body .field label {
+   margin-bottom: 2px;
+   opacity: 0.8;
+}
+
+.order-flow-properties-body .field input {
+   background: var(--theia-input-background);
+   color: var(--theia-input-foreground);
+   border: 1px solid var(--theia-input-border);
+   padding: 3px 6px;
+}
+
+.order-flow-properties-body .field input:focus {
+   outline: 1px solid var(--theia-focusBorder);
+}
+
+.order-flow-properties-body .field input:disabled {
+   opacity: 0.5;
+}
+
+.order-flow-properties-body .status {
+   margin: 8px 0;
+   min-height: 1em;
+}
+
+.order-flow-properties-body .status[data-kind='merged'] {
+   color: var(--theia-editorInfo-foreground);
+}
+
+.order-flow-properties-body .status[data-kind='conflict'] {
+   color: var(--theia-editorWarning-foreground);
+}
+
+.order-flow-properties-body .status[data-kind='error'] {
+   color: var(--theia-editorError-foreground);
+}
+
+.order-flow-properties-body .diagnostics {
+   list-style: none;
+   margin: 8px 0 0;
+   padding: 0;
+}
+
+.order-flow-properties-body .diagnostics li {
+   color: var(--theia-editorError-foreground);
+   margin-bottom: 3px;
+}

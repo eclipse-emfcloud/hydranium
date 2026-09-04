@@ -1,0 +1,8 @@
+/**
+ * A restock order, pointed at the shelf it fills.
+ *
+ * The target lives in `catalogue.bookstore`. The starter grammar declares no
+ * `project` header, so every name is exported at the universal tier and a
+ * reference resolves across documents with no scoping to configure.
+ */
+node WeeklyRestock -> Fiction

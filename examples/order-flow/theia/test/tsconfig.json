@@ -1,0 +1,18 @@
+// Exists for the EDITOR, not for any build or script.
+//
+// The test tree is type-checked by `../tsconfig.test.json` (the
+// `typecheck:test` task), but an editor only auto-discovers `tsconfig.json` —
+// and this package's includes `src` alone. Without this file the tests belong to
+// no discoverable project, so the TS server falls back to an inferred project
+// that loads every `@types` package in the tree: `@types/mocha` and
+// `@types/jest` then both declare `describe` / `it` / `beforeEach`, and every
+// test file shows `TS2403` clashes that no `tsc -p tsconfig.test.json` run
+// reproduces.
+//
+// Nothing else reads it: `typecheck:test` names its project explicitly, and the
+// runner transpiles without type-checking. The base config's relative `include`
+// stays correct here, because TypeScript resolves it against the file it
+// originates in rather than the one that extends it.
+{
+  "extends": "../tsconfig.test.json"
+}

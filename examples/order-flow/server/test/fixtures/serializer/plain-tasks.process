@@ -1,0 +1,5 @@
+process Manual for Shipment {
+   task Await
+   task Confirm
+   transition Await -> Confirm
+}

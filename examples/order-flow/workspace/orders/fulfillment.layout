@@ -1,0 +1,44 @@
+// Layout for `fulfillment.process`, in its own file rather than a block inside
+// it. Each entry REFERENCES the flow node it positions, so the `.process` file
+// stays free of rendering concerns and is complete without this one — delete
+// this file and the diagram simply opens unpositioned.
+//
+// The reference crosses a document boundary, which is what makes it interesting:
+// `[FlowNode:ID]` would otherwise resolve against every flow node in the
+// workspace via the global index, so an entry here could bind to a same-named
+// task in an unrelated process and still look correct.
+// `OrderFlowLayoutScopeProvider` narrows the candidates to the nodes of the
+// process named above.
+//
+// This is what `repositionable` / `resizable` are backed by — dragging a node in
+// the diagram rewrites an entry here. Creating one from the canvas writes BOTH
+// files in a single operation, semantics first.
+//
+// `Cancel` is deliberately absent: a flow node with no entry is left to client
+// layout, which is the normal state for anything added in text. That client
+// puts it at the ORIGIN, so the entries below start well clear of it — an
+// unpositioned node dropped on top of a positioned one reads as a rendering
+// fault rather than as the one node this file does not place.
+//
+// The positions run left to right by rank — `Pay`, the gateway, then its two
+// exits — and the gateway's branches split VERTICALLY: `yes` continues down and
+// right to `Pick` and `Ship`, `no` leaves up and left to `Cancel` at the origin.
+// The split is what makes the diamond worth drawing: each branch leaves a
+// different face of it, so `DiamondAnchor` has something to be right about.
+//
+// `PaymentOk` carries a position and NO size, which is the other partial state
+// this file demonstrates: a gateway's shape comes from the notation — see
+// `GATEWAY_LAYOUT_OPTIONS`, where the padding around the name is what sets it —
+// so pinning one here would only be a chance to contradict it. Pinning a height
+// larger than the notation's would also push the gateway's label up under the
+// top vertex, because the micro-layout has already placed it by then.
+//
+// A `size` on the others is a MINIMUM, not a dimension: a node grows past it to
+// fit its labels, so these are floors and the rendered widths are wider.
+
+layout FulfillmentLayout for Fulfillment {
+   node Pay at 40, 100 size 160, 60
+   node PaymentOk at 260, 90
+   node Pick at 440, 200 size 160, 60
+   node Ship at 660, 200 size 160, 60
+}

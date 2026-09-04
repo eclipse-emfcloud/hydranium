@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8" />
+      <title>Order Flow — language server in a web worker</title>
+      <!--
+         Emitted by esbuild beside the page bundle: `@eclipse-glsp/client`'s
+         modules import their own stylesheets, and the diagram's shared sheet is
+         imported last so its rules win. Without this link the diagram renders,
+         with every shape at the browser's SVG defaults — black fill, no stroke —
+         which reads as a broken model rather than as a missing stylesheet.
+
+         It also brings in TWO things this shell then relies on: the
+         `--order-flow-*` colour-role vocabulary with its DARK defaults, which
+         the light rules below override, and `@vscode/codicons`, which
+         `@eclipse-glsp/client`'s default module loads for its own palette. The
+         page's icons are therefore free — a `codicon codicon-*` class and no
+         further dependency.
+
+         It must stay ABOVE this `<style>` block: both define the roles at
+         `:root`, so the later one wins on equal specificity and the order is the
+         whole mechanism.
+      -->
+      <link rel="stylesheet" href="./out/order-flow-page.css" />
+      <style>
+         /*
+            The light role set — what this SHELL contributes to the diagram's
+            appearance, and the direct counterpart of
+            `examples/order-flow/vscode/src/webview/diagram.css`, which binds the
+            same roles to `--vscode-*`. A page has no theme service to read, so
+            it states the values.
+
+            Scoped to `[data-theme='light']` on the root element rather than to a
+            `prefers-color-scheme` query, because the switch has to be able to
+            overrule the OS. `order-flow-page.ts` seeds the attribute from
+            `prefers-color-scheme` at startup and the checkbox writes it after.
+            A media query cannot be overridden from script without duplicating
+            every rule.
+         */
+         :root[data-theme='light'] {
+            --order-flow-surface: #ffffff;
+            --order-flow-foreground: #3b3b3b;
+            --order-flow-muted-foreground: #6c6c6c;
+            --order-flow-panel-background: #f8f8f8;
+            --order-flow-panel-foreground: var(--order-flow-foreground);
+            --order-flow-panel-border: #e5e5e5;
+            --order-flow-hover-background: rgb(0 0 0 / 6%);
+            --order-flow-focus-border: #005fb8;
+            --order-flow-invalid: #e51400;
+            /*
+               The accents are the only roles the dark set leaves alone, because
+               they are mid-tones drawn as a 1px border and a 16% wash rather
+               than behind text. These are the light-theme members of the same
+               `--vscode-charts-*` family the VS Code shell borrows.
+            */
+            --order-flow-task-accent: #1a7bbe;
+            --order-flow-gateway-accent: #8452b5;
+            --order-flow-edge: var(--order-flow-foreground);
+         }
+
+         /*
+            Two roles this SHELL adds on top of the diagram's vocabulary, because
+            a workbench has surfaces a diagram does not: a warning colour for the
+            problems list, and a slightly recessed background so a sidebar and a
+            dock read as behind the editors rather than beside them. Derived from
+            the diagram's roles wherever possible so one switch still moves
+            everything.
+         */
+         :root {
+            --order-flow-warning: #cca700;
+            --order-flow-recessed: color-mix(in srgb, var(--order-flow-panel-background) 70%, var(--order-flow-surface));
+            /*
+               The resizable tracks. Every one of these is a divider's target —
+               see `src/page/splitters.ts`, which writes them onto this element —
+               so the values here are the DEFAULT layout and the reset button
+               works by removing the inline overrides.
+            */
+            --sidebar-width: 300px;
+            /*
+               A FRACTION, not a length, so the lookup editor and the subject
+               column share what is left of the window at any width — a px default
+               is only ever right at one viewport size, and at a wide one it leaves
+               the lookup editor truncating lines while the pair beside the diagram
+               has room to spare. Below `1fr` because the subject column holds two
+               editors AND a canvas where this holds one editor, so an even split
+               starves the pair that carries the page's central claim. The dividers
+               write a length over this on the first drag; see `splitters.ts`,
+               which measures the element rather than parsing this value for
+               exactly that reason.
+            */
+            --selected-width: 0.6fr;
+            /* Half and half: the diagram and the pair of documents it is a view of
+               are equally the subject, so neither gets the larger share. */
+            --diagram-split: 50%;
+            --fixed-split: 50%;
+            --dock-height: 240px;
+            /*
+               The LOG takes the width and problems a quarter of it. A diagnostic
+               message is a sentence, but there is one of them in this workspace
+               and the list is a column of short rows; the log is dozens of lines
+               each carrying a padded level, a timestamp and a component before it
+               says anything, so it is the one that reads badly when narrowed.
+            */
+            --dock-split: 75%;
+            --divider: 5px;
+         }
+         :root[data-theme='light'] {
+            --order-flow-warning: #bf8803;
+         }
+
+         /*
+            The page's OWN chrome reads the same `--order-flow-*` roles as the
+            diagram, and that is the point rather than a shortcut: it is what
+            makes one switch drive everything, and it demonstrates that the role
+            vocabulary is a theme contract a host fills in, not a diagram-private
+            detail. Nothing below names a literal colour.
+         */
+         * {
+            box-sizing: border-box;
+         }
+         html,
+         body {
+            height: 100%;
+            margin: 0;
+         }
+         body {
+            /*
+               A grid rather than a flex column, because the dock's height is a
+               resizable track and `grid-template-rows` is where a track size can
+               be named by a custom property. The `minmax(0, 1fr)` on the
+               workbench row is what lets it SHRINK: `1fr` alone resolves to
+               `minmax(auto, 1fr)`, and `auto` refuses to go below its content —
+               Monaco reports a content height from the whole file, so without
+               this the editors push the dock off the bottom of the viewport.
+            */
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) var(--divider) var(--dock-height) auto;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+            background: var(--order-flow-surface);
+            color: var(--order-flow-foreground);
+         }
+
+         /* ---- title bar ------------------------------------------------ */
+
+         .titlebar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.4rem 0.75rem;
+            border-bottom: 1px solid var(--order-flow-panel-border);
+            background: var(--order-flow-panel-background);
+         }
+         .titlebar h1 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin: 0;
+            white-space: nowrap;
+         }
+         .titlebar .subtitle {
+            font-weight: 400;
+            color: var(--order-flow-muted-foreground);
+            margin-left: 0.5rem;
+         }
+         .titlebar .spacer {
+            flex: 1 1 auto;
+         }
+         .titlebar .app-mark {
+            color: var(--order-flow-task-accent);
+            font-size: 1.1rem;
+         }
+         .actions {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            /* The controls must not be pushed off the edge by a long title, which
+               is what a plain flex row does at a narrow viewport. */
+            flex: 0 0 auto;
+         }
+         /*
+            Buttons styled off the same roles as everything else — one left at its
+            user-agent appearance is light-grey chrome on a dark page, which reads
+            as an unfinished theme.
+         */
+         .action {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font: inherit;
+            color: var(--order-flow-panel-foreground);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            padding: 0.25rem 0.55rem;
+            cursor: pointer;
+            white-space: nowrap;
+         }
+         .action:hover:enabled,
+         .action:hover:not(button) {
+            background: var(--order-flow-hover-background);
+            border-color: var(--order-flow-panel-border);
+         }
+         .action:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 1px;
+         }
+         .action:disabled {
+            color: var(--order-flow-muted-foreground);
+            cursor: default;
+         }
+         .scheme-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--order-flow-panel-foreground);
+            user-select: none;
+         }
+         /*
+            A REAL checkbox, restyled as a switch rather than replaced by a
+            button. `accent-color` alone leaves a native box that reads as a form
+            control in an app chrome, and `appearance: none` on the input itself
+            keeps it focusable, keyboard-operable and hit-testable — which a
+            `<div role="switch">` would each have to re-implement.
+         */
+         .scheme-switch input {
+            appearance: none;
+            margin: 0;
+            width: 28px;
+            height: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--order-flow-panel-border);
+            background: var(--order-flow-recessed);
+            position: relative;
+            cursor: pointer;
+            transition: background 0.15s ease-out;
+         }
+         .scheme-switch input::after {
+            content: '';
+            position: absolute;
+            top: 1px;
+            left: 1px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--order-flow-muted-foreground);
+            transition: transform 0.15s ease-out;
+         }
+         .scheme-switch input:checked {
+            background: color-mix(in srgb, var(--order-flow-focus-border) 40%, transparent);
+            border-color: var(--order-flow-focus-border);
+         }
+         .scheme-switch input:checked::after {
+            transform: translateX(12px);
+            background: var(--order-flow-focus-border);
+         }
+         .scheme-switch input:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 2px;
+         }
+
+         /* ---- status bar ----------------------------------------------- */
+
+         /*
+            The head reports, as a STATUS BAR along the bottom.
+
+            They are what tells a reader the page works, and the e2e asserts on
+            all of them — so they have to be permanently visible, which a status
+            bar is and a scrolling region is not. At the bottom rather than under
+            the title bar, because that is where a reader of any workbench already
+            looks for "what is the tool doing", and because a row of live values
+            competing with the title for the top of the page reads as the page's
+            subject rather than as its state.
+
+            One row, and it must STAY one row: `flex-wrap` is off and each segment
+            truncates, so a value that grows — the layout report grows by an entry
+            on every create — cannot reflow the bar and move the diagram under an
+            automated pointer mid-gesture. The full text is on the `title`.
+         */
+         #reports {
+            display: flex;
+            align-items: baseline;
+            gap: 0 0.9rem;
+            margin: 0;
+            padding: 0.25rem 0.75rem;
+            border-top: 1px solid var(--order-flow-panel-border);
+            background: var(--order-flow-panel-background);
+            font-size: 0.74rem;
+            overflow: hidden;
+         }
+         #reports > div {
+            display: flex;
+            align-items: baseline;
+            gap: 0.35rem;
+            min-width: 0;
+         }
+         /* The three heads first, so they get the room a long value needs; the
+            two derived reports shrink before they do. */
+         #reports > div.head {
+            flex: 1 1 auto;
+         }
+         #reports > div.derived {
+            flex: 0 1 auto;
+         }
+         #reports dt {
+            color: var(--order-flow-muted-foreground);
+            white-space: nowrap;
+            flex: 0 0 auto;
+         }
+         #reports dt .codicon {
+            font-size: 0.85rem;
+            vertical-align: -2px;
+         }
+         #reports dd {
+            margin: 0;
+            font-family: ui-monospace, monospace;
+            font-size: 0.72rem;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+         }
+
+         /* ---- workbench ------------------------------------------------ */
+
+         /*
+            Three columns, left to right in order of how much of the reader's
+            attention they hold: the workspace they navigate from, the document
+            they looked something up in, and the subject — the diagram with the two
+            documents it is a view of. The lookup editor sits NEXT TO the list that
+            drives it, so a selection changes the pane the reader's eye is already
+            on rather than one across the window.
+         */
+         #layout {
+            display: grid;
+            grid-template-columns:
+               var(--sidebar-width) var(--divider) minmax(0, var(--selected-width))
+               var(--divider) minmax(0, 1fr);
+            min-height: 0;
+            overflow: hidden;
+         }
+         /*
+            The dividers. 5px is the whole hit target, which is thin — so each one
+            grows a hover highlight and the cursor changes over it, and the ROOT
+            keeps the cursor for the duration of the drag (see
+            `src/page/splitters.ts`), because a pointer that has left the divider
+            would otherwise revert to the default mid-gesture.
+         */
+         .splitter {
+            background: var(--order-flow-panel-border);
+            position: relative;
+         }
+         .splitter[data-axis='x'] {
+            cursor: col-resize;
+         }
+         .splitter[data-axis='y'] {
+            cursor: row-resize;
+         }
+         .splitter:hover,
+         .splitter.dragging {
+            background: var(--order-flow-focus-border);
+         }
+         /*
+            The cursor during a drag, on the root element. Without this the
+            pointer takes the cursor of whatever it is over — a text I-beam across
+            an editor, which reads as the drag having ended.
+         */
+         :root.resizing-x,
+         :root.resizing-x * {
+            cursor: col-resize !important;
+         }
+         :root.resizing-y,
+         :root.resizing-y * {
+            cursor: row-resize !important;
+         }
+         /*
+            `user-select: none` for the duration, because a horizontal drag across
+            an editor selects text in it — which then survives the drag as a
+            highlighted region nobody asked for.
+         */
+         :root.resizing-x,
+         :root.resizing-y {
+            user-select: none;
+         }
+
+         /* ---- panels --------------------------------------------------- */
+
+         .panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            min-width: 0;
+         }
+         .panel-head {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.6rem;
+            border-bottom: 1px solid var(--order-flow-panel-border);
+            color: var(--order-flow-muted-foreground);
+         }
+         .panel-head h2 {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin: 0;
+         }
+         .panel-head .spacer {
+            flex: 1 1 auto;
+         }
+         .panel-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding: 0.2rem 0;
+         }
+         .sidebar {
+            background: var(--order-flow-recessed);
+            border-right: 1px solid var(--order-flow-panel-border);
+         }
+         .badge {
+            font-family: ui-monospace, monospace;
+            font-size: 0.7rem;
+            line-height: 1.4;
+            padding: 0 0.35rem;
+            border-radius: 8px;
+            background: var(--order-flow-hover-background);
+            color: var(--order-flow-muted-foreground);
+            flex: 0 0 auto;
+         }
+         .badge-error {
+            background: color-mix(in srgb, var(--order-flow-invalid) 22%, transparent);
+            color: var(--order-flow-invalid);
+         }
+         .badge-warning {
+            background: color-mix(in srgb, var(--order-flow-warning) 22%, transparent);
+            color: var(--order-flow-warning);
+         }
+         .badge-info,
+         .badge-hint {
+            background: color-mix(in srgb, var(--order-flow-focus-border) 20%, transparent);
+            color: var(--order-flow-focus-border);
+         }
+
+         /*
+            Every row in a list is a `<button>`, not a `<div>` with a click
+            handler: it is a control that navigates, so it should be reachable by
+            Tab and operable by Enter without any script of ours.
+         */
+         .row {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            width: 100%;
+            font: inherit;
+            text-align: left;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            border-left: 2px solid transparent;
+            padding: 0.2rem 0.6rem;
+            cursor: pointer;
+         }
+         .row:hover {
+            background: var(--order-flow-hover-background);
+         }
+         .row:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: -1px;
+         }
+         .row-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+         }
+         .row .codicon {
+            font-size: 0.85rem;
+            color: var(--order-flow-muted-foreground);
+            flex: 0 0 auto;
+         }
+         /*
+            TWO markers, because the list has two things to say and one of them is
+            not a selection.
+
+            `is-selected` is the last click: it drives the lookup editor, so it
+            takes the accent bar and the weight — the affordances a reader reads as
+            "this row is why that pane shows what it shows".
+
+            `is-pinned` is the pair beside the diagram, which is on screen whatever
+            the reader clicks. Marking it the same way made three of seven rows
+            look selected and made clicking one of THEM look like it did nothing,
+            so it gets a pin at the trailing edge and no bar at all.
+         */
+         .document-row.is-selected {
+            border-left-color: var(--order-flow-focus-border);
+            background: var(--order-flow-hover-background);
+         }
+         .document-row.is-selected .row-label {
+            font-weight: 600;
+         }
+         .document-row.is-pinned > .codicon-pinned {
+            color: var(--order-flow-task-accent);
+            font-size: 0.8rem;
+         }
+         .problem-group-head {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0.6rem 0.1rem;
+            color: var(--order-flow-muted-foreground);
+            font-family: ui-monospace, monospace;
+            font-size: 0.72rem;
+         }
+         .problem-row {
+            padding-left: 1.4rem;
+            font-size: 0.76rem;
+         }
+         .problem-row.error > .codicon {
+            color: var(--order-flow-invalid);
+         }
+         .problem-row.warning > .codicon {
+            color: var(--order-flow-warning);
+         }
+         .problem-row.info > .codicon,
+         .problem-row.hint > .codicon {
+            color: var(--order-flow-focus-border);
+         }
+         .hint-text {
+            font-size: 0.72rem;
+            color: var(--order-flow-muted-foreground);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+         }
+         .empty {
+            margin: 0;
+            padding: 0.4rem 0.6rem;
+            color: var(--order-flow-muted-foreground);
+         }
+
+         /* ---- diagram + editors ---------------------------------------- */
+
+         .pane {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            /*
+               `min-width: 0`, because a flex item's default `min-width: auto`
+               makes it refuse to shrink below its content — and Monaco reports a
+               content width from the longest line, so without this the editors
+               push each other wider than the page and the last one scrolls off.
+               It presents as Monaco ignoring `automaticLayout`.
+            */
+            min-width: 0;
+         }
+         .pane-head {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0.6rem;
+            color: var(--order-flow-muted-foreground);
+            background: var(--order-flow-panel-background);
+            border-bottom: 1px solid var(--order-flow-panel-border);
+            font-family: ui-monospace, monospace;
+            font-size: 0.74rem;
+         }
+         .pane-head .pane-title {
+            flex: 0 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--order-flow-foreground);
+         }
+         .pane-head .hint {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: right;
+            font-family: system-ui, sans-serif;
+         }
+         /*
+            The subject column: the diagram over the two documents it is a view of.
+            `.process` carries the semantics the diagram draws and `.layout` the
+            coordinates a drag rewrites, so the pair side by side under the canvas
+            is the page's central claim in one glance — a write landing in one of
+            them and not the other, with the gesture that caused it still visible
+            above.
+         */
+         .subject {
+            display: grid;
+            grid-template-rows: minmax(0, var(--diagram-split)) var(--divider) minmax(0, 1fr);
+            min-width: 0;
+            border-left: 1px solid var(--order-flow-panel-border);
+         }
+         .fixed-editors {
+            display: grid;
+            grid-template-columns: minmax(0, var(--fixed-split)) var(--divider) minmax(0, 1fr);
+            min-height: 0;
+         }
+         /*
+            The diagram mount point. A shell (Theia, VS Code) supplies this much
+            for its widget; a plain page has to, and neither rule is decoration.
+
+            The height, because the element sprotty renders into is sized by CSS
+            and a `div` with no content has none. Here it comes from the pane
+            rather than from a fixed value, so the dividers reach it.
+
+            `position: relative`, because GLSP's UI extensions — the tool palette
+            above all — are absolutely positioned and would otherwise anchor to
+            the viewport and float over the top-right of the document.
+         */
+         #order-flow-process-diagram {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            /* Clipped, so the palette's slide-out animation cannot push a
+               scrollbar onto the pane. */
+            overflow: hidden;
+         }
+         /*
+            **This rule is load-bearing and its absence is silent.** sprotty sets
+            no width or height on the `<svg>`, so without it the element takes
+            the SVG default of 300x150 — and `ShapeView.isVisible` CULLS every
+            element whose bounds fall outside the canvas. The model arrives
+            complete, the hidden measuring view holds all of it, and the page
+            draws only the elements that happen to sit in the top-left corner.
+            That reads as a server sending a partial model, which is the one
+            thing it is not.
+         */
+         #order-flow-process-diagram > svg {
+            width: 100%;
+            height: 100%;
+         }
+         /*
+            Monaco is sized entirely by its container, like the diagram mount: it
+            measures the element it was created in and a `div` with no height has
+            none, so the editor renders as a 0px strip with no error.
+         */
+         .editor {
+            flex: 1 1 auto;
+            min-height: 0;
+         }
+
+         /* ---- dock ----------------------------------------------------- */
+
+         /*
+            The dock holds the two things whose content is WIDE: a diagnostic
+            message is a sentence, and a log line carries a padded level, a
+            timestamp and a component before it says anything. Neither belongs in a
+            sidebar, where both would be a column of ellipses.
+
+            Both panels are OPEN by default, and so is the workspace list. That is
+            affordable now and was not before: the panels used to be `<details>` in
+            a footer, taking their height from the editors, so either one open
+            shrank the document a diagram write appends to below the thing it
+            exists to show. With the dock as its own resizable track it costs the
+            editors nothing they were not already given, and a reader who wants the
+            height back drags the divider instead of hunting for a disclosure
+            triangle.
+         */
+         .dock {
+            display: grid;
+            grid-template-columns: minmax(0, var(--dock-split)) var(--divider) minmax(0, 1fr);
+            min-height: 0;
+            background: var(--order-flow-recessed);
+            border-top: 1px solid var(--order-flow-panel-border);
+         }
+         #log {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding: 0.2rem 0.75rem 0.5rem;
+            font-family: ui-monospace, monospace;
+            font-size: 0.73rem;
+            /*
+               `pre-wrap`: the server pre-formats each line with a padded level
+               and a timestamp, so collapsing whitespace would destroy the column
+               alignment that makes the log scannable.
+            */
+            white-space: pre-wrap;
+         }
+         #log div {
+            color: var(--order-flow-muted-foreground);
+         }
+         #log div.error {
+            color: var(--order-flow-invalid);
+         }
+         #log div.warning {
+            color: var(--order-flow-warning);
+         }
+         #log div.info {
+            color: var(--order-flow-foreground);
+         }
+         .filter-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.1rem 0.4rem;
+            border: 1px solid var(--order-flow-panel-border);
+            border-radius: 4px;
+            background: var(--order-flow-surface);
+         }
+         .filter-box .codicon {
+            font-size: 0.8rem;
+            color: var(--order-flow-muted-foreground);
+         }
+         .filter-box input {
+            font: inherit;
+            font-size: 0.75rem;
+            width: 12ch;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            outline: none;
+         }
+         a {
+            color: var(--order-flow-focus-border);
+         }
+
+         /* ---- sprotty's measuring copy ---------------------------------- */
+
+         /*
+            **A host accommodation, not decoration, and its absence is a page
+            whose top-left corner silently ignores clicks.**
+
+            sprotty renders the whole model a SECOND time into a hidden div so it
+            can measure it, and appends that div to `<body>`. GLSP styles it
+            `position: absolute; width: 0; height: 0` with no `overflow` and no
+            `pointer-events` — so the box is zero-sized at the top-left of the
+            viewport while the `<svg>` inside OVERFLOWS it at full size and stays
+            hit-testable. Measured on this page: a 302x152 region at (0,0) in
+            which `elementFromPoint` returns `svg.sprotty-graph`, over whatever
+            the host put there.
+
+            It is invisible, so the symptom is not a stray diagram — it is a
+            control that does nothing, in one corner, with a clean console. Here
+            that corner holds the workspace list, so the first rows could not be
+            opened while every row further down worked, which reads as a bug in
+            the list.
+
+            **`overflow: hidden` is the declaration that carries it**, measured:
+            clipping the overflow to the zero-sized box takes the copy out of hit
+            testing as well as out of painting, and removing `pointer-events`
+            alone leaves every assertion green. `pointer-events: none` stays
+            because it says the intent that the clip only implies — nothing in
+            this subtree is ever a target — and would still hold if a future GLSP
+            gave the box a size.
+
+            Neither can affect measurement: bounds come from
+            `getBoundingClientRect` and `getBBox`, and clipping an ancestor does
+            not change a descendant's reported box.
+         */
+         body > .sprotty-hidden {
+            pointer-events: none;
+            overflow: hidden;
+         }
+
+         /* ---- scrollbars ----------------------------------------------- */
+
+         /*
+            The page's own scrollable regions, matched to Monaco's.
+
+            Monaco does NOT use the platform scrollbar — it draws its own inside
+            the editor, as a thin translucent thumb on no track — so a page that
+            leaves the lists and the log at the user-agent default puts a wide
+            opaque bar with a light track next to it. On a dark theme that reads as
+            a rendering fault rather than as two different scrollbars, and it is
+            the one piece of chrome on this page that cannot be reached through the
+            `--order-flow-*` roles.
+
+            Both spellings, because they are not interchangeable: `scrollbar-*` is
+            the standard property and Firefox's only option, while WebKit and
+            Chromium honour the pseudo-elements and give the control this needs —
+            a thumb with no track, no buttons, and a hover state.
+         */
+         .panel-body,
+         #log {
+            scrollbar-width: thin;
+            scrollbar-color: var(--order-flow-panel-border) transparent;
+         }
+         .panel-body::-webkit-scrollbar,
+         #log::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+         }
+         .panel-body::-webkit-scrollbar-track,
+         #log::-webkit-scrollbar-track {
+            background: transparent;
+         }
+         .panel-body::-webkit-scrollbar-thumb,
+         #log::-webkit-scrollbar-thumb {
+            /* A mid-tone at low alpha rather than a role colour, for the same
+               reason Monaco's is: the thumb sits over content in both themes, so
+               it has to stay visible against text and against the surface. */
+            background: color-mix(in srgb, var(--order-flow-muted-foreground) 45%, transparent);
+            /* Inset by a border rather than sized smaller, which is how a thumb
+               gets padding: the box is the scrollbar's width and only the
+               background is inset. */
+            border: 2px solid transparent;
+            background-clip: padding-box;
+            border-radius: 5px;
+         }
+         .panel-body::-webkit-scrollbar-thumb:hover,
+         #log::-webkit-scrollbar-thumb:hover {
+            background: color-mix(in srgb, var(--order-flow-muted-foreground) 75%, transparent);
+            background-clip: padding-box;
+         }
+         /* The corner where two scrollbars meet, which defaults to an opaque
+            light square — the one part of the default chrome that shows even when
+            both bars are styled. */
+         .panel-body::-webkit-scrollbar-corner,
+         #log::-webkit-scrollbar-corner {
+            background: transparent;
+         }
+      </style>
+   </head>
+   <body>
+      <header class="titlebar">
+         <span class="app-mark codicon codicon-type-hierarchy-sub" aria-hidden="true"></span>
+         <h1>Order Flow<span class="subtitle">three heads, one language server, one web worker</span></h1>
+         <span class="spacer"></span>
+         <div class="actions">
+            <!--
+               Save and reset are both DISABLED here and enabled from script once
+               the data head has answered. The save goes through that head, so a
+               click before it exists could only fail — and a button that stays
+               disabled is a visible symptom of a page that did not finish coming
+               up.
+
+               Save rather than autosave, because that is the parity a Node host
+               has: an edit lives in the server's in-memory text document until
+               something persists it, in a browser exactly as on a disk.
+            -->
+            <button type="button" id="save-workspace" class="action" disabled>
+               <i class="codicon codicon-save" aria-hidden="true"></i> Save workspace
+            </button>
+            <button type="button" id="reset-workspace" class="action" disabled>
+               <i class="codicon codicon-discard" aria-hidden="true"></i> Reset workspace
+            </button>
+            <button type="button" id="reset-layout" class="action" title="Restore the default pane sizes">
+               <i class="codicon codicon-screen-normal" aria-hidden="true"></i> Reset layout
+            </button>
+            <label class="scheme-switch action" title="Light or dark">
+               <input type="checkbox" id="dark-scheme" />
+               <i class="codicon codicon-color-mode" aria-hidden="true"></i>
+               Dark
+            </label>
+         </div>
+      </header>
+
+      <div id="layout">
+         <!--
+            Every seeded document, with its diagnostic count. This is what makes
+            the problems list in the dock navigable rather than a report about
+            files the page gives no way to see.
+         -->
+         <section class="panel sidebar" id="document-panel">
+            <div class="panel-head">
+               <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
+               <h2>Workspace</h2>
+               <span class="spacer"></span>
+               <span class="badge" id="document-list-count" title="documents">0</span>
+            </div>
+            <div class="panel-body" id="document-list"></div>
+         </section>
+
+         <div
+            class="splitter"
+            data-splitter="--sidebar-width"
+            data-measure="#document-panel"
+            data-axis="x"
+            data-min="180"
+            data-max="600"
+         ></div>
+
+         <!--
+            ONE editor for whatever was last selected, and it sits here — beside
+            the list that drives it — rather than across the window: a selection
+            should change the pane the reader's eye is already on.
+         -->
+         <section class="pane" id="selected-pane">
+            <div class="pane-head">
+               <i class="codicon codicon-go-to-file" aria-hidden="true"></i>
+               <span class="pane-title" id="selected-editor-title">…</span>
+               <span class="hint">selected</span>
+            </div>
+            <div id="selected-editor" class="editor"></div>
+         </section>
+
+         <div
+            class="splitter"
+            data-splitter="--selected-width"
+            data-measure="#selected-pane"
+            data-axis="x"
+            data-min="220"
+            data-max="900"
+         ></div>
+
+         <!--
+            The subject: the diagram over the two documents it is a view of, both
+            FIXED. `.process` carries the semantics the canvas draws and `.layout`
+            the coordinates a drag rewrites, so neither may be swapped out by a
+            sidebar selection — the page's central claim is that a write lands in
+            one of them and not the other, and it is unobservable if either can
+            leave the screen. See `src/page/editor-area.ts`.
+         -->
+         <div class="subject">
+            <section class="pane" id="diagram-pane">
+               <div class="pane-head">
+                  <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i>
+                  <span class="pane-title">orders/fulfillment.process</span>
+                  <span class="hint">drag a node; the layout editor follows</span>
+               </div>
+               <div id="order-flow-process-diagram"></div>
+            </section>
+            <div
+               class="splitter"
+               data-splitter="--diagram-split"
+               data-measure="#diagram-pane"
+               data-axis="y"
+               data-min="120"
+               data-max="900"
+            ></div>
+            <div class="fixed-editors">
+               <section class="pane" id="process-pane">
+                  <div class="pane-head">
+                     <i class="codicon codicon-symbol-event" aria-hidden="true"></i>
+                     <span class="pane-title" id="process-editor-title">…</span>
+                     <span class="hint">semantics</span>
+                  </div>
+                  <div id="process-editor" class="editor"></div>
+               </section>
+               <div
+                  class="splitter"
+                  data-splitter="--fixed-split"
+                  data-measure="#process-pane"
+                  data-axis="x"
+                  data-min="180"
+                  data-max="1200"
+               ></div>
+               <section class="pane">
+                  <div class="pane-head">
+                     <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i>
+                     <span class="pane-title" id="layout-editor-title">…</span>
+                     <span class="hint">coordinates</span>
+                  </div>
+                  <div id="layout-editor" class="editor"></div>
+               </section>
+            </div>
+         </div>
+      </div>
+
+      <div class="splitter" data-splitter="--dock-height" data-measure="#dock" data-axis="y" data-invert data-min="60" data-max="700"></div>
+
+      <section class="dock" id="dock">
+         <section class="panel" id="log-panel">
+            <div class="panel-head">
+               <i class="codicon codicon-output" aria-hidden="true"></i>
+               <h2>Server log</h2>
+               <span class="badge" id="log-summary" title="lines received">0</span>
+               <span class="spacer"></span>
+               <span class="filter-box">
+                  <i class="codicon codicon-filter" aria-hidden="true"></i>
+                  <input type="text" id="log-filter" placeholder="filter" aria-label="Filter the server log" />
+               </span>
+               <button type="button" id="log-clear" class="action" title="Clear the lines held here">
+                  <i class="codicon codicon-clear-all" aria-hidden="true"></i>
+               </button>
+            </div>
+            <div id="log"></div>
+         </section>
+         <div class="splitter" data-splitter="--dock-split" data-measure="#log-panel" data-axis="x" data-min="240" data-max="1400"></div>
+         <!--
+            NOT filtered to the open documents, and that is the demonstration:
+            `orders/audit-leak.domain` exists so a diagnostic is published for a
+            file nobody opened. See `src/page/workspace-panel.ts`.
+         -->
+         <section class="panel">
+            <div class="panel-head">
+               <i class="codicon codicon-warning" aria-hidden="true"></i>
+               <h2>Problems</h2>
+               <span class="badge" id="problem-list-count" title="diagnostics">0</span>
+               <span class="spacer"></span>
+               <span class="hint-text" title="click a diagnostic to open its document at the line">click to open</span>
+            </div>
+            <div class="panel-body" id="problem-list"></div>
+         </section>
+      </section>
+
+      <!--
+         The head reports, as the status bar. They are what tells a reader the
+         page works, and the e2e asserts on all of them.
+      -->
+      <dl id="reports">
+         <div class="head">
+            <dt><i class="codicon codicon-symbol-namespace"></i> LSP</dt>
+            <dd id="status">loading…</dd>
+         </div>
+         <div class="head">
+            <dt><i class="codicon codicon-symbol-structure"></i> Data</dt>
+            <dd id="data-head">…</dd>
+         </div>
+         <div class="head">
+            <dt><i class="codicon codicon-type-hierarchy"></i> GLSP</dt>
+            <dd id="glsp-head">…</dd>
+         </div>
+         <div class="derived">
+            <dt><i class="codicon codicon-symbol-ruler"></i> Layout</dt>
+            <dd id="layout-head">…</dd>
+         </div>
+         <div class="derived">
+            <dt><i class="codicon codicon-database"></i> Storage</dt>
+            <dd id="workspace">…</dd>
+         </div>
+      </dl>
+      <script src="./out/order-flow-page.js"></script>
+   </body>
+</html>
