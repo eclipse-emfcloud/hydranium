@@ -1,0 +1,19 @@
+// Test-only fixture. Two `Money` declarations in one document: without the
+// integrity rule both would be exported to the global index under the same
+// key, and which one a reference resolved to would depend on emit order.
+//
+// Loaded through a temp-directory copy, because the integrity service's
+// default `silent` sync mode writes repairs back to disk — building this file
+// in place would rewrite it and leave the test asserting nothing.
+
+valuetype Money {
+   amount: Number
+}
+
+valuetype Money {
+   cents: Number
+}
+
+entity Order {
+   total: Money
+}

@@ -1,0 +1,121 @@
+{
+  "name": "@hydranium/example-order-flow-vscode-servers",
+  "displayName": "Order Flow Servers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Servers-only VS Code extension for the order-flow example: hosts the language server and publishes both socket-head ports as host commands, with no UI contributions. Sideloaded by the Theia app so it can launch the server without also inheriting the VS Code shell's diagram editor.",
+  "categories": [
+    "Programming Languages"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/vscode-servers"
+  },
+  "license": "MIT",
+  "publisher": "eclipse-emfcloud",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:grammar && tsc",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
+    "copy:grammar": "node -e \"const fs=require('fs');fs.mkdirSync('syntaxes',{recursive:true});for(const g of ['order-flow-domain','order-flow-process','order-flow-layout'])fs.copyFileSync('../server/syntaxes/'+g+'.tmLanguage.json','syntaxes/'+g+'.tmLanguage.json')\"",
+    "lint": "eslint src --max-warnings 0",
+    "watch": "tsc --watch --preserveWatchOutput"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Order Flow",
+      "properties": {
+        "order-flow.log.level": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "default": "info",
+          "description": "Log level for the Order Flow language server, applied live. Messages below this level are not written to the output channel."
+        },
+        "order-flow.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between the editor and the Order Flow language server."
+        }
+      }
+    },
+    "grammars": [
+      {
+        "language": "order-flow-domain",
+        "scopeName": "source.order-flow-domain",
+        "path": "./syntaxes/order-flow-domain.tmLanguage.json"
+      },
+      {
+        "language": "order-flow-process",
+        "scopeName": "source.order-flow-process",
+        "path": "./syntaxes/order-flow-process.tmLanguage.json"
+      },
+      {
+        "language": "order-flow-layout",
+        "scopeName": "source.order-flow-layout",
+        "path": "./syntaxes/order-flow-layout.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "order-flow-domain",
+        "aliases": [
+          "Order Flow Domain"
+        ],
+        "extensions": [
+          ".domain"
+        ]
+      },
+      {
+        "id": "order-flow-process",
+        "aliases": [
+          "Order Flow Process"
+        ],
+        "extensions": [
+          ".process"
+        ]
+      },
+      {
+        "id": "order-flow-layout",
+        "aliases": [
+          "Order Flow Layout"
+        ],
+        "extensions": [
+          ".layout"
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "dependencies": {
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.101.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "//activationEvents": "`onStartupFinished` rather than `onLanguage:*`, because a Theia backend connection handler may poll a port command before any order-flow document is opened — the diagram or properties view can be the first thing a user touches. Waiting for `onLanguage` would leave those polls unanswered until an editor happened to open.",
+  "//contributes": "No `commands` and no `customEditors`, both deliberate. The two port commands are registered at RUNTIME only (see language-client.ts): registering is sufficient to invoke a command programmatically, and contributing them would put diagnostics-only entries in a product's command palette. No custom editor is the whole reason this package exists — see the extension.ts header. `languages` and `grammars` ARE duplicated from `order-flow-vscode`, because each extension must be self-sufficient in whichever host installs it; only the runtime launch is shared."
+}

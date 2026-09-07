@@ -1,0 +1,5 @@
+{
+  "projectName": "Fixture",
+  "languages": [{ "id": "fixture", "grammar": "src/grammar/fixture.langium" }],
+  "out": "src/generated"
+}

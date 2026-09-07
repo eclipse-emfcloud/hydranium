@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // This app has no `src` and no `tsc` build — `theia build` assembles it from
+    // `src-gen` — so the root task's `dependsOn: ["build"]` and its `src/**/*`
+    // inputs are both wrong here. The e2e specs import
+    // `@hydranium/core/testing/playwright` and nothing the bundle produces, so the
+    // real edge is `^build`: build the dependencies whose types this checks
+    // against, not the app itself, whose native rebuild and bundling would cost
+    // minutes per `check` and change nothing being typechecked.
+    "typecheck:test": {
+      "dependsOn": ["^build"],
+      "inputs": ["test/**/*", "playwright.config.mts", "tsconfig.e2e.json"]
+    }
+  }
+}

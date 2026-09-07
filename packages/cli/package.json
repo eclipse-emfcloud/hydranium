@@ -1,0 +1,105 @@
+{
+  "name": "@hydranium/cli",
+  "version": "0.0.0",
+  "description": "Build-time codegen tools + data-server subcommands for the hydranium framework.",
+  "keywords": [
+    "hydranium",
+    "langium",
+    "language-server",
+    "lsp",
+    "cli",
+    "codegen"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/cli",
+  "bugs": {
+    "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
+  },
+  "sideEffects": [
+    "./lib/cli.js",
+    "./lib/commands/*-driver.js",
+    "./lib/testing/echo-server.js"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./lib/cli.js": {
+      "types": "./lib/cli.d.ts",
+      "default": "./lib/cli.js"
+    }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "bin": {
+    "hydranium-cli": "lib/cli.js"
+  },
+  "files": [
+    "lib",
+    "src",
+    "heap-analysis",
+    "!lib/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b && node -e \"require('node:fs').chmodSync('lib/cli.js',0o755)\"",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "eslint src test --max-warnings 0",
+    "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc -b -w --preserveWatchOutput"
+  },
+  "dependencies": {
+    "@clack/prompts": "~1.7.0",
+    "commander": "^14.0.3",
+    "ts-morph": "^25.0.0"
+  },
+  "devDependencies": {
+    "@hydranium/core": "0.0.0",
+    "@hydranium/data-server": "0.0.0",
+    "@hydranium/langium": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vscode-jsonrpc": "9.0.1",
+    "vscode-languageserver": "~10.0.1"
+  },
+  "peerDependencies": {
+    "@hydranium/core": "^0.0.0",
+    "@hydranium/data-server": "^0.0.0",
+    "@hydranium/langium": "^0.0.0",
+    "@hydranium/protocol": "^0.0.0",
+    "@memlab/core": "^2.0.3",
+    "@memlab/heap-analysis": "^2.0.3",
+    "vscode-jsonrpc": "^8.0.0 || ^9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@memlab/core": {
+      "optional": true
+    },
+    "@memlab/heap-analysis": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "//build": "The chmod is load-bearing, not cruft. npm sets a bin's executable bit through bin-links' fixBin, but ONLY when it first creates the link — and `tsc` never sets it, so after `npm run clean` (which deletes lib/) a rebuild leaves lib/cli.js at 0644 and the node_modules/.bin/hydranium-cli symlink resolves to a non-executable target. Every example's `generate` step then dies with `sh: hydranium-cli: Permission denied`, surfacing as an opaque npm error code 127 during `turbo run build`. npm rebuild, npm rebuild @hydranium/cli AND a full npm install all fail to restore it, because npm will not revisit an existing workspace symlink; only a from-scratch `rm -rf node_modules` install does. Written as `node -e` rather than `chmod +x` so it stays portable — on Windows npm generates .cmd/.ps1 shims where the bit is irrelevant and chmodSync is harmless. The example packages' bins need no such step: their tests spawn them via process.execPath, never through the shim.",
+  "//exports": "Two keys, and the SHORT list is the point: `files` ships the whole compiled tree, so without a map every `lib/commands/*.js`, every internal helper and `lib/testing/echo-server.js` is deep-importable the moment this publishes, and semver then applies to all of it. `.` is the library barrel (the data-server subcommands an adopter calls as functions). `./lib/cli.js` is the BINARY ARTEFACT, and it is declared because a consumer that spawns the CLI resolves it BY SPECIFIER — `createRequire(import.meta.url).resolve('@hydranium/cli/lib/cli.js')` — to get the path npx would run; `bin` gives a shim on PATH, not a path, so dropping this key breaks that resolution and the failure surfaces as \"hydranium-cli is not built\", naming the wrong cause. It is declared in the `/lib/` spelling ONLY: that spelling already resolves under both of this repo's module resolvers, so the twin rule (which exists so a BARE subpath is reachable from node10) has nothing to add here and a bare twin would only be a second name for one artefact. `heap-analysis/` needs no key even though `files` ships it — `analyze-heap` reaches the analyzer through a `new URL(..., import.meta.url)` file URL, which `exports` does not gate, and the package's own tests reach it relatively. `./testing` is deliberately absent: `echo-server` is a spawnable stdio fixture, not a reusable export.",
+  "//memlab": "@memlab/core and @memlab/heap-analysis are OPTIONAL PEER dependencies, not optionalDependencies, and the distinction is the whole point: npm installs optionalDependencies BY DEFAULT, both memlab packages pin puppeteer exactly, and puppeteer's postinstall downloads a Chrome binary — so every adopter of this CLI paid ~86 MB and a browser download for the one subcommand almost none of them run, and the download can fail and be walked past as a warning. An optional peer is not auto-installed, so `analyze-heap` documents `npm install @memlab/core @memlab/heap-analysis` as the opt-in and every other subcommand is unaffected. Taken pre-publish deliberately: after publish the install shape is what adopters already have.",
+  "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
+  "//sideEffects": "The listed modules RUN on load rather than exporting anything: `cli.js` is the `bin`, each `*-driver.js` is spawned as its own process and calls `main(process.argv)` at top level, and `echo-server.js` starts a server. Their whole purpose is the effect, so a bundler must never treat them as prunable. Everything else here is library code with no module-level state beyond `new URL(..., import.meta.url)` constants."
+}

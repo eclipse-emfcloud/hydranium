@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 746" font-family="Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-labelledby="arch-title arch-desc">
+  <title id="arch-title">Hydranium architecture overview</title>
+  <desc id="arch-desc">A Theia or VS Code application — frontend editors plus an extension host — connects over per-protocol channels (LSP, data RPC, GLSP, or a custom protocol) to a separate Hydranium server process. The server hosts LSP, data-server, GLSP and custom heads on a shared, layered Langium workspace: model coordination over the language workspace (the live AST) and language semantics. The workspace loads and saves model files on disk.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7585"/>
+    </marker>
+    <marker id="aG" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa3b0"/>
+    </marker>
+  </defs>
+
+  <style>
+    .title  { font-size: 14.5px; font-weight: 700; }
+    .detail { font-size: 12px; }
+    .pkg    { font-size: 11.5px; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-weight: 700; }
+    .clab   { font-size: 13px; font-weight: 700; }
+    .sub    { font-size: 11.5px; fill: #6b7480; }
+    .elab   { font-size: 11.5px; fill: #243244; }
+    .it     { font-style: italic; }
+    .edge   { stroke: #6b7585; stroke-width: 1.8; fill: none; }
+    .eA     { stroke: #b08a1c; stroke-width: 2; fill: none; }
+    .eT     { stroke: #2f8473; stroke-width: 2; fill: none; }
+    .eP     { stroke: #7a5fc0; stroke-width: 2; fill: none; }
+    .eG     { stroke: #9aa3b0; stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+    .spawn  { stroke: #9aa3b0; stroke-width: 1.5; fill: none; stroke-dasharray: 4 3; }
+  </style>
+
+  <!-- ===================== Theia / VS Code application ===================== -->
+  <g id="application">
+    <title>Theia / VS Code application</title>
+    <rect x="20" y="16" width="1000" height="176" rx="10" fill="#fbfcfd" stroke="#c2ccd8"/>
+    <text x="520" y="36" text-anchor="middle" class="clab" fill="#243244">Theia / VS&#160;Code application</text>
+    <text x="520" y="53" text-anchor="middle" class="sub">Frontend &#160;·&#160; webview / browser</text>
+
+    <g id="client-text-editor" class="node">
+      <title>Text editor</title>
+      <rect x="40" y="62" width="200" height="54" rx="7" fill="#fff3c4" stroke="#d6a700"/>
+      <text x="140" y="84" text-anchor="middle" class="title" fill="#3a3000">Text editor</text>
+      <text x="140" y="103" text-anchor="middle" class="detail" fill="#3a3000">Monaco / LSP client</text>
+    </g>
+
+    <g id="client-form-editor" class="node">
+      <title>Form / tree editor</title>
+      <rect x="290" y="62" width="200" height="54" rx="7" fill="#cdeae3" stroke="#3f9684"/>
+      <text x="390" y="84" text-anchor="middle" class="title" fill="#143b34">Form / tree editor</text>
+      <text x="390" y="103" text-anchor="middle" class="detail" fill="#143b34">adopter UI framework</text>
+    </g>
+
+    <g id="client-diagram" class="node">
+      <title>Diagram client</title>
+      <rect x="540" y="62" width="200" height="54" rx="7" fill="#e0d6f2" stroke="#8a6fce"/>
+      <text x="640" y="84" text-anchor="middle" class="title" fill="#2e2150">Diagram client</text>
+      <text x="640" y="104" text-anchor="middle" class="pkg" fill="#2e2150">glsp-client-theia</text>
+    </g>
+
+    <g id="client-custom" class="node">
+      <title>Custom client</title>
+      <rect x="790" y="62" width="200" height="54" rx="7" fill="#f4f6f8" stroke="#aeb8c4" stroke-dasharray="5 4"/>
+      <text x="890" y="84" text-anchor="middle" class="title" fill="#5b6573">+ custom client</text>
+      <text x="890" y="103" text-anchor="middle" class="detail it" fill="#5b6573">CLI, code-gen, …</text>
+    </g>
+
+    <g id="extension-host" class="node">
+      <title>Extension Host</title>
+      <rect x="40" y="134" width="950" height="50" rx="7" fill="#e7eaef" stroke="#8b95a5"/>
+      <text x="515" y="156" text-anchor="middle" class="title" fill="#2c3340">Extension Host</text>
+      <text x="515" y="174" text-anchor="middle" class="detail" fill="#2c3340">language client · server contributions</text>
+    </g>
+  </g>
+
+  <!-- ===================== server process ===================== -->
+  <g id="server-process">
+    <title>Server process (@hydranium/*)</title>
+    <rect x="20" y="258" width="1000" height="392" rx="10" fill="#fbfcfd" stroke="#c2ccd8"/>
+    <text x="520" y="279" text-anchor="middle" class="clab" fill="#243244">Server process &#160;·&#160; <tspan class="pkg" font-size="13">@hydranium/*</tspan></text>
+
+    <g id="head-lsp" class="node head">
+      <title>LSP head</title>
+      <rect x="40" y="290" width="200" height="86" rx="7" fill="#fff3c4" stroke="#d6a700"/>
+      <text x="140" y="311" text-anchor="middle" class="title" fill="#3a3000">LSP head</text>
+      <text x="140" y="329" text-anchor="middle" class="pkg" fill="#3a3000">@hydranium/core/lsp</text>
+      <text x="140" y="351" text-anchor="middle" class="detail" fill="#3a3000">completion · diagnostics</text>
+      <text x="140" y="368" text-anchor="middle" class="detail" fill="#3a3000">references · formatting</text>
+    </g>
+
+    <g id="head-data-server" class="node head">
+      <title>data-server head</title>
+      <rect x="290" y="290" width="200" height="86" rx="7" fill="#cdeae3" stroke="#3f9684"/>
+      <text x="390" y="311" text-anchor="middle" class="title" fill="#143b34">data-server head</text>
+      <text x="390" y="329" text-anchor="middle" class="pkg" fill="#143b34">@hydranium/data-server</text>
+      <text x="390" y="351" text-anchor="middle" class="detail" fill="#143b34">read · update</text>
+      <text x="390" y="368" text-anchor="middle" class="detail" fill="#143b34">save · push events</text>
+    </g>
+
+    <g id="head-glsp-server" class="node head">
+      <title>glsp-server head</title>
+      <rect x="540" y="290" width="200" height="86" rx="7" fill="#e0d6f2" stroke="#8a6fce"/>
+      <text x="640" y="311" text-anchor="middle" class="title" fill="#2e2150">glsp-server head</text>
+      <text x="640" y="329" text-anchor="middle" class="pkg" fill="#2e2150">@hydranium/glsp-server</text>
+      <text x="640" y="351" text-anchor="middle" class="detail" fill="#2e2150">GModel storage</text>
+      <text x="640" y="368" text-anchor="middle" class="detail" fill="#2e2150">submission · commands</text>
+    </g>
+
+    <g id="head-custom" class="node head">
+      <title>Custom head</title>
+      <rect x="790" y="290" width="200" height="86" rx="7" fill="#f4f6f8" stroke="#aeb8c4" stroke-dasharray="5 4"/>
+      <text x="890" y="328" text-anchor="middle" class="title" fill="#5b6573">+ custom head</text>
+      <text x="890" y="350" text-anchor="middle" class="detail it" fill="#5b6573">adopter-defined</text>
+    </g>
+
+    <!-- shared workspace -->
+    <g id="shared-workspace">
+      <title>Shared workspace (@hydranium/core)</title>
+      <rect x="40" y="394" width="950" height="244" rx="8" fill="#f6f8fb" stroke="#cdd5e0"/>
+
+      <g id="layer-model-coordination" class="node layer">
+        <title>Model coordination</title>
+        <rect x="66" y="410" width="894" height="66" rx="7" fill="#e3eaf4" stroke="#6b7d99" stroke-width="1.6"/>
+        <text x="513" y="431" text-anchor="middle" class="title" fill="#1b2738">Model coordination</text>
+        <text x="513" y="451" text-anchor="middle" class="detail" fill="#1b2738">open · update · save · change events — one live model shared by every head;</text>
+        <text x="513" y="468" text-anchor="middle" class="detail" fill="#1b2738">sequences concurrent edits, hands back model snapshots</text>
+      </g>
+
+      <g id="layer-language-workspace" class="node layer">
+        <title>Language workspace</title>
+        <rect x="66" y="530" width="404" height="64" rx="7" fill="#eef2f7" stroke="#9aa7b8"/>
+        <text x="268" y="551" text-anchor="middle" class="title" fill="#1f2a37">Language workspace</text>
+        <text x="268" y="571" text-anchor="middle" class="detail" fill="#1f2a37">parse · link · validate · index</text>
+        <text x="268" y="588" text-anchor="middle" class="detail" fill="#1f2a37">the live AST · single source of truth</text>
+      </g>
+
+      <g id="layer-language-semantics" class="node layer">
+        <title>Language semantics</title>
+        <rect x="556" y="530" width="404" height="64" rx="7" fill="#eef2f7" stroke="#9aa7b8"/>
+        <text x="758" y="551" text-anchor="middle" class="title" fill="#1f2a37">Language semantics</text>
+        <text x="758" y="571" text-anchor="middle" class="detail" fill="#1f2a37">scoping &amp; visibility · integrity</text>
+        <text x="758" y="588" text-anchor="middle" class="detail" fill="#1f2a37">computed properties · serialization</text>
+      </g>
+
+      <text x="513" y="624" text-anchor="middle" class="sub">Shared workspace &#160;·&#160; <tspan class="pkg" fill="#6b7480">@hydranium/core</tspan></text>
+    </g>
+  </g>
+
+  <!-- ===================== persistent store ===================== -->
+  <g id="disk" class="node">
+    <title>Model files on disk</title>
+    <path d="M435,680 v40 a85,10 0 0 0 170,0 v-40" fill="#fde2cf" stroke="#e08a4a"/>
+    <ellipse cx="520" cy="680" rx="85" ry="10" fill="#fde2cf" stroke="#e08a4a"/>
+    <text x="520" y="712" text-anchor="middle" class="title" font-size="12.5" fill="#5a2f12">Model files on disk</text>
+  </g>
+
+  <!-- ===================== connections ===================== -->
+  <g id="connections">
+    <title>Connections</title>
+
+    <g id="edges-client-host">
+      <title>Frontend clients run on the extension host</title>
+      <line x1="140" y1="116" x2="140" y2="134" class="eA"/>
+      <line x1="390" y1="116" x2="390" y2="134" class="eT"/>
+      <line x1="640" y1="116" x2="640" y2="134" class="eP"/>
+      <line x1="890" y1="116" x2="890" y2="134" class="eG"/>
+    </g>
+
+    <g id="edge-spawns">
+      <title>Extension host spawns the server process</title>
+      <line x1="520" y1="184" x2="520" y2="258" class="spawn" marker-end="url(#aG)"/>
+      <rect x="496" y="213" width="48" height="16" fill="#ffffff"/>
+      <text x="520" y="225" text-anchor="middle" class="elab" fill="#5b6573">spawns</text>
+    </g>
+
+    <g id="edges-protocol" text-anchor="middle">
+      <title>Per-protocol channels between the application and the heads</title>
+      <line x1="140" y1="192" x2="140" y2="290" class="eA"/>
+      <line x1="390" y1="192" x2="390" y2="290" class="eT"/>
+      <line x1="640" y1="192" x2="640" y2="290" class="eP"/>
+      <line x1="890" y1="192" x2="890" y2="290" class="eG"/>
+      <rect x="120" y="231" width="40" height="17" fill="#ffffff"/><text x="140" y="243" class="elab">LSP</text>
+      <rect x="358" y="231" width="64" height="17" fill="#ffffff"/><text x="390" y="243" class="elab">Data RPC</text>
+      <rect x="620" y="231" width="40" height="17" fill="#ffffff"/><text x="640" y="243" class="elab">GLSP</text>
+      <rect x="838" y="231" width="104" height="17" fill="#ffffff"/><text x="890" y="243" class="elab">adopter protocol</text>
+    </g>
+
+    <g id="edges-heads-coordination">
+      <title>Heads coordinate through the model-coordination layer</title>
+      <line x1="140" y1="376" x2="140" y2="410" class="eA"/>
+      <line x1="390" y1="376" x2="390" y2="410" class="eT"/>
+      <line x1="640" y1="376" x2="640" y2="410" class="eP"/>
+      <line x1="890" y1="376" x2="890" y2="410" class="eG"/>
+    </g>
+
+    <g id="edge-read-build">
+      <title>Model coordination reads and builds the language workspace</title>
+      <line x1="268" y1="476" x2="268" y2="530" class="edge" marker-end="url(#arrow)"/>
+      <rect x="231" y="494" width="74" height="17" fill="#f6f8fb"/>
+      <text x="268" y="506" text-anchor="middle" class="elab">read / build</text>
+    </g>
+
+    <g id="edge-apply">
+      <title>Language semantics apply to the workspace</title>
+      <line x1="556" y1="562" x2="470" y2="562" class="edge" marker-end="url(#arrow)"/>
+      <rect x="493" y="554" width="40" height="16" fill="#f6f8fb"/>
+      <text x="513" y="566" text-anchor="middle" class="elab">apply</text>
+    </g>
+
+    <g id="edge-load-save">
+      <title>The language workspace loads and saves model files on disk</title>
+      <path d="M268,594 V695 H435" class="edge"/>
+      <rect x="234" y="606" width="68" height="16" fill="#f6f8fb"/>
+      <text x="268" y="618" text-anchor="middle" class="elab">load / save</text>
+    </g>
+  </g>
+</svg>

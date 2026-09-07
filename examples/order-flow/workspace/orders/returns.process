@@ -1,0 +1,13 @@
+// A second process over the same domain entity, so the workspace shows that
+// `.domain` declarations are shared by several `.process` files rather than
+// owned by one. Renaming `Order.status` has to update both.
+
+process Returns for Order {
+   task Receive reads Order.id
+   gateway Restockable
+      yes -> Restock
+      no -> Scrap
+   task Restock writes Order.status = NEW
+   task Scrap writes Order.status = CANCELLED
+   transition Receive -> Restockable
+}

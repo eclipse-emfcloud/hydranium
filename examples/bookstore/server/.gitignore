@@ -1,0 +1,6 @@
+# The workspace root already covers `node_modules/`, `lib/` and `*.tsbuildinfo`.
+# It has no reason to know about this one: the TextMate grammar is a Langium
+# artefact, rewritten by every `langium generate`, so a root that has never held
+# a Langium package ignores nothing here and the generated file is offered for
+# commit.
+syntaxes/

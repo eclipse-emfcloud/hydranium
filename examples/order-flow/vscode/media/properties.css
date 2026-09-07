@@ -1,0 +1,102 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/*
+ * The properties panel's styles.
+ *
+ * A LINKED stylesheet rather than an inline `<style nonce>`, which is the shape
+ * VS Code's own webview sample uses and the reason is a CSP one: the panel's
+ * policy is `default-src 'none'`, and a `style-src` that lists only a nonce
+ * governs every style in the document. VS Code injects its own theme-variable
+ * stylesheet into the webview, and that one carries no nonce of ours — so the
+ * tight-looking inline form risks losing every `--vscode-*` variable and
+ * rendering the panel unthemed. Serving this file from the extension and
+ * allowing `webview.cspSource` keeps the policy strict without betting on how
+ * the host injects its own styles.
+ *
+ * Everything here is expressed in `--vscode-*` variables, so the panel follows
+ * the user's theme rather than approximating it.
+ */
+
+body {
+   font-family: var(--vscode-font-family);
+   font-size: var(--vscode-font-size);
+   color: var(--vscode-foreground);
+   padding: 0.75rem;
+}
+
+h1 {
+   font-size: 1em;
+   font-weight: 600;
+   margin: 0 0 0.75rem;
+}
+
+.field {
+   display: flex;
+   flex-direction: column;
+   margin-bottom: 0.6rem;
+}
+
+.field label {
+   margin-bottom: 0.2rem;
+   opacity: 0.85;
+}
+
+.field input {
+   background: var(--vscode-input-background);
+   color: var(--vscode-input-foreground);
+   /*
+    * A fallback CHAIN ending in a literal, because `--vscode-input-border` is
+    * simply not defined in several stock themes — Light+ among them — and a
+    * `transparent` fallback then renders a text box whose only edge is the
+    * contrast between its background and the panel's. On a light theme those are
+    * nearly the same colour, so the field looks like plain text. The neutral grey
+    * at the end reads on both light and dark, so the box is always findable even
+    * when a theme defines none of the variables.
+    */
+   border: 1px solid var(--vscode-input-border, var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.6))));
+   padding: 0.25rem 0.4rem;
+   font-family: inherit;
+   font-size: inherit;
+}
+
+.field input:focus {
+   outline: 1px solid var(--vscode-focusBorder);
+   outline-offset: -1px;
+}
+
+.field input:disabled {
+   opacity: 0.6;
+}
+
+.status {
+   margin-top: 0.75rem;
+   min-height: 1.2em;
+   opacity: 0.85;
+}
+
+.status[data-kind='conflict'],
+.status[data-kind='error'] {
+   color: var(--vscode-errorForeground);
+   opacity: 1;
+}
+
+.status[data-kind='merged'] {
+   color: var(--vscode-editorWarning-foreground);
+   opacity: 1;
+}
+
+.diagnostics {
+   margin: 0.75rem 0 0;
+   padding-left: 1.1rem;
+}
+
+.diagnostics li {
+   color: var(--vscode-editorWarning-foreground);
+}

@@ -1,0 +1,16 @@
+{
+  "//": "The webview is a BROWSER, so it needs the DOM lib the repo-wide tsconfig.base.json deliberately withholds (`lib: [\"ES2022\"]`, which is what compile-bans `document`/`window` on every neutral surface). Typecheck-only: esbuild.mjs does the emitting, so `noEmit` — and `composite: false`, because TypeScript rejects the pair. `src/properties-panel-protocol.ts` is compiled by BOTH this project and the extension host's, which is how the two ends share the panel's notification types.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/webview", "src/properties-panel-protocol.ts"]
+}

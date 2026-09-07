@@ -1,0 +1,79 @@
+diff --git a/node_modules/vscode-jsonrpc/browser.d.ts b/node_modules/vscode-jsonrpc/browser.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5360a485d407618d8a49c88eee003d474e9e1b9
+--- /dev/null
++++ b/node_modules/vscode-jsonrpc/browser.d.ts
+@@ -0,0 +1,6 @@
++/* --------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ * ----------------------------------------------------------------------------------------- */
++
++export * from './lib/browser/main';
+diff --git a/node_modules/vscode-jsonrpc/browser.js b/node_modules/vscode-jsonrpc/browser.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..11fee64db4b82123e5fcfbf0e20f7ad172c98b05
+--- /dev/null
++++ b/node_modules/vscode-jsonrpc/browser.js
+@@ -0,0 +1,7 @@
++/* --------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ * ----------------------------------------------------------------------------------------- */
++'use strict';
++
++module.exports = require('./lib/browser/main');
+diff --git a/node_modules/vscode-jsonrpc/node.d.ts b/node_modules/vscode-jsonrpc/node.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4b4a52434ca1ba34ee0d0fe840fe0eff1a8d4f7
+--- /dev/null
++++ b/node_modules/vscode-jsonrpc/node.d.ts
+@@ -0,0 +1,6 @@
++/* --------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ * ----------------------------------------------------------------------------------------- */
++
++export * from './lib/node/main';
+diff --git a/node_modules/vscode-jsonrpc/node.js b/node_modules/vscode-jsonrpc/node.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..827f978667165c08417bd705d386c16e6da26980
+--- /dev/null
++++ b/node_modules/vscode-jsonrpc/node.js
+@@ -0,0 +1,7 @@
++/* --------------------------------------------------------------------------------------------
++ *  Copyright (c) Microsoft Corporation. All rights reserved.
++ *  Licensed under the MIT License. See License.txt in the project root for license information.
++ * ----------------------------------------------------------------------------------------- */
++'use strict';
++
++module.exports = require('./lib/node/main');
+diff --git a/node_modules/vscode-jsonrpc/package.json b/node_modules/vscode-jsonrpc/package.json
+index 08eaf7c61e377e3a26156a7aef57cd69eeaa0b1e..efc4c40d4a76abe267710a93587cdb44795919e8 100644
+--- a/node_modules/vscode-jsonrpc/package.json
++++ b/node_modules/vscode-jsonrpc/package.json
+@@ -22,11 +22,13 @@
+ 		},
+ 		"./node": {
+ 			"types": "./lib/node/main.d.ts",
+-			"node": "./lib/node/main.js"
++			"node": "./lib/node/main.js",
++			"default": "./lib/node/main.js"
+ 		},
+ 		"./browser": {
+ 			"types": "./lib/browser/main.d.ts",
+-			"browser": "./lib/browser/main.js"
++			"browser": "./lib/browser/main.js",
++			"default": "./lib/browser/main.js"
+ 		}
+ 	},
+ 	"devDependencies": {
+@@ -50,5 +52,7 @@
+ 		"all": "npm run clean && npm run compile && npm run lint && npm run test",
+ 		"compile:publish": "tsc -b ./tsconfig.publish.json",
+ 		"all:publish": "git clean -xfd . && npm install && npm run compile:publish && npm run lint && npm run test"
+-	}
++	},
++	"main": "./lib/common/api.js",
++	"typings": "./lib/common/api.d.ts"
+ }

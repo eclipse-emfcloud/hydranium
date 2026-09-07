@@ -1,0 +1,11 @@
+// Test-only fixture, deliberately outside the sample workspace.
+//
+// `Order.total` is a `Money` value type, not an enumeration, so the third
+// reference of the effect has no candidates at all — `PAID` must fail to link
+// even though `Order` and `total` both resolve. Without the dependent scope
+// this file would link cleanly against every `EnumLiteral` in the workspace.
+
+process BrokenEffect for Order {
+   task Overreach writes Order.total = PAID
+   task Ghost reads Order.nosuchfield
+}

@@ -1,0 +1,14 @@
+// Deliberately broken fixture, and the workspace's ONLY intended error.
+//
+// `orders` requires `commerce-core` and therefore resolves that project's
+// `public` declarations. `AuditStamp` is not one of them, so the reference
+// below MUST fail to link. If it ever resolves, the `public` modifier has
+// stopped meaning anything and the whole visibility story in this example is
+// decorative.
+//
+// This is also the file that makes `hydranium-cli validate` exit non-zero on
+// this workspace — repair it and the gate can no longer be shown failing.
+
+entity ShipmentLog {
+   stamp: AuditStamp
+}

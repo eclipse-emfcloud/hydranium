@@ -1,0 +1,13 @@
+// Exists for the EDITOR, not for any build or script — see the sibling packages'
+// `test/tsconfig.json` for the full reasoning. This tier's tests are
+// type-checked by `../tsconfig.e2e.json` rather than a `tsconfig.test.json`,
+// because they run in Node under Playwright and need the `node` types the
+// worker and page projects deliberately drop.
+//
+// Without this file the tests belong to no editor-discoverable project, so the
+// TS server infers one that loads every `@types` package in the tree and
+// reports `TS2403` clashes between `@types/mocha` and `@types/jest` that no
+// `typecheck:test` run reproduces.
+{
+  "extends": "../tsconfig.e2e.json"
+}

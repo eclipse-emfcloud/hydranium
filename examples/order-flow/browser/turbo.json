@@ -1,0 +1,30 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The sample workspace is generated into this package at build time but
+    // lives outside it, and it is not an npm workspace, so nothing in the
+    // inherited input set covers it. Without the $TURBO_ROOT$ entry a model
+    // edit leaves this package's inputs untouched, turbo replays the cached
+    // bundle, and the browser host serves the previous workspace while every
+    // other host serves the new one — a stale green that looks like a build.
+    //
+    // Line comments rather than a "//inputs" sibling: turbo validates this file
+    // against a schema and rejects unknown keys, so the convention the
+    // package.json files use fails here.
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*",
+        "scripts/**/*",
+        "package.json",
+        "tsconfig.worker.json",
+        "tsconfig.page.json",
+        "esbuild.mjs",
+        "index.html",
+        "$TURBO_ROOT$/examples/order-flow/workspace/**"
+      ],
+      "outputs": ["out/**", "src/generated/**"]
+    }
+  }
+}

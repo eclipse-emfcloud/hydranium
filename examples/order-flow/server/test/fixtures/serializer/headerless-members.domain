@@ -1,0 +1,8 @@
+entity Manifest {
+   shipment: Shipment
+   stamp: ID
+}
+
+valuetype Barcode {}
+
+enum Scan {}

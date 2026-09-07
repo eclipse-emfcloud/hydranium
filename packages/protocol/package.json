@@ -1,0 +1,100 @@
+{
+  "name": "@hydranium/protocol",
+  "version": "0.0.0",
+  "description": "Generic, language-agnostic types, constants, and pure utilities for the hydranium framework.",
+  "keywords": [
+    "hydranium",
+    "langium",
+    "language-server",
+    "lsp",
+    "rpc",
+    "transfer-model"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/protocol",
+  "bugs": {
+    "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "packages/protocol"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client/index.js"
+    },
+    "./lib/client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client/index.js"
+    },
+    "./data": {
+      "types": "./lib/data/index.d.ts",
+      "default": "./lib/data/index.js"
+    },
+    "./testing": {
+      "types": "./lib/testing/index.d.ts",
+      "default": "./lib/testing/index.js"
+    },
+    "./testing/node": {
+      "types": "./lib/testing/node/index.d.ts",
+      "default": "./lib/testing/node/index.js"
+    },
+    "./lib/data": {
+      "types": "./lib/data/index.d.ts",
+      "default": "./lib/data/index.js"
+    },
+    "./lib/testing": {
+      "types": "./lib/testing/index.d.ts",
+      "default": "./lib/testing/index.js"
+    },
+    "./lib/testing/node": {
+      "types": "./lib/testing/node/index.d.ts",
+      "default": "./lib/testing/node/index.js"
+    }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "eslint src test --max-warnings 0",
+    "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc -b -w --preserveWatchOutput"
+  },
+  "dependencies": {
+    "fast-json-patch": "^3.1.1"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vscode-jsonrpc": "9.0.1"
+  },
+  "peerDependencies": {
+    "vscode-jsonrpc": "^8.0.0 || ^9.0.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
+}

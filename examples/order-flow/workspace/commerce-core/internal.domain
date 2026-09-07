@@ -1,0 +1,16 @@
+// No `project` header, so this file is not a descriptor — it is an ordinary
+// member of the `commerce-core` project declared by `money.domain`.
+//
+// `AuditStamp` carries no `public` modifier, so it exists only at the
+// framework's `project` visibility tier. Inside `commerce-core` it resolves
+// normally (the `stamp: ID` field below reaches `money.domain` across a file
+// boundary within the same project); from `orders` it must not resolve at
+// all, and completion there must not offer it. The server's project-visibility
+// suite asserts that negative — a visibility tier you cannot observe failing is
+// not demonstrated.
+
+entity AuditStamp {
+   stamp: ID
+   createdBy: String
+   createdAt: String
+}

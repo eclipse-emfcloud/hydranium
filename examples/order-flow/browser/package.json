@@ -1,0 +1,60 @@
+{
+  "name": "@hydranium/example-order-flow-browser",
+  "displayName": "Order Flow — Browser",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The reference browser deployment: all three hydranium heads in one web worker, with no Node runtime and no backend. A plain page drives them over three MessagePorts — a GLSP diagram, three Monaco editors with diagnostics, highlighting, completion, hover and inbound workspace/applyEdit, light/dark theming, and a workspace that survives a reload through IndexedDB — so it is the thing an adopter copies for a browser host rather than a demonstration that one is possible.",
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/browser"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "npm run generate && npm run typecheck && npm run bundle",
+    "build:all": "turbo run build --filter=@hydranium/example-order-flow-browser...",
+    "bundle": "node esbuild.mjs",
+    "clean": "rimraf out test-results playwright-report tsconfig.worker.tsbuildinfo tsconfig.page.tsbuildinfo",
+    "generate": "node scripts/generate-workspace-seed.mjs",
+    "lint": "eslint src test --max-warnings 0",
+    "start": "node scripts/serve.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:headed": "playwright test --tsconfig tsconfig.e2e.json --headed",
+    "test:e2e:install": "playwright install chromium",
+    "test:e2e:ui": "playwright test --tsconfig tsconfig.e2e.json --ui",
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json",
+    "typecheck:test": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "node esbuild.mjs --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/protocol": "2.7.0",
+    "@eclipse-glsp/server": "2.7.0",
+    "@hydranium/core": "0.0.0",
+    "@hydranium/data-server": "0.0.0",
+    "@hydranium/example-order-flow-client": "0.0.0",
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "@hydranium/glsp-server": "0.0.0",
+    "@hydranium/langium": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "inversify": "^6.1.3",
+    "monaco-editor-core": "0.56.0",
+    "reflect-metadata": "~0.2.2",
+    "vscode-jsonrpc": "~9.0.1",
+    "vscode-languageserver": "~10.0.1",
+    "vscode-languageserver-protocol": "~3.18.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "//generate": "The seed is committed, and `build` regenerates it from `examples/order-flow/workspace` before anything compiles, so the browser host cannot open models that have drifted from the ones the VS Code and Theia hosts open. That directory is NOT an npm workspace, so turbo cannot infer it as an input — see this package's `turbo.json`, without which a workspace edit replays a stale cached bundle.",
+  "//monaco-editor-core": "CORE, not `monaco-editor`, which is core plus eighty bundled language definitions — a page whose entire subject is that its language comes from a server should ship none of them. Core's `module` entry is `editor.main.js` = `editor.all.js` (every editor contribution: suggest widget, hover controller, `documentSemanticTokens`) plus the standalone quick-access commands: one supported specifier, same API surface, no grammars. It costs exactly two things, both in `src/page/`: `monaco-editor-worker.ts` assembles the `editor.worker.js` entry the wrapper package would have shipped, and `monaco-editor-core-worker.d.ts` declares it, since core's `typings` covers the editor API alone. Trying to reach the same place from `monaco-editor` does not work cleanly — `features/register.all.js` omits `coreCommands`, `suggestController` and `documentSemanticTokens`, so composing it takes about ten deep-internal specifiers no export map declares. Measured on 0.56, the page bundle unminified is about 1.7 MB smaller on core than on `monaco-editor`; the README carries the absolute figures, once. Deliberately NOT `monaco-languageclient` — see `src/page/monaco-lsp-adapter.ts`, which is the whole cost of that decision.",
+  "//test:e2e": "Deliberately NOT wired to `test`, so `npm run check` does not depend on a downloaded browser binary — the same posture as `examples/order-flow/theia-app`. The launch surface of the worker head IS covered inside `check`, headless, by `packages/glsp-server/test/start-glsp-server-in-worker.test.ts`; what only this tier can cover is a GLSP model reaching a rendered view. Run `test:e2e:install` once, then `npm run build && npm run test:e2e`.",
+  "//typecheck": "Two projects, not one: the worker needs `lib.webworker` and the page needs `lib.dom`, and those two libs declare conflicting globals (`self`, `postMessage`, `addEventListener`) so a single project cannot hold both. `src/head-channels.ts` is compiled by BOTH, which is how the two ends of the host protocol stay in step. `src/generated` is compiled by the WORKER only: the filesystem is the seed with the stored edits laid over it, so the page takes its editor text from the workspace the worker sends rather than from a seed that is a version behind after any save. `typecheck:test` is a THIRD project for the Playwright tier, which runs in Node and needs the `node` types the other two deliberately drop."
+}

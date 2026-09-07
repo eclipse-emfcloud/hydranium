@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "out",
+    "module": "CommonJS",
+    "moduleResolution": "Node"
+  },
+  "include": ["src"],
+  "//exclude": "src/webview is a BROWSER bundle: it needs the DOM lib this project deliberately does not have and is emitted by esbuild, not tsc. Its own project is tsconfig.webview.json, which also compiles src/properties-panel-protocol.ts — the one module both ends share.",
+  "exclude": ["src/webview"]
+}

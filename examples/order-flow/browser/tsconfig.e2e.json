@@ -1,0 +1,32 @@
+{
+  // Playwright-only tsconfig, passed via `--tsconfig` from the `test:e2e` script
+  // and used by `typecheck:test` so the spec is type-checked in `npm run check`
+  // even though the suite itself is not run there.
+  //
+  // Without `--tsconfig` Playwright walks up from `playwright.config.mts`,
+  // reaches the repo root `tsconfig.json`, and fails to load it: that file is a
+  // solution-style config whose `references` entries are DIRECTORIES, which
+  // Playwright's own tsconfig reader does not resolve to the contained
+  // `tsconfig.json`. The failure happens while loading the Playwright config
+  // itself, so the `tsconfig` config property cannot help.
+  //
+  // Separate from `tsconfig.page.json` / `tsconfig.worker.json` rather than
+  // added to either: this tier runs in NODE and drives a browser, so it needs
+  // the `node` types those two deliberately drop (`types: []` is the point of
+  // the exercise there) alongside the DOM lib for the `evaluate` callbacks.
+  //
+  // `.mts` for the same reason the Theia app's tier uses it: this package has no
+  // `"type": "module"`, so a `.ts` config would take Playwright's CommonJS path.
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["test", "playwright.config.mts"]
+}

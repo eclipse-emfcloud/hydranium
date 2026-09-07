@@ -1,0 +1,16 @@
+{
+  "//": "The page half — the client end of the worker's channels, and the only code here that touches the DOM. `src/head-channels.ts` is compiled by this project AND the worker's, which is how both ends of the host protocol stay in step; the two cannot be merged into one project because `lib.dom` and `lib.webworker` declare conflicting globals. `src/generated` is deliberately NOT here: the worker's filesystem is the seed with the stored edits laid over it, so the page takes its editor text from the workspace the worker sends rather than from the committed seed, which after a restore is a version behind.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/page", "src/head-channels.ts"]
+}

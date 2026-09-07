@@ -1,0 +1,16 @@
+{
+  "//": "The worker half. `lib.webworker` instead of `lib.dom` — the heads run in a DedicatedWorkerGlobalScope, and giving this project the DOM lib would let a stray `document` reference compile and then fail at runtime where there is no devtools breakpoint worth setting. Typecheck-only: esbuild emits, so `noEmit`, and `composite: false` because TypeScript rejects the pair. `types: []` drops the repo-wide `node` types, which is the point of the exercise.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/worker", "src/workspace", "src/generated", "src/head-channels.ts"]
+}

@@ -1,0 +1,5 @@
+layout DispatchLayout for Dispatch {
+   node Pack at 40, 40 size 160, 60
+   node Weighed at 40, 160
+   node Freight at 260, 160 size 160, 60
+}

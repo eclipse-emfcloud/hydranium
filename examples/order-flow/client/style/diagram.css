@@ -1,0 +1,319 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/*
+ * How a `.process` diagram LOOKS, for every shell that mounts it.
+ *
+ * The companion to `src/diagram/order-flow-process-diagram-module.ts`: that file
+ * says which model class and view each element type gets, this one says how the
+ * result is painted. Both are host-agnostic, and for the same reason — a shell
+ * supplies a transport and a theme, not a notation.
+ *
+ * **Every colour here is an `--order-flow-*` variable the SHELL defines**, and
+ * that indirection is the whole design. The VS Code webview reads `--vscode-*`
+ * while a Theia widget reads `--theia-*`, and the two families are not even
+ * parallel — Theia registers no `charts.*` colours at all. Mapping a handful of
+ * variables per shell is the only part that cannot be shared; the selectors and
+ * the relationships between the colours are identical, so a per-shell copy of
+ * them buys nothing and drifts.
+ *
+ * The fallbacks are a dark-theme palette rather than `inherit`, so a shell that
+ * defines nothing still renders a legible diagram instead of transparent shapes.
+ *
+ * **The class on each element is the type id's SUBTYPE, and nothing sets it.**
+ * sprotty's `CssClassPostprocessor` appends the part of the model type after the
+ * colon on top of whatever `cssClasses` the server sent, so `node:task` styles as
+ * `.task` with no server-side `addCssClass` anywhere. That makes the ids in
+ * `order-flow-process-diagram-types.ts` load-bearing for this stylesheet as well
+ * as for the view registry.
+ *
+ * The selector shape is `.task > .sprotty-node`, not `.sprotty-node.task`: the
+ * subtype lands on the element's outer `<g>`, while the drawn shape is the
+ * `<rect>` / `<polygon>` inside it.
+ */
+
+:root {
+   /* Surfaces and text. A shell maps these onto its own editor colours. */
+   --order-flow-surface: #1f1f1f;
+   --order-flow-foreground: #cccccc;
+   --order-flow-muted-foreground: #9d9d9d;
+   --order-flow-panel-background: #202020;
+   --order-flow-panel-foreground: var(--order-flow-foreground);
+   --order-flow-panel-border: #2b2b2b;
+   --order-flow-hover-background: rgb(255 255 255 / 8%);
+   --order-flow-focus-border: #0078d4;
+   /* Refusals during edge creation; a shell maps it onto its error colour. */
+   --order-flow-invalid: #f14c4c;
+
+   /*
+    * One accent per element kind, and these two are mid-tones on purpose rather
+    * than a dark-theme pair like the surfaces above. An accent is only ever
+    * drawn as a 1px border and as a 16% wash over the surface, never behind text
+    * — label text always takes `--order-flow-foreground` — so a mid-tone stays
+    * legible whichever way the theme goes, which is what lets a shell with no
+    * theme-derived palette of its own simply leave them alone. Theia is that
+    * shell: it registers no `charts.*` colours, so these values are what its
+    * diagram actually uses.
+    */
+   --order-flow-task-accent: #4a90d9;
+   --order-flow-gateway-accent: #9a6fc4;
+   /* A branch is a gateway's exit, so it takes the gateway's colour; the dash is
+      what separates it from a plain transition. */
+   --order-flow-branch-accent: var(--order-flow-gateway-accent);
+   --order-flow-edge: var(--order-flow-foreground);
+}
+
+/*
+ * Nodes. The fill is the accent diluted into the surface rather than a colour of
+ * its own, so it stays a TINT of the canvas in either theme instead of a fixed
+ * value that reads as a hole in one of them.
+ */
+.sprotty .sprotty-node {
+   stroke-width: 1;
+}
+
+.sprotty .task > .sprotty-node {
+   fill: color-mix(in srgb, var(--order-flow-task-accent) 16%, var(--order-flow-surface));
+   stroke: var(--order-flow-task-accent);
+}
+
+.sprotty .gateway > .sprotty-node {
+   fill: color-mix(in srgb, var(--order-flow-gateway-accent) 16%, var(--order-flow-surface));
+   stroke: var(--order-flow-gateway-accent);
+}
+
+/* The effect compartment is a layout box, not a drawn one — the task's own shape
+   is the only surface here. Left with GLSP's default it paints a second
+   rectangle over the node. */
+.sprotty .sprotty-comp {
+   fill: transparent;
+   stroke: none;
+}
+
+/* A node's name carries it; the effect lines are supporting detail and take the
+   theme's secondary foreground so they recede without becoming unreadable. */
+.sprotty .sprotty-label {
+   fill: var(--order-flow-foreground);
+   stroke: none;
+   font-weight: 600;
+}
+
+.sprotty .effect {
+   fill: var(--order-flow-muted-foreground);
+   font-weight: 400;
+   font-size: 0.9em;
+}
+
+.sprotty .sprotty-edge {
+   stroke: var(--order-flow-edge);
+   stroke-width: 1.5;
+   fill: none;
+}
+
+.sprotty .sprotty-edge > .arrow {
+   fill: var(--order-flow-edge);
+   stroke: var(--order-flow-edge);
+}
+
+/* A branch is a CONDITIONAL exit from a gateway, so it is drawn as one. The
+   arrow opts out of the dash explicitly because `stroke-dasharray` is an
+   inherited SVG property and would otherwise reach the arrowhead through the
+   edge's own `<g>`. */
+.sprotty .branch {
+   stroke: var(--order-flow-branch-accent);
+   stroke-dasharray: 5 3;
+}
+
+.sprotty .branch > .arrow {
+   fill: var(--order-flow-branch-accent);
+   stroke: var(--order-flow-branch-accent);
+   stroke-dasharray: none;
+}
+
+.sprotty .branch > .sprotty-label {
+   fill: var(--order-flow-foreground);
+   font-size: 0.85em;
+   stroke: none;
+}
+
+/* Selection and hover come from the shell's own focus affordance rather than a
+   colour of our own, so they match every other focusable surface around them. */
+.sprotty .sprotty-node.mouseover {
+   stroke: var(--order-flow-focus-border);
+}
+
+.sprotty .sprotty-node.selected {
+   stroke: var(--order-flow-focus-border);
+   stroke-width: 2;
+}
+
+/*
+ * Edge-creation feedback, on the SHAPE rather than only on the pointer.
+ *
+ * GLSP already puts a mode class on the `<svg>` while an edge is being drawn and
+ * styles the cursor from it — `crosshair` for a target it will take, `no-drop`
+ * for one it will not. That is the entire cue by default, and a cursor is a poor
+ * place to explain a rule: it is 16px of chrome at the edge of attention, it
+ * does not say WHICH element is the problem, and on a dense diagram the
+ * difference between two arrow shapes is easy to miss.
+ *
+ * So the element under the pointer answers too: the one that will accept the
+ * edge takes the focus affordance, and the one that will not is struck through
+ * in the theme's error colour. Both are scoped to the mode class, so neither
+ * leaks into ordinary hovering.
+ */
+.sprotty .edge-creation-select-target-mode .sprotty-node.mouseover,
+.sprotty .edge-reconnect-select-target-mode .sprotty-node.mouseover {
+   stroke: var(--order-flow-focus-border);
+   stroke-width: 3;
+}
+
+.sprotty .edge-modification-not-allowed-mode .sprotty-node.mouseover {
+   stroke: var(--order-flow-invalid);
+   stroke-width: 2;
+   /* Dashed as well as coloured: colour alone is the one channel some readers do
+      not have, and this is a refusal rather than a decoration. */
+   stroke-dasharray: 4 3;
+}
+
+.sprotty text {
+   stroke: none;
+   user-select: none;
+}
+
+/*
+ * The tool palette is GLSP's own DOM, not part of the graph, and it ships with a
+ * light surface — on a dark theme it reads as a lit panel floating over the
+ * canvas. Both inner surfaces carry a light default of their own (the body a
+ * translucent grey, the group an opaque near-white), and either one leaves the
+ * themed foreground sitting on a pale strip, so both are cleared: the palette's
+ * own background is the only surface this panel needs.
+ */
+.sprotty .tool-palette {
+   background: var(--order-flow-panel-background);
+   color: var(--order-flow-panel-foreground);
+   border: 1px solid var(--order-flow-panel-border);
+   border-radius: 4px;
+   /* GLSP's own drop shadow is two fixed `rgba(0, 0, 0, 0.2)` offsets, so it is
+      the one part of this panel that cannot follow a theme: on a light canvas it
+      is elevation and on a dark one it is a smear under the right and bottom
+      edges, darker than the surface it is meant to lift off. The themed 1px
+      border above already separates the panel from the canvas, which is what the
+      shadow was there to do. */
+   box-shadow: none;
+   /*
+    * Clipped, because the collapse animates this element's own `max-height` and
+    * upstream pairs that with `overflow: auto` — so for the whole 0.2s the
+    * content is taller than the box holding it and a scrollbar appears, flickers
+    * and goes, on every show and hide.
+    *
+    * `.collapsible-palette` is the SAME element as `.tool-palette`, not a child
+    * of it, which is why this lives here: a descendant selector spelling —
+    * `.tool-palette .collapsible-palette` — matches nothing at all and reads as
+    * a fix while the scrollbar keeps appearing.
+    *
+    * It costs nothing here: the palette's content is the tool list this
+    * diagram's type hints produce, and it is shorter than the canvas it floats
+    * over. A palette that genuinely needed to scroll would need the scrollbar
+    * back and the animation suppressed instead.
+    */
+   overflow: hidden;
+}
+
+/*
+ * A fully collapsed palette must paint NOTHING, and its own box is what stops
+ * it. `max-height: 0` takes the CONTENT away and leaves the panel itself drawn:
+ * a 2px-tall strip of border and background hanging in the canvas where the
+ * palette was. Both surfaces have to go — clearing the border alone leaves the
+ * background showing as a fainter line of exactly the same shape, which reads as
+ * the fix not having worked.
+ *
+ * Made transparent rather than removed, so closing does not also change the
+ * element's height mid-transition. Nothing is lost during the slide: the content
+ * is clipped to the shrinking box and the header carries its own background, so
+ * the panel's is only ever behind the part that is already hidden.
+ *
+ * **Keyed off the inline style because the collapsed state has no class.** GLSP
+ * toggles `containerElement.style.maxHeight` between `'500px'` and `'0px'`
+ * directly, and adds nothing else, so there is no `.collapsed` to select — the
+ * two values are the whole state. That makes this selector the one rule here
+ * that a GLSP upgrade can silently stop matching; the cost if it does is the
+ * strip coming back, not a broken palette.
+ */
+.sprotty .tool-palette[style*='max-height: 0'] {
+   border-color: transparent;
+   background: transparent;
+}
+
+.sprotty .tool-palette .palette-body,
+.sprotty .tool-palette .tool-group {
+   background: transparent;
+}
+
+.sprotty .tool-palette .palette-header,
+.sprotty .tool-palette .group-header {
+   background: var(--order-flow-panel-background);
+   color: var(--order-flow-panel-foreground);
+   border-bottom: 1px solid var(--order-flow-panel-border);
+}
+
+.sprotty .tool-palette .tool-button {
+   color: var(--order-flow-panel-foreground);
+   background: transparent;
+}
+
+.sprotty .tool-palette .tool-button:hover {
+   background: var(--order-flow-hover-background);
+}
+
+.sprotty .tool-palette .tool-button.clicked {
+   background: color-mix(in srgb, var(--order-flow-focus-border) 30%, transparent);
+}
+
+/*
+ * The palette HEADER tools need rules of their OWN, and the reason is a class
+ * that is not there: GLSP renders each header tool as a bare
+ * `<i class="codicon codicon-inspect clicked">` with NO `tool-button` class, so
+ * a selector written as `.header-tools .tool-button.clicked` — which is what
+ * this rule used to carry — matches nothing at all. It read as coverage while
+ * GLSP's own light-theme defaults showed through underneath: `#bddaef` for the
+ * armed tool and `#dfdfdf` for hover, both of which land as a pale tile on a
+ * dark panel and read as a rendering defect rather than as an unstyled state.
+ * The armed tool takes a border as well as a wash, so it stays distinguishable
+ * from hover at the same 30% tint.
+ */
+.sprotty .tool-palette .header-tools i:hover {
+   background: var(--order-flow-hover-background);
+}
+
+.sprotty .tool-palette .header-tools .clicked {
+   background: color-mix(in srgb, var(--order-flow-focus-border) 30%, transparent);
+   border: 1px solid var(--order-flow-focus-border);
+}
+
+/*
+ * The palette's filter box, which GLSP gives a near-white background and BLACK
+ * text — so on a dark theme it is a white strip whose caret and text are the
+ * only legible things about it.
+ */
+.sprotty .tool-palette .search-input {
+   background: var(--order-flow-panel-background);
+   color: var(--order-flow-panel-foreground);
+   border: 1px solid var(--order-flow-panel-border);
+}
+
+/*
+ * The minimise button, which is NOT inside the palette panel — GLSP positions it
+ * absolutely against the diagram container, over the canvas — so it takes the
+ * canvas foreground rather than the panel's. Its own default is a dark grey
+ * picked for a light canvas, which on a dark one is very nearly invisible.
+ */
+.sprotty > .minimize-palette-button {
+   color: var(--order-flow-foreground);
+}

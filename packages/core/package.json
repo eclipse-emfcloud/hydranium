@@ -1,0 +1,134 @@
+{
+  "name": "@hydranium/core",
+  "version": "0.0.0",
+  "description": "Foundational runtime of the hydranium framework: AST coordination layer (services, integrity, AST extension, serialization, multi-client documents) plus the LSP textual head at the /lsp subpath. Consumed by protocol-head packages (@hydranium/data-server, @hydranium/glsp-server).",
+  "keywords": [
+    "hydranium",
+    "langium",
+    "language-server",
+    "lsp",
+    "ast",
+    "serialization"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/core",
+  "bugs": {
+    "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "packages/core"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
+  },
+  "sideEffects": [
+    "./lib/node/index.js",
+    "./lib/util/index.js"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./lsp": {
+      "types": "./lib/lsp/index.d.ts",
+      "default": "./lib/lsp/index.js"
+    },
+    "./lib/lsp": {
+      "types": "./lib/lsp/index.d.ts",
+      "default": "./lib/lsp/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    },
+    "./lib/node": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    },
+    "./testing": {
+      "types": "./lib/testing/index.d.ts",
+      "default": "./lib/testing/index.js"
+    },
+    "./testing/node": {
+      "types": "./lib/testing/node/index.d.ts",
+      "default": "./lib/testing/node/index.js"
+    },
+    "./lib/testing/node": {
+      "types": "./lib/testing/node/index.d.ts",
+      "default": "./lib/testing/node/index.js"
+    },
+    "./lib/testing": {
+      "types": "./lib/testing/index.d.ts",
+      "default": "./lib/testing/index.js"
+    },
+    "./testing/playwright": {
+      "types": "./lib/testing/playwright/index.d.ts",
+      "default": "./lib/testing/playwright/index.js"
+    },
+    "./lib/testing/playwright": {
+      "types": "./lib/testing/playwright/index.d.ts",
+      "default": "./lib/testing/playwright/index.js"
+    }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "audit:mutation": "stryker run",
+    "audit:mutation:quick": "stryker run --mutate src/langium/model-service/model-service.ts",
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "eslint src test --max-warnings 0",
+    "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc -b -w --preserveWatchOutput"
+  },
+  "dependencies": {
+    "diff": "^5.2.0"
+  },
+  "devDependencies": {
+    "@hydranium/langium": "0.0.0",
+    "@hydranium/protocol": "0.0.0",
+    "@playwright/test": "^1.40.0",
+    "@types/diff": "^5.2.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vscode-jsonrpc": "9.0.1",
+    "vscode-languageserver": "~10.0.1",
+    "vscode-languageserver-protocol": "~3.18.2",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-languageserver-types": "^3.17.5"
+  },
+  "peerDependencies": {
+    "@hydranium/langium": "^0.0.0",
+    "@hydranium/protocol": "^0.0.0",
+    "@playwright/test": "^1.40.0",
+    "vscode-jsonrpc": "^8.0.0 || ^9.0.0",
+    "vscode-languageserver": "^9.0.0 || ^10.0.0",
+    "vscode-languageserver-protocol": "^3.17.5",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-languageserver-types": "^3.17.5"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
+  "//sideEffects": "NOT `false`: two barrels do work at module load that their re-exports do not account for, and a bundler skips an unflagged re-export barrel outright. `node/index.js` calls `installNodeLogFileSink()` and `installNodeWriteLockScope()`, which is how a Node host gets the log file-tee and write-lock reentrancy detection merely by importing `@hydranium/core/node`. `util/index.js` carries a bare `import '@hydranium/langium'` so the `UriUtils` namespace augmentation stays loaded for anything importing from here. Both failures are runtime-only and silent — a missing log file, a `UriUtils.toUri` that is `undefined`."
+}

@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/langium" },
+    { "path": "packages/core" },
+    { "path": "packages/data-server" },
+    { "path": "packages/glsp-server" },
+    { "path": "packages/client-theia" },
+    { "path": "packages/glsp-client-theia" },
+    { "path": "packages/data-client-theia" },
+    { "path": "packages/conformance" },
+    { "path": "packages/cli" }
+  ]
+}

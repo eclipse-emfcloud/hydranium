@@ -1,0 +1,20 @@
+// Test-only fixture, deliberately outside the sample workspace.
+//
+// Two transition shapes the GRAMMAR accepts and the model cannot mean: one
+// returning to its own source, and one repeating a pair already declared. The
+// diagram refuses both at the cursor, so the text has to report both too or the
+// two halves disagree.
+//
+// `Pay -> Pick` appears twice on purpose; the SECOND is the duplicate, which is
+// what the diagnostic should blame. `Pick -> Ship` is well-formed and must stay
+// clean, so the check cannot be passing by flagging everything.
+
+process MalformedTransitions for Order {
+   task Pay
+   task Pick
+   task Ship
+   transition Pay -> Pay
+   transition Pay -> Pick
+   transition Pay -> Pick
+   transition Pick -> Ship
+}

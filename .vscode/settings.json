@@ -1,0 +1,10 @@
+{
+  "jest.virtualFolders": [
+    {
+      "name": "conformance-jest-smoke",
+      "rootPath": "packages/conformance",
+      "jestCommandLine": "npx cross-env NODE_OPTIONS=--experimental-vm-modules jest"
+    }
+  ],
+  "markdown.preview.breaks": false
+}

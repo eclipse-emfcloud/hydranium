@@ -1,0 +1,56 @@
+# Prettier ignores only node_modules / .git by default (it does NOT read
+# .gitignore), so every build/generated/cache path prettier must skip is listed
+# here explicitly. Keep in sync with .gitignore.
+
+# Build output
+**/lib
+**/out
+**/dist
+**/*.tsbuildinfo
+
+# Test / coverage artefacts
+**/coverage
+**/unit-test-results
+**/*test-results
+**/playwright-report
+
+# Turbo / Nx caches
+.turbo
+**/.turbo
+.nx
+
+# yalc (local package linking)
+.yalc
+
+# Generated code — Langium parser/AST + Theia browser-app scaffolding.
+# `generated-transfer` is `hydranium-cli generate-transfer-model` output, kept
+# out of `generated` because langium-cli treats its own output directory as
+# exclusive and offers to delete anything else it finds there.
+**/generated
+**/generated-transfer
+**/src-gen
+**/syntaxes
+examples/*/theia-app/plugins
+
+# Throwaway probe scripts. A hand-written investigation left in the tree is not
+# source and should not be able to redden `format:check`, which is the LAST
+# clause of the chain and so reports after every other gate has already run.
+*.tmp.mjs
+*.tmp.ts
+
+# Lockfile (npm-managed formatting)
+package-lock.json
+
+# Markdown — prettier's table-padding and emphasis normalization would churn
+# prose-heavy planning/architecture docs on every edit for no correctness gain.
+#
+# So NO gate formats or checks markdown, and none is meant to: wrap, tables and
+# emphasis are maintained by hand. `.editorconfig` is not that gate — it is
+# advisory, applied by an editor and enforced by nothing here, and its markdown
+# block only turns trailing-whitespace trimming OFF, because two trailing
+# spaces are a hard line break. `check:readme` is the only check with teeth
+# over markdown, and it typechecks fences rather than reading formatting.
+#
+# The format globs therefore do NOT name `md`. Adding it back reads as coverage
+# and delivers none, since this rule wins.
+**/*.md

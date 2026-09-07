@@ -1,0 +1,17 @@
+project shipping requires commerce-core
+
+public entity Shipment {
+   id: ID
+   status: Status
+   carrier: Carrier
+   parcels: Parcel[]
+}
+
+public enum Status { NEW, PACKED, DELIVERED }
+
+public enum Carrier { DHL, UPS, FEDEX }
+
+valuetype Parcel {
+   weight: Number
+   fragile: Boolean
+}
