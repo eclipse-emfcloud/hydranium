@@ -35,7 +35,12 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { startSpawnedServer, type SpawnedServer, type SpawnedServerOptions } from '../../src/testing/node/spawned-server.js';
+import {
+   SPAWNED_SERVER_BOOT_TIMEOUT_MS,
+   startSpawnedServer,
+   type SpawnedServer,
+   type SpawnedServerOptions
+} from '../../src/testing/node/spawned-server.js';
 
 const FIXTURE_MODULE = fileURLToPath(new URL('./fixtures/fake-stdio-lsp-server.mjs', import.meta.url));
 
@@ -53,11 +58,31 @@ const FIXTURE_FIRST_DIAGNOSTIC = 'first';
 const PORT_COMMAND = 'ns/head/port';
 
 /**
- * Long enough that a loaded machine still reaches the fake's answer, short
- * enough that a suite asserting the boot FAILURE finishes in well under a
- * second. It bounds only the negative cases: nothing positive waits on it.
+ * Bounds the cases that assert the TIMEOUT message, so the suite does not wait
+ * out the production default for each of them.
+ *
+ * It cannot be shortened much, and the reason is easy to miss: every one of
+ * these cases asserts something the CHILD produced — its pid file, its stdout,
+ * its stderr — so the child has to finish spawning and loading its module
+ * before the timer fires. Under the budget it fails on an empty capture rather
+ * than on the behaviour under test. Windows CI has been measured spending 2-3s
+ * on that startup, where a 1s budget failed deterministically rather than
+ * intermittently, and lost a further assertion each time startup got slower.
+ *
+ * The case where the timer must LOSE passes its own bound instead; see the
+ * mid-handshake exit test.
  */
-const SHORT_BOOT_MS = 1_000;
+const SHORT_BOOT_MS = 8_000;
+
+/**
+ * vitest's own per-test bound for the cases that wait out {@link SHORT_BOOT_MS}.
+ *
+ * Derived rather than written out, because the two bounds race and vitest wins
+ * ties: left at its 5s default, a boot budget at or above it reports
+ * "Test timed out" and the assertion under test never runs, which reads as a
+ * broken test rather than a slow one.
+ */
+const TIMER_BOUND_TEST_MS = SHORT_BOOT_MS * 3;
 
 /** Grace before `SIGKILL` in the teardown tests, applied twice by the harness. */
 const SHORT_KILL_MS = 250;
@@ -240,25 +265,42 @@ describe('startSpawnedServer', () => {
       expect(isAlive(pid)).toBe(false);
    });
 
-   it('rejects naming the module when the handshake never answers, and leaves no child', async () => {
-      const error = await bootFailure('silent', 'no-initialize');
+   it(
+      'rejects naming the module when the handshake never answers, and leaves no child',
+      async () => {
+         const error = await bootFailure('silent', 'no-initialize');
 
-      expect(error.message).toContain(FIXTURE_MODULE);
-      expect(error.message).toContain(`did not answer "initialize" within ${SHORT_BOOT_MS}ms`);
-      expect(isAlive(recordedPid('silent'))).toBe(false);
-   });
+         expect(error.message).toContain(FIXTURE_MODULE);
+         expect(error.message).toContain(`did not answer "initialize" within ${SHORT_BOOT_MS}ms`);
+         // Reads the pid the CHILD recorded, so the boot budget above has to be
+         // long enough for it to have got there: the harness force-terminates
+         // before this line runs, so a child killed mid-startup never writes the
+         // file and this fails on ENOENT rather than on a surviving process.
+         expect(isAlive(recordedPid('silent'))).toBe(false);
+      },
+      TIMER_BOUND_TEST_MS
+   );
 
-   it('reports a log leaked onto stdout as the first bytes on the protocol channel', async () => {
-      const error = await bootFailure('noisy', 'stdout-noise');
+   it(
+      'reports a log leaked onto stdout as the first bytes on the protocol channel',
+      async () => {
+         const error = await bootFailure('noisy', 'stdout-noise');
 
-      // stdout is the transport, so this is how a framework log routed to it
-      // surfaces — as the bytes ahead of any framing, quoted in the failure.
-      expect(error.message).toContain(FIXTURE_STDOUT_NOISE);
-      expect(error.message).toContain(FIXTURE_STDERR_MARKER);
-   });
+         // stdout is the transport, so this is how a framework log routed to it
+         // surfaces — as the bytes ahead of any framing, quoted in the failure.
+         expect(error.message).toContain(FIXTURE_STDOUT_NOISE);
+         expect(error.message).toContain(FIXTURE_STDERR_MARKER);
+      },
+      TIMER_BOUND_TEST_MS
+   );
 
    it('fails as an exit rather than as a timeout when the child dies mid-handshake', async () => {
-      const error = await bootFailure('dies', 'die-on-initialize');
+      // The production bound rather than SHORT_BOOT_MS, because here the timer
+      // is the LOSER of the race under test: a short budget lets the timeout
+      // win on a slow runner, which is the one outcome this test exists to
+      // rule out. It costs nothing — the child exits promptly, so the bound is
+      // never reached on the path that passes.
+      const error = await bootFailure('dies', 'die-on-initialize', { bootTimeoutMs: SPAWNED_SERVER_BOOT_TIMEOUT_MS });
 
       expect(error.message).toContain('exited with code 3 during the handshake');
    });
