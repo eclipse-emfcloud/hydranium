@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/glsp-server",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "GLSP protocol head for the hydranium framework. Peer of @hydranium/core/lsp and @hydranium/data-server; built on @hydranium/core.",
   "keywords": [
     "hydranium",
@@ -79,9 +79,9 @@
   "devDependencies": {
     "@eclipse-glsp/protocol": "2.7.0",
     "@eclipse-glsp/server": "2.7.0",
-    "@hydranium/core": "0.0.0",
-    "@hydranium/langium": "0.0.0",
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/core": "1.0.0-next",
+    "@hydranium/langium": "1.0.0-next",
+    "@hydranium/protocol": "1.0.0-next",
     "inversify": "6.2.2",
     "reflect-metadata": "0.2.2",
     "rimraf": "^5.0.0",
@@ -92,9 +92,9 @@
   "peerDependencies": {
     "@eclipse-glsp/protocol": "^2.6.0",
     "@eclipse-glsp/server": "^2.6.0",
-    "@hydranium/core": "^0.0.0",
-    "@hydranium/langium": "^0.0.0",
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/core": "^1.0.0-next",
+    "@hydranium/langium": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
     "inversify": "^6.0.0",
     "reflect-metadata": "^0.2.2",
     "vscode-jsonrpc": "^8.0.0 || ^9.0.0",

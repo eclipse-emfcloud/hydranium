@@ -1,6 +1,6 @@
 {
   "name": "hydranium-root",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "private": true,
   "description": "Generic, language-agnostic Langium-based language-server framework.",
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",

@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/conformance",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Protocol conformance kit (TCK) for hydranium adopters. Per-head slices (/data, /lsp, /glsp) of fixture-parameterized, protocol-only smoke checks an adopter runs against its own server.",
   "keywords": [
     "hydranium",
@@ -88,7 +88,7 @@
     "watch": "tsc -b -w --preserveWatchOutput"
   },
   "devDependencies": {
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/protocol": "1.0.0-next",
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.12",
     "jest": "^29.7.0",
@@ -98,7 +98,7 @@
     "vitest": "^4.0.0"
   },
   "peerDependencies": {
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/protocol": "^1.0.0-next",
     "@jest/globals": "^29.0.0",
     "vitest": "^4.0.0"
   },

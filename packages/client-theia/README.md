@@ -56,12 +56,12 @@ npm install @hydranium/client-theia
 You must already have a Theia application (or a Theia extension inside one). The
 declared peer dependencies are:
 
-| Peer                  | Range     |
-| --------------------- | --------- |
-| `@hydranium/protocol` | `^0.0.0`  |
-| `@theia/core`         | `^1.71.0` |
-| `@theia/output`       | `^1.71.0` |
-| `inversify`           | `^6.0.0`  |
+| Peer                  | Range         |
+| --------------------- | ------------- |
+| `@hydranium/protocol` | `^1.0.0-next` |
+| `@theia/core`         | `^1.71.0`     |
+| `@theia/output`       | `^1.71.0`     |
+| `inversify`           | `^6.0.0`      |
 
 `@theia/output` is easy to miss: the memory-diagnostics commands and the channel
 logger both write to an Output channel, so a host that does not already depend on

@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/core",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Foundational runtime of the hydranium framework: AST coordination layer (services, integrity, AST extension, serialization, multi-client documents) plus the LSP textual head at the /lsp subpath. Consumed by protocol-head packages (@hydranium/data-server, @hydranium/glsp-server).",
   "keywords": [
     "hydranium",
@@ -96,8 +96,8 @@
     "diff": "^5.2.0"
   },
   "devDependencies": {
-    "@hydranium/langium": "0.0.0",
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/langium": "1.0.0-next",
+    "@hydranium/protocol": "1.0.0-next",
     "@playwright/test": "^1.40.0",
     "@types/diff": "^5.2.0",
     "rimraf": "^5.0.0",
@@ -109,8 +109,8 @@
     "vscode-languageserver-types": "^3.17.5"
   },
   "peerDependencies": {
-    "@hydranium/langium": "^0.0.0",
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/langium": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
     "@playwright/test": "^1.40.0",
     "vscode-jsonrpc": "^8.0.0 || ^9.0.0",
     "vscode-languageserver": "^9.0.0 || ^10.0.0",

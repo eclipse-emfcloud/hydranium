@@ -128,13 +128,12 @@ scaffolder. It stands up a complete, buildable project — a starter grammar,
 the `create<Name>Services` DI wiring, an LSP + data-server launch, and build
 scripts — that you then grow into your own language.
 
-> **Read this before running anything below.** Nothing in `@hydranium/*` is on
-> npm yet, so every `npx` line in this section resolves to no package and fails
-> with `E404`. Until the first release the CLI is reachable only from a clone of
-> this repository: run `npm run build`, then substitute
-> `node packages/cli/lib/cli.js` for the `npx …` prefix. Subcommands, flags and
-> output are the same either way. The caveat governs this whole section, which
-> is why it sits ahead of the first command rather than beside one of them.
+> **Hydranium is alpha, and every release is a prerelease.** Releases roll:
+> each one is `1.0.0-next.<n>`, where `n` counts commits since the last release
+> tag. There is no stable version yet, so `latest` points at the newest
+> prerelease and the `npx` lines below resolve to it. **Pin an exact version for
+> a reproducible build** — a range like `^1.0.0` matches no prerelease at all,
+> so it will not resolve one.
 
 ```bash
 # Scaffold a new language project

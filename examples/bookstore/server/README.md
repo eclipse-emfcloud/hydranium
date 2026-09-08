@@ -4,14 +4,6 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
-> **Pre-publish note.** `@hydranium/*` is not on npm yet, so the `0.0.0`
-> pins below are placeholders and `npm install` will fail with a 404 until
-> the framework is released. Until then, supply the packages from a local
-> framework checkout with [yalc](https://github.com/wclr/yalc) — a plain
-> `file:` path or `npm link` is not enough, because the framework packages
-> depend on each other by version and npm would try to fetch those from the
-> registry too.
-
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar

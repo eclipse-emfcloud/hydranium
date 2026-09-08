@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/client-theia",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Cross-head Theia client primitives shared by the hydranium protocol heads. Provides the socket-forwarding connection-handler base that the data-server and GLSP Theia integrations subclass, plus the preference-driven Output-channel logger; carries no head-specific dependency.",
   "keywords": [
     "hydranium",
@@ -70,7 +70,7 @@
     "watch": "tsc -b -w --preserveWatchOutput"
   },
   "devDependencies": {
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/protocol": "1.0.0-next",
     "@theia/core": "^1.71.0",
     "@theia/output": "^1.71.0",
     "@types/node": "^22.0.0",
@@ -80,7 +80,7 @@
     "typescript": "^5.8.0"
   },
   "peerDependencies": {
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/protocol": "^1.0.0-next",
     "@theia/core": "^1.71.0",
     "@theia/output": "^1.71.0",
     "inversify": "^6.0.0"
