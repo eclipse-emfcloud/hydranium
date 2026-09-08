@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/langium",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Augmented re-export of the Langium API for the hydranium framework: the single chokepoint where hydranium pins the Langium version and layers its type/namespace augmentations. ~99% passthrough today.",
   "keywords": [
     "hydranium",

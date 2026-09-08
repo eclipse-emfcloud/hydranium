@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/cli",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Build-time codegen tools + data-server subcommands for the hydranium framework.",
   "keywords": [
     "hydranium",
@@ -65,20 +65,20 @@
     "ts-morph": "^25.0.0"
   },
   "devDependencies": {
-    "@hydranium/core": "0.0.0",
-    "@hydranium/data-server": "0.0.0",
-    "@hydranium/langium": "0.0.0",
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/core": "1.0.0-next",
+    "@hydranium/data-server": "1.0.0-next",
+    "@hydranium/langium": "1.0.0-next",
+    "@hydranium/protocol": "1.0.0-next",
     "rimraf": "^5.0.0",
     "typescript": "^5.8.0",
     "vscode-jsonrpc": "9.0.1",
     "vscode-languageserver": "~10.0.1"
   },
   "peerDependencies": {
-    "@hydranium/core": "^0.0.0",
-    "@hydranium/data-server": "^0.0.0",
-    "@hydranium/langium": "^0.0.0",
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/core": "^1.0.0-next",
+    "@hydranium/data-server": "^1.0.0-next",
+    "@hydranium/langium": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
     "@memlab/core": "^2.0.3",
     "@memlab/heap-analysis": "^2.0.3",
     "vscode-jsonrpc": "^8.0.0 || ^9.0.0"

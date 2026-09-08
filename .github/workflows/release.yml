@@ -1,8 +1,14 @@
 name: Release
 
+# `workflow_dispatch` is not a convenience. The placeholder guard that used to
+# make an accidental run harmless is gone with the `0.0.0` versions it read, so
+# a deliberate trigger is what replaces it — and the bootstrap publish, which
+# has to happen once before any package has a trusted publisher to authenticate
+# against, has no other way to be invoked.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -10,9 +16,12 @@ defaults:
   run:
     shell: bash
 
+# `contents: read`, not write. Nothing here commits, tags or cuts a GitHub
+# release any more — the version is stamped in the runner's tree and thrown
+# away — so write access would be a grant this job has no use for, in the one
+# job that also holds `id-token: write`.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   id-token: write
 
 jobs:
@@ -24,34 +33,43 @@ jobs:
     # This job runs the same `npm run build:all` as CI, so it needs the same
     # build environment; CI compares the two files and reddens if they diverge.
     #
-    # NODE_AUTH_TOKEN is job-level rather than on the publish step alone,
-    # because setup-node's `registry-url` writes an .npmrc that reads it and
-    # points NPM_CONFIG_USERCONFIG at that file for EVERY step — so every npm
-    # invocation here, not just the publish, resolves its credentials through
-    # it. Left unset, setup-node substitutes a dummy value and the failure is a
-    # 401 from something that looks unrelated.
+    # There is deliberately NO NODE_AUTH_TOKEN here. Publishing authenticates
+    # through OIDC (see the preflight below), and npm only reaches for OIDC when
+    # it finds no usable token first — so a token in the environment does not
+    # add a fallback, it silently takes precedence and the trusted-publisher
+    # path is never exercised.
     env:
       NODE_OPTIONS: --max_old_space_size=4096
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       TURBO_UI: stream
       FORCE_COLOR: 1
 
     steps:
       # SHA-pinned, not tag-pinned; see the twin step in ci.yml. It matters most
-      # in this file, where a step further down is handed NPM_TOKEN: a mutable
-      # major tag is a standing grant to run whatever it is moved to, beside a
-      # credential that can publish under the org's name.
+      # in this file: a mutable major tag on an action running in a job that
+      # holds `id-token: write` is a standing grant to mint a publish credential
+      # for whatever that tag is later moved to.
+      #
+      # `fetch-depth: 0` is load-bearing rather than cautious — the rolling
+      # version counts commits since the last release tag, and a shallow clone
+      # resolves no tag at all.
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
+      # No `registry-url`, and that is required rather than an omission. Given
+      # one, setup-node writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+      # into an .npmrc and points NPM_CONFIG_USERCONFIG at it for every step.
+      # With no token in the environment that expands to an EMPTY token, which
+      # npm treats as a credential it should use — so it never attempts the OIDC
+      # exchange and the publish fails with ENEEDAUTH, or with a 404 that is
+      # really a 403. Omitting the input leaves npm on its default registry,
+      # which is the same registry, with nothing written into an .npmrc.
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       # setup-node does not act on `packageManager`; see the twin step in
       # ci.yml. Kept textually identical to it so the two toolchains cannot
@@ -86,55 +104,39 @@ jobs:
             }
           "
 
-      # Everything irreversible in this job happens in its LAST step: the tags
-      # are cut and the version PR is already merged by the time `changeset
-      # publish` first speaks to the registry. So the credential question is
-      # asked here instead, against the same .npmrc that publish will use,
-      # while failing still costs nothing.
+      # The publish is the LAST step, so by the time npm first speaks to the
+      # registry the whole graph has been built and gated. These three questions
+      # are asked here instead, where failing costs seconds — and each has
+      # actually been observed to fail silently rather than loudly.
       #
-      # It fires when NPM_TOKEN is absent, empty, expired or revoked, and also
-      # when the token is fine but npm is not reading the file it was written
-      # into — which is the one interaction this workflow could not otherwise
-      # discover except by burning a release on it.
-      - name: Preflight the npm credentials
+      # `npm whoami` is deliberately NOT among them: it exercises token
+      # authentication, which this workflow no longer uses, so under OIDC it
+      # fails on a correctly configured runner and proves nothing on a broken
+      # one. There is no cheap probe for "trusted publishing is configured for
+      # this package" — npm does not validate a publisher configuration when it
+      # is saved, and the first real signal is the publish itself.
+      - name: Preflight the publish environment
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NODE_AUTH_TOKEN is empty: the NPM_TOKEN secret is unset on this repository." >&2
-            exit 1
-          fi
-          if ! npm whoami --registry https://registry.npmjs.org; then
-            echo "npm could not authenticate against registry.npmjs.org." >&2
-            echo "Either NPM_TOKEN is invalid or expired, or the .npmrc npm read is not the" >&2
-            echo "one actions/setup-node wrote from registry-url." >&2
-            exit 1
-          fi
-
-      # With no changesets pending, changesets/action takes its PUBLISH path
-      # rather than opening a version PR. Every package is still at the
-      # placeholder 0.0.0 and none is on the registry, so the first push of a
-      # fresh main would publish ten packages at 0.0.0 — burning both that
-      # version and the names, neither of which npm lets you take back.
-      #
-      # This guard blocks only that state. A package at 0.0.0 is a placeholder
-      # by definition, so refusing to publish it forecloses no intended
-      # release; pick the real first version and the step passes.
-      - name: Guard against publishing placeholder versions
-        run: |
-          placeholders=$(node -e "
-            const fs = require('node:fs');
-            const names = [];
-            for (const dir of fs.readdirSync('packages')) {
-              const manifest = 'packages/' + dir + '/package.json';
-              if (!fs.existsSync(manifest)) continue;
-              const parsed = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
-              if (parsed.private !== true && parsed.version === '0.0.0') names.push(parsed.name);
+          npm_version=$(npm --version)
+          node -e "
+            const [major, minor, patch] = process.argv[1].split('.').map(Number);
+            const rank = (major * 1e6) + (minor * 1e3) + patch;
+            if (rank < (11 * 1e6) + (5 * 1e3) + 1) {
+              console.error('npm ' + process.argv[1] + ' predates 11.5.1 and will not attempt the OIDC exchange.');
+              process.exit(1);
             }
-            console.log(names.join(' '));
-          ")
-          if [ -n "$placeholders" ]; then
-            echo "Refusing to release: still at the placeholder version 0.0.0:" >&2
-            echo "  $placeholders" >&2
-            echo "Set the first real version before enabling the release workflow." >&2
+          " "$npm_version"
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "No OIDC token endpoint in the environment, so this job cannot mint a" >&2
+            echo "publish credential. The job needs 'id-token: write'." >&2
+            exit 1
+          fi
+          # An _authToken reaching npm from any .npmrc takes precedence over
+          # OIDC, so a publish would quietly authenticate as something other
+          # than this workflow — or, with the token empty, not at all.
+          if npm config get //registry.npmjs.org/:_authToken 2>/dev/null | grep -qv '^undefined$'; then
+            echo "An npm _authToken is configured. It would take precedence over OIDC," >&2
+            echo "so the trusted-publisher path would never run." >&2
             exit 1
           fi
 
@@ -182,32 +184,21 @@ jobs:
       - name: Full gate
         run: npm run check
 
-      # `--tag alpha` on the publish is a PRECONDITION of the first release, not
-      # a refinement after it. The release line starts at 1.0.0 — under `fixed`
-      # versioning plus caret peer ranges a 0.x line cannot take a minor bump at
-      # all — so the version number can no longer carry the alpha signal, and
-      # semver reads 1.0.0 as stable. `changeset publish` always passes a `--tag`
-      # through to `npm publish` and defaults it to `latest`, so leaving the flag
-      # off does not mean "no tag": it means the alpha is what a bare
-      # `npm install @hydranium/core` resolves. A dist-tag can be moved
-      # afterwards; a version already served from `latest` cannot be recalled,
-      # which is why this lives in the workflow and not only in the runbook.
+      # The version is derived and stamped HERE, in a throwaway tree, and is
+      # never committed. That is what keeps `package-lock.json` honest: a
+      # committed version bump leaves the lockfile describing versions that do
+      # not exist anywhere until someone remembers to reinstall, and the
+      # mismatch is invisible until the next install fails.
       #
-      # It does NOT make the first publish safe on its own. npmjs.org assigns
-      # `latest` to the first version of a new package in addition to the
-      # requested tag, so 1.0.0 lands on both `alpha` and `latest` and `latest`
-      # has to be moved by hand afterwards (see docs/contributing/releasing.md). What the flag
-      # buys is the `alpha` tag existing at all, and every publish after the
-      # first staying off `latest`. Drop it in the same change that moves
-      # `latest` deliberately, never before.
-      - name: Create Release PR or Publish
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
-        with:
-          version: npx changeset version
-          publish: npx changeset publish --tag alpha
-          commit: 'chore(release): version packages'
-          title: 'chore(release): version packages'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+      # `NPM_CONFIG_PROVENANCE` is not set. Under OIDC npm attaches provenance
+      # by itself, and setting it would make a run that has quietly fallen back
+      # to some other credential still LOOK provenanced in the log while
+      # attaching nothing. Read the registry page, not this file.
+      #
+      # The script owns the dist-tag rather than taking it from here: before the
+      # first stable release `latest` has to track the newest prerelease, and
+      # after it `latest` belongs to the stable line. Deriving that from the
+      # registry means no one has to remember to change a flag on the day it
+      # stops being true. See docs/contributing/releasing.md.
+      - name: Publish
+        run: node scripts/release.mjs next

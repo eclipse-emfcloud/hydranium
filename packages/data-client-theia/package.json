@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/data-client-theia",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Theia-coupled client primitives for the hydranium data-server protocol head; companion of @hydranium/data-server. Bridges framework typed errors (e.g. ConflictError) across Theia's RPC boundary so their code + data survive the wire.",
   "keywords": [
     "hydranium",
@@ -70,9 +70,9 @@
     "watch": "tsc -b -w --preserveWatchOutput"
   },
   "devDependencies": {
-    "@hydranium/client-theia": "0.0.0",
-    "@hydranium/core": "0.0.0",
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/client-theia": "1.0.0-next",
+    "@hydranium/core": "1.0.0-next",
+    "@hydranium/protocol": "1.0.0-next",
     "@theia/core": "^1.71.0",
     "@theia/workspace": "^1.71.0",
     "@types/node": "^22.0.0",
@@ -83,9 +83,9 @@
     "vscode-jsonrpc": "9.0.1"
   },
   "peerDependencies": {
-    "@hydranium/client-theia": "^0.0.0",
-    "@hydranium/core": "^0.0.0",
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/client-theia": "^1.0.0-next",
+    "@hydranium/core": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
     "@theia/core": "^1.71.0",
     "@theia/workspace": "^1.71.0",
     "inversify": "^6.0.0",

@@ -126,13 +126,13 @@ jobs:
             awk -v needle="$1" 'index($0, needle) { print NR; exit }' .github/workflows/release.yml
           }
           gate=$(locate 'run: npm run check')
-          publish=$(locate 'uses: changesets/action@')
+          publish=$(locate 'run: node scripts/release.mjs')
           if [ -z "$gate" ]; then
             echo "release.yml no longer runs the full gate: its publish path is ungated." >&2
             exit 1
           fi
           if [ -z "$publish" ]; then
-            echo "release.yml no longer calls changesets/action, so this check cannot" >&2
+            echo "release.yml no longer invokes scripts/release.mjs, so this check cannot" >&2
             echo "locate the publish step it is asserting against." >&2
             exit 1
           fi

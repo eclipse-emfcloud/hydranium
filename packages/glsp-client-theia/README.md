@@ -66,17 +66,17 @@ You must already have a Theia application wired for GLSP — `@eclipse-glsp/clie
 and `@eclipse-glsp/theia-integration` are peers, not bundled — and a running
 hydranium GLSP server. The declared peer dependencies are:
 
-| Peer                              | Range     |
-| --------------------------------- | --------- |
-| `@eclipse-glsp/client`            | `^2.6.0`  |
-| `@eclipse-glsp/theia-integration` | `^2.6.0`  |
-| `@hydranium/client-theia`         | `^0.0.0`  |
-| `@hydranium/protocol`             | `^0.0.0`  |
-| `@theia/core`                     | `^1.71.0` |
-| `@theia/output`                   | `^1.71.0` |
-| `@theia/workspace`                | `^1.71.0` |
-| `inversify`                       | `^6.0.0`  |
-| `snabbdom`                        | `^3.5.1`  |
+| Peer                              | Range         |
+| --------------------------------- | ------------- |
+| `@eclipse-glsp/client`            | `^2.6.0`      |
+| `@eclipse-glsp/theia-integration` | `^2.6.0`      |
+| `@hydranium/client-theia`         | `^1.0.0-next` |
+| `@hydranium/protocol`             | `^1.0.0-next` |
+| `@theia/core`                     | `^1.71.0`     |
+| `@theia/output`                   | `^1.71.0`     |
+| `@theia/workspace`                | `^1.71.0`     |
+| `inversify`                       | `^6.0.0`      |
+| `snabbdom`                        | `^3.5.1`      |
 
 ## Wiring
 

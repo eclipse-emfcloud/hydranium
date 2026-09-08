@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/protocol",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Generic, language-agnostic types, constants, and pure utilities for the hydranium framework.",
   "keywords": [
     "hydranium",

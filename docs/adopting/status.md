@@ -24,13 +24,17 @@ moving, not because the _machinery_ is unproven.
   identity, not by structure.
 - **The release line starts at `1.0.0`, and that number is not a stability
   claim.** Under `fixed` versioning plus caret peer ranges a `0.x` line cannot
-  take a minor bump at all, so the version number cannot carry the alpha signal.
-  An **npm dist-tag** carries it instead: releases publish under `alpha`, so ask
-  for `@hydranium/core@alpha` rather than relying on a bare install. A **minor**
-  bump may contain breaking changes for as long as the framework is alpha. Pin
-  exactly, or expect to read a changelog. ("pre-v0" above names the un-frozen
+  take a minor bump at all, so the major cannot carry the alpha signal. **A
+  prerelease suffix carries it instead**: every release is `1.0.0-next.<n>`,
+  where `n` counts commits since the last release tag, and **no semver range
+  matches a prerelease** — `^1.0.0` resolves none of them — so a dependency
+  range can never pick one up by accident. Until the first stable release
+  exists, `latest` points at the newest prerelease, so a bare
+  `npm install @hydranium/core` does get it. A **minor** bump may contain
+  breaking changes for as long as the framework is alpha. Pin exactly, or
+  expect to read a changelog. ("pre-v0" above names the un-frozen
   API surface, not the version number.) [`releasing.md`](../contributing/releasing.md) has the
-  tag mechanics.
+  release mechanics.
 - Subpath exports (`@hydranium/core/lsp`, `@hydranium/core/node`,
   `@hydranium/protocol/data`, …) carry the same stability level as the package
   root. Subpaths ending in `/testing` are **test-support only** and may change

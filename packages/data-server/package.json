@@ -1,6 +1,6 @@
 {
   "name": "@hydranium/data-server",
-  "version": "0.0.0",
+  "version": "1.0.0-next",
   "description": "Typed-RPC protocol head for the hydranium framework. Peer of @hydranium/core/lsp and @hydranium/glsp-server; built on @hydranium/core.",
   "keywords": [
     "hydranium",
@@ -67,18 +67,18 @@
     "watch": "tsc -b -w --preserveWatchOutput"
   },
   "devDependencies": {
-    "@hydranium/core": "0.0.0",
-    "@hydranium/langium": "0.0.0",
-    "@hydranium/protocol": "0.0.0",
+    "@hydranium/core": "1.0.0-next",
+    "@hydranium/langium": "1.0.0-next",
+    "@hydranium/protocol": "1.0.0-next",
     "rimraf": "^5.0.0",
     "typescript": "^5.8.0",
     "vscode-jsonrpc": "9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   },
   "peerDependencies": {
-    "@hydranium/core": "^0.0.0",
-    "@hydranium/langium": "^0.0.0",
-    "@hydranium/protocol": "^0.0.0",
+    "@hydranium/core": "^1.0.0-next",
+    "@hydranium/langium": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
     "vscode-jsonrpc": "^8.0.0 || ^9.0.0",
     "vscode-languageserver-textdocument": "^1.0.12"
   },

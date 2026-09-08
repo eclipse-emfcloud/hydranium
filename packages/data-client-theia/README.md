@@ -64,9 +64,9 @@ running hydranium data server to connect to. The declared peer dependencies are:
 
 | Peer                      | Range                |
 | ------------------------- | -------------------- |
-| `@hydranium/client-theia` | `^0.0.0`             |
-| `@hydranium/core`         | `^0.0.0`             |
-| `@hydranium/protocol`     | `^0.0.0`             |
+| `@hydranium/client-theia` | `^1.0.0-next`        |
+| `@hydranium/core`         | `^1.0.0-next`        |
+| `@hydranium/protocol`     | `^1.0.0-next`        |
 | `@theia/core`             | `^1.71.0`            |
 | `@theia/workspace`        | `^1.71.0`            |
 | `inversify`               | `^6.0.0`             |
