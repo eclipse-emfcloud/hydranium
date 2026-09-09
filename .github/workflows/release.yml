@@ -1,10 +1,10 @@
 name: Release
 
-# `workflow_dispatch` is not a convenience. The placeholder guard that used to
-# make an accidental run harmless is gone with the `0.0.0` versions it read, so
-# a deliberate trigger is what replaces it — and the bootstrap publish, which
-# has to happen once before any package has a trusted publisher to authenticate
-# against, has no other way to be invoked.
+# `workflow_dispatch` is not a convenience: it is the only way to re-run a
+# release at the same commit. The version is derived from the commit count, so
+# it cannot be advanced without one, and a run that published some packages
+# before failing has no other recovery path — the publish step treats an
+# already-published version as a skip, so the re-run completes the set.
 on:
   push:
     branches: [main]

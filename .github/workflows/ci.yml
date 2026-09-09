@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A branch with no open pull request matches neither trigger above, so this
+  # is the only way to run the gate on one.
+  workflow_dispatch:
 
 # A superseded pull-request run is worthless, so cancel it; a superseded
 # push-to-main run is the ONLY signal that commit will ever get, so queue it
