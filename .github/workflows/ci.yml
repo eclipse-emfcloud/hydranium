@@ -8,9 +8,9 @@ on:
   # A branch with no open pull request matches neither trigger above, so this
   # is the only way to run the gate on one.
   #
-  # Both inputs exist to vary one knob across repeated runs of the SAME commit,
+  # Every input exists to vary one knob across repeated runs of the SAME commit,
   # which is what separates a flaky leg from a broken change. Each is empty or
-  # false on a push and a pull request, so neither can alter what those runs do.
+  # false on a push and a pull request, so none can alter what those runs do.
   workflow_dispatch:
     inputs:
       turbo_concurrency:
@@ -18,6 +18,15 @@ on:
         type: string
       skip_e2e:
         description: 'Skip the e2e job'
+        type: boolean
+        default: false
+      # Caching `node_modules` costs the one thing `npm ci` was buying that the
+      # npm cache was not: proof that a from-scratch install still works on this
+      # platform. Nothing else in the repository exercises that, so it needs an
+      # invocation of its own rather than a note asking someone to remember.
+      # Run it after any dependency change that a cache hit would have hidden.
+      skip_node_modules_cache:
+        description: 'Install from scratch, ignoring the node_modules cache'
         type: boolean
         default: false
 
@@ -252,7 +261,100 @@ jobs:
             }
           "
 
+      # `node_modules`, not `~/.npm`, which setup-node already caches above and
+      # which already hits: 146 MB restored in 5s, after which npm still reports
+      # `added 1678 packages in 3m`. So the cost is not fetching anything, it is
+      # materialising 63,218 files — and that is why it is a Windows problem,
+      # where `npm ci` runs 182–521s (median ~211 over 17 samples) against
+      # Ubuntu's steady 35–40s.
+      #
+      # `restore` and `save` as separate steps rather than `actions/cache`,
+      # which saves from a post-step that runs however the job ended. A job that
+      # died midway through installing would publish a half-materialised tree
+      # under a key every later run then hits, and nothing downstream would
+      # report it as a cache problem. Saving explicitly, immediately after the
+      # install and link have both succeeded, is what makes that impossible.
+      #
+      # The key carries the OS and the arch because `node_modules` holds
+      # compiled binaries and actions/cache does NOT namespace by runner: one
+      # shared key hands Windows a Linux tree. `.nvmrc` joins them because a
+      # Node major re-ABIs every native module, and `patches/**` because
+      # `patch-package` runs from `postinstall` and MUTATES the installed tree,
+      # so a restored tree carries whichever patches were current when it was
+      # saved.
+      #
+      # No `restore-keys`. A prefix match would restore a tree resolved from a
+      # different lockfile, which is worse than installing rather than a
+      # cheaper version of it.
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ !inputs.skip_node_modules_cache }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # `examples/*/*/node_modules`, two deep: every example is
+          # `examples/<example>/<package>`, and a `*` does not cross a
+          # separator, so the one-deep spelling matches nothing at all and
+          # would say so by silently caching less.
+          #
+          # `.vite` is excluded deliberately. It is Vitest's dep-optimizer
+          # prebundle, it is regenerated on demand, and it is the one directory
+          # here whose corruption does not present as a cache problem — a bad
+          # `deps_ssr` fails every suite in its package with a missing-module
+          # error naming a dependency. Vite invalidates it correctly on its own
+          # hashes, so this is not a staleness claim; it is that the payload is
+          # pure churn and the failure it could import is expensive to read.
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
+
+      # A hit is not the same as a usable tree, and the gap is platform-shaped:
+      # npm links workspaces with junctions on Windows and symlinks elsewhere,
+      # and the two do not survive a tar round trip equally. So the restore is
+      # verified rather than trusted — resolve a workspace link and a `.bin`
+      # shim, and fall back to installing when either is broken.
+      #
+      # It never fails the job. A cache that cannot be used on some platform
+      # should cost that platform the install it would have run anyway, not a
+      # red build. But it says so in the summary, because the failure this
+      # guards is otherwise invisible: the leg would quietly install every time
+      # and read as a cache that simply never helps.
+      - name: Check the restored tree is usable
+        id: restored
+        if: steps.node-modules-cache.outputs.cache-hit == 'true'
+        run: |
+          # The verdict is the EXIT STATUS, inside an `if`, so that the step
+          # cannot fail the job under this shell's `-e` and so that a node that
+          # crashed for some third reason counts as unusable and installs. A
+          # command substitution would have done neither.
+          usable=false
+          if node -e "
+            const { lstatSync, realpathSync } = require('node:fs');
+            const { resolve } = require('node:path');
+            // lstat, NEVER existsSync: the shim points into \`lib/\`, which the
+            // build two steps below has not produced yet, so at this moment a
+            // correctly restored shim is a DANGLING link and existsSync follows
+            // it and answers false. That reads as an unusable cache on every
+            // hit, and the leg would install every time while looking healthy.
+            const present = path => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+            const linked = realpathSync('node_modules/@hydranium/core');
+            if (linked !== resolve('packages/core')) {
+              throw new Error('workspace link resolves to ' + linked);
+            }
+            const shim = 'node_modules/.bin/hydranium-cli';
+            if (!present(shim) && !present(shim + '.cmd')) {
+              throw new Error('no hydranium-cli shim under node_modules/.bin');
+            }
+          "; then
+            usable=true
+          fi
+          echo "usable=$usable" >> "$GITHUB_OUTPUT"
+          echo "- node_modules cache: hit, restored tree usable: \`$usable\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install dependencies
+        if: steps.restored.outputs.usable != 'true'
         run: npm ci --no-fund --no-audit
 
       # `lib/` is build output and is not committed, so `packages/cli/lib/cli.js`
@@ -274,8 +376,47 @@ jobs:
       - name: Build the framework packages
         run: npm run build
 
+      # Skipped on a usable restore for the same reason the install above is:
+      # the shims are inside `node_modules/.bin` and came back with it. They
+      # dangle until the build above produces `lib/`, which is why this step
+      # was second in the first place, and a restored shim is in exactly that
+      # state — the check earlier asserts it EXISTS, and the build makes it
+      # resolve.
       - name: Link the workspace bins
+        if: steps.restored.outputs.usable != 'true'
         run: npm install --no-fund --no-audit
+
+      # Saved here rather than from a post-step, so what lands under the key is
+      # a tree that installed, built and linked. `success()` is redundant
+      # against a failing earlier step and is stated anyway, because the
+      # property it asserts — never publish a tree that did not work — is the
+      # whole reason this is not `actions/cache`.
+      #
+      # BEFORE `build:all`, and that ordering is load-bearing rather than
+      # incidental: turbo caches under `node_modules/.cache`, so saving after it
+      # would put one runner's task cache under a key every later run restores.
+      # A replayed turbo cache reports tasks as cached and logs them as passing
+      # without executing anything, which is a false green in the step whose
+      # entire job is verification. Nothing between the install and here writes
+      # into `node_modules` — the framework build is `tsc -b` and emits to
+      # `lib/`.
+      #
+      # Nothing to save on a hit: the key is already occupied and a second
+      # reservation of it is the `Failed to save: Unable to reserve cache` the
+      # Theia compatibility leg had to drop its own cache to be rid of. A hit
+      # whose tree came back UNUSABLE is not repairable here either, because a
+      # key is immutable once written — the summary line above is what reports
+      # it, and changing the lockfile is what retires it.
+      - name: Save node_modules
+        if: ${{ success() && !inputs.skip_node_modules_cache && steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ steps.node-modules-cache.outputs.cache-primary-key }}
 
       # Kept separate from the gate below so a plain compile failure is
       # distinguishable at a glance, and so the gate's own turbo clause reuses
