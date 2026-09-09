@@ -1,4 +1,4 @@
-name: Theia compatibility
+name: Theia Compatibility
 
 # The three published `*-theia` packages declare their `@theia/*` peers as a
 # RANGE, and the committed lockfile resolves one point near the top of it.
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       theia_version:
-        description: A @theia/* version or dist-tag; empty runs the standard legs
+        description: Version or dist-tag to run instead of the floor+latest pair, e.g. 1.71.0 or next
         required: false
         default: ''
   # Weekly, not per push. Nothing in a pull request can move what Theia has
@@ -39,7 +39,7 @@ defaults:
 
 jobs:
   compat:
-    name: theia ${{ matrix.theia }}
+    name: Theia ${{ matrix.theia }}
     runs-on: ubuntu-22.04
     # A backstop, not a target. The install is the long pole and its cost is
     # a fresh resolution of the whole graph rather than a lockfile replay.
@@ -92,16 +92,19 @@ jobs:
       # Read from `.nvmrc` rather than stated here, so one edit moves every
       # workflow and a local `nvm use` together.
       #
-      # `cache: npm` still earns its place even though the lockfile is about
-      # to be deleted: it caches `~/.npm`, not `node_modules`, and its key is
-      # computed while the lockfile is still present. A fresh resolution
-      # fetches metadata for a different tree but re-uses every tarball the
-      # cache already holds.
+      # NO `cache: npm`, and it must not come back. setup-node keys that cache
+      # on the lockfile HERE, before the discard step deletes it — so every leg
+      # computes one identical key while installing a different tree, and the
+      # legs then race to reserve it (`Failed to save: Unable to reserve
+      # cache`). The payload is `~/.npm` rather than `node_modules`, so a
+      # restore cannot forge a green past the assertion below; the cost is a
+      # key that describes a tree nobody installed and a failure line that
+      # reads as a defect. A weekly schedule also sits on the eviction
+      # boundary, so a hit is not something to plan around.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       # Mirrors ci.yml's step of the same name, and is not optional here.
       # Whatever npm ships inside the Node image `.nvmrc` selects CRASHES in
@@ -423,3 +426,20 @@ jobs:
             -w @hydranium/client-theia \
             -w @hydranium/data-client-theia \
             -w @hydranium/glsp-client-theia
+
+      # The run's conclusion says pass or fail but not WHAT was tested, and a
+      # leg that resolved a dist-tag cannot be compared against next week's
+      # unless the version it landed on is written down. Reads the installed
+      # tree rather than the request, so the line stays honest when an override
+      # did not apply, and `always()` so a red leg still names its version —
+      # which is the first thing anyone reading the failure needs.
+      - name: Record what this leg tested
+        if: always()
+        run: |
+          {
+            echo "### Theia ${{ matrix.theia }}"
+            echo "- requested: \`${{ matrix.theia }}\`"
+            echo "- resolved: \`${{ steps.resolve.outputs.version || 'unresolved' }}\`"
+            echo "- node: \`$(node --version)\`, npm: \`$(npm --version)\`"
+            node -e 'const fs = require("node:fs"); const at = "node_modules/@theia/core/package.json"; console.log("- installed @theia/core: `" + (fs.existsSync(at) ? JSON.parse(fs.readFileSync(at, "utf8")).version : "not installed") + "`");'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
