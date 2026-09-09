@@ -1,0 +1,425 @@
+name: Theia compatibility
+
+# The three published `*-theia` packages declare their `@theia/*` peers as a
+# RANGE, and the committed lockfile resolves one point near the top of it.
+# Nothing else in this repository ever installs the bottom, so the floor we
+# publish is a claim checked by nobody but the first adopter to pin there.
+# This workflow installs it and runs what can be run against it.
+#
+# Typecheck and unit tiers only, deliberately. The e2e tiers and the Theia
+# application bundler drag in an application dependency graph carrying its
+# own Theia floors, so a red there names that graph rather than the peer
+# range under test — and the leg would go amber for reasons no adopter of
+# these three packages is exposed to.
+on:
+  workflow_dispatch:
+    inputs:
+      theia_version:
+        description: A @theia/* version or dist-tag; empty runs the standard legs
+        required: false
+        default: ''
+  # Weekly, not per push. Nothing in a pull request can move what Theia has
+  # published, and this leg deletes the lockfile — so it resolves a fresh
+  # tree every run, cannot be cached, and answers a question about the
+  # REGISTRY rather than about the commit. Monday morning UTC puts the
+  # verdict in front of someone before the week's work lands on top of it.
+  schedule:
+    - cron: '0 8 * * 1'
+
+# Reads the repository and reports through the run's own conclusion. It
+# writes no comment, no status and no release, so `contents: read` is the
+# whole requirement and a top-level block sets every scope it omits to
+# `none`.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compat:
+    name: theia ${{ matrix.theia }}
+    runs-on: ubuntu-22.04
+    # A backstop, not a target. The install is the long pole and its cost is
+    # a fresh resolution of the whole graph rather than a lockfile replay.
+    timeout-minutes: 30
+
+    strategy:
+      # Each leg asks an independent question about one Theia version, so a
+      # red floor must not cancel the leg that would have said whether the
+      # ceiling moved as well.
+      fail-fast: false
+      matrix:
+        # `&&` and `||` yield an OPERAND here rather than a boolean, so this
+        # reads as: a supplied target becomes the only leg, and anything
+        # falsy falls through to the standard pair. Three things are falsy
+        # for this purpose — an omitted input, the empty-string default, and
+        # the `inputs` context under `schedule`, where it is not populated at
+        # all.
+        #
+        # `1.71.0` is the declared floor and the only value that tests the
+        # published range. `latest` is the ceiling, and it resolves today to
+        # what the lockfile already holds — a standing probe that begins
+        # saying something the day Theia's next minor ships, rather than a
+        # leg that tests anything now.
+        #
+        # This interpolates the target into JSON, so it does NOT constrain
+        # what a target may be. An unbalanced quote makes `fromJSON` fail and
+        # takes the run down before any leg starts; a balanced one splits
+        # into several legs instead, and a partial version such as `1.71`
+        # survives to become a leg of its own. The resolve step below is the
+        # gate on all three, because it is the only place a target is
+        # compared against what the registry actually publishes.
+        theia: ${{ inputs.theia_version && fromJSON(format('["{0}"]',
+          inputs.theia_version)) || fromJSON('["1.71.0", "latest"]') }}
+
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+      FORCE_COLOR: 1
+
+    steps:
+      # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one
+      # is a standing grant to run whatever it is later moved to. The
+      # trailing comment carries the human-readable release, without which a
+      # reviewer cannot tell an intended bump from a substitution.
+      #
+      # No `fetch-depth: 0`, unlike ci.yml's gate job: the gate that resolves
+      # documented commit SHAs against git does not run in this workflow.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read from `.nvmrc` rather than stated here, so one edit moves every
+      # workflow and a local `nvm use` together.
+      #
+      # `cache: npm` still earns its place even though the lockfile is about
+      # to be deleted: it caches `~/.npm`, not `node_modules`, and its key is
+      # computed while the lockfile is still present. A fresh resolution
+      # fetches metadata for a different tree but re-uses every tarball the
+      # cache already holds.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Mirrors ci.yml's step of the same name, and is not optional here.
+      # Whatever npm ships inside the Node image `.nvmrc` selects CRASHES in
+      # arborist on this tree once the overrides below are in place — a null
+      # dereference on `edgesOut` reported against no package, which reads as
+      # a corrupt install rather than as an npm defect. The pinned npm
+      # resolves the same tree without complaint.
+      #
+      # The two assertions are the point. A global install that lands off the
+      # front of PATH leaves the pin silently unapplied; and the Node the
+      # runner resolved is asserted against `engines.node` rather than
+      # trusted, because the version file is a spec and not a guarantee.
+      - name: Pin the toolchain
+        run: |
+          pinned=$(node -e "
+            const { packageManager } = require('./package.json');
+            if (typeof packageManager !== 'string' || !packageManager.startsWith('npm@')) {
+              console.error('Root packageManager is not an npm pin: ' + packageManager);
+              process.exit(1);
+            }
+            console.log(packageManager.slice(4));
+          ")
+          npm install -g "npm@$pinned" --no-fund --no-audit
+          if [ "$(npm --version)" != "$pinned" ]; then
+            echo "npm $(npm --version) is first on PATH, but package.json pins npm@$pinned." >&2
+            exit 1
+          fi
+          node -e "
+            const engines = require('./package.json').engines.node;
+            if (!engines.startsWith('>=')) {
+              console.error('engines.node is ' + engines + '; this check understands only a >=x.y[.z] floor.');
+              process.exit(1);
+            }
+            const pad = (version) => (version + '.0.0').split('.').slice(0, 3);
+            const rank = (version) => pad(version).reduce((acc, part) => acc * 1000 + Number(part), 0);
+            if (rank(process.versions.node) < rank(engines.slice(2).trim())) {
+              console.error('Node ' + process.versions.node + ' does not satisfy engines.node ' + engines + '.');
+              process.exit(1);
+            }
+          "
+
+      # A dist-tag target has to become a concrete version BEFORE anything
+      # else happens, for two reasons. The override injected below pins every
+      # package to one literal version, so that the tree cannot end up
+      # straddling two of them when a tag has moved for some packages and not
+      # yet for others; and the assertion after the install has nothing to
+      # compare against until the tag is resolved.
+      #
+      # `npm view` prints one bare line for an exact version or a tag, and one
+      # `name@version 'version'` line PER MATCH for a range. A range target
+      # would therefore hand a multi-line blob to every step downstream, so
+      # the line count is checked rather than assumed.
+      - name: Resolve the target Theia version
+        id: resolve
+        env:
+          THEIA_TARGET: ${{ matrix.theia }}
+        run: |
+          resolved=$(npm view "@theia/core@$THEIA_TARGET" version)
+          if [ "$(printf '%s\n' "$resolved" | wc -l)" -ne 1 ]; then
+            echo "'$THEIA_TARGET' matched more than one @theia/core version:" >&2
+            printf '%s\n' "$resolved" >&2
+            echo "Give an exact version or a dist-tag, not a range." >&2
+            exit 1
+          fi
+          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "'$THEIA_TARGET' resolved to '$resolved', which is not a version." >&2
+            exit 1
+          fi
+          echo "$THEIA_TARGET resolves to $resolved"
+          echo "version=$resolved" >> "$GITHUB_OUTPUT"
+
+      # A root `overrides` entry per `@theia/*` package, because nothing
+      # weaker moves this tree. `npm install @theia/core@<target>` was
+      # measured to ADD one copy at the target and leave every other
+      # `@theia/*` where it was, which installs the question rather than
+      # answering it.
+      #
+      # The script is fed from the environment and heredoc-quoted, so the
+      # shell interprets none of it: a `$` inside a regexp or a `\n` in a
+      # string is otherwise the shell's before it is node's.
+      - name: Pin every @theia/* to the target
+        env:
+          THEIA_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          // A @theia/* package whose first release came LATER than the
+          // target cannot be pinned to it: the version does not exist and
+          // npm fails the entire install on the 404, so one unpublished
+          // package takes the leg down instead of the compatibility question
+          // it was asked. Data rather than a hardcoded skip, because the
+          // exclusion is a property of that package's release history and
+          // whoever adds the next one has to be able to find where it goes.
+          const MIN_VERSION = {
+            '@theia/bundle-plugin': '1.72.0',
+          };
+          const target = process.env.THEIA_VERSION;
+          // Prerelease-insensitive, because a floor is a statement about the
+          // release LINE: a 1.72.0-next.x is the first thing published on
+          // 1.72 and has to clear a 1.72.0 floor, which a string comparison
+          // rejects.
+          const rank = (version) =>
+            version
+              .split('-')[0]
+              .split('.')
+              .slice(0, 3)
+              .reduce((acc, part) => acc * 1000 + Number(part), 0);
+          const rootManifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const dirs = ['.'];
+          for (const entry of rootManifest.workspaces) {
+            if (!entry.includes('*')) {
+              dirs.push(entry);
+              continue;
+            }
+            // Only a trailing single-segment `*` is understood, and any
+            // other shape is REFUSED rather than skipped. A glob this cannot
+            // expand yields fewer pinned packages, and the assertion below
+            // covers @theia/core alone — so the leg would go green having
+            // pinned part of the tree.
+            if (!entry.endsWith('/*') || entry.slice(0, -2).includes('*')) {
+              console.error('Unsupported workspace glob: ' + entry);
+              process.exit(1);
+            }
+            const base = entry.slice(0, -2);
+            for (const child of fs.readdirSync(base)) {
+              if (fs.existsSync(path.join(base, child, 'package.json'))) {
+                dirs.push(path.join(base, child));
+              }
+            }
+          }
+          const names = new Set();
+          for (const dir of dirs) {
+            const manifest = JSON.parse(
+              fs.readFileSync(path.join(dir, 'package.json'), 'utf8')
+            );
+            // peerDependencies is in this list deliberately: on two of the
+            // three packages the range under test is declared THERE and in
+            // devDependencies only as its mirror, so reading the installed
+            // blocks alone would leave the very claim unpinned.
+            for (const block of [
+              'dependencies',
+              'devDependencies',
+              'peerDependencies',
+              'optionalDependencies',
+            ]) {
+              for (const name of Object.keys(manifest[block] ?? {})) {
+                if (name.startsWith('@theia/')) {
+                  names.add(name);
+                }
+              }
+            }
+          }
+          if (names.size === 0) {
+            console.error('No @theia/* dependency in the workspace: this leg would test nothing.');
+            process.exit(1);
+          }
+          const overrides = { ...rootManifest.overrides };
+          const skipped = [];
+          for (const name of [...names].sort()) {
+            const floor = MIN_VERSION[name];
+            if (floor && rank(target) < rank(floor)) {
+              skipped.push(name + ' (nothing published before ' + floor + ')');
+              continue;
+            }
+            overrides[name] = target;
+          }
+          // The pre-existing overrides pin langium and the vscode-jsonrpc
+          // chain to exact versions for single-physical-copy identity.
+          // Dropping one does not fail the install; it produces a second
+          // physical copy and an identity comparison that returns false at
+          // runtime, which surfaces as an unrelated defect in whatever this
+          // leg runs next.
+          for (const [name, value] of Object.entries(rootManifest.overrides ?? {})) {
+            if (overrides[name] !== value) {
+              console.error('Injection would change the existing override for ' + name + '.');
+              process.exit(1);
+            }
+          }
+          rootManifest.overrides = overrides;
+          fs.writeFileSync('package.json', JSON.stringify(rootManifest, null, 2) + '\n');
+          console.log('Pinned ' + (names.size - skipped.length) + ' @theia/* packages to ' + target + '.');
+          for (const entry of skipped) {
+            console.log('Left unpinned: ' + entry);
+          }
+          NODE
+
+      # THE CENTRAL HAZARD OF THIS WORKFLOW. With the lockfile in place npm
+      # replays it and the injected override is SILENTLY IGNORED — the
+      # install succeeds, @theia/core stays where the lockfile put it, and
+      # every step after this one passes while testing the version CI already
+      # covers. Deleting `node_modules` alone is not enough for the same
+      # reason, and neither is `npm ci`, which refuses to run without a
+      # lockfile at all.
+      #
+      # The nested trees go too, and not for tidiness. A surviving
+      # `packages/*/node_modules` changes what npm HOISTS to the root, and
+      # hoisting is what decides whether a root-level package can resolve a
+      # `@theia/*` module at all — leave them and a suite fails to load
+      # something that resolves cleanly from a fresh checkout, which reads as
+      # a Theia incompatibility and is not one. A runner checks out clean, so
+      # this line is what keeps a local reproduction of this leg honest.
+      #
+      # Checked rather than trusted, because a silent failure here is a green
+      # run that proves nothing.
+      - name: Discard the resolved dependency tree
+        run: |
+          rm -rf node_modules package-lock.json
+          rm -rf packages/*/node_modules examples/*/*/node_modules
+          if [ -e package-lock.json ]; then
+            echo "package-lock.json survived deletion; the override would be ignored." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
+      # Without this the workflow is theatre. The failure mode above
+      # produces a successful install, a green build and a full green test
+      # run against the Theia version the lockfile always resolved, so the
+      # ONLY thing standing between this leg and a false pass is a direct
+      # reading of what got installed.
+      - name: Assert the installed Theia version
+        env:
+          THEIA_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const expected = process.env.THEIA_VERSION;
+          const found = [];
+          // A walk, not `require.resolve` and not the hoisted copy alone.
+          // The override exists to force ONE physical copy, so a second
+          // version surviving anywhere is a partially applied override —
+          // and that state reads as success from the hoisted path, which is
+          // precisely what must not be certified.
+          const visit = (dir) => {
+            const manifest = path.join(dir, '@theia', 'core', 'package.json');
+            if (fs.existsSync(manifest)) {
+              found.push({
+                version: JSON.parse(fs.readFileSync(manifest, 'utf8')).version,
+                at: path.relative(process.cwd(), manifest),
+              });
+            }
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) {
+                continue;
+              }
+              const outer = path.join(dir, entry.name);
+              if (fs.existsSync(path.join(outer, 'node_modules'))) {
+                visit(path.join(outer, 'node_modules'));
+              }
+              // A scope directory holds packages rather than being one, so
+              // its CHILDREN are where a nested `node_modules` can sit.
+              if (entry.name.startsWith('@')) {
+                for (const scoped of fs.readdirSync(outer, { withFileTypes: true })) {
+                  const inner = path.join(outer, scoped.name, 'node_modules');
+                  if (scoped.isDirectory() && fs.existsSync(inner)) {
+                    visit(inner);
+                  }
+                }
+              }
+            }
+          };
+          visit('node_modules');
+          // Zero copies is a FAILURE, not a pass. Comparing an empty list
+          // against the expected version finds no mismatch, so a check
+          // written the other way round certifies a tree with no Theia in it.
+          if (found.length === 0) {
+            console.error('No @theia/core under node_modules: nothing was installed to check.');
+            process.exit(1);
+          }
+          for (const copy of found) {
+            const mark = copy.version === expected ? 'ok   ' : 'WRONG';
+            console.log(mark + ' ' + copy.version + '  ' + copy.at);
+          }
+          if (found.some((copy) => copy.version !== expected)) {
+            console.error('');
+            console.error('Expected every @theia/core copy at ' + expected + '.');
+            console.error('The overrides did not take effect, so this leg ran against the');
+            console.error('version the committed lockfile resolves and proves nothing.');
+            process.exit(1);
+          }
+          console.log('@theia/core is ' + expected + ' in all ' + found.length + ' copies.');
+          NODE
+
+      # `tsc -b` over `packages/*`, which is what compiles the three packages
+      # under test against the Theia typings that were just installed. The
+      # `build` / `install` two-step ci.yml needs is absent on purpose: that
+      # exists so npm makes the `hydranium-cli` workspace bin symlink before
+      # an example's `generate` invokes it, and no example is built here.
+      - name: Build the framework packages
+        run: npm run build
+
+      # Ahead of the suites, and redundant with them by construction — each
+      # package's own `test` script runs `typecheck:test` first. Running all
+      # three here anyway is what makes a type-level incompatibility, the
+      # likeliest way a peer floor actually breaks, report as a compile
+      # failure across every affected package in one step, instead of as the
+      # first package's test failure with the other two never reached.
+      #
+      # The three are named rather than swept with `-ws`: they are the only
+      # packages declaring the range under test, and a workspace-wide run
+      # would turn a targeted probe into a second full gate.
+      - name: Typecheck the tests
+        run: |
+          npm run typecheck:test \
+            -w @hydranium/client-theia \
+            -w @hydranium/data-client-theia \
+            -w @hydranium/glsp-client-theia
+
+      # Each package's own `test` script, not a hand-rolled `vitest run`.
+      # A bare invocation here would drift from the command a contributor
+      # runs, and the leg's verdict has to be about Theia rather than about
+      # this workflow's idea of how to run the suite.
+      - name: Unit suites
+        run: |
+          npm run test \
+            -w @hydranium/client-theia \
+            -w @hydranium/data-client-theia \
+            -w @hydranium/glsp-client-theia
