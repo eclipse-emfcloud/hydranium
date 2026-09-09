@@ -34,15 +34,21 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 
-// Deliberately narrower than `v*`: this repository carries marker tags such as
-// `v0-api-freeze`, and a naive `v[0-9]*` matches that one — `v` followed by
-// `0-api-freeze` — which would silently anchor the counter to a tag that is not
-// a release. Requiring all three dot-separated numeric segments excludes it.
+// Deliberately narrower than `v*`, and than `v[0-9]*`: both also match a
+// `v`-prefixed marker tag, which would silently anchor the counter to a tag
+// that is not a release. All three dot-separated numeric segments are required.
 const RELEASE_TAG_GLOB = 'v[0-9]*.[0-9]*.[0-9]*';
 
-/** Re-reads while the registry propagates; see {@link verifyPublished}. */
-const VERIFY_ATTEMPTS = 5;
-const VERIFY_BACKOFF_MS = 2_000;
+/**
+ * Re-reads while the registry propagates; see {@link verifyPublished}.
+ *
+ * A round covers every package still pending, so the linear backoff is shared
+ * rather than paid per straggler — three minutes in total, however many lag.
+ * Per-package it multiplies by the number of stragglers and overruns the
+ * release job's own timeout, which kills the run before it can report which.
+ */
+const VERIFY_ROUNDS = 10;
+const VERIFY_BACKOFF_MS = 4_000;
 
 /**
  * What `distTag` currently points at for `name`, or undefined.
@@ -267,29 +273,33 @@ function publish(pkg, distTag, dryRun) {
  * moved, not merely that a version exists somewhere.
  *
  * Retried regardless, because propagation is eventual and a fresh CDN edge can
- * lag a write by seconds.
+ * lag a write by seconds — in rounds over the packages still pending, so that
+ * waiting on one re-reads the rest for free.
  */
 function verifyPublished(packages, version, distTag) {
-   const missing = [];
-   for (const pkg of packages) {
-      const name = pkg.manifest.name;
-      let seen;
-      for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt++) {
-         if (attempt > 0) {
-            sleepSync(VERIFY_BACKOFF_MS * attempt);
-         }
-         seen = publishedTag(name, distTag);
-         if (seen === version) {
-            break;
-         }
+   // Holds the last version seen, not just the name: the failure has to tell a
+   // tag serving the PREVIOUS version apart from one it could not read.
+   const pending = new Map(packages.map(pkg => [pkg.manifest.name, undefined]));
+   for (let round = 0; round < VERIFY_ROUNDS && pending.size > 0; round++) {
+      if (round > 0) {
+         sleepSync(VERIFY_BACKOFF_MS * round);
       }
-      if (seen !== version) {
-         missing.push(`${name} (${distTag} → ${seen ?? 'unreadable'})`);
+      for (const name of [...pending.keys()]) {
+         const seen = publishedTag(name, distTag);
+         if (seen === version) {
+            pending.delete(name);
+         } else {
+            pending.set(name, seen);
+         }
       }
    }
-   if (missing.length > 0) {
+   if (pending.size > 0) {
+      const missing = [...pending].map(([name, seen]) => `${name} (${distTag} → ${seen ?? 'unreadable'})`);
       throw new Error(
-         `Published ${packages.length} packages but '${distTag}' does not point at ${version} for:\n  ${missing.join('\n  ')}`
+         `Published ${packages.length} packages but '${distTag}' does not point at ${version} for:\n  ${missing.join('\n  ')}\n\n` +
+            'A tag showing the PREVIOUS version is propagation lag rather than a failed publish, and the\n' +
+            'publishes above have already succeeded. Re-check with `npm dist-tag ls <package>` before\n' +
+            'treating this as a release failure; if it has caught up, only this budget was too short.'
       );
    }
    console.log(`✓ all ${packages.length} packages serve ${version} on '${distTag}'`);

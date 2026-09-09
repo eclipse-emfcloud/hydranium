@@ -103,21 +103,20 @@ while attaching nothing. Confirm it on the registry page.
 
 [1551]: https://github.com/actions/setup-node/issues/1551
 
-## Bootstrapping (one time)
+## Adding a package to the published set
 
 Trusted publishing is configured **per package**, and a package must
-already exist before it can be configured — so the first publish cannot
-itself use OIDC. In order:
+already exist before it can be configured — so a new package's first
+publish cannot use OIDC, and until it is configured it fails the next
+release for the whole set, which publishes in lockstep.
 
-1. Cut a release tag so the counter has a floor. The match pattern is
-   deliberately narrow (`v[0-9]*.[0-9]*.[0-9]*`): this repository
-   carries marker tags such as `v0-api-freeze`, which a naive `v[0-9]*`
-   matches — `v` followed by `0-api-freeze` — and would silently anchor
-   every version number to a tag that is not a release.
-2. Publish once with a token, **from CI rather than a laptop**. A local
-   `npm publish` has neither `id-token: write` nor provenance and looks
-   entirely successful.
-3. Configure the publisher for each package:
+1. Publish that package once **locally**, under `npm login`. It cannot
+   be done from `release.yml`: that workflow is OIDC-only and its
+   preflight fails when it finds an `_authToken`, because a token takes
+   precedence over OIDC and would leave the trusted-publisher path
+   untested. That version carries no provenance; the first OIDC publish
+   attaches it.
+2. Configure the publisher:
 
    ```bash
    npm trust github --repo eclipse-emfcloud/hydranium \
@@ -129,9 +128,12 @@ itself use OIDC. In order:
    turn every release into a staged submission awaiting 2FA approval.
    Account-level 2FA is required, and granular tokens with the bypass
    option are rejected.
-4. Verify on **one** package before trusting all ten — publishing scoped
-   packages over OIDC has an open failure report ([npm/cli#8976][8976]).
-5. Delete the `NPM_TOKEN` secret and revoke the token.
+3. `npm logout`, so no credential remains that could take precedence
+   over OIDC on a later local run.
+
+Publishing a scoped package over OIDC has an open failure report
+([npm/cli#8976][8976]), so confirm the next automated release carries the
+new package rather than assuming it.
 
 [8976]: https://github.com/npm/cli/issues/8976
 
