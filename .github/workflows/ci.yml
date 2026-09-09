@@ -29,6 +29,9 @@ on:
         description: 'Install from scratch, ignoring the node_modules cache'
         type: boolean
         default: false
+      vitest_max_workers:
+        description: 'Vitest workers per package: an integer >= 1. Empty uses the configured CI default'
+        type: string
 
 # A superseded pull-request run is worthless, so cancel it; a superseded
 # push-to-main run is the ONLY signal that commit will ever get, so queue it
@@ -94,6 +97,11 @@ jobs:
       # Empty is what turbo reads as unset, so a push and a pull request keep
       # its default and only a dispatch that fills the input caps anything.
       TURBO_CONCURRENCY: ${{ inputs.turbo_concurrency }}
+      # Same shape, one layer down: turbo's cap is on TASKS and this one is on
+      # the workers inside each task, and the product of the two is what the
+      # runner's four cores actually see. `vitest.shared.ts` treats empty as
+      # unset and applies its own CI default.
+      VITEST_MAX_WORKERS: ${{ inputs.vitest_max_workers }}
 
     steps:
       # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one is
@@ -218,11 +226,20 @@ jobs:
       # boundary its flag documentation names — so the pair is what says whether
       # the cap raises the ceiling, matches it, or lowers it. Either figure alone
       # invites the reader to assume one of the three.
+      #
+      # The vitest cap is the one figure here reported as REQUESTED rather than
+      # as in force, because the value that binds is computed in
+      # `vitest.shared.ts` and this step runs before the install that would let
+      # anything read it. The two cannot silently diverge even so: an empty
+      # request means the config's own default, and a request the config cannot
+      # parse throws at startup rather than falling back — so there is no state
+      # in which a number was asked for, ignored, and reported as applied.
       - name: Record the effective build knobs
         run: |
           {
             echo "### Build knobs (${{ matrix.os }})"
             echo "- turbo concurrency: \`${TURBO_CONCURRENCY:-turbo default}\`"
+            echo "- vitest workers per package, requested: \`${VITEST_MAX_WORKERS:-config default}\`"
             echo "- node heap cap: \`${NODE_OPTIONS:-unset}\`"
             node -e 'const os = require("node:os"), v8 = require("node:v8"); const gib = (bytes) => (bytes / 2 ** 30).toFixed(2); console.log("- node: `" + process.version + "`"); console.log("- effective heap limit: `" + gib(v8.getHeapStatistics().heap_size_limit) + " GiB`"); console.log("- cpus: `" + os.cpus().length + "`"); console.log("- total memory: `" + gib(os.totalmem()) + " GiB`");'
             env -u NODE_OPTIONS node -e 'console.log("- heap limit without the cap: `" + (require("node:v8").getHeapStatistics().heap_size_limit / 2 ** 30).toFixed(2) + " GiB`");' || echo "- heap limit without the cap: \`unavailable\`"
