@@ -7,7 +7,19 @@ on:
     branches: [main]
   # A branch with no open pull request matches neither trigger above, so this
   # is the only way to run the gate on one.
+  #
+  # Both inputs exist to vary one knob across repeated runs of the SAME commit,
+  # which is what separates a flaky leg from a broken change. Each is empty or
+  # false on a push and a pull request, so neither can alter what those runs do.
   workflow_dispatch:
+    inputs:
+      turbo_concurrency:
+        description: 'Task concurrency cap: an integer >= 1, or a percentage like 50%'
+        type: string
+      skip_e2e:
+        description: 'Skip the e2e job'
+        type: boolean
+        default: false
 
 # A superseded pull-request run is worthless, so cancel it; a superseded
 # push-to-main run is the ONLY signal that commit will ever get, so queue it
@@ -42,18 +54,28 @@ jobs:
       fail-fast: false
       matrix:
         # Windows earns its place on a language-server framework rather than as
-        # generic coverage: path spelling, drive letters and `file://` URI
-        # construction are where this stack diverges, and identity comparisons
-        # on `URI` fail silently when it does. `.gitattributes` pins every text
-        # file to LF on checkout, so the byte-exact gates compare the same bytes
-        # on both — without that this matrix would redden on line endings alone
-        # and say nothing about the code.
-        os: [ubuntu-22.04, windows-latest]
+        # generic coverage, on two axes. Path spelling, drive letters and
+        # `file://` URI construction are where this stack diverges, and identity
+        # comparisons on `URI` fail silently when it does. Child-process startup
+        # and per-file cost are where it is SLOWER, so a boot or handshake budget
+        # tuned to Linux expires here and reports the code under test rather than
+        # the budget. `.gitattributes` pins every text file to LF on checkout, so
+        # the byte-exact gates compare the same bytes on both — without that this
+        # matrix would redden on line endings alone and say nothing about the code.
+        #
+        # The Windows image is pinned rather than `windows-latest`, which is a
+        # moving alias: it advances a major Windows Server release under the
+        # workflow, and a leg whose runtime and failure rate both move on someone
+        # else's schedule cannot be measured against a change made here.
+        os: [ubuntu-22.04, windows-2025]
 
     env:
       NODE_OPTIONS: --max_old_space_size=4096
       TURBO_UI: stream
       FORCE_COLOR: 1
+      # Empty is what turbo reads as unset, so a push and a pull request keep
+      # its default and only a dispatch that fills the input caps anything.
+      TURBO_CONCURRENCY: ${{ inputs.turbo_concurrency }}
 
     steps:
       # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one is
@@ -61,7 +83,7 @@ jobs:
       # comment carries the human-readable release, without which a reviewer
       # cannot tell an intended bump from a substitution.
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history, because a gate that resolves commit SHAs cited in
           # documentation against git cannot do so under the default shallow
@@ -150,15 +172,48 @@ jobs:
       # a major-only spec is a semver RANGE, and it clears the floor only for as
       # long as the newest release in that major happens to be above it.
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
 
-      # setup-node does not act on `packageManager`: its documented inputs cover
-      # a node-version spec and a cache hint, and the field is a hint about
-      # WHICH cache to use, never a version to install. Without this step CI
-      # runs whatever npm ships inside the Node image and the pin is decorative.
+      # A dispatch's inputs reach no API response and no log, so a run cannot
+      # otherwise be told apart from one that took the defaults — and a knob
+      # that silently failed to apply reads exactly like a knob that did not
+      # help, which makes every measurement taken with it uninterpretable.
+      # Each figure is read from what is IN FORCE rather than from what was
+      # asked for: the variable turbo consults, and the heap ceiling V8 reports,
+      # which is the one that binds whether or not NODE_OPTIONS moved it.
+      #
+      # After `Setup Node`, and that is the whole reason it is not the job's
+      # first step: earlier it would measure the runner's preinstalled Node, and
+      # V8 derives its default ceiling from physical memory per version, so the
+      # figure would describe a process the build never runs.
+      #
+      # Through `tee`, because the summary renders for a reader while the log is
+      # the only copy an API can retrieve, and a figure nobody can read back is
+      # not a measurement. The machine sits beside the knobs because the two are
+      # only meaningful together: the ceiling is PER PROCESS and turbo runs many.
+      #
+      # The ceiling is reported TWICE, with NODE_OPTIONS and without. V8 derives
+      # its own from physical memory, and these runners sit just under the 16 GB
+      # boundary its flag documentation names — so the pair is what says whether
+      # the cap raises the ceiling, matches it, or lowers it. Either figure alone
+      # invites the reader to assume one of the three.
+      - name: Record the effective build knobs
+        run: |
+          {
+            echo "### Build knobs (${{ matrix.os }})"
+            echo "- turbo concurrency: \`${TURBO_CONCURRENCY:-turbo default}\`"
+            echo "- node heap cap: \`${NODE_OPTIONS:-unset}\`"
+            node -e 'const os = require("node:os"), v8 = require("node:v8"); const gib = (bytes) => (bytes / 2 ** 30).toFixed(2); console.log("- node: `" + process.version + "`"); console.log("- effective heap limit: `" + gib(v8.getHeapStatistics().heap_size_limit) + " GiB`"); console.log("- cpus: `" + os.cpus().length + "`"); console.log("- total memory: `" + gib(os.totalmem()) + " GiB`");'
+            env -u NODE_OPTIONS node -e 'console.log("- heap limit without the cap: `" + (require("node:v8").getHeapStatistics().heap_size_limit / 2 ** 30).toFixed(2) + " GiB`");' || echo "- heap limit without the cap: \`unavailable\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # setup-node does not INSTALL `packageManager`'s version: it reads the
+      # field only to pick which package manager's cache to restore, never as a
+      # version to install. Without this step CI runs whatever npm ships inside
+      # the Node image and the pin is decorative.
       # The version is read out of the manifest rather than repeated here, so a
       # bump to `packageManager` cannot leave the workflow behind.
       #
@@ -281,6 +336,11 @@ jobs:
     name: e2e
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    # Skippable ONLY from a dispatch, where the input exists: repeating a run to
+    # measure the gate should not also repeat four minutes this job shares
+    # nothing with. On a push or a pull request the input is empty and the job
+    # runs, so no ordinary run can lose e2e coverage.
+    if: ${{ inputs.skip_e2e != true }}
 
     env:
       NODE_OPTIONS: --max_old_space_size=4096
@@ -291,10 +351,10 @@ jobs:
       # No `fetch-depth: 0` here, unlike the gate job: full history exists for
       # the commit-citation gate, which runs over there and not in this job.
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
