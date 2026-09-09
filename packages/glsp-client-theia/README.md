@@ -74,6 +74,7 @@ hydranium GLSP server. The declared peer dependencies are:
 | `@hydranium/protocol`             | `^1.0.0-next` |
 | `@theia/core`                     | `^1.71.0`     |
 | `@theia/output`                   | `^1.71.0`     |
+| `@theia/process`                  | `^1.71.0`     |
 | `@theia/workspace`                | `^1.71.0`     |
 | `inversify`                       | `^6.0.0`      |
 | `snabbdom`                        | `^3.5.1`      |
