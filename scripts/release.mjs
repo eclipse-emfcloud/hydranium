@@ -40,15 +40,19 @@ const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const RELEASE_TAG_GLOB = 'v[0-9]*.[0-9]*.[0-9]*';
 
 /**
- * Re-reads while the registry propagates; see {@link verifyPublished}.
+ * Re-reads while the registry propagates; see {@link reportPublished}.
  *
  * A round covers every package still pending, so the linear backoff is shared
- * rather than paid per straggler — three minutes in total, however many lag.
- * Per-package it multiplies by the number of stragglers and overruns the
- * release job's own timeout, which kills the run before it can report which.
+ * rather than paid per straggler — twenty-four seconds in total, however many
+ * lag. Per-package it would multiply by the number of stragglers instead.
+ *
+ * Short, because the read it retries decides nothing. Three minutes was tried
+ * while this was a gate and was not enough either: the endpoint stayed stale
+ * past the whole budget, so the only thing a longer wait bought was a later
+ * red on a release that had already succeeded.
  */
-const VERIFY_ROUNDS = 10;
-const VERIFY_BACKOFF_MS = 4_000;
+const REPORT_ROUNDS = 4;
+const REPORT_BACKOFF_MS = 4_000;
 
 /**
  * What `distTag` currently points at for `name`, or undefined.
@@ -232,7 +236,7 @@ function publishablePackages(workspace) {
  * Publish one package, treating "this version already exists" as a SKIP.
  *
  * Detected from the registry's rejection rather than by asking first, because
- * a pre-check reads the same cached document {@link verifyPublished} cannot
+ * a pre-check reads the same cached document {@link reportPublished} cannot
  * trust, and a stale answer either skips a package that needs publishing or
  * attempts one that does not. The write path gets the authoritative answer.
  *
@@ -258,31 +262,35 @@ function publish(pkg, distTag, dryRun) {
 }
 
 /**
- * Confirm every package actually landed, by reading the DIST-TAG rather than
- * the package document.
+ * Report which packages already serve `version` on `distTag`.
  *
- * `npm view` reads the public package document, which is served through a CDN
- * that caches NEGATIVE responses. Every name here was queried while it did not
- * exist — the bootstrap sequence does exactly that — so immediately after a
- * first publish `npm view` returns a stale 404 and this reports ten packages
- * missing that are all present. Measured: `npm view` 404'd on packages that
- * `npm access list packages` and `npm dist-tag ls` both showed as live.
+ * A REPORT and not a gate, which is the whole point of it. The publish is the
+ * verification: npm acknowledges each write with its own `+ name@version` line
+ * and a rejected publish throws from the command itself, so by the time this
+ * runs the registry has already accepted all of them. Everything here is a
+ * read back through a CDN, and that read has been observed serving a
+ * superseded version for longer than three minutes — long enough that failing
+ * on it reddened roughly half of all releases AFTER the publishes had landed.
+ * A verdict that is wrong half the time is worse than no verdict, because the
+ * one real failure arrives looking exactly like the noise.
  *
- * The dist-tag endpoint was not stale in that same window, and checking it is
- * the stronger assertion anyway: it proves the tag consumers resolve actually
- * moved, not merely that a version exists somewhere.
+ * Read on the dist-tag endpoint rather than the package document, which is
+ * where a first publish went wrong: `npm view` caches NEGATIVE responses, and
+ * the bootstrap queries every name while it does not yet exist, so it returned
+ * a stale 404 for packages that were live. Swapping endpoints would only move
+ * the staleness, since both are cached — hence reporting rather than gating.
  *
- * Retried regardless, because propagation is eventual and a fresh CDN edge can
- * lag a write by seconds — in rounds over the packages still pending, so that
- * waiting on one re-reads the rest for free.
+ * Retried in rounds over the packages still pending, so waiting on one re-reads
+ * the rest for free. The budget is short deliberately: it buys a tidier report,
+ * never a verdict, so there is nothing to be gained by waiting longer.
  */
-function verifyPublished(packages, version, distTag) {
-   // Holds the last version seen, not just the name: the failure has to tell a
+function reportPublished(packages, version, distTag) {
+   // Holds the last version seen, not just the name: the report has to tell a
    // tag serving the PREVIOUS version apart from one it could not read.
    const pending = new Map(packages.map(pkg => [pkg.manifest.name, undefined]));
-   for (let round = 0; round < VERIFY_ROUNDS && pending.size > 0; round++) {
+   for (let round = 0; round < REPORT_ROUNDS && pending.size > 0; round++) {
       if (round > 0) {
-         sleepSync(VERIFY_BACKOFF_MS * round);
+         sleepSync(REPORT_BACKOFF_MS * round);
       }
       for (const name of [...pending.keys()]) {
          const seen = publishedTag(name, distTag);
@@ -293,16 +301,16 @@ function verifyPublished(packages, version, distTag) {
          }
       }
    }
-   if (pending.size > 0) {
-      const missing = [...pending].map(([name, seen]) => `${name} (${distTag} → ${seen ?? 'unreadable'})`);
-      throw new Error(
-         `Published ${packages.length} packages but '${distTag}' does not point at ${version} for:\n  ${missing.join('\n  ')}\n\n` +
-            'A tag showing the PREVIOUS version is propagation lag rather than a failed publish, and the\n' +
-            'publishes above have already succeeded. Re-check with `npm dist-tag ls <package>` before\n' +
-            'treating this as a release failure; if it has caught up, only this budget was too short.'
-      );
+   if (pending.size === 0) {
+      console.log(`✓ all ${packages.length} packages serve ${version} on '${distTag}'`);
+      return;
    }
-   console.log(`✓ all ${packages.length} packages serve ${version} on '${distTag}'`);
+   const lagging = [...pending].map(([name, seen]) => `${name} (${distTag} → ${seen ?? 'unreadable'})`);
+   console.warn(
+      `\n! '${distTag}' does not yet point at ${version} for:\n  ${lagging.join('\n  ')}\n\n` +
+         `The publishes above succeeded, so this is the read catching up rather than a failed\n` +
+         `release. Confirm with \`npm dist-tag ls <package>\`; it has always caught up so far.\n`
+   );
 }
 
 function releaseNext(workspace, dryRun) {
@@ -325,7 +333,7 @@ function releaseNext(workspace, dryRun) {
       publish(pkg, distTag, dryRun);
    }
    if (!dryRun) {
-      verifyPublished(packages, version, distTag);
+      reportPublished(packages, version, distTag);
    }
 }
 
@@ -347,7 +355,7 @@ function releaseLatest(workspace, dryRun) {
       publish(pkg, 'latest', dryRun);
    }
    if (!dryRun) {
-      verifyPublished(packages, base, 'latest');
+      reportPublished(packages, base, 'latest');
    }
 }
 
