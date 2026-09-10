@@ -1,0 +1,167 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/**
+ * A `--require` preload that records why a Node process exited non-zero, for the
+ * Windows CI failure where one does so having written nothing at all.
+ *
+ * ## Why a preload rather than a per-tool instrument
+ *
+ * The victim is not a tool. Captured `.turbo/*.log` files show the same silent
+ * non-zero exit from `tsc --noEmit` (no diagnostic printed), from `eslint`
+ * (which exits 1 only when it found problems it would have printed), from a
+ * vitest fork worker, and from an intermediate `npm run` that never printed
+ * npm's own `Lifecycle script … failed` block. What they share is being a Node
+ * child on Windows, so the instrument belongs on every Node process rather than
+ * on any one of them.
+ *
+ * ## Why it writes to a file
+ *
+ * Both channels a dying process would normally use are already known to lose
+ * this: a vitest fork's `stdout`/`stderr` are piped into vitest's own console
+ * interception, which attributes output to the running test and drops what
+ * arrives after one finishes; and turbo merges every task's streams into one
+ * pipe. A file bypasses both. It also keeps the recorder off stdout, which
+ * matters because subcommand tests assert on a spawned process's stdout being
+ * exactly its payload.
+ *
+ * ## What each outcome means
+ *
+ * - an `uncaught` field names the exception and the stack, and the case is closed
+ * - an `exitCall` stack with no `uncaught` names the library line calling
+ *   `process.exit`, and the case is closed
+ * - neither, with a non-zero `code`, means the tool set `process.exitCode`
+ *   deliberately — for eslint that would mean real findings whose output was lost
+ * - NO RECORD AT ALL for a process that npm reported as exiting 1 means it never
+ *   reached a JS exit handler, which moves the question to external termination
+ *
+ * The last of those is why the self-test below has to exist: a recorder that has
+ * silently stopped recording produces the same empty directory as the finding.
+ *
+ * ## Constraints this must hold
+ *
+ * It runs in EVERY Node process of a `npm run check`, including ones whose
+ * output is asserted on byte-for-byte, so it must never write to stdout or
+ * stderr, never throw, and never change an exit code. It is inert unless
+ * `HYDRANIUM_EXIT_TRACE_DIR` names a directory, so a developer machine and an
+ * adopter's install are untouched.
+ *
+ * SCAFFOLDING. Its removal trigger is the `//trace-exits` note in the root
+ * manifest, alongside the vitest patch's.
+ */
+
+'use strict';
+
+const TRACE_DIR = process.env.HYDRANIUM_EXIT_TRACE_DIR;
+
+/**
+ * Everything the recorder learns before it is allowed to write, which is at
+ * `exit` and no earlier: only there is the FINAL code known, and a process that
+ * ends up exiting 0 must leave no file behind — an artefact holding one entry
+ * per healthy process would bury the handful that matter.
+ */
+let uncaught;
+let exitCall;
+
+/** Never let the recorder's own failure become the process's failure. */
+function safely(action) {
+   try {
+      action();
+   } catch {
+      // Deliberately empty. A recorder that throws would convert the silent
+      // failure under investigation into a different one, attributed here.
+   }
+}
+
+/**
+ * A stream's state at exit. `pending` is the point of it: bytes still queued on
+ * a stream nobody will drain again are output the reader never saw, which is one
+ * of the two standing explanations for the silence and is otherwise unobservable
+ * from outside the process.
+ */
+function streamState(stream) {
+   if (!stream) {
+      return undefined;
+   }
+   return {
+      pending: stream.writableLength,
+      ended: stream.writableEnded === true,
+      destroyed: stream.destroyed === true,
+      errored: stream.errored ? String(stream.errored.message || stream.errored) : undefined
+   };
+}
+
+function describe(error) {
+   if (!(error instanceof Error)) {
+      return { message: String(error) };
+   }
+   return { name: error.name, message: error.message, stack: error.stack };
+}
+
+function install() {
+   const { appendFileSync, mkdirSync } = require('node:fs');
+   const { join } = require('node:path');
+
+   // `uncaughtExceptionMonitor` and NOT `uncaughtException`: the monitor
+   // observes and leaves Node's default crash behaviour in place, whereas a
+   // plain listener SUPPRESSES it and would turn a process that dies into one
+   // that survives — changing the very outcome being measured.
+   process.on('uncaughtExceptionMonitor', (error, origin) => {
+      safely(() => {
+         uncaught = { origin, ...describe(error) };
+      });
+   });
+
+   // An unhandled rejection has no monitor variant, and a plain listener would
+   // suppress the default throw. Under Node's default `--unhandled-rejections=throw`
+   // it becomes an uncaught exception, so the monitor above already sees it.
+
+   const realExit = process.exit;
+   process.exit = function exit(...args) {
+      safely(() => {
+         // Captured rather than written: an explicit `process.exit(0)` is
+         // ordinary — tsc calls one on a clean run — and only the final code
+         // decides whether this mattered.
+         exitCall = new Error('process.exit').stack;
+      });
+      return realExit.apply(process, args);
+   };
+
+   process.on('exit', code => {
+      if (code === 0) {
+         return;
+      }
+      safely(() => {
+         mkdirSync(TRACE_DIR, { recursive: true });
+         const record = {
+            pid: process.pid,
+            ppid: process.ppid,
+            code,
+            uptimeMs: Math.round(process.uptime() * 1000),
+            argv: process.argv,
+            cwd: process.cwd(),
+            uncaught,
+            exitCall,
+            stdout: streamState(process.stdout),
+            stderr: streamState(process.stderr)
+         };
+         // One file per process rather than one shared file: the whole point is
+         // a run with dozens of concurrent Node processes, and concurrent
+         // appends to one file on Windows have no atomicity guarantee worth
+         // relying on when the thing being measured is already a Windows
+         // anomaly. The pid is in the name AND in the record, because a pid is
+         // reused within a job long enough for two entries to share a file.
+         appendFileSync(join(TRACE_DIR, `exit-${process.pid}.json`), `${JSON.stringify(record)}\n`);
+      });
+   });
+}
+
+if (TRACE_DIR) {
+   safely(install);
+}
