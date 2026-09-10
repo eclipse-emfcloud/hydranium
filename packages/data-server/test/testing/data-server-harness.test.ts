@@ -50,8 +50,8 @@ const PROJECT: Project = { id: 'p-one', referenceName: 'one' };
 
 /**
  * A stand-in for the server under test: it answers `getProjects` and can push
- * any of the three client events back, using the same `createRpcProxy` call
- * shape the real `DataServer` constructor uses.
+ * any client event back, using the same `createRpcProxy` call shape the real
+ * `DataServer` constructor uses.
  */
 class FakeServer {
    readonly clientProxy: DataClientProtocol<FakeTransfer, TransferDiagnostic, Project>;
@@ -146,11 +146,13 @@ describe('makeDataServerHarness — the seam', () => {
 });
 
 describe('makeDataServerHarness — the capture arrays', () => {
-   it('captures all three client channels, in arrival order', async () => {
+   it('captures each client channel separately, in arrival order', async () => {
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({ server: channel => new FakeServer(channel) });
 
       harness.server.clientProxy.onDocumentUpdated(updated(URI_ONE));
       harness.server.clientProxy.onDocumentSaved(saved(URI_ONE));
+      harness.server.clientProxy.onDocumentDeleted({ uri: URI_ONE });
+      harness.server.clientProxy.onDocumentsBuilt({ uris: [URI_ONE] });
       harness.server.clientProxy.onProjectsChanged(projectsChanged());
 
       // A notification has a whole socket round trip ahead of it, so nothing
@@ -158,25 +160,36 @@ describe('makeDataServerHarness — the capture arrays', () => {
       // than slept: a fixed yield is starved past its own deadline when the
       // whole workspace's suites run in parallel, which reddens a positive
       // wait for a reason the test is not about.
-      await waitFor(() => harness.events.length + harness.saves.length + harness.projectsChanges.length === 3);
+      await waitFor(
+         () =>
+            harness.events.length +
+               harness.saves.length +
+               harness.deletions.length +
+               harness.builds.length +
+               harness.projectsChanges.length ===
+            5
+      );
 
       expect(harness.events.map(event => event.document.uri)).toEqual([URI_ONE]);
       expect(harness.saves.map(event => event.document.uri)).toEqual([URI_ONE]);
+      expect(harness.deletions.map(event => event.uri)).toEqual([URI_ONE]);
+      expect(harness.builds.map(event => event.uris)).toEqual([[URI_ONE]]);
       expect(harness.projectsChanges.map(event => [event.project.id, event.reason])).toEqual([['p-one', 'added']]);
       harness.dispose();
    });
 
-   it('captures every name on the shipped client allowlist, not a hand-listed three', async () => {
+   it('captures every name on the shipped client allowlist, not a hand-listed subset', async () => {
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({ server: channel => new FakeServer(channel) });
 
-      // Driven from the constant rather than from three named calls, so a
-      // FOURTH client method added to the contract without a matching capture
-      // channel reddens here. Sent as raw notifications because the point is
-      // the wire name, and the default handlers only push.
+      // Driven from the constant rather than from one named call per channel, so
+      // a client method added to the contract without a matching capture channel
+      // reddens here. Sent as raw notifications because the point is the wire
+      // name, and the default handlers only push.
       for (const method of DATA_CLIENT_PROTOCOL_METHODS) {
          harness.pair.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}${method}`, updated(URI_ONE));
       }
-      const total = (): number => harness.events.length + harness.saves.length + harness.projectsChanges.length;
+      const total = (): number =>
+         harness.events.length + harness.saves.length + harness.deletions.length + harness.builds.length + harness.projectsChanges.length;
       await waitFor(() => total() === DATA_CLIENT_PROTOCOL_METHODS.length);
 
       expect(total()).toBe(DATA_CLIENT_PROTOCOL_METHODS.length);

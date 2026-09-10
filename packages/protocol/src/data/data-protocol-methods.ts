@@ -59,9 +59,12 @@ export const REFERENCE_SERVER_PROTOCOL_METHODS = [
 ] as const satisfies ReadonlyArray<keyof ReferenceServerProtocol<TransferElement> & string>;
 
 /** Notification-method names on {@link DocumentClientProtocol}. */
-export const DOCUMENT_CLIENT_PROTOCOL_METHODS = ['onDocumentUpdated', 'onDocumentSaved'] as const satisfies ReadonlyArray<
-   keyof DocumentClientProtocol<TransferElement> & string
->;
+export const DOCUMENT_CLIENT_PROTOCOL_METHODS = [
+   'onDocumentUpdated',
+   'onDocumentSaved',
+   'onDocumentDeleted',
+   'onDocumentsBuilt'
+] as const satisfies ReadonlyArray<keyof DocumentClientProtocol<TransferElement> & string>;
 
 /** Notification-method names on {@link ProjectClientProtocol}. */
 export const PROJECT_CLIENT_PROTOCOL_METHODS = ['onProjectsChanged'] as const satisfies ReadonlyArray<keyof ProjectClientProtocol & string>;

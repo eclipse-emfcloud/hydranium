@@ -135,6 +135,18 @@ const domainFixture: LanguageFixture = {
    edit: {
       to: 'entity Shipment {\n   tracking: ID\n   carrier: String\n}\n\nentity Pallet {\n   code: ID\n}\n',
       expect: root => (root as DomainModel).declarations?.some(declaration => declaration.name === 'Pallet') ?? false
+   },
+   /**
+    * The cascade half, and it is CROSS-GRAMMAR on purpose: a `.process` whose
+    * subject resolves into this `.domain`, so editing the domain relinks the
+    * process without its own file being touched. A single-grammar fixture
+    * could express the same relation, but this is the shape an adopter with
+    * more than one language actually has.
+    */
+   dependent: {
+      uri: uri('orders/conformance-dependent.process'),
+      languageId: PROCESS_LANGUAGE_ID,
+      text: 'process Packing for Shipment {\n   task Label reads Shipment.tracking\n}\n'
    }
 };
 

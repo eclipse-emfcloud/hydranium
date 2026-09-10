@@ -49,6 +49,7 @@ import type {
 import type {
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
    TransferSaveDocumentArgs,
    TransferUpdateDocumentArgs,
@@ -137,6 +138,15 @@ export interface CanaryDefects {
    /** Updates are fanned out regardless of the subscription table. */
    readonly notifiesBeforeSubscribe?: boolean;
    /**
+    * A document rebuilt as a cascade is never reported, which is the state a
+    * head is in when it gates its build notification on the subscription map:
+    * the dependent has no watcher, so gating it silences the one channel that
+    * could carry it.
+    */
+   readonly silentCascade?: boolean;
+   /** The cascade report names the WATCHED document too, which the update channel already carried. */
+   readonly cascadeNamesWatched?: boolean;
+   /**
     * A synthetic source whose URI names no file answers `[]` instead of the
     * project's candidates — the create-dialog defect: a head that routes only
     * by URI extension has nothing to route a folder on, so the picker comes
@@ -161,6 +171,8 @@ interface StoredDocument {
  */
 export class CanaryDataServer {
    readonly events: TransferDocumentUpdatedEvent<CanaryRoot, TransferDiagnostic>[] = [];
+   /** The canary provokes no cascade — it stores documents in a Map with no reference graph. */
+   readonly builds: TransferDocumentsBuiltEvent[] = [];
 
    private readonly documents = new Map<string, StoredDocument>();
    private readonly watched = new Set<string>();
@@ -256,6 +268,14 @@ export class CanaryDataServer {
       if (this.watched.has(args.uri) || this.defects.notifiesBeforeSubscribe) {
          this.events.push({ document, sourceClientId: args.clientId, reason: 'changed' });
       }
+      // The fake's stand-in for a dependency graph: editing `valid` "rebuilds"
+      // the fixture's dependent. A Map holds no references, so the relation is
+      // declared rather than derived — enough to exercise the check, and the
+      // reason this canary cannot be mistaken for a real head.
+      if (isEdit && args.uri === CANARY_VALID_URI && !this.defects.silentCascade) {
+         const uris = this.defects.cascadeNamesWatched ? [CANARY_DEPENDENT_URI, args.uri] : [CANARY_DEPENDENT_URI];
+         this.builds.push({ uris });
+      }
       return document;
    }
 
@@ -310,9 +330,15 @@ export class CanaryDataServer {
 /** The single candidate the canary's reference surface offers. */
 export const CANARY_CANDIDATE = 'CanaryTarget';
 
+/** The fixture's `valid` URI, named so the cascade fake can recognise an edit to it. */
+export const CANARY_VALID_URI = 'file:///one.x';
+/** The fixture's `dependent` URI — the document the fake reports as cascade-rebuilt. */
+export const CANARY_DEPENDENT_URI = 'file:///three.x';
+
 export const CANARY_FIXTURE: LanguageFixture = {
-   valid: { uri: 'file:///one.x', languageId: 'x', text: VALID_TEXT },
+   valid: { uri: CANARY_VALID_URI, languageId: 'x', text: VALID_TEXT },
    invalid: { uri: 'file:///two.x', languageId: 'x', text: INVALID_TEXT },
+   dependent: { uri: CANARY_DEPENDENT_URI, languageId: 'x', text: VALID_TEXT },
    edit: { to: EDITED_TEXT, expect: root => isCanaryRoot(root) && root.text === EDITED_TEXT },
    // An explicit folder rather than the derived default: this fixture's `valid`
    // sits at the URI root, so deriving a parent from it yields the degenerate

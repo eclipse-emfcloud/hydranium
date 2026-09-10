@@ -326,9 +326,11 @@ interface ResolvedDataServerOptions {
  * any names supplied via {@link DataServerOptions.additionalMethods}) and
  * builds the {@link DataClientProtocol} notification proxy on the same
  * connection in one {@link createRpcProxy} call (binding `this` as its
- * `localTarget`) under the configured namespace, and subscribes one
- * `DocumentBuilder.onDocumentPhase` listener per configured phase that
- * dispatches subscription events via `clientProxy.onDocumentUpdated`.
+ * `localTarget`) under the configured namespace, and subscribes two listeners
+ * at the configured phase: a `DocumentBuilder.onDocumentPhase` one dispatching
+ * per-document `clientProxy.onDocumentUpdated` for watched URIs, and a
+ * `DocumentBuilder.onBuildPhase` one dispatching a single
+ * `clientProxy.onDocumentsBuilt` naming the batch's unwatched documents.
  *
  * The data-server requires the full {@link ServerSharedServices}
  * shape — `HydraniumTextDocuments` for client-attributed updates,
@@ -381,10 +383,12 @@ export class DataServer<
    /**
     * Snapshot of the most recent `DocumentBuilder.onUpdate` event. Drives
     * `reason` discrimination on outbound `onDocumentUpdated` notifications:
-    * a URI in the `changed` list emits `'changed'`, in `deleted` emits
-    * `'deleted'`, otherwise `'rebuilt'` (cascade rebuild from a dependent
-    * URI's change). The same mechanism `AstDocumentManager.onUpdate` uses on
-    * the LSP side, so reason fidelity stays consistent between heads.
+    * a URI in the `changed` list emits `'changed'`, otherwise `'rebuilt'`
+    * (cascade rebuild from a dependent URI's change). The same mechanism
+    * `AstDocumentManager.onUpdate` uses on the LSP side, so reason fidelity
+    * stays consistent between heads. The `deleted` half is read by
+    * {@link dispatchDeleteEvents} rather than by the reason discrimination,
+    * a deletion travelling on its own channel.
     */
    protected lastBuildUpdate?: { changed: readonly URI[]; deleted: readonly URI[] };
    /**
@@ -499,6 +503,7 @@ export class DataServer<
       this.disposables.push(
          this.services.workspace.DocumentBuilder.onUpdate((changed, deleted) => {
             this.lastBuildUpdate = { changed, deleted };
+            this.dispatchDeleteEvents(deleted);
          })
       );
       this.subscribeToDocumentBuilder();
@@ -996,6 +1001,57 @@ export class DataServer<
             this.dispatchPhaseEvent(document, cancelToken)
          )
       );
+      // The BUILD-phase hook, not the per-document one: this notification is one
+      // message per build rather than one per document, and Langium hands the
+      // whole batch over here. It also does not fire for a cancelled build,
+      // which is what the per-document dispatch has to check by hand.
+      this.disposables.push(
+         this.services.workspace.DocumentBuilder.onBuildPhase(this.options.subscriptionPhase, built => this.dispatchBuiltEvent(built))
+      );
+   }
+
+   /**
+    * Report the documents that reached {@link DataServerOptions.subscriptionPhase}
+    * and that NOBODY on this
+    * connection is watching — the ones a client was not told about through
+    * {@link dispatchPhaseEvent}, which is gated per URI.
+    *
+    * **The gap this closes is the one no other source can observe.** A document
+    * the client watches, it hears about already. A file changed on disk, the
+    * host's own filesystem watcher reports — and on a browser host, where the
+    * workspace lives behind this head, an external change cannot happen at all.
+    * What is left, and what nothing outside the server can see, is a document
+    * rebuilt because something it DEPENDS ON changed: its file never changed, so
+    * a filesystem watcher is silent by construction, and it has no subscriber, so
+    * the update channel is silent by design. A consumer displaying data derived
+    * from that document — a tree label, a decorator — otherwise goes stale with
+    * no signal from any source, and repairs itself the moment someone opens the
+    * file to investigate, which is what makes it expensive to diagnose later.
+    *
+    * Payload-free on purpose: URIs only, so a client re-reads what it displays
+    * rather than being handed transfer documents it did not ask for. That is the
+    * property the subscription map protects, and it is preserved here by
+    * carrying no document rather than by gating the message.
+    *
+    * Quiet in the common case. Editing a document that an editor has open leaves
+    * that URI watched and therefore out of this set, so a build with no
+    * dependents produces nothing at all, and workspace initialisation produces
+    * nothing because it does not build to this phase. The ceiling is a
+    * whole-workspace rebuild at the subscription phase: one message, URIs only.
+    *
+    * The URI is canonicalised for the same reason the subscription map is keyed
+    * that way, and is untested for the same reason as its twin in
+    * {@link dispatchDeleteEvents}: the builder reports URIs out of its own
+    * store, so a non-canonical one cannot be produced without a fixture
+    * asserting a shape the real system never emits.
+    */
+   protected dispatchBuiltEvent(built: readonly LangiumDocument[]): void {
+      const uris = built.map(document => this.canonicalKey(document.uri.toString())).filter(uri => !this.subscriptions.has(uri));
+      if (uris.length === 0) {
+         return;
+      }
+      this.tracer.debug(`Emit onDocumentsBuilt: ${uris.length} unwatched document(s)`);
+      this.clientProxy.onDocumentsBuilt({ uris });
    }
 
    /**
@@ -1031,6 +1087,56 @@ export class DataServer<
             }
          })
       );
+   }
+
+   /**
+    * Fan out a deletion for each removed URI, to EVERY client on the connection
+    * rather than only to the ones watching that URI.
+    *
+    * **Deliberately ungated, where {@link dispatchPhaseEvent} and
+    * {@link dispatchSaveEvent} are gated.** Those two carry a built document and
+    * fire on every build, so the subscription map is what keeps bandwidth
+    * proportional to what a client asked for. A deletion is neither: it is one
+    * URI, it is rare, and it reports the workspace's STRUCTURE rather than a
+    * document's content. Gating it forces any consumer that displays the
+    * workspace — a model tree, a file decorator — to learn about disappearances
+    * from a filesystem watcher instead, which a client hosted in a browser has
+    * no way to run: its workspace lives behind the head. A client that does not
+    * care filters on the URI, which costs it a comparison.
+    *
+    * The precedent is the last-close revert broadcast (see
+    * {@link pendingRevertBroadcasts}), where the same judgement was already made
+    * in the other direction: a transition that matters enough is delivered
+    * without a subscription.
+    *
+    * Runs from the `DocumentBuilder.onUpdate` listener rather than from a phase
+    * listener, which is the only place a deletion is observable: `update`
+    * removes the document before deriving the rebuild set, so it is never built.
+    * That ordering also puts this notification ahead of the `'rebuilt'` events
+    * for the dependents whose references the deletion just broke.
+    *
+    * The `deleted` list arrives already expanded to concrete document URIs —
+    * `deleteDocuments` resolves a directory URI to the documents beneath it — so
+    * no caller has to handle a directory here.
+    *
+    * Per-URI derived state is dropped for the same reason it is dropped
+    * anywhere: it describes a document that no longer exists.
+    * {@link lastEmittedFingerprint} in particular can outlive its subscriptions
+    * through the last-close revert path — left behind, it is adopted as the
+    * baseline by the next {@link watchModelDocument} and suppresses the first
+    * emit after the file returns with its previous content.
+    *
+    * The subscription itself SURVIVES: a recreated file resumes delivering to
+    * the same watchers with no re-subscription, and a client that answers the
+    * deletion by closing releases the watch through `closeModelDocument` anyway.
+    */
+   protected dispatchDeleteEvents(deleted: readonly URI[]): void {
+      for (const removed of deleted) {
+         const uri = this.canonicalKey(removed.toString());
+         this.lastEmittedFingerprint.delete(uri);
+         this.pendingRevertBroadcasts.delete(uri);
+         this.clientProxy.onDocumentDeleted({ uri });
+      }
    }
 
    /** Fan out a save event for the document's URI, gated by the subscription map. */
@@ -1151,26 +1257,19 @@ export class DataServer<
    /**
     * Discriminate the reason for a phase-event-driven update notification.
     * Uses the most recent `DocumentBuilder.onUpdate` snapshot:
-    * - URI in the `deleted` list → `'deleted'`
     * - URI in the `changed` list → `'changed'` (the URI was passed to
     *   `documentBuilder.update(changed, deleted)`, which spans `didChange`
     *   text-document events and programmatic `update([uri], [])` calls).
     * - Otherwise → `'rebuilt'` (cascade re-derivation: this URI was rebuilt
     *   because something it depends on changed; its own text wasn't flagged).
     *
-    * `'saved'` is NOT emitted from this code path — saves take the dedicated
-    * `DataClientProtocol.onDocumentSaved` channel; adopters that want a
-    * unified update stream synthesise `'saved'` in their bridge layer.
+    * `'saved'` is NOT emitted here — saves take the dedicated
+    * `DataClientProtocol.onDocumentSaved` channel, and adopters wanting a
+    * unified stream synthesise it in their bridge layer. A deletion is not a
+    * reason at all; see {@link dispatchDeleteEvents}.
     */
    protected resolveUpdateReason(uri: URI): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>['reason'] {
-      const last = this.lastBuildUpdate;
-      if (last?.deleted.some(deleted => UriUtils.equals(deleted, uri))) {
-         return 'deleted';
-      }
-      if (last?.changed.some(changed => UriUtils.equals(changed, uri))) {
-         return 'changed';
-      }
-      return 'rebuilt';
+      return this.lastBuildUpdate?.changed.some(changed => UriUtils.equals(changed, uri)) ? 'changed' : 'rebuilt';
    }
 
    /**

@@ -24,6 +24,28 @@ Layers 1 and 2 are upstream: the framework consumes them and does not
 redefine them. Layers 3 and 4 are the framework's own, and are where the
 naming questions arise.
 
+### Layer 1 can lag layer 2's AST
+
+The two upstream layers are normally in step — `LangiumDocument.textDocument`
+is the characters its AST was parsed from. An integrity repair breaks that on
+one path, and it is worth knowing before you read a repair back.
+
+A rule mutates the AST in place; the integrity tier then serialises the result
+and routes it by how the document is held. For a document open in an editor it
+rides the current build. For a closed one it goes to disk in `'silent'` sync
+mode, or to a staging slot the next open consumes in `'editor'` mode. Only the
+disk write comes back through a re-parse, because Langium's factory gates
+re-parsing on the CST's own `fullText`: with the repair staged rather than
+written, the text the factory re-reads still matches the CST, the parse is
+skipped, and the mutated AST stands against unrepaired text.
+
+So for a closed document with a staged repair, layer 1 mirrors **disk** while
+layer 2's AST carries the repair. `IntegrityService.SettledState` is the
+landmark for post-integrity content, and what it guarantees is the AST: read a
+repair from `parseResult.value`, or from the staged content, never from
+`textDocument.getText()`. Layers 3 and 4 both project the AST, so both carry
+the repair — only a consumer reading the raw text sees the older state.
+
 ### Layer 3 — `AstDocument`, the in-process snapshot
 
 `AstDocument<TAst extends AstNode, TDiagnostic>`
@@ -39,7 +61,10 @@ which state its edit was based on.
 
 That version field is load-bearing rather than informational: an in-process
 caller passes it back as `TransferUpdateArgs.baseVersion` / `TransferSaveArgs.baseVersion`
-to opt into the conflict gate.
+to opt into the conflict gate. It is a server-owned counter that advances iff
+the content changes, which is what makes the gate sound — and an integrity
+repair is one of those changes, so a snapshot taken before a repair is
+genuinely stale rather than merely older.
 
 ### Layer 4 — `TransferDocument`, the wire envelope
 

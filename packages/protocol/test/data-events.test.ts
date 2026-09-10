@@ -117,6 +117,36 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       expect(saved).toEqual(['file:///widgets/gauge.widget']);
    });
 
+   it('fans a deletion out on its own channel, carrying only the URI', () => {
+      const events = new DataEvents<WidgetRoot>();
+      const deleted: string[] = [];
+      let updates = 0;
+      events.onDidDeleteDocument(event => deleted.push(event.uri));
+      // The update channel stays silent: a subscriber that reacts to a deletion
+      // by clearing its cache must not also see it as content it should render.
+      events.onDidUpdateDocument(() => updates++);
+
+      events.onDocumentDeleted({ uri: 'file:///widgets/gauge.widget' });
+
+      expect(deleted).toEqual(['file:///widgets/gauge.widget']);
+      expect(updates).toBe(0);
+   });
+
+   it('fans a build out on its own channel, without touching the update one', () => {
+      const events = new DataEvents<WidgetRoot>();
+      const built: string[][] = [];
+      let updates = 0;
+      events.onDidBuildDocuments(event => built.push([...event.uris]));
+      // The complement of the update channel, not a second copy of it: a
+      // recipient re-reads what it displays rather than rendering from here.
+      events.onDidUpdateDocument(() => updates++);
+
+      events.onDocumentsBuilt({ uris: ['file:///widgets/gauge.widget'] });
+
+      expect(built).toEqual([['file:///widgets/gauge.widget']]);
+      expect(updates).toBe(0);
+   });
+
    it('releases its emitters on dispose', () => {
       const events = new DataEvents<WidgetRoot>();
       let updates = 0;

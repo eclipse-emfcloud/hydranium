@@ -31,7 +31,12 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onTestFinished } from 'vitest';
-import { createOrderFlowServices, type OrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
+import {
+   createOrderFlowServices,
+   type OrderFlowOptions,
+   type OrderFlowServices,
+   type OrderFlowSharedServices
+} from '../src/language-server/order-flow-module.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -88,9 +93,17 @@ export interface OrderFlowHarness {
    readonly layout: OrderFlowServices;
 }
 
-/** Boot all three languages with no workspace initialized, so nothing is read from disk. */
-export function makeServices(): OrderFlowHarness {
-   const { shared, Domain, Process, Layout } = createOrderFlowServices({ ...NodeFileSystem });
+/**
+ * Boot all three languages with no workspace initialized, so nothing is read
+ * from disk.
+ *
+ * `options` reaches the composition verbatim, which is how a suite boots a
+ * framework service on non-default options (`extraSharedModules` /
+ * `extraLanguageModules`) or binds a slot production leaves unbound, such as
+ * `lsp.Connection`.
+ */
+export function makeServices(options: OrderFlowOptions = {}): OrderFlowHarness {
+   const { shared, Domain, Process, Layout } = createOrderFlowServices({ ...NodeFileSystem }, options);
    return { shared, domain: Domain, process: Process, layout: Layout };
 }
 
@@ -104,8 +117,8 @@ export function makeServices(): OrderFlowHarness {
  * and hands back the disposal obligation with it. Exposing the raw root would
  * let a suite initialize over the committed workspace and write to it.
  */
-async function makeHarnessOver(workspaceRoot: string): Promise<OrderFlowHarness> {
-   const harness = makeServices();
+async function makeHarnessOver(workspaceRoot: string, options: OrderFlowOptions = {}): Promise<OrderFlowHarness> {
+   const harness = makeServices(options);
    await initializeWorkspaceProgrammatically(harness.shared, workspaceRoot);
    return harness;
 }
@@ -145,10 +158,13 @@ export interface ScratchOrderFlowHarness {
  * *initial* state of a modified workspace must go through here rather than
  * write-then-rebuild.
  */
-export async function makeScratchWorkspaceHarness(prepare?: (workspace: ScratchWorkspace) => void): Promise<ScratchOrderFlowHarness> {
+export async function makeScratchWorkspaceHarness(
+   prepare?: (workspace: ScratchWorkspace) => void,
+   options: OrderFlowOptions = {}
+): Promise<ScratchOrderFlowHarness> {
    const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-workspace-' });
    prepare?.(workspace);
-   return { harness: await makeHarnessOver(workspace.root), workspace };
+   return { harness: await makeHarnessOver(workspace.root, options), workspace };
 }
 
 /** URI of a workspace file, given its path relative to the workspace root. */

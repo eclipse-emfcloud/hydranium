@@ -12,11 +12,15 @@
  * against a real `DocumentBuilder` over real files.
  *
  * The reason comes from the builder's last update request: `'changed'` if the
- * URI was in the changed list, `'deleted'` if it was in the deleted list,
- * `'rebuilt'` otherwise. The event is emitted from a document-phase listener at
- * `Validated`, and a stub builder would let a test fire that listener for any
- * document at all — including one the real builder would already have dropped.
- * So each branch's reachability is only observable against the real thing.
+ * URI was in the changed list, `'rebuilt'` otherwise. The event is emitted from
+ * a document-phase listener at `Validated`, and a stub builder would let a test
+ * fire that listener for any document at all — including one the real builder
+ * would already have dropped. So each branch's reachability is only observable
+ * against the real thing.
+ *
+ * A deleted URI is the case that has no reason at all, and this file is where
+ * that is measured: the union offers none because the event cannot reach a
+ * deleted document, which is why deletion travels on its own notification.
  *
  * The documents must exist ON DISK: `DocumentBuilder.update` re-reads a changed
  * URI through the document factory, so an in-memory `fromString` document makes
@@ -79,7 +83,7 @@ describe('TransferUpdatedEvent.reason against a real DocumentBuilder', () => {
       expect(reasons).toEqual(['changed']);
    });
 
-   it("never delivers 'deleted', because a deleted document reaches no phase listener", async () => {
+   it('delivers nothing at all for a deleted URI, which reaches no phase listener', async () => {
       const { harness, primaryUri, reasons } = await buildFixture();
 
       await harness.shared.workspace.DocumentBuilder.update([], [primaryUri]);

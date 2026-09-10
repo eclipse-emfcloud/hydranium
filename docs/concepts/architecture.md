@@ -81,7 +81,8 @@ attributes, not text ranges. The data-server head
 ([`@hydranium/data-server`](../../packages/data-server/src/data-server.ts),
 `DataServer`) closes that gap: it is a typed JSON-RPC service exposing a
 `getModelDocument` / `update` / `save` lifecycle plus push notifications
-(`onDocumentUpdated`, `onDocumentSaved`, `onProjectsChanged`).
+(`onDocumentUpdated`, `onDocumentSaved`, `onDocumentDeleted`,
+`onDocumentsBuilt`, `onProjectsChanged`).
 
 It projects the live Langium AST onto an adopter-supplied transfer shape — there
 is no separate EMF runtime model. `new DataServer(connection, shared)`

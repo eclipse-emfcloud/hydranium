@@ -211,12 +211,55 @@ describe('makeStubDocumentBuilder — the members it declares but does not imple
       // via the bind-site cast would otherwise fail with "undefined is not a
       // function", which names neither the stub nor the method.
       expect(() => builder.build([document(URI_ONE)])).toThrow(/StubDocumentBuilder\.build is not implemented/);
-      expect(() => builder.onBuildPhase(DocumentState.Validated, async () => undefined)).toThrow(
-         /StubDocumentBuilder\.onBuildPhase is not implemented/
-      );
       expect(() => builder.resetToState(document(URI_ONE), DocumentState.Parsed)).toThrow(
          /StubDocumentBuilder\.resetToState is not implemented/
       );
+   });
+});
+
+describe('makeStubDocumentBuilder — build-phase listeners', () => {
+   it('delivers the whole batch to a build-phase listener, once', () => {
+      const builder = makeStubDocumentBuilder();
+      const batches: string[][] = [];
+      builder.onBuildPhase(DocumentState.Validated, built => {
+         batches.push(built.map(entry => entry.uri.toString()));
+      });
+
+      builder.fireBuildPhase(DocumentState.Validated, [document(URI_ONE), document(URI_TWO)]);
+
+      // One call with both documents, not one call each: a subject that reports
+      // per BUILD rather than per document is the reason this hook exists, and
+      // a stub that fanned it out per document would let such a subject pass
+      // while emitting the wrong number of notifications.
+      expect(batches).toEqual([[URI_ONE.toString(), URI_TWO.toString()]]);
+   });
+
+   it('keeps build-phase and document-phase listeners on separate channels', () => {
+      const builder = makeStubDocumentBuilder();
+      const builds: number[] = [];
+      const documents: string[] = [];
+      builder.onBuildPhase(DocumentState.Validated, built => void builds.push(built.length));
+      builder.onDocumentPhase(DocumentState.Validated, built => void documents.push(built.uri.toString()));
+
+      builder.firePhase(DocumentState.Validated, document(URI_ONE));
+
+      // `firePhase` must not reach the build listener. A stub that conflated the
+      // two would make a per-build subject look wired while the real builder
+      // left it silent — which is the failure the separate hook exists to model.
+      expect(documents).toEqual([URI_ONE.toString()]);
+      expect(builds).toEqual([]);
+   });
+
+   it('stops delivering after the subscription is disposed', () => {
+      const builder = makeStubDocumentBuilder();
+      const batches: number[] = [];
+      const subscription = builder.onBuildPhase(DocumentState.Validated, built => void batches.push(built.length));
+
+      builder.fireBuildPhase(DocumentState.Validated, [document(URI_ONE)]);
+      subscription.dispose();
+      builder.fireBuildPhase(DocumentState.Validated, [document(URI_ONE)]);
+
+      expect(batches).toEqual([1]);
    });
 });
 

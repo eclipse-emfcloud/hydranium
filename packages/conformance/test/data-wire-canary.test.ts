@@ -58,7 +58,7 @@ async function shapeCheckAgainst(payload: unknown): Promise<Error | undefined> {
    const proxy = createRpcProxy<DataServerProtocol<CanaryRoot, TransferDiagnostic>>(pair.left, {
       methodNamespace: DATA_SERVER_WIRE_PREFIX
    });
-   const driver: DataConformanceDriver<CanaryRoot, TransferDiagnostic> = { proxy, events: [], dispose: () => undefined };
+   const driver: DataConformanceDriver<CanaryRoot, TransferDiagnostic> = { proxy, events: [], builds: [], dispose: () => undefined };
 
    const checks = buildDataChecks<CanaryRoot, TransferDiagnostic>({ connect: () => driver, languages: [CANARY_FIXTURE] });
    const matched = checks.filter(check => check.title.includes(PROJECT_SHAPE));

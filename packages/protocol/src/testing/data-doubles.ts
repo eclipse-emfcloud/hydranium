@@ -34,7 +34,13 @@
 import { Emitter, type MessageConnection } from 'vscode-jsonrpc';
 import type { DataPort } from '../client/data-port';
 import type { DataClientProtocol } from '../data/data-server-protocol';
-import type { ProjectsChangedEvent, TransferDocumentSavedEvent, TransferDocumentUpdatedEvent } from '../data/events';
+import type {
+   ProjectsChangedEvent,
+   TransferDocumentDeletedEvent,
+   TransferDocumentSavedEvent,
+   TransferDocumentsBuiltEvent,
+   TransferDocumentUpdatedEvent
+} from '../data/events';
 import type { ResolvedMessage } from '../messages/primitives';
 import type { Project } from '../project';
 import type { TransferDiagnostic } from '../transfer-diagnostic';
@@ -134,6 +140,10 @@ export interface CapturingDataClient<
    readonly updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[];
    /** Every `onDocumentSaved` event, in arrival order. */
    readonly saves: TransferDocumentSavedEvent<TTransfer, TDiagnostic>[];
+   /** Every `onDocumentDeleted` event, in arrival order. */
+   readonly deletions: TransferDocumentDeletedEvent[];
+   /** Every `onDocumentsBuilt` event, in arrival order. */
+   readonly builds: TransferDocumentsBuiltEvent[];
    /** Every `onProjectsChanged` event, in arrival order. */
    readonly projectsChanges: ProjectsChangedEvent<TProject>[];
 }
@@ -141,7 +151,7 @@ export interface CapturingDataClient<
 /**
  * A {@link DataClientProtocol} that records every notification it receives.
  *
- * Recording ALL THREE channels even when a suite reads one is deliberate: an
+ * Recording EVERY channel even when a suite reads one is deliberate: an
  * event delivered on the wrong channel is a real defect of the data head, and a
  * double that drops the other two turns it into silence on the one being
  * watched.
@@ -158,6 +168,8 @@ export function makeCapturingDataClient<
 >(overrides: Partial<DataClientProtocol<TTransfer, TDiagnostic, TProject>> = {}): CapturingDataClient<TTransfer, TDiagnostic, TProject> {
    const updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[] = [];
    const saves: TransferDocumentSavedEvent<TTransfer, TDiagnostic>[] = [];
+   const deletions: TransferDocumentDeletedEvent[] = [];
+   const builds: TransferDocumentsBuiltEvent[] = [];
    const projectsChanges: ProjectsChangedEvent<TProject>[] = [];
    const client: DataClientProtocol<TTransfer, TDiagnostic, TProject> = {
       onDocumentUpdated:
@@ -170,11 +182,21 @@ export function makeCapturingDataClient<
          (event => {
             saves.push(event);
          }),
+      onDocumentDeleted:
+         overrides.onDocumentDeleted ??
+         (event => {
+            deletions.push(event);
+         }),
+      onDocumentsBuilt:
+         overrides.onDocumentsBuilt ??
+         (event => {
+            builds.push(event);
+         }),
       onProjectsChanged:
          overrides.onProjectsChanged ??
          (event => {
             projectsChanges.push(event);
          })
    };
-   return { client, updates, saves, projectsChanges };
+   return { client, updates, saves, deletions, builds, projectsChanges };
 }

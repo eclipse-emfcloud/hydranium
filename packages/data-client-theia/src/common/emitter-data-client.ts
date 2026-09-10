@@ -12,7 +12,9 @@ import type {
    Project,
    ProjectsChangedEvent,
    TransferDiagnostic,
+   TransferDocumentDeletedEvent,
    TransferDocumentSavedEvent,
+   TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
    TransferElement
 } from '@hydranium/protocol';
@@ -46,6 +48,14 @@ export class EmitterDataClient<
    /** Fires for each inbound {@link onDocumentSaved} notification. */
    readonly onDidSaveDocument: Event<TransferDocumentSavedEvent<TTransfer, TDiagnostic>> = this.onDocumentSavedEmitter.event;
 
+   protected readonly onDocumentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
+   /** Fires for each inbound {@link onDocumentDeleted} notification. */
+   readonly onDidDeleteDocument: Event<TransferDocumentDeletedEvent> = this.onDocumentDeletedEmitter.event;
+
+   protected readonly onDocumentsBuiltEmitter = new Emitter<TransferDocumentsBuiltEvent>();
+   /** Fires for each inbound {@link onDocumentsBuilt} notification. */
+   readonly onDidBuildDocuments: Event<TransferDocumentsBuiltEvent> = this.onDocumentsBuiltEmitter.event;
+
    protected readonly onProjectsChangedEmitter = new Emitter<ProjectsChangedEvent<TProject>>();
    /** Fires for each inbound {@link onProjectsChanged} notification. */
    readonly onDidChangeProjects: Event<ProjectsChangedEvent<TProject>> = this.onProjectsChangedEmitter.event;
@@ -56,6 +66,14 @@ export class EmitterDataClient<
 
    onDocumentSaved(event: TransferDocumentSavedEvent<TTransfer, TDiagnostic>): void {
       this.onDocumentSavedEmitter.fire(event);
+   }
+
+   onDocumentDeleted(event: TransferDocumentDeletedEvent): void {
+      this.onDocumentDeletedEmitter.fire(event);
+   }
+
+   onDocumentsBuilt(event: TransferDocumentsBuiltEvent): void {
+      this.onDocumentsBuiltEmitter.fire(event);
    }
 
    onProjectsChanged(event: ProjectsChangedEvent<TProject>): void {

@@ -13,11 +13,21 @@ import { CONFLICT_ERROR_CODE, ConflictError, STALE_BASED_UPDATE, isConflictError
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
 
 describe('ConflictError', () => {
-   it('exposes uri / expected / actual via getters backed by the data payload', () => {
+   it('exposes uri / expectedVersion / actualVersion via getters backed by the data payload', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
       expect(error.uri).toBe('file:///A.fake');
-      expect(error.expected).toBe(3);
-      expect(error.actual).toBe(5);
+      expect(error.expectedVersion).toBe(3);
+      expect(error.actualVersion).toBe(5);
+   });
+
+   it('carries neither `expected` nor `actual`, which a test reporter would read as an assertion failure', () => {
+      // vitest's formatter enters its diff branch for any error defining both,
+      // then assigns the prettified values back — throwing on an accessor and
+      // replacing the real failure with a TypeError. The two reads below ARE
+      // that branch's condition.
+      const error = new ConflictError('file:///A.fake', 3, 5);
+      expect('expected' in error).toBe(false);
+      expect('actual' in error).toBe(false);
    });
 
    it('carries the typed data payload on the JSON-RPC error envelope', () => {
@@ -25,14 +35,14 @@ describe('ConflictError', () => {
       // `toMatchObject`, not `toEqual`: `data` also carries the message identity,
       // and asserting the payload EXACTLY would make every future envelope field
       // a test change. The identity's own assertion is the next case.
-      expect(error.data).toMatchObject({ uri: 'file:///A.fake', expected: 3, actual: 5 });
+      expect(error.data).toMatchObject({ uri: 'file:///A.fake', expectedVersion: 3, actualVersion: 5 });
    });
 
    it('carries the message identity beside the typed payload, so a translating host can render it', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
       expect(hasMessageIdentity(error.data)).toBe(true);
       expect(resolvedFromResponseError(error)?.code).toBe(STALE_BASED_UPDATE.code);
-      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///A.fake', expected: 3, actual: 5 });
+      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///A.fake', expectedVersion: 3, actualVersion: 5 });
    });
 
    it('sets the application-specific JSON-RPC code', () => {
@@ -72,8 +82,8 @@ describe('isConflictError', () => {
    it('returns true for a generic ResponseError carrying the conflict code (post-RPC reconstruction)', () => {
       const reconstructed = new ResponseError(CONFLICT_ERROR_CODE, 'some transport-wrapped message', {
          uri: 'file:///A.fake',
-         expected: 3,
-         actual: 5
+         expectedVersion: 3,
+         actualVersion: 5
       });
       expect(isConflictError(reconstructed)).toBe(true);
    });

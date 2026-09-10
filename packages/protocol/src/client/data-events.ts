@@ -8,7 +8,14 @@
  ********************************************************************************/
 
 import { Emitter, type Event } from 'vscode-jsonrpc';
-import type { DataClientProtocol, ProjectsChangedEvent, TransferDocumentSavedEvent, TransferDocumentUpdatedEvent } from '../data';
+import type {
+   DataClientProtocol,
+   ProjectsChangedEvent,
+   TransferDocumentDeletedEvent,
+   TransferDocumentSavedEvent,
+   TransferDocumentsBuiltEvent,
+   TransferDocumentUpdatedEvent
+} from '../data';
 import type { Project } from '../project';
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
@@ -40,12 +47,18 @@ export class DataEvents<
 > implements DataClientProtocol<TTransfer, TDiagnostic, TProject> {
    protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>();
    protected readonly documentSavedEmitter = new Emitter<TransferDocumentSavedEvent<TTransfer, TDiagnostic>>();
+   protected readonly documentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
+   protected readonly documentsBuiltEmitter = new Emitter<TransferDocumentsBuiltEvent>();
    protected readonly projectsChangedEmitter = new Emitter<ProjectsChangedEvent<TProject>>();
 
    /** A build-phase event for a watched document. Carries the originating `sourceClientId`. */
    readonly onDidUpdateDocument: Event<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>> = this.documentUpdatedEmitter.event;
    /** A watched document was persisted to disk. */
    readonly onDidSaveDocument: Event<TransferDocumentSavedEvent<TTransfer, TDiagnostic>> = this.documentSavedEmitter.event;
+   /** A document's backing file was removed, watched or not. Any watch survives. */
+   readonly onDidDeleteDocument: Event<TransferDocumentDeletedEvent> = this.documentDeletedEmitter.event;
+   /** Documents built that nobody watches — re-read anything derived from them. */
+   readonly onDidBuildDocuments: Event<TransferDocumentsBuiltEvent> = this.documentsBuiltEmitter.event;
    /** The project set changed. */
    readonly onDidChangeProjects: Event<ProjectsChangedEvent<TProject>> = this.projectsChangedEmitter.event;
 
@@ -59,6 +72,14 @@ export class DataEvents<
       this.documentSavedEmitter.fire(event);
    }
 
+   onDocumentDeleted(event: TransferDocumentDeletedEvent): void {
+      this.documentDeletedEmitter.fire(event);
+   }
+
+   onDocumentsBuilt(event: TransferDocumentsBuiltEvent): void {
+      this.documentsBuiltEmitter.fire(event);
+   }
+
    onProjectsChanged(event: ProjectsChangedEvent<TProject>): void {
       this.projectsChangedEmitter.fire(event);
    }
@@ -66,6 +87,8 @@ export class DataEvents<
    dispose(): void {
       this.documentUpdatedEmitter.dispose();
       this.documentSavedEmitter.dispose();
+      this.documentDeletedEmitter.dispose();
+      this.documentsBuiltEmitter.dispose();
       this.projectsChangedEmitter.dispose();
    }
 }

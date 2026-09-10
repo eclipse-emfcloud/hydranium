@@ -315,6 +315,12 @@ describe('DataServer', () => {
             onDocumentSaved(event): void {
                savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
             },
+            onDocumentDeleted(): void {
+               // not exercised
+            },
+            onDocumentsBuilt(): void {
+               // not exercised
+            },
             onProjectsChanged(): void {
                // not exercised
             }
@@ -381,6 +387,12 @@ describe('DataServer', () => {
             },
             onDocumentSaved(event): void {
                savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
+            },
+            onDocumentDeleted(): void {
+               /* not exercised */
+            },
+            onDocumentsBuilt(): void {
+               /* not exercised */
             },
             onProjectsChanged(): void {
                /* not exercised */
@@ -546,7 +558,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('discriminates reason: changed/deleted/rebuilt based on the last documentBuilder.onUpdate snapshot', async () => {
+      it('discriminates reason: changed/rebuilt based on the last documentBuilder.onUpdate snapshot', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { proxy, events, pair } = makeHarness(bundle.services);
@@ -563,19 +575,94 @@ describe('DataServer', () => {
             await waitFor(() => events.length >= 1);
             expect(events[events.length - 1].reason).toBe('changed');
 
-            // `deleted` list contains URI_A → reason should be 'deleted'.
-            const docDeleted = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v3' });
-            bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_A)]);
-            fireRebuild(bundle, docDeleted);
-            await waitFor(() => events.length >= 2);
-            expect(events[events.length - 1].reason).toBe('deleted');
+            // A `deleted` case belongs in neither this test nor this layer: the
+            // real builder drops a deleted document before deriving the rebuild
+            // set, so driving these two stubs into that state asserts a sequence
+            // that cannot occur. It is pinned against a real builder instead.
 
             // URI not in either list (cascade rebuild from a dependent) → 'rebuilt' fallback.
-            const docRebuilt = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v4' });
+            const docRebuilt = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v3' });
             bundle.documentBuilder.fireOnUpdate([URI.parse(URI_B)], []);
             fireRebuild(bundle, docRebuilt);
-            await waitFor(() => events.length >= 3);
+            await waitFor(() => events.length >= 2);
             expect(events[events.length - 1].reason).toBe('rebuilt');
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('reports a deletion for an UNWATCHED document too, unlike every other channel', async () => {
+         // A builder STUB is honest here, unlike for the update reason: this
+         // dispatch hangs off `onUpdate`, which the stub reproduces faithfully.
+         // No phase notification is involved, so there is no impossible sequence
+         // to fake.
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         bundle.documents.set(URI_B, { $type: 'FakeRoot', name: 'B' });
+         const { proxy, deletions, pair } = makeHarness(bundle.services);
+         try {
+            // Only A is watched. B stands for every model file a workspace view
+            // displays without ever opening it — the case a subscription-gated
+            // channel cannot serve, and that a browser-hosted client cannot
+            // cover with a filesystem watcher either.
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+
+            bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_B), URI.parse(URI_A)]);
+            await waitFor(() => deletions.length >= 2);
+
+            expect(deletions.map(event => event.uri)).toEqual([URI_B, URI_A]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('reports the built documents nobody watches, and stays silent when every one is watched', async () => {
+         const bundle = buildBundle();
+         const docA = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const docB = bundle.documents.set(URI_B, { $type: 'FakeRoot', name: 'B' });
+         const { proxy, builds, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+
+            // B stands for the cascade: rebuilt because something it depends on
+            // changed, its own file untouched, nobody watching it. A is watched,
+            // so its update already reached the client and it is excluded here.
+            bundle.documentBuilder.fireBuildPhase(DocumentState.Validated, [docA, docB]);
+            await waitFor(() => builds.length >= 1);
+            expect(builds[0].uris).toEqual([URI_B]);
+
+            // A build whose documents are all watched has nothing to add.
+            bundle.documentBuilder.fireBuildPhase(DocumentState.Validated, [docA]);
+            await proxy.getProjects();
+            expect(builds).toHaveLength(1);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('drops the last-close revert mark on deletion, so a recreated file does not broadcast to nobody', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         bundle.textDocuments.seedOpen(URI_A, 'name:A', 'editor-1');
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            // Nobody ever watches here, so the last-close revert broadcast is
+            // the only thing that could put an event on this wire — which is
+            // what makes the empty array below mean something.
+            bundle.textDocuments.fireClose(URI_A, 'editor-1');
+            bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_A)]);
+
+            // The file comes back and rebuilds. The mark belonged to a document
+            // that no longer existed by then; left in place it survives to here
+            // and broadcasts to a client holding no subscription.
+            const recreated = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-again' });
+            bundle.documentBuilder.fireOnUpdate([URI.parse(URI_A)], []);
+            fireRebuild(bundle, recreated);
+            // A round trip on the same connection: any notification the rebuild
+            // produced would have to precede this response.
+            await proxy.getProjects();
+
+            expect(events).toEqual([]);
          } finally {
             pair.dispose();
          }
@@ -845,6 +932,12 @@ describe('DataServer', () => {
                // not exercised by this test
             },
             onDocumentSaved(): void {
+               // not exercised by this test
+            },
+            onDocumentDeleted(): void {
+               // not exercised by this test
+            },
+            onDocumentsBuilt(): void {
                // not exercised by this test
             },
             onProjectsChanged(event): void {

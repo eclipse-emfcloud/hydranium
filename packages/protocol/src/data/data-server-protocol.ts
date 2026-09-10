@@ -13,7 +13,13 @@ import type { Project } from '../project';
 import type { TransferDocument } from '../transfer-document';
 import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
-import type { ProjectsChangedEvent, TransferDocumentSavedEvent, TransferDocumentUpdatedEvent } from './events';
+import type {
+   ProjectsChangedEvent,
+   TransferDocumentDeletedEvent,
+   TransferDocumentSavedEvent,
+   TransferDocumentsBuiltEvent,
+   TransferDocumentUpdatedEvent
+} from './events';
 import type {
    GetModelDocumentArgs,
    GetProjectForUriArgs,
@@ -262,6 +268,28 @@ export interface DocumentClientProtocol<TTransfer extends TransferElement, TDiag
     * codepath, not a subscription codepath).
     */
    onDocumentSaved(event: TransferDocumentSavedEvent<TTransfer, TDiagnostic>): void;
+
+   /**
+    * Delivered when a document's backing file was removed. Separate from
+    * {@link onDocumentUpdated} for the same reason as {@link onDocumentSaved},
+    * and more strongly: there is no built state to deliver, and the build-phase
+    * path cannot report a deletion at all.
+    *
+    * Ungated, because on a browser host — where the workspace lives behind the
+    * head — no other source can observe a file disappearing. Recipients that
+    * only care about their own documents filter by URI.
+    */
+   onDocumentDeleted(event: TransferDocumentDeletedEvent): void;
+
+   /**
+    * Delivered once per build, naming the documents that reached the
+    * subscription phase and that
+    * nobody on this connection watches — chiefly the ones rebuilt as a cascade
+    * from a dependency's change, which no filesystem watcher can see because
+    * their own files did not change. The complement of
+    * {@link onDocumentUpdated}; carries URIs and no documents.
+    */
+   onDocumentsBuilt(event: TransferDocumentsBuiltEvent): void;
 }
 
 /**

@@ -29,6 +29,8 @@ import {
    type GetProjectForUriArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
+   DOCUMENT_CLIENT_PROTOCOL_METHODS,
+   type DocumentClientProtocol,
    type TransferDocumentSavedEvent,
    type TransferDocumentUpdateReason,
    type TransferUpdateDocumentArgs
@@ -151,10 +153,26 @@ describe('DataServerProtocol — type contract', () => {
       const REASON_COVERAGE: Record<TransferDocumentUpdateReason, true> = {
          changed: true,
          rebuilt: true,
-         saved: true,
-         deleted: true
+         saved: true
       };
-      expect(Object.keys(REASON_COVERAGE).sort()).toEqual(['changed', 'deleted', 'rebuilt', 'saved']);
+      expect(Object.keys(REASON_COVERAGE).sort()).toEqual(['changed', 'rebuilt', 'saved']);
+   });
+
+   it('names every `DocumentClientProtocol` notification in its wire-method list', () => {
+      // The list is `as const satisfies ReadonlyArray<keyof DocumentClientProtocol
+      // & string>`, which only rejects a name that is NOT a key — it says nothing
+      // about a key that is missing. A notification added to the interface and
+      // forgotten here compiles clean and is then never proxied, so the server
+      // calls a method no wire message carries. The `Record` fails to compile when
+      // a member is added or removed, and the comparison catches the list drifting
+      // away from it.
+      const CLIENT_METHOD_COVERAGE: Record<keyof DocumentClientProtocol<FakeRoot>, true> = {
+         onDocumentUpdated: true,
+         onDocumentSaved: true,
+         onDocumentDeleted: true,
+         onDocumentsBuilt: true
+      };
+      expect(Object.keys(CLIENT_METHOD_COVERAGE).sort()).toEqual([...DOCUMENT_CLIENT_PROTOCOL_METHODS].sort());
    });
 
    it('keeps `TransferDocumentSavedEvent` distinct from update events', () => {

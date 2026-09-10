@@ -29,15 +29,16 @@
  */
 
 import { TransferDocument } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { DataServer, type DataServerOptions } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
-import { DocumentState } from '@hydranium/langium';
+import { DocumentState, URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { isProcessModel, isTask } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
 
 type OrderFlowTransfer = DomainModel | ProcessModel;
 
@@ -52,6 +53,8 @@ interface DrivenHead {
    readonly uri: (relativePath: string) => string;
    /** Current on-disk text, for asserting what `saveModelDocument` wrote. */
    readonly diskText: (relativePath: string) => string;
+   /** In-process services, for driving the builder directly rather than over the wire. */
+   readonly services: OrderFlowHarness;
 }
 
 /** Boot both languages over a scratch workspace and put a real DataServer on a duplex pair. */
@@ -64,7 +67,8 @@ async function driveDataHead(options?: DataServerOptions): Promise<DrivenHead> {
    return {
       harness,
       uri: relativePath => scratch.uri(relativePath),
-      diskText: relativePath => readFileSync(scratch.resolve(relativePath), 'utf8')
+      diskText: relativePath => readFileSync(scratch.resolve(relativePath), 'utf8'),
+      services
    };
 }
 
@@ -218,6 +222,97 @@ describe('order-flow data head', () => {
       expect(event.sourceClientId).toBe(CLIENT_ID);
       // The notification carries the projected document, not just a signal.
       expect((event.document.root as ProcessModel).nodes.map(node => node.name)).toEqual(['Pay']);
+   });
+
+   it('tells a watching client its document was deleted, on its own channel', async () => {
+      const head = await driveDataHead();
+      const uri = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      await head.harness.proxy.openModelDocument({ uri, clientId: CLIENT_ID });
+      await head.harness.proxy.watchModelDocument({ uri, clientId: CLIENT_ID });
+
+      // Establish that this subscription delivers at all, so the absence below
+      // is evidence about deletion rather than about a probe that can observe
+      // nothing. Without it the assertion also passes for a watch that never
+      // registered, and the emission-fingerprint dedup makes that easy to hit.
+      await head.harness.proxy.updateModelDocument({
+         uri,
+         clientId: CLIENT_ID,
+         model: 'process Fulfillment for Order {\n   task Pay\n}'
+      });
+      const afterUpdate = head.harness.events.length;
+      expect(afterUpdate).toBeGreaterThan(0);
+
+      await head.services.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
+      // The builder call is in-process, so it orders against no wire traffic. A
+      // round trip on the same connection is the flush: a notification emitted
+      // by the deletion would have to precede this response.
+      await head.harness.proxy.getModelDocument({ uri: head.uri(WORKSPACE_FILES.returnsProcess) });
+
+      expect(head.harness.deletions.map(event => event.uri)).toEqual([uri]);
+      // The deletion does NOT travel as an update. That silence is the builder's
+      // own invariant rather than framework behaviour — it drops the document
+      // before deriving the rebuild set — so no local edit can redden this line;
+      // what it guards is a Langium upgrade that changes the invariant.
+      expect(head.harness.events.length).toBe(afterUpdate);
+      expect(head.services.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+   });
+
+   it('names a cascade-rebuilt document that nobody watches, which no other source can report', async () => {
+      const head = await driveDataHead();
+      const process = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const domain = head.uri(WORKSPACE_FILES.ordersDomain);
+      // Only the domain is watched. The process references it, so editing the
+      // domain rebuilds the process as a cascade — its own file never changes,
+      // which is what makes a filesystem watcher blind to it, and it has no
+      // subscriber, which is what makes the update channel silent.
+      // Settle the whole workspace WITH validation first. Langium's rebuild set
+      // also sweeps in every document whose previous build left results
+      // incomplete, so without this the next update rebuilds everything and a
+      // cascade is indistinguishable from a workspace-wide build — measured: the
+      // discriminating assertion below fails without this line.
+      const documents = head.services.shared.workspace.LangiumDocuments;
+      await head.services.shared.workspace.DocumentBuilder.build(documents.all.toArray(), { validation: true });
+
+      await head.harness.proxy.openModelDocument({ uri: domain, clientId: CLIENT_ID });
+      await head.harness.proxy.watchModelDocument({ uri: domain, clientId: CLIENT_ID });
+      const before = head.harness.builds.length;
+
+      await head.services.shared.workspace.DocumentBuilder.update([URI.parse(domain)], []);
+      await waitFor(() => head.harness.builds.length > before);
+
+      // Only the events this edit produced: the settle build above emitted one
+      // of its own, naming every document, which would satisfy the assertion
+      // below without the cascade having happened at all.
+      const uris = head.harness.builds.slice(before).flatMap(event => [...event.uris]);
+      expect(uris).toContain(process);
+      // The watched document is excluded: its editor already heard about it on
+      // the update channel, and repeating it here would be the firehose this
+      // notification exists to avoid.
+      expect(uris).not.toContain(domain);
+      // Discriminates a CASCADE from "the build swept the workspace": the other
+      // project's document is what `orders` depends ON, not a dependent of it,
+      // so a targeted relink leaves it alone. Without this the assertion above
+      // would also pass on a build that rebuilt everything.
+      expect(uris).not.toContain(head.uri(WORKSPACE_FILES.commerceCoreMoney));
+   });
+
+   it('resumes delivering to the same watcher when the deleted file comes back unchanged', async () => {
+      const head = await driveDataHead();
+      const uri = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const builder = head.services.shared.workspace.DocumentBuilder;
+      await head.harness.proxy.watchModelDocument({ uri, clientId: CLIENT_ID });
+
+      await builder.update([], [URI.parse(uri)]);
+      const afterDelete = head.harness.events.length;
+      // The file was never touched on disk, so the rebuild reproduces the exact
+      // content the watch baselined its emission fingerprint against. Two things
+      // have to hold for an event to arrive at all: the watch survived the
+      // deletion, and the deletion dropped that fingerprint. Leave the
+      // fingerprint in place and the rebuild is dismissed as a no-op change.
+      await builder.update([URI.parse(uri)], []);
+      await waitFor(() => head.harness.events.length > afterDelete);
+
+      expect(head.harness.events[head.harness.events.length - 1].document.uri).toBe(uri);
    });
 
    it('writes to disk on save, and tells the client it happened', async () => {

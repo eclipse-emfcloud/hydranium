@@ -356,11 +356,12 @@ export class DefaultAstDocumentManager<TAst extends AstNode, TDiagnostic = unkno
          const event: TransferUpdatedEvent<AstDocument<TAst, TDiagnostic>> = {
             document: this.toAstDocument(document),
             sourceClientId,
-            reason: this.lastUpdate?.changed.find(changed => UriUtils.equals(changed, document.uri))
-               ? 'changed'
-               : this.lastUpdate?.deleted.find(deleted => UriUtils.equals(deleted, document.uri))
-                 ? 'deleted'
-                 : 'rebuilt'
+            // No `'deleted'` arm: `DocumentBuilder.update` drops a deleted
+            // document from `LangiumDocuments` before deriving the rebuild set
+            // from it, so a deleted URI is never built and never reaches this
+            // phase listener. A subscriber needing deletions has to be told on
+            // a channel that does not require a built document.
+            reason: this.lastUpdate?.changed.some(changed => UriUtils.equals(changed, document.uri)) ? 'changed' : 'rebuilt'
          };
          this.tracer.with(uri).trace(`emitUpdate start: source=${sourceClientId}, reason=${event.reason}`);
          listener(event);

@@ -96,21 +96,10 @@ describe('AstDocumentManager onUpdate', () => {
       expect(reasons).toEqual(['changed']);
    });
 
-   it('reports reason "deleted" when the URI is in the most recent deleted set', () => {
-      const { manager, textDocuments, builder } = makeManagerHarness();
-      open(textDocuments, URI_A, 1, 'author-1');
-
-      const reasons: string[] = [];
-      manager.onUpdate(URI_A, event => reasons.push(event.reason));
-
-      builder.fireOnUpdate([], [URI.parse(URI_A)]);
-      builder.firePhase(
-         DocumentState.Validated,
-         makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), { version: 1 })
-      );
-
-      expect(reasons).toEqual(['deleted']);
-   });
+   // A `deleted` counterpart is deliberately absent: this harness's builder stub
+   // will fire a phase for a URI it has just reported as deleted, which the real
+   // builder cannot do, so such a test would assert an impossible sequence. The
+   // unreachability is pinned against a real builder instead.
 
    it('URI-gates: a phase fire for a different URI does not invoke the listener', () => {
       const { manager, builder } = makeManagerHarness();
