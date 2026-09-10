@@ -1,0 +1,16 @@
+diff --git a/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js b/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js
+index 2b8bb8d..f84a8ba 100644
+--- a/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js
++++ b/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js
+@@ -3086,8 +3086,9 @@ class PoolRunner {
+ 			this._eventEmitter.emit("error", error);
+ 		}
+ 	};
+-	emitUnexpectedExit = () => {
+-		const error = /* @__PURE__ */ new Error("Worker exited unexpectedly");
++	emitUnexpectedExit = (exitCode, signal) => {
++		const hex = typeof exitCode === "number" ? `0x${(exitCode >>> 0).toString(16).toUpperCase().padStart(8, "0")}` : "n/a";
++		const error = /* @__PURE__ */ new Error(`Worker exited unexpectedly [hydranium-patch] code=${exitCode} hex=${hex} signal=${signal}`);
+ 		this._state = RunnerState.STOPPED;
+ 		this._eventEmitter.emit("error", error);
+ 	};
