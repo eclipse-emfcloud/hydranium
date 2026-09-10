@@ -65,29 +65,39 @@ server's own request ids, which it _can_ import.
 
 ## Translating the framework's messages
 
-The framework **externalizes user-facing strings and never translates them**: each
+The framework **externalizes user-facing strings and selects no locale**: each
 carries a stable `hydranium/<unscoped-package>/<name>` code beside its English
-text, and the side that knows the reading user's locale renders it. This example
-is where that gets exercised, and `src/nls/order-flow.de.json` is the whole
-opt-in.
+text, and the side that knows the reading user's language renders it.
 
-**One catalogue covers both framework layers**, because Theia flattens a nested
-catalogue by joining keys with `/` — the separator the codes already use:
+**Two catalogues, split by which side that is** — and their key sets are
+disjoint, which a test here asserts, because a message rendered twice has two
+authorities over one sentence:
 
-- **host-bound** strings (`hydranium/client-theia/*`) the Theia frontend resolves
-  itself through `nls.localize`;
-- **identity-side** ones (`hydranium/protocol/*`) that the framework only attaches
-  an identity to, reaching a user through `OrderFlowTheiaDataPort.reportError`,
-  which hands `nls.localization?.translations` to `renderFrameworkMessage`.
+- `theia/src/nls/order-flow.de.json` — what **this frontend** renders: the
+  host-bound strings (`hydranium/client-theia/*`) Theia resolves through
+  `nls.localize`, and the portable client tier's own (`hydranium/protocol/*`,
+  `order-flow/properties/*`) which reach a user through
+  `OrderFlowTheiaDataPort.reportError`. Those fire when the data server is
+  unreachable, so no server could have worded them. Nested, because Theia
+  flattens a catalogue by joining keys with `/` — the separator the codes use.
+- `server/src/nls/order-flow.de.json` — what the **server** renders: its
+  diagnostics, this example's validation codes, Langium's unresolved-reference
+  sentence. Flat keys, handed straight to `OrderFlowMessageRenderer`, the one
+  binding server-side rendering asks of an adopter.
 
-Adopter-owned codes (`order-flow/*`) live in the same file under their own
-namespace — `hydranium/` is reserved for the framework.
+Adopter-owned codes (`order-flow/*`) live under their own namespace in whichever
+file renders them — `hydranium/` is reserved for the framework.
 
 To see it, use Theia's **Configure Display Language** command and pick German,
-then reload. The locale lives in `localStorage['localeId']`; nothing on the
-backend selects one, and nothing can — a Theia backend serves every connected
-frontend at once, which is why the framework holds no locale and leaves the
-render to this side.
+then reload. The locale lives in `localStorage['localeId']`.
+
+**One switch changes both sides.** Theia initializes its plugin host with the
+frontend's locale, the sideloaded servers extension runs there, and
+`vscode-languageclient` puts `env.language` into LSP `initialize` — so the
+server is handed the same locale and renders its own messages before sending
+them. Nothing on this *backend* selects a locale, and nothing can: it serves
+every connected frontend at once, which is why the locale is declared per
+connection rather than held there.
 
 **The catalogue is deliberately partial**, and that is the demonstration rather
 than an oversight: an untranslated code falls back to its English default, so an
@@ -95,19 +105,24 @@ adopter can translate as little as they like — or nothing, and never learn the
 mechanism exists. Running in German therefore shows German palette entries beside
 English ones, which is what a half-finished translation honestly looks like.
 
-**Diagnostics are translated in the properties panel.** `TransferDiagnostic`
-carries `code` **and** `params`, so `hydranium/core/separator-in-name` — the
-framework's one validation diagnostic, which interpolates a name and a separator
-— renders complete in German there. `OrderFlowTheiaDataPort.renderDiagnostic`
-does the render, from `TransferDiagnostic.resolved` plus Theia's loaded
-catalogue, and the form takes it through the optional `renderDiagnostic` handler
-so the VS Code webview keeps showing the server's English unchanged.
+**Diagnostics reach the squiggle in German**, including a parameterised one.
+To see it, type a reference to something that does not exist:
+`hydranium/core/unresolved-reference` interpolates a reference type and its
+text, and renders complete on the squiggle, the hover, the Problems tree and the
+properties panel alike, because the server renders it once and every surface
+receives the finished sentence.
 
-The **squiggle, hover and Problems tree stay English**, and that is a decision
-rather than a gap: Monaco's marker model has no field for the params, so the
-only route is a rebound `ProtocolToMonacoConverter` — a Theia internal that
-would need re-checking at every version bump. So for an editor-surface
-diagnostic, prefer a parameterless sentence.
+The catalogue also translates `hydranium/core/separator-in-name`, which **this
+example cannot make fire** — every name here is an `ID` and `ProjectName` admits
+only hyphens, so the identifier charset never meets the `.` separator. It is
+translated anyway because an adopter cannot know which framework codes their own
+grammar will reach, and an untranslated one costs nothing.
+
+That is what moved: rendering these on the client could never reach the editor
+surfaces, Monaco's marker model having no field for the params, and the only
+route there was a rebound `ProtocolToMonacoConverter` — a Theia internal needing
+re-checking at every bump. A server that renders needs none of it, and the
+advice to prefer a parameterless sentence for the squiggle retires with it.
 
 **Two Theia requirements that fail silently**, both fixed here and both worth
 copying if you register a catalogue of your own:

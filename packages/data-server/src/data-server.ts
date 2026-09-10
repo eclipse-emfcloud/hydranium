@@ -59,10 +59,10 @@ import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 /**
  * Raised when a profiling command arrives with no capture running.
  *
- * A `ResponseError` rather than a plain `Error` so the identity survives the
- * hop: an unwrapped throw inside an RPC handler reaches the client as a generic
- * internal error, which carries no code for a caller to switch on and no
- * envelope for a translating host to read.
+ * A `ResponseError` rather than a plain `Error` so the identity survives to the
+ * response boundary, which is where the message is rendered. An unwrapped throw
+ * reaches the client as a generic internal error instead: no code for a caller
+ * to switch on, and nothing for the boundary to render from.
  */
 export const NO_ACTIVE_PROFILE = defineMessage(
    'hydranium/data-server/no-active-profile',
@@ -490,7 +490,11 @@ export class DataServer<
          methodNamespace: this.options.methodNamespace,
          localTarget: this,
          localMethods: registeredMethods as readonly (keyof this & string)[],
-         latency: this.latency
+         latency: this.latency,
+         // Bound at the chokepoint rather than per handler, so an adopter's
+         // `additionalMethods` are rendered on the same terms as the
+         // framework's own rejections.
+         renderErrorMessage: error => this.services.MessageRenderer.renderError(error)
       });
       this.disposables.push(
          this.services.workspace.DocumentBuilder.onUpdate((changed, deleted) => {

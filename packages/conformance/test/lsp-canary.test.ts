@@ -192,11 +192,31 @@ describe('the /lsp battery discriminates', () => {
       expect(await failingChecks({})).toEqual([]);
    });
 
-   it('plans exactly the seven checks the must-fail cases below name', () => {
-      const titles = batteryOver().map(check => check.title);
+   it('plans exactly the seven RUNNABLE checks the must-fail cases below name', () => {
+      // Runnable, not planned: a check the fixture did not opt into is planned
+      // as a skip with no body, and a must-fail case cannot cover a body that
+      // does not exist. Counting bodies is what keeps this assertion meaningful
+      // as opt-in checks are added — counting the plan would make every new
+      // opt-in check look like a coverage hole.
+      const titles = batteryOver()
+         .filter(check => check.body !== undefined)
+         .map(check => check.title);
       expect(titles).toHaveLength(7);
       const covered = [SYNC_CAPABILITY, COMPLETION_CAPABILITY, SHUTDOWN, OPEN_VALID, OPEN_INVALID, RE_DIAGNOSE, COMPLETION];
       expect(matching(titles, covered)).toHaveLength(7);
+   });
+
+   it('plans the two render checks as SKIPS, this fixture declaring no locale', () => {
+      // The opt-in the count above excludes, named so it is a decision rather
+      // than an omission: this canary server has no catalogue, so a render check
+      // held against it would be asserting the framework's own default.
+      const skipped = batteryOver().filter(check => check.body === undefined);
+      expect(skipped.map(check => check.title).sort()).toEqual(
+         [
+            'a diagnostic is published rendered in the locale initialize declared [x]',
+            'the same diagnostic is NOT rendered when no locale is declared [x]'
+         ].sort()
+      );
    });
 
    const canaries: ReadonlyArray<{ label: string; defects: LspCanaryDefects; expected: readonly string[] }> = [

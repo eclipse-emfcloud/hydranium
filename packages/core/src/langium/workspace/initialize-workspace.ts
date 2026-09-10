@@ -19,6 +19,25 @@ import type { ServerSharedServicesMinimal } from '../shared-services.js';
 export type WorkspaceFolderInput = string | URI;
 
 /**
+ * Options for the headless init seams.
+ *
+ * **Optional, and the parameter is optional too**, so that no existing caller
+ * has to change to gain a field it does not set.
+ */
+export interface ProgrammaticInitOptions {
+   /**
+    * The locale to render user-facing server messages in — the headless
+    * equivalent of LSP `initialize`'s `locale`, for a head with no LSP
+    * connection (`startStdioServer`, the CLI subcommands, a test harness).
+    *
+    * Omitted means no locale, which the default renderer resolves as the
+    * framework's English. That is the correct answer for a headless tool: it
+    * has no reading user to have a language.
+    */
+   readonly locale?: string;
+}
+
+/**
  * Normalize the seam's flexible folder argument to LSP {@link WorkspaceFolder}s.
  * A `string` is resolved to an absolute filesystem path and wrapped as a
  * `file:` URI; a {@link URI} is taken as-is. `name` is the URI's basename.
@@ -58,17 +77,25 @@ function toWorkspaceFolders(folders: WorkspaceFolderInput | ReadonlyArray<Worksp
  *
  * @param services the shared services tree the workspace manager lives on
  * @param folders one or more workspace roots (filesystem paths or URIs)
+ * @param options the message locale, when the caller has one
  */
 export async function initializeWorkspaceProgrammatically(
    services: ServerSharedServicesMinimal,
-   folders: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>
+   folders: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>,
+   options: ProgrammaticInitOptions = {}
 ): Promise<void> {
    const workspaceFolders = toWorkspaceFolders(folders);
    const manager = services.workspace.WorkspaceManager;
-   // `initialize` records the folders (DefaultWorkspaceManager reads only this
+   // `locale` goes through the synthesized params rather than a direct
+   // `acceptLocale` call, so this seam and a real LSP `initialize` reach the
+   // slot by the SAME path — an adopter overriding the capture in
+   // `HydraniumWorkspaceManager.initialize` is honoured headlessly too, which a
+   // second write site here would silently bypass.
+   //
+   // `initialize` records the folders (DefaultWorkspaceManager reads only that
    // field); `initialized` runs `mutex.write(initializeWorkspace)` and resolves
    // once discovery + the init build settle, so awaiting it is the ready gate.
-   manager.initialize({ workspaceFolders } as InitializeParams);
+   manager.initialize({ workspaceFolders, locale: options.locale } as InitializeParams);
    await manager.initialized({} as InitializedParams);
 }
 
@@ -91,12 +118,14 @@ export async function initializeWorkspaceProgrammatically(
  *
  * @param services the shared services tree the workspace manager lives on
  * @param folders one or more workspace roots (filesystem paths or URIs)
+ * @param options the message locale, when the caller has one
  */
 export async function buildWorkspaceProgrammatically(
    services: ServerSharedServicesMinimal,
-   folders: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>
+   folders: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>,
+   options: ProgrammaticInitOptions = {}
 ): Promise<void> {
-   await initializeWorkspaceProgrammatically(services, folders);
+   await initializeWorkspaceProgrammatically(services, folders, options);
    const documents = services.workspace.LangiumDocuments.all.toArray();
    await services.workspace.DocumentBuilder.build(documents, { validation: true });
 }

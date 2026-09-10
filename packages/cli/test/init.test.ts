@@ -798,7 +798,7 @@ describe('runInit --monorepo', () => {
     * - same value in the base (`target`, `strict`, `types`) → dropped;
     * - different value (`module`: the base says `CommonJS`, the emitted ESM
     *   needs `NodeNext`) → kept, because inheriting it would break every import;
-    * - absent from the base (`lib`, `skipLibCheck`, …) → kept.
+    * - absent from the base (`lib`, `resolveJsonModule`, `skipLibCheck`, …) → kept.
     *
     * A base config that happened to supply everything would show only the first.
     */
@@ -814,13 +814,14 @@ describe('runInit --monorepo', () => {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "declaration": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src", "src/**/*.json"]
 }
 `
       );

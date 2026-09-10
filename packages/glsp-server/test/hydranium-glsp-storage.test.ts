@@ -30,6 +30,7 @@ import { Container } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
+import { ServerMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
@@ -361,6 +362,72 @@ describe('HydraniumGlspStorage', () => {
          expect(thrown.cause).toBeDefined();
          expect(String(thrown.cause)).toContain(SOURCE_URI_ARG);
          expect(String(thrown.cause)).toContain(RequestModelAction.KIND);
+      });
+   });
+
+   /**
+    * GLSP's action protocol has no slot for a message identity anywhere, so the
+    * raise site renders. These assert on the thrown `message`, which is what
+    * upstream turns into the toast (no request id) or the reject `detail` (with
+    * one) — the only channel either string reaches a user through.
+    */
+   describe('server-side rendering of a GLSP message', () => {
+      const GLSP_CATALOGUE = { [SOURCE_URI_MISSING.code]: 'AA: kein Dokument' };
+
+      class GlspCatalogueRenderer extends ServerMessageRenderer {
+         protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
+            return locale === 'xx-AA' ? GLSP_CATALOGUE : undefined;
+         }
+      }
+
+      /** A tree whose renderer serves {@link GLSP_CATALOGUE} at `locale`. */
+      function servicesWithLocale(locale: string | undefined): ServerSharedServices {
+         const services = makeNoopSharedServices<ServerSharedServices>({
+            MessageRenderer: shared => new GlspCatalogueRenderer(shared)
+         });
+         if (locale) {
+            services.ServerLocale.accept(locale);
+         }
+         return services;
+      }
+
+      /** The `GLSPServerError` a source-URI-less model request throws. */
+      function thrownError(services: ServerSharedServices): GLSPServerError {
+         const { storage } = createStorage('client-1', services);
+         const action = { kind: RequestModelAction.KIND, options: {} } as unknown as RequestModelAction;
+         try {
+            storage.callGetSourceUri(action);
+         } catch (error: unknown) {
+            if (error instanceof GLSPServerError) {
+               return error;
+            }
+         }
+         throw new Error('expected getSourceUri to throw a GLSPServerError');
+      }
+
+      it('renders the message in the installed locale', () => {
+         expect(thrownError(servicesWithLocale('xx-AA')).message).toBe('AA: kein Dokument');
+      });
+
+      it('sends the English when no locale matches — the control on the row above', () => {
+         // Same renderer, no locale: without this the assertion above would pass
+         // against a renderer that was never consulted.
+         expect(thrownError(servicesWithLocale(undefined)).message).toBe(SOURCE_URI_MISSING.text);
+      });
+
+      it('leaves the cause untranslated, its content being developer-addressed', () => {
+         // An AUDIENCE call, not a reachability one. On this path the cause does
+         // reach only logs (`RejectAction.detail` is read by nothing but the
+         // upstream client's action-dispatcher `logger.warn`), but the save path
+         // routes it into `MessageAction.details`, which a Theia host shows to a
+         // user behind a "Show details" button. What keeps it English is that it
+         // names the action kind and the missing option: a translated developer
+         // string is the worse outcome.
+         const error = thrownError(servicesWithLocale('xx-AA'));
+
+         expect(String(error.cause)).toContain(SOURCE_URI_ARG);
+         expect(String(error.cause)).toContain(RequestModelAction.KIND);
+         expect(String(error.cause)).not.toContain('AA:');
       });
    });
 

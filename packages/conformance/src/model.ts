@@ -167,4 +167,48 @@ export interface LanguageFixture {
     * only**, and only when the driver exposes the opt-in reference surface.
     */
    readonly referenceQuery?: ReferenceQuerySpec;
+   /**
+    * Optional: a locale plus the sentence the server must publish in it. Read
+    * by the **LSP slice only**.
+    */
+   readonly renderedDiagnostic?: RenderedDiagnosticSpec;
+}
+
+/**
+ * A locale, and one sentence the server must produce in it for the `invalid`
+ * fixture.
+ *
+ * **Opt-in, and it has to be.** The framework ships no catalogue and selects no
+ * locale, so a server that installs no renderer correctly publishes English —
+ * mandating this check would fail every adopter without i18n for doing the right
+ * thing. Supplying the field is the adopter saying "I render server-side, hold me
+ * to it".
+ *
+ * `expected` is a SUBSTRING, not the whole message. The kit owns no grammar, so
+ * it cannot know how many diagnostics `invalid` produces or in what order, and
+ * an adopter should be able to pin the translated fragment without restating a
+ * sentence they may reword. A substring long enough to be wrong if the render
+ * did not happen is the whole requirement.
+ *
+ * `absentWithoutLocale` is what makes the check a pair rather than a single
+ * assertion: "the message contains X" also passes for a server whose English
+ * happens to contain X, and for one that renders regardless of locale. Naming
+ * the fragment that must DISAPPEAR when no locale is declared is what
+ * distinguishes those.
+ */
+export interface RenderedDiagnosticSpec {
+   /** The locale to declare at `initialize` — the tag whose catalogue the server has. */
+   readonly locale: string;
+   /** A fragment of the translated sentence, present in some diagnostic of the `invalid` fixture. */
+   readonly expected: string;
+   /**
+    * A fragment that must be absent once `locale` is declared, and present
+    * without it — normally a piece of the server's own English.
+    *
+    * Optional only because a catalogue may translate a message whose English
+    * shares no distinctive fragment with it. Omitting it drops the second half
+    * of the pair and leaves a check that a render-nothing server can pass; the
+    * kit reports that rather than pretending otherwise.
+    */
+   readonly absentWithLocale?: string;
 }

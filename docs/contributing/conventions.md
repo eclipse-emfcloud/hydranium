@@ -1202,36 +1202,47 @@ and copied, so a worked example there is the point.
 
 ## User-facing messages
 
-**The framework externalizes user-facing strings, never translates them, and
-holds no locale.** Every user-facing string carries a stable code beside its
-English text, and whoever owns the surface renders it. An adopter with their own
-i18n reads the code; an adopter without one shows the English and never learns
-any of this exists.
+**The framework externalizes user-facing strings, ships no catalogue, and
+selects no locale.** It relays the locale its client declared and renders with
+whatever templates the adopter installed, defaulting to its English. Every
+user-facing string carries a stable code beside that English. An adopter with
+their own i18n binds one renderer; an adopter without one shows the English and
+never learns any of this exists.
 
-The absence of a locale in the framework is what makes it non-conflicting. If the
-framework held one there would be two authorities, and the failure is concrete:
-one toast carrying a German adopter sentence and an English framework clause.
+**Exactly one side renders a given message** — the side that knows the reading
+user's language. What makes that non-conflicting is provenance, not ignorance:
+the locale always comes from the reading user's own client, so there is one
+authority per sentence. Two renders of one message is the concrete failure to
+avoid — a toast carrying a German adopter clause wrapped in an English framework
+one, or two catalogues that diverge on the first reword.
 
-### Which side resolves
+### Which side renders
 
 The axis is **which process knows the reading user's locale**, not "does this
 package know its host".
 
-- **Resolve-side** — the Theia client packages' *frontend* code. Use the host's
-  own mechanism directly (Theia `nls`), with the key **and** the English default
-  as inline string literals at the call site. `theia nls-extract` is a textual
+- **Server-side** — `core`, `data-server`, `glsp-server`. Declare with
+  `defineMessage`, attach the identity to what you already send, and let the
+  bound `ServerMessageRenderer` render it. The locale arrives at LSP
+  `initialize` (or through the headless init seams' options parameter) and lands
+  on `ServerLocale`; every real host reaches it, and a process that reaches
+  neither is English, correctly. Placeholders are named (`{name}`), because our
+  `interpolate` substitutes.
+- **Host-side** — the Theia client packages' *frontend* code. Use the host's own
+  mechanism directly (Theia `nls`), with the key **and** the English default as
+  inline string literals at the call site. `theia nls-extract` is a textual
   extractor: an imported key or default throws a cross-file-reference error that
   the tool *suppresses*, so the call is silently dropped from the catalogue and
   nothing fails. Placeholders are positional (`{0}`), because Theia substitutes.
-- **Identity-side** — `core`, `protocol` (including its portable client tier),
-  `data-server`, `glsp-server`, and the `/node` half of a Theia package. Declare
-  with `defineMessage` and attach the identity to what you already send. Never
-  render. Placeholders are named (`{name}`), because our `interpolate`
-  substitutes.
+- **Client-tier** — `protocol`'s portable client tier and an adopter's own
+  client code. It renders its OWN messages and only those: they fire when the
+  server is unreachable, which is precisely when no server could have worded
+  them. It renders nothing the server sent.
 
-A Theia **backend** is identity-side even though it is a Theia package: `nls` is
-a process global whose localization is assigned only in the browser preload, so a
-backend holds one locale for every connected frontend, and in practice none.
+A Theia **backend** renders nothing: `nls` is a process global whose localization
+is assigned only in the browser preload, so a backend holds one locale for every
+connected frontend, and in practice none. Its one English dialog string is out of
+scope by policy below.
 
 ### Codes
 
@@ -1302,30 +1313,94 @@ Written once here so nobody re-audits them:
   frontend-facing RPC service, because the channel is a byte relay and its error
   emitter carries an `Error` rather than an identity. The lint rule is scoped off
   `src/node/` for exactly this reason.
-- **GLSP diagram errors** — no slot exists anywhere in the action protocol, so
-  English by upstream constraint. `MessageAction.details` is not a substitute: it
-  is prose populated from `cause?.toString?.()`.
+- **A `GLSPServerError`'s `cause`** — out of scope by AUDIENCE, not by
+  reachability, and the distinction is worth stating because the reachability
+  argument is available, tempting and wrong. On the request path the cause
+  really does reach only logs (`RejectAction.detail` is read by nothing but
+  `@eclipse-glsp/client`'s action-dispatcher `logger.warn`). On the
+  non-request path it does not: the cause travels in `MessageAction.details`,
+  and while `@eclipse-glsp/client` reads that field nowhere,
+  `@eclipse-glsp/theia-integration`'s `TheiaGLSPMessageService` puts a **"Show
+  details"** button on the toast and opens a dialog holding it — and its
+  `theiaNotificationModule` is in `THEIA_DEFAULT_MODULES`, so every
+  Theia-hosted diagram has it. **Measuring one package of a client stack does
+  not measure the stack.** What keeps the cause English is its content: it names
+  a wire action kind, an option key and a client id, so it addresses whoever
+  composes the system, and a *translated* developer string is the worse outcome.
+  Its `message` IS rendered, at the raise site: GLSP's action protocol has no
+  identity slot anywhere, so the throw is the last place that still knows which
+  message it is.
 - **Product nouns are not i18n.** A framework product name leaking into an
   adopter's UI is a branding defect wanting a configurable name (`serverName`),
   not a catalogue entry — routing it through one would ask an adopter to
   "translate" English into their own product name.
 
-### Diagnostics carry the identity everywhere except the squiggle
+### Diagnostics are rendered once, before they are published
 
-`acceptMessage` puts the identity on both `Diagnostic.code` and `data.hydranium`,
-and `TransferEncoder.toTransferDiagnostic` lifts it onto `TransferDiagnostic` as
-`code` + `params` — so a form editor or any adopter-owned surface can render a
-diagnostic in the reading user's language, parameterised or not. Reach for
+`HydraniumDocumentBuilder` renders every diagnostic at `Validated`, in one pass
+over the finished list, before Langium publishes it. All three heads read that
+list, so the LSP squiggle, the hover, the Problems tree, `TransferDiagnostic`
+and the GLSP markers all receive the same finished sentence — parameterised or
+not. Nothing downstream renders, and an adopter binds one slot rather than a
+render call per surface.
+
+**The "every" is conditional on serialised builds, which is the default.** The
+pass runs before the phase listeners, not atomically with them: the loop awaits,
+and Langium's `validate` PUSHES onto the live diagnostics array rather than
+replacing it, so a second build settling inside that window appends entries the
+pass never saw and the first build's publisher sends them unrendered. This is
+the same window `dedupeDiagnostics` has, closed by the same thing —
+`ModelServiceOptions.serializeBuilds`, which defaults to `true`. An adopter who
+opts out accepts unrendered diagnostics on the same terms as duplicate ones, and
+the framework promises neither in that configuration.
+
+That placement is also the only one that covers **lexer and parser errors**,
+which Langium pushes onto the document without routing them through
+`toDiagnostic`, and it is where Langium's own unresolved-reference sentence
+picks up a framework identity.
+
+**The identity still travels** — `acceptMessage` puts it on both
+`Diagnostic.code` and `data.hydranium`, and `TransferEncoder.toTransferDiagnostic`
+lifts it onto `TransferDiagnostic` as `code` + `params`. Its purpose is now
+IDENTIFICATION rather than rendering: filtering, grouping, or asserting on a
+message in a test without asserting on a translation. Reach for
 `TransferDiagnostic.resolved`, which returns `undefined` for a diagnostic with no
 framework identity; `code` alone does not establish one, because Langium's
 internal codes share the field.
 
-The **editor surface is the exception**: Monaco's `IMarkerData` has no slot for
-the params, so Theia's converter can only carry `code` through and a
-parameterised sentence falls back to the server's English on the squiggle, its
-hover and the Problems tree. Resolving it earlier means rebinding
-`ProtocolToMonacoConverter`, which couples an adopter to a host internal. So when
-a diagnostic's main audience is the editor, **prefer a parameterless sentence**.
+### Three rules for a renderer
+
+- **A server-rendered message must not be re-rendered client-side.** The
+  identity on the wire is for identifying a message, not for rendering it again.
+  Nothing enforces this, so two catalogues holding one code is the shape to look
+  for in review.
+- **An interceptor matches structured fields, never the sentence.** A renderer
+  wanting Langium's uncoded messages matches `Diagnostic.data.code`
+  (`linking-error`, `lexing-error`, `parsing-error`) and the `refText` /
+  `containerType` / `property` beside it. Matching English prose breaks on the
+  first upstream reword — and it cannot even tell an identity-bearing message
+  with no catalogue entry from one that has no identity, since both come back
+  unchanged.
+- **A renderer must not throw**, and the contract lives on
+  `ServerMessageRenderer`'s public methods rather than at each call site. The
+  framework's `interpolate` cannot throw, but an adopter's catalogue lookup can,
+  and an error escaping the diagnostics pass would strand the document at
+  `Validated` with Langium's publisher never invoked — no diagnostics for that
+  file at all. Override `translationsFor` and the guard is inherited; override a
+  render method and it is yours to keep.
+
+### `separator-in-name` guards a misconfiguration, not ordinary content
+
+`hydranium/core/separator-in-name` fires when a name contains the qualified-name
+separator, and it is unreachable in every example and in the reference adopter —
+all of them keep the identifier charset disjoint from the separator, which is the
+check succeeding as a constraint rather than failing as dead code.
+
+What it guards is the framework default: **`nameProperties` defaults to
+`['name']`**. Where `name` is a human-readable label rather than an identifier —
+a `STRING` in the grammar, holding `"Order.Line"` legitimately — every dotted
+label errors. Adopters whose identity lives elsewhere must say so
+(`nameProperties: ['id']`), and that override is not optional.
 
 ### Fragments are not parameters
 

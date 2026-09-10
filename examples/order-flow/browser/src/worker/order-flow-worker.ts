@@ -54,7 +54,12 @@ import type {
    LayoutModel,
    ProcessModel
 } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
-import { startLanguageServer } from '@hydranium/langium/lsp';
+// The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one: it
+// runs `assertLspHeadComposed` first, so a shared module that skipped
+// `createLspServerSharedModule` fails here instead of booting on Langium's
+// default handler. Browser-neutral, so the worker takes the same composition
+// check every other host does.
+import { startLanguageServer } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { BrowserMessageReader, BrowserMessageWriter, createConnection, ProposedFeatures } from 'vscode-languageserver/browser';

@@ -9,6 +9,8 @@
 
 import { type Clock, DefaultTracer, type Logger, NoopLogger, SystemClock, type Tracer } from '@hydranium/protocol';
 import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
+import { ServerLocale } from '../locale/server-locale.js';
+import { ServerMessageRenderer } from '../messages/renderer.js';
 
 /**
  * Overrides for {@link makeNoopSharedServices}. The three observability slots
@@ -29,6 +31,18 @@ export interface NoopSharedServicesOverrides {
    Logger?: Logger;
    /** Bound on the top-level `Tracer` slot. Default: a `DefaultTracer` over `Logger` + `Clock`. */
    Tracer?: Tracer;
+   /** Factory for the `ServerLocale` slot. Default: a real one, reporting no locale. */
+   ServerLocale?: (services: ServerSharedServicesMinimal) => ServerLocale;
+   /**
+    * Factory for the `MessageRenderer` slot. Default: the real
+    * {@link ServerMessageRenderer}, whose no-catalogue behaviour is a
+    * pass-through — so the default is the framework's own behaviour, not a stub.
+    *
+    * A factory rather than an instance, because a renderer reads the tree it is
+    * bound into. Both slots are resolved lazily, so an override is honoured
+    * however late the caller reads them.
+    */
+   MessageRenderer?: (services: ServerSharedServicesMinimal) => ServerMessageRenderer;
    /** Per-slot `workspace` overrides. Slots left out resolve to `undefined`. */
    workspace?: Record<string, unknown>;
    /** Any other minimal slot (`ServiceRegistry`, `AstReflection`, `additionalDocuments`, …). */
@@ -63,11 +77,21 @@ export interface NoopSharedServicesOverrides {
 export function makeNoopSharedServices<T extends ServerSharedServicesMinimal = ServerSharedServicesMinimal>(
    overrides: NoopSharedServicesOverrides = {}
 ): T {
-   const { Clock: clock, Logger: logger, Tracer: tracer, workspace, additionalDocuments, ...restTop } = overrides;
+   const {
+      Clock: clock,
+      Logger: logger,
+      Tracer: tracer,
+      ServerLocale: serverLocale,
+      MessageRenderer: messageRenderer,
+      workspace,
+      additionalDocuments,
+      ...restTop
+   } = overrides;
    const resolvedClock = clock ?? new SystemClock();
    const resolvedLogger = logger ?? new NoopLogger();
    const resolvedTracer = tracer ?? new DefaultTracer(resolvedLogger, resolvedClock);
-   return {
+   // Assembled in two steps, because both defaults read the tree they belong to.
+   const services = {
       Clock: resolvedClock,
       Logger: resolvedLogger,
       Tracer: resolvedTracer,
@@ -75,4 +99,28 @@ export function makeNoopSharedServices<T extends ServerSharedServicesMinimal = S
       ...restTop,
       workspace: { ...(workspace ?? {}) }
    } as unknown as T;
+   // Lazy, like Langium's own per-slot construction — and load-bearing here:
+   // both services emit an `instantiated` trace, so building them eagerly puts
+   // two lines into the capture of every test that passes a capturing logger
+   // and asserts on emptiness.
+   defineLazySlot(services, 'ServerLocale', () => serverLocale?.(services) ?? new ServerLocale(services));
+   defineLazySlot(services, 'MessageRenderer', () => messageRenderer?.(services) ?? new ServerMessageRenderer(services));
+   return services;
+}
+
+/** Install `name` as a memoized getter, so nothing is constructed until it is read. */
+function defineLazySlot(target: object, name: string, create: () => unknown): void {
+   let resolved: unknown;
+   let built = false;
+   Object.defineProperty(target, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+         if (!built) {
+            resolved = create();
+            built = true;
+         }
+         return resolved;
+      }
+   });
 }

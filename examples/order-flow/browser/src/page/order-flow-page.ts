@@ -195,6 +195,26 @@ function setStatus(text: string): void {
 }
 
 /**
+ * The locale to declare at `initialize`, from `?locale=` on the page URL.
+ *
+ * **A query parameter, not a picker, and not `navigator.language`.** The point
+ * is to make the server's rendering switchable in one reload while reading the
+ * page's own diagnostics, which a picker would complicate and the browser's
+ * language would make untestable — you cannot ask a reviewer to change their
+ * browser's language to see the feature. `?locale=de` reaches this example's
+ * German catalogue; anything else falls back to English, which is the same
+ * pass-through an adopter with no entry for a code gets.
+ *
+ * An empty value is treated as absent: `?locale=` is a URL a reader lands on by
+ * deleting the tag, and declaring `''` would be a claim about a language rather
+ * than the absence of one.
+ */
+function requestedLocale(): string | undefined {
+   const requested = new URLSearchParams(window.location.search).get('locale')?.trim();
+   return requested === undefined || requested === '' ? undefined : requested;
+}
+
+/**
  * Put the whole page into `scheme` — the page chrome, the diagram's
  * `--order-flow-*` colour roles, and every Monaco editor.
  *
@@ -480,10 +500,17 @@ async function main(): Promise<void> {
 
    connection.listen();
 
-   setStatus('initializing…');
+   const locale = requestedLocale();
+   setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
    const initializeResult = await connection.sendRequest(InitializeRequest.type, {
       processId: null,
       rootUri: WORKSPACE_ROOT_URI,
+      // The reading user's language, which only the client knows. A worker has
+      // no host to ask — no `vscode.env.language`, no Theia `localeId` — so the
+      // page has to state it, and `initialize` is the same slot every other host
+      // uses. Absent means the framework's English, which is correct rather than
+      // a fallback: a page that declares no language has no user to have one.
+      locale,
       // `applyEdit` declared because the adapter answers it, and for no stronger
       // reason than that it is true. **It does not gate the request, measured:**
       // `applyEditToLanguageClient` checks only that an LSP connection is bound

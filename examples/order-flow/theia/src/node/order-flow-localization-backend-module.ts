@@ -12,43 +12,32 @@ import { LocalizationContribution, type LocalizationRegistry } from '@theia/core
 import germanCatalogue from '../nls/order-flow.de.json';
 
 /**
- * Registers this example's German catalogue, which is how an adopter renders the
- * framework's messages in a language the framework ships nothing for.
+ * Registers the German catalogue for the messages THIS FRONTEND renders.
  *
- * # One catalogue serves both framework layers
+ * # Two catalogues, split by which side renders
  *
- * The framework externalizes user-facing strings and never translates them: each
+ * The framework externalizes user-facing strings and selects no locale; each
  * carries a stable `hydranium/<unscoped-package>/<name>` code beside its English
- * text, and whoever owns the surface renders it. Those codes land in ONE flat map
- * here, because Theia flattens a nested catalogue by joining keys with `/` — the
- * same separator the framework's codes use. So a single file covers:
+ * text, and the side that knows the reading user's language renders it. Since
+ * that side differs per message, so do the catalogues — and their key sets are
+ * disjoint, which a test in this package asserts:
  *
- * - the **host-bound** strings (`hydranium/client-theia/*`), which the Theia
- *   frontend resolves itself through `nls.localize`; and
- * - the **identity-side** ones (`hydranium/protocol/*`),
- *   which the framework only ever attaches an identity to. Those reach a user
- *   through `OrderFlowTheiaDataPort.reportError`, which hands
- *   `nls.localization?.translations` — this map — to `renderFrameworkMessage`.
+ * - **Here** are the strings this frontend renders: the host-bound ones
+ *   (`hydranium/client-theia/*`) that Theia resolves through `nls.localize`, and
+ *   the portable client tier's own (`hydranium/protocol/*`,
+ *   `order-flow/properties/*`), which reach a user through
+ *   `OrderFlowTheiaDataPort.reportError`. Those fire when the data server is
+ *   unreachable, so no server could have worded them.
+ * - **In the server package** are the messages the SERVER renders — its
+ *   diagnostics, this example's validation codes, Langium's
+ *   unresolved-reference sentence. It is handed a locale at LSP `initialize`
+ *   and renders before sending, so nothing on this side re-renders them.
+ *   Doing so would put two authorities on one sentence.
  *
- * Adopter-owned codes (`order-flow/*`) sit in the same file under their own
- * namespace. `hydranium/` is reserved for the framework, so an adopter's own
- * messages must not be declared under it.
- *
- * # The validation diagnostic, and where its translation reaches
- *
- * `hydranium/core/separator-in-name` is PARAMETERISED, and it renders complete
- * in this example's properties panel: `TransferDiagnostic` carries `code` and
- * `params`, and `OrderFlowTheiaDataPort.renderDiagnostic` assembles them into
- * the sentence the panel draws. It is the entry to copy when checking whether a
- * translated diagnostic is arriving, because a missing param shows as a literal
- * `{name}` rather than as nothing.
- *
- * It does NOT reach Theia's own squiggle, hover or Problems tree, and that is a
- * decision rather than a gap: Monaco's marker model has no field for the params,
- * so the only way there is to resolve the sentence inside a rebound
- * `ProtocolToMonacoConverter` — a Theia internal that would have to be
- * re-checked at every version bump. So the framework's editor-surface advice
- * still stands: prefer a parameterless sentence FOR THE SQUIGGLE.
+ * Codes land in one flat map because Theia flattens a nested catalogue by
+ * joining keys with `/` — the same separator the codes use. Adopter-owned codes
+ * (`order-flow/*`) sit under their own namespace; `hydranium/` is reserved for
+ * the framework.
  *
  * # The catalogue is deliberately PARTIAL
  *
@@ -64,9 +53,16 @@ import germanCatalogue from '../nls/order-flow.de.json';
  *
  * Theia reads the active locale from `localStorage['localeId']` in the
  * frontend, so use the *Configure Display Language* command (or set that key in
- * devtools) and reload. Nothing on the backend selects a locale, and nothing can:
- * a Theia backend serves every connected frontend at once, which is why the
- * framework holds no locale of its own and leaves the render to this side.
+ * devtools) and reload. That also reaches the server: Theia initializes its
+ * plugin host with the frontend's locale, the sideloaded servers extension runs
+ * there, and `vscode-languageclient` puts `env.language` in `initialize`. So
+ * one switch changes both the shell's German and the squiggles' — including a
+ * PARAMETERISED diagnostic, which client-side rendering could never reach,
+ * Monaco's marker model having no field for the params.
+ *
+ * Nothing on this BACKEND selects a locale, and nothing can: it serves every
+ * connected frontend at once. That is why the locale is declared per LSP
+ * connection rather than held here.
  *
  * The German entry appears in that command's list only because the registration
  * below declares a `languageName`; a registration that passes a bare locale

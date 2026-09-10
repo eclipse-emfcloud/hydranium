@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type ApplyWorkspaceEditResult, CancellationToken, Range, type WorkspaceEdit } from 'vscode-languageserver';
+import { type ApplyWorkspaceEditParams, type ApplyWorkspaceEditResult, CancellationToken, Range } from 'vscode-languageserver';
 import { TextDocument as TextDocumentImpl } from 'vscode-languageserver-textdocument';
 import type { TextDocument, TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
@@ -19,15 +19,19 @@ import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-u
 const URI = 'file:///a.x';
 
 interface RecordedApplyEdit {
-   // Production `applyEditToLanguageClient` passes a bare `WorkspaceEdit`
-   // (`{ label, documentChanges: [...] }`) to `connection.workspace.applyEdit`,
-   // not an `ApplyWorkspaceEditParams` wrapper — so `documentChanges` is read here.
-   params: WorkspaceEdit;
+   // The full `ApplyWorkspaceEditParams`, `edit` and all, because a double typed
+   // to the wrong member of the union cannot observe the defect this guards:
+   // `applyEdit` discriminates `ApplyWorkspaceEditParams | WorkspaceEdit` on
+   // `!!value.edit`, so an object with `label` beside `documentChanges` is
+   // wrapped as `{ edit: { label, documentChanges } }` and the label reaches no
+   // reader at all. Typed as a bare `WorkspaceEdit` this sees only the inner
+   // level, where both shapes look identical.
+   params: ApplyWorkspaceEditParams;
 }
 
 interface ConnectionStub {
    workspace: {
-      applyEdit: (params: WorkspaceEdit) => Promise<ApplyWorkspaceEditResult>;
+      applyEdit: (params: ApplyWorkspaceEditParams) => Promise<ApplyWorkspaceEditResult>;
    };
 }
 
@@ -121,6 +125,23 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       expect(result).toBeUndefined();
    });
 
+   it('puts the label on the PARAMS, where a client reads it for its undo stack', async () => {
+      // LSP specifies `ApplyWorkspaceEditParams.label` as "presented in the user
+      // interface for example on an undo stack", and `WorkspaceEdit` has no such
+      // field at all. `connection.workspace.applyEdit` takes
+      // `ApplyWorkspaceEditParams | WorkspaceEdit` and discriminates on
+      // `!!value.edit`, so passing `{ label, documentChanges }` was wrapped as
+      // `{ edit: { label, documentChanges } }` and the label reached no reader —
+      // asserted at BOTH levels here, because the nesting is what went wrong and
+      // a check on the top level alone would pass for a label sent nowhere.
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+
+      await docs.applyEditToLanguageClient(URI, 'hello\n', { label: 'Update Model' });
+
+      expect(recorded[0].params.label).toBe('Update Model');
+      expect(recorded[0].params.edit).not.toHaveProperty('label');
+   });
+
    it('sends a full-document replace when the shadow has no baseline', async () => {
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
@@ -128,7 +149,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       const result = await docs.applyEditToLanguageClient(URI, 'hello\nworld\n');
       expect(result).toEqual({ applied: true });
       expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits).toHaveLength(1);
       expect(edits[0].newText).toBe('hello\nworld\n');
    });
@@ -139,7 +160,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       });
       openInLanguageClient(docs, 'a\nb\nc\n');
       await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       // Diff hits only the middle line; the framework should not emit a full replace.
       expect(edits.length).toBeGreaterThan(0);
       expect(edits[edits.length - 1].newText).not.toBe('a\nB\nc\n');
@@ -164,7 +185,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       // The shadow was invalidated, so the next push cannot diff against it and
       // must send one full-range replace rather than a line-keyed edit.
       await docs.applyEditToLanguageClient(URI, 'totally\nnew\n');
-      const edits = (recorded[1].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits).toHaveLength(1);
       expect(edits[0].newText).toBe('totally\nnew\n');
    });
@@ -186,7 +207,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       openInLanguageClient(docs2, 'a\nb\n');
       docs2.invalidateLanguageClientText(URI);
       await docs2.applyEditToLanguageClient(URI, 'a\nB\n');
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits).toHaveLength(1);
       expect(edits[0].newText).toBe('a\nB\n');
    });
@@ -236,7 +257,7 @@ describe('HydraniumTextDocuments shadow auto-tracking', () => {
       // Shadow is still 'baseline\n'; outbound applyEditToLanguageClient should produce a diff.
       await docs.applyEditToLanguageClient(URI, 'form-edited\n');
       expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       // Replaces baseline → form-edited (single-line diff or full replace; either way edits is non-empty).
       expect(edits.length).toBeGreaterThan(0);
    });
@@ -250,7 +271,7 @@ describe('HydraniumTextDocuments shadow auto-tracking', () => {
       // Post-close, next applyEditToLanguageClient sends a full replace.
       await docs.applyEditToLanguageClient(URI, 'alive\n');
       expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits).toHaveLength(1);
       expect(edits[0].newText).toBe('alive\n');
    });
@@ -283,7 +304,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
          LANGUAGE_CLIENT_ID
       );
       await docs.applyEditToLanguageClient(URI, 'a\nB\nc2\n');
-      const identifier = (recorded[0].params.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+      const identifier = (recorded[0].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
       expect(identifier.version).toBe(7);
    });
 
@@ -297,7 +318,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
       openInLanguageClient(docs, 'a\nb\n');
       docs.invalidateLanguageClientText(URI);
       await docs.applyEditToLanguageClient(URI, 'a\nB\n');
-      const identifier = (recorded[0].params.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+      const identifier = (recorded[0].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
       expect(identifier.version).toBeNull();
    });
 
@@ -306,7 +327,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
          workspace: { applyEdit: async () => ({ applied: true }) }
       });
       await docs.applyEditToLanguageClient(URI, 'fresh\n');
-      const identifier = (recorded[0].params.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+      const identifier = (recorded[0].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
       expect(identifier.version).toBeNull();
    });
 
@@ -334,7 +355,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
       let clientVersion = 1;
       // Bound after `docs` exists — the stub client has to talk back to the store
       // to deliver the keystroke's didChange from inside the in-flight window.
-      let onApplyEdit: (params: WorkspaceEdit) => ApplyWorkspaceEditResult = () => ({ applied: true });
+      let onApplyEdit: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult = () => ({ applied: true });
       const { docs } = makeDocs({ workspace: { applyEdit: async params => onApplyEdit(params) } });
       onApplyEdit = params => {
          // The in-flight window: the keystroke lands in the editor buffer and its
@@ -345,7 +366,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
             { textDocument: { uri: URI, version: clientVersion }, contentChanges: [{ text: USER_EDITED }] },
             LANGUAGE_CLIENT_ID
          );
-         const change = params.documentChanges![0] as {
+         const change = params.edit.documentChanges![0] as {
             textDocument: { version: number | null };
             edits: Array<{ range: unknown; newText: string }>;
          };
@@ -711,7 +732,7 @@ describe('HydraniumTextDocuments open / close client gating', () => {
       const result = await docs.applyEditToLanguageClient(URI, 'glsp-content\n');
       expect(result).toEqual({ applied: true });
       expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits[0].newText).toBe('glsp-content\n');
    });
 
@@ -740,7 +761,7 @@ describe('HydraniumTextDocuments applyEditToLanguageClient invalidation', () => 
       // Shadow now holds 'a\nB\n'. A second edit must diff against it (single line),
       // not fall back to a full replace (which is what invalidation would force).
       await docs.applyEditToLanguageClient(URI, 'a\nC\n');
-      const edits = (recorded[1].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits[edits.length - 1].newText).not.toBe('a\nC\n');
    });
 });
@@ -1164,7 +1185,7 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
     * `WorkspaceEdit`.
     */
    function pushedEdits(recorded: RecordedApplyEdit): { range: Range; newText: string }[] {
-      const change = recorded.params.documentChanges?.[0] as { edits: { range: Range; newText: string }[] } | undefined;
+      const change = recorded.params.edit.documentChanges?.[0] as { edits: { range: Range; newText: string }[] } | undefined;
       if (change === undefined) {
          throw new Error('The push carried no documentChanges');
       }
@@ -1400,7 +1421,11 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       const recorded: RecordedApplyEdit[] = [];
       const logger = makeLogger();
       const services = {
-         lsp: { Connection: { workspace: { applyEdit: async (params: WorkspaceEdit) => (recorded.push({ params }), { applied: true }) } } },
+         lsp: {
+            Connection: {
+               workspace: { applyEdit: async (params: ApplyWorkspaceEditParams) => (recorded.push({ params }), { applied: true }) }
+            }
+         },
          Logger: { for: () => logger },
          Tracer: { for: () => logger },
          workspace: {
@@ -1414,7 +1439,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
    }
 
    const targetUriOf = (rec: RecordedApplyEdit): string =>
-      (rec.params.documentChanges![0] as { textDocument: { uri: string } }).textDocument.uri;
+      (rec.params.edit.documentChanges![0] as { textDocument: { uri: string } }).textDocument.uri;
 
    it('addresses a server push at the CLIENT spelling even when pushed under the canonical URI', async () => {
       const { docs, recorded } = makeConnectedStore();
@@ -1429,7 +1454,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       expect(recorded).toHaveLength(1);
       expect(targetUriOf(recorded[0])).toBe(LINK);
       // ...and the diff is computed against the client baseline (a minimal edit, not a full replace).
-      const edits = (recorded[0].params.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
       expect(edits[edits.length - 1].newText).not.toBe('a\nB\n');
    });
 

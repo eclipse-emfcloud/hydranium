@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { MessageConnection } from 'vscode-jsonrpc';
+import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
 import type { LatencyCollector } from '../latency-collector';
 import { type Disposable, DisposableCollection } from '../util';
 import { defaultIsNotification } from './create-rpc-proxy';
@@ -70,6 +70,36 @@ export interface BindRpcMethodsOptions {
     * Requests and notifications are both timed. Absent by default (no overhead).
     */
    readonly latency?: LatencyCollector;
+
+   /**
+    * Produce the `message` an outgoing rejection carries, so a user-facing
+    * error is rendered by the side that knows the reading user's language.
+    * Applied at this one chokepoint, which is what covers a caller's
+    * additional methods as well as the framework's own.
+    *
+    * Only a `ResponseError` is routed through it — a plain `Error` carries no
+    * identity to render from, and rewriting its message would relabel a
+    * developer-facing failure as a translated one. The rejection is
+    * RECONSTRUCTED rather than mutated, because the thrown value may be a
+    * shared constant; nothing is lost, since only `code`, `message` and `data`
+    * cross the wire and `instanceof` does not survive reconstruction anyway.
+    *
+    * Notifications are not covered, and "they have no reply channel" is only
+    * half the reason — a notification's own PAYLOAD can carry prose. What makes
+    * this sound is where that prose comes from: the only user-facing text on
+    * the data head's client surface is the diagnostics riding the
+    * document-updated and document-saved events, and those are read off
+    * `LangiumDocument.diagnostics`, which the document builder has already
+    * rendered at `Validated`. So they arrive rendered rather than escaping
+    * unrendered. A notification that ever carries prose of its OWN needs its
+    * own render at the raise site, as GLSP's actions do.
+    */
+   readonly renderErrorMessage?: (error: ResponseError<unknown>) => string;
+}
+
+/** The rejection to throw in place of `err`, with its message rendered. */
+function renderRejection(err: unknown, render: (error: ResponseError<unknown>) => string): unknown {
+   return err instanceof ResponseError ? new ResponseError(err.code, render(err), err.data) : err;
 }
 
 /**
@@ -91,8 +121,10 @@ export interface BindRpcMethodsOptions {
  *
  * Errors thrown synchronously from a request handler — or surfaced as a
  * rejected promise — propagate back to the caller through vscode-jsonrpc's
- * standard error envelope. Errors from a notification handler cannot, and are
- * routed to {@link BindRpcMethodsOptions.onNotificationError} instead.
+ * standard error envelope, with the message rendered when
+ * {@link BindRpcMethodsOptions.renderErrorMessage} is supplied. Errors from a
+ * notification handler cannot propagate, and are routed to
+ * {@link BindRpcMethodsOptions.onNotificationError} instead.
  *
  * Accepts either a ready connection or a `Promise<MessageConnection>` —
  * registrations queue until the connection resolves, then attach. The
@@ -154,7 +186,20 @@ export function bindRpcMethods<T extends object>(
                })
             );
          } else {
-            disposables.push(resolved.onRequest(wireName, async (params: unknown) => dispatch(params)));
+            const render = options.renderErrorMessage;
+            disposables.push(
+               resolved.onRequest(wireName, async (params: unknown) => {
+                  if (!render) {
+                     return dispatch(params);
+                  }
+                  try {
+                     // Awaited inside the try, or a rejected promise escapes it.
+                     return await dispatch(params);
+                  } catch (err: unknown) {
+                     throw renderRejection(err, render);
+                  }
+               })
+            );
          }
       }
    };

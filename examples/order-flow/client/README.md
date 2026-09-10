@@ -58,11 +58,16 @@ look Theia-only.
   messages, declared with the framework's `defineMessage`. This is the adopter
   half of message externalization: a stable code beside an English default,
   resolved where the failure is raised and rendered by whoever knows the reading
-  user's locale. Two rules make it copyable — the `hydranium/` code namespace is
-  reserved for the framework, so an adopter prefixes with its own name
-  (`order-flow/<area>/<name>`); and the messages are declared once for the panel
-  rather than once per host, because the Theia widget and the VS Code webview
-  present the same surface and a failure has to read identically in both.
+  user's locale. **This tier still renders its own messages, and only its own**
+  — they fire when the data server is unreachable, which is precisely when no
+  server could have worded them. A diagnostic arrives already rendered, in the
+  locale its client declared at init, so the form draws `message` as it came:
+  re-rendering it here would put two authorities on one sentence. Two rules make
+  the declarations copyable — the `hydranium/` code namespace is reserved for the
+  framework, so an adopter prefixes with its own name (`order-flow/<area>/<name>`);
+  and the messages are declared once for the panel rather than once per host,
+  because the Theia widget and the VS Code webview present the same surface and a
+  failure has to read identically in both.
 - `src/data/order-flow-messenger-channel.ts` — the VS Code adapter, presenting
   a `vscode-messenger` `Messenger` as a `PostMessageChannel` so the data head
   rides the same hop the diagram already uses. Hand-rolled here because the

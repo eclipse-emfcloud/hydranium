@@ -16,8 +16,13 @@ import {
    type LangiumDocument,
    type ValidationSeverity
 } from '@hydranium/langium';
+import type { Diagnostic } from 'vscode-languageserver-protocol';
 import { Range } from 'vscode-languageserver-types';
-import { HydraniumDocumentValidator, type DocumentValidatorOptions } from '../../../src/langium/validation/document-validator.js';
+import {
+   HydraniumDocumentValidator,
+   UNRESOLVED_REFERENCE,
+   type DocumentValidatorOptions
+} from '../../../src/langium/validation/document-validator.js';
 import { makeFakeAstNode, makeFakeDocument, makeNoopTracer } from '../../../src/testing/index.js';
 
 function makeLogger(): Tracer {
@@ -28,7 +33,13 @@ interface PathProvider {
    getAstNodePath(node: AstNode): string;
 }
 
-function makeStubServices(astNodeLocator: PathProvider, logger: Logger): LangiumCoreServices & { shared: { Tracer: Tracer } } {
+function makeStubServices(
+   astNodeLocator: PathProvider,
+   logger: Logger,
+   // Overridable because `processLinkingErrors` recovers the reference type
+   // through it, and one of its arms is the lookup RAISING.
+   getReferenceType: () => string = () => 'Fake'
+): LangiumCoreServices & { shared: { Tracer: Tracer } } {
    const documentBuilderStub = {
       onUpdate: () => Disposable.EMPTY,
       onBuildPhase: () => Disposable.EMPTY
@@ -39,7 +50,7 @@ function makeStubServices(astNodeLocator: PathProvider, logger: Logger): Langium
          Tracer: logger,
          workspace: { DocumentBuilder: documentBuilderStub },
          profilers: { LangiumProfiler: undefined },
-         AstReflection: { getReferenceType: () => 'Fake', isSubtype: () => true }
+         AstReflection: { getReferenceType, isSubtype: () => true }
       },
       workspace: { AstNodeLocator: astNodeLocator },
       // `checksBefore`/`checksAfter` are iterated by Langium's DefaultDocumentValidator;
@@ -306,6 +317,115 @@ describe('HydraniumDocumentValidator', () => {
          const validator = new TestValidator({ getAstNodePath: () => '/x' }, makeLogger(), undefined, { logAfterMs: 100 });
          expect(validator.resolvedLogAfterMs).toBe(100);
          expect(validator.resolvedLogLevel).toBe('debug');
+      });
+   });
+
+   /**
+    * The pass has three exits and only the attaching one is observable from an
+    * example, because every other exit produces a diagnostic that looks exactly
+    * like Langium's. So they are enumerated from the code here rather than
+    * inferred from the sentences a grammar happens to produce.
+    */
+   describe('processLinkingErrors', () => {
+      /** Langium's own `data` for a linking error, whose shape every arm shares. */
+      const LINKING_DATA = { code: 'linking-error', containerType: 'Holder', property: 'target', refText: 'Foo' };
+
+      /** A document carrying one linking error worded `message`, as `DefaultLinker` leaves it. */
+      function documentWith(message: string): LangiumDocument {
+         return {
+            references: [
+               {
+                  $refText: LINKING_DATA.refText,
+                  $refNode: undefined,
+                  error: {
+                     info: {
+                        container: { $type: LINKING_DATA.containerType },
+                        property: LINKING_DATA.property,
+                        reference: { $refText: LINKING_DATA.refText }
+                     },
+                     message
+                  }
+               }
+            ]
+         } as unknown as LangiumDocument;
+      }
+
+      /** Exposes the protected pass, which has no public caller to drive it through. */
+      class PassProbe extends HydraniumDocumentValidator {
+         run(target: LangiumDocument, into: Diagnostic[]): void {
+            this.processLinkingErrors(target, into, {});
+         }
+      }
+
+      function makeProbe(getReferenceType: () => string): PassProbe {
+         return new PassProbe(makeStubServices({ getAstNodePath: () => '/x' }, makeLogger(), getReferenceType));
+      }
+
+      function runPass(document: LangiumDocument, getReferenceType: () => string): Diagnostic[] {
+         const diagnostics: Diagnostic[] = [];
+         makeProbe(getReferenceType).run(document, diagnostics);
+         return diagnostics;
+      }
+
+      /** Byte-identical to `DefaultLinker.createLinkingError`'s sentence, which is the contract. */
+      const STANDARD = "Could not resolve reference to Entity named 'Foo'.";
+
+      it('attaches the identity to the sentence the declaration renders', () => {
+         const [diagnostic] = runPass(documentWith(STANDARD), () => 'Entity');
+
+         expect(diagnostic.code).toBe(UNRESOLVED_REFERENCE.code);
+         // Merged OVER Langium's data, which `stopAfterLinkingErrors` reads.
+         expect(diagnostic.data).toMatchObject({ code: 'linking-error', hydranium: { code: UNRESOLVED_REFERENCE.code } });
+      });
+
+      it('declines the linker EXCEPTION form, whose data is shape-identical', () => {
+         // Raised when resolution itself threw. Labelling it would let a
+         // catalogue render "could not resolve" over it and discard the cause
+         // that is the whole content of the message.
+         const [diagnostic] = runPass(documentWith("An error occurred while resolving reference to 'Foo': boom"), () => 'Entity');
+
+         expect(diagnostic.code).toBeUndefined();
+         expect(diagnostic.data).not.toHaveProperty('hydranium');
+      });
+
+      it("declines an adopter's reworded createLinkingError", () => {
+         const [diagnostic] = runPass(documentWith("No Entity called 'Foo' is in scope."), () => 'Entity');
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('declines rather than throwing when the reflection cannot name the reference type', () => {
+         // `getReferenceType` raises on an unknown container `$type` and on a
+         // non-reference property, and the diagnostic most likely to reach here
+         // is one whose lookup ALREADY failed inside `DefaultLinker` — which is
+         // why the guard cannot sit after the message comparison. Langium wraps
+         // `processLinkingErrors` in no try, so a rethrow fails the whole
+         // validation for the document.
+         let diagnostics: Diagnostic[] = [];
+         expect(() => {
+            diagnostics = runPass(documentWith(STANDARD), () => {
+               throw new Error('Type Holder not found.');
+            });
+         }).not.toThrow();
+
+         // The diagnostic still arrives, unidentified — asserted rather than
+         // just the absence of a throw, because a swallowed error that also
+         // dropped the entry would satisfy `not.toThrow()` too.
+         expect(diagnostics).toHaveLength(1);
+         expect(diagnostics[0].message).toBe(STANDARD);
+         expect(diagnostics[0].code).toBeUndefined();
+      });
+
+      it('leaves diagnostics that were already in the list untouched', () => {
+         // The pass identifies only what `super` appended, so a parser error
+         // sitting in the list ahead of it cannot be relabelled.
+         const preexisting: Diagnostic = { range: Range.create(0, 0, 0, 0), message: STANDARD, data: LINKING_DATA };
+         const diagnostics: Diagnostic[] = [preexisting];
+
+         makeProbe(() => 'Entity').run(documentWith(STANDARD), diagnostics);
+
+         expect(diagnostics[0]).toBe(preexisting);
+         expect(diagnostics[0].code).toBeUndefined();
       });
    });
 });

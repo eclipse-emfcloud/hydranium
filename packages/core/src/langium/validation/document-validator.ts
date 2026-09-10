@@ -7,10 +7,20 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type LogThreshold, type MaybeObservableValue, ObservableValue, type Tracer, TransferDiagnostic } from '@hydranium/protocol';
+import {
+   defineMessage,
+   describeError,
+   messageData,
+   type LogThreshold,
+   type MaybeObservableValue,
+   ObservableValue,
+   type Tracer,
+   TransferDiagnostic
+} from '@hydranium/protocol';
 import {
    type AstNode,
    type AstNodeLocator,
+   type AstReflection,
    DefaultDocumentValidator,
    type DiagnosticInfo,
    type LangiumDocument,
@@ -47,6 +57,26 @@ export interface TransferLspDiagnostic extends Diagnostic {
    element?: string;
    property?: string;
 }
+
+/**
+ * A reference resolved to nothing.
+ *
+ * **The English is byte-identical to Langium's `DefaultLinker.createLinkingError`
+ * sentence, and must stay so.** The identity is attached to a diagnostic Langium
+ * already worded, so a divergence here would silently change the text every
+ * adopter without a catalogue sees. {@link HydraniumDocumentValidator.processLinkingErrors}
+ * attaches it only when the two match exactly, which is also what keeps an
+ * adopter's own reworded linking error from being mislabelled as this one.
+ *
+ * It exists because this is the most-seen validation error in any language built
+ * on the framework, and Langium puts its own code in `data.code` rather than on
+ * `Diagnostic.code` — so without a framework identity every adopter wanting to
+ * render it has to special-case Langium's shape.
+ */
+export const UNRESOLVED_REFERENCE = defineMessage(
+   'hydranium/core/unresolved-reference',
+   "Could not resolve reference to {referenceType} named '{refText}'."
+);
 
 export interface DocumentValidatorOptions extends LogNameOptions {
    /**
@@ -94,6 +124,7 @@ export interface DocumentValidatorOptions extends LogNameOptions {
 export class HydraniumDocumentValidator extends DefaultDocumentValidator {
    protected readonly tracer: Tracer;
    protected readonly astNodeLocator: AstNodeLocator;
+   protected readonly reflection: AstReflection;
    protected readonly logLevel: ObservableValue<LogThreshold>;
    protected readonly logAfterMs: ObservableValue<number>;
    protected readonly validateVirtualDocuments: ObservableValue<boolean>;
@@ -103,6 +134,7 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
       super(services);
       this.tracer = services.shared.Tracer.for(options.logName ?? 'DocumentValidator').trace('instantiated');
       this.astNodeLocator = services.workspace.AstNodeLocator;
+      this.reflection = services.shared.AstReflection;
       this.logLevel = ObservableValue.from(options.logLevel ?? 'debug');
       this.logAfterMs = ObservableValue.from(options.logAfterMs ?? 20);
       this.validateVirtualDocuments = ObservableValue.from(options.validateVirtualDocuments ?? false);
@@ -155,6 +187,90 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
     */
    protected shouldSkipValidation(node: AstNode): boolean {
       return !this.validateSyntheticNodes.value && isSyntheticNode(node);
+   }
+
+   /**
+    * Langium's linking-error pass, plus the framework identity on each
+    * diagnostic it produced.
+    *
+    * Langium puts its own `linking-error` marker in `data.code` and leaves
+    * `Diagnostic.code` unset, so nothing identifies the message on a surface
+    * that drops `data` — which is every editor surface. This adds the framework
+    * identity to both `code` and `data.hydranium` while LEAVING `data.code` in
+    * place: `stopAfterLinkingErrors` and Langium's code-action dispatch both
+    * read it.
+    *
+    * **The identity is attached only when the message is the one
+    * {@link UNRESOLVED_REFERENCE} renders.** Two other sentences reach this
+    * list: the linker's exception form, raised when resolution itself throws,
+    * and whatever an adopter overriding `createLinkingError` chose. Labelling
+    * either would make a catalogue render the wrong sentence — and for the
+    * exception form it would discard the underlying cause. Comparing against
+    * the locally rendered English is what discriminates; there is no structural
+    * field that does.
+    */
+   protected override processLinkingErrors(document: LangiumDocument, diagnostics: Diagnostic[], options: ValidationOptions): void {
+      const from = diagnostics.length;
+      super.processLinkingErrors(document, diagnostics, options);
+      for (let index = from; index < diagnostics.length; index++) {
+         diagnostics[index] = this.identifyLinkingError(diagnostics[index]);
+      }
+   }
+
+   /**
+    * Add the {@link UNRESOLVED_REFERENCE} identity to one linking diagnostic,
+    * or return it untouched when its message is not the sentence that identity
+    * renders.
+    *
+    * `refText` comes from the `data` Langium populated; `referenceType` is not
+    * in it, so it is recovered the same way `createLinkingError` produced it —
+    * through the reflection, from the container type and property.
+    */
+   protected identifyLinkingError(diagnostic: Diagnostic): Diagnostic {
+      const data = diagnostic.data as { code?: unknown; refText?: unknown; containerType?: unknown; property?: unknown } | undefined;
+      if (typeof data?.refText !== 'string' || typeof data.containerType !== 'string' || typeof data.property !== 'string') {
+         return diagnostic;
+      }
+      const referenceType = this.referenceTypeOf(data.containerType, data.property, data.refText);
+      if (referenceType === undefined) {
+         return diagnostic;
+      }
+      const params = { referenceType, refText: data.refText };
+      if (diagnostic.message !== UNRESOLVED_REFERENCE.format(params)) {
+         return diagnostic;
+      }
+      // Merged OVER Langium's data rather than replacing it, so `data.code`
+      // survives for the readers that switch on it.
+      return { ...diagnostic, code: UNRESOLVED_REFERENCE.code, data: { ...data, ...messageData(UNRESOLVED_REFERENCE, params) } };
+   }
+
+   /**
+    * The declared target type of the reference this diagnostic came from, or
+    * `undefined` when the reflection cannot name one.
+    *
+    * **The lookup can throw, and that is the reason this is a method rather
+    * than an inline call.** `AbstractAstReflection.getReferenceType` raises on
+    * an unknown container `$type` and on a property that is not a reference —
+    * and the linking error whose type it cannot name is the one most likely to
+    * reach here, because `DefaultLinker` catches its OWN failed lookup and
+    * turns it into the exception-form message. Rethrowing would take
+    * `validateDocument` with it, since Langium wraps `processLinkingErrors` in
+    * no try: a diagnostic Langium degraded gracefully would become a failed
+    * build. Declining is also the right answer on the merits — a reference
+    * whose type cannot be named is not the message
+    * {@link UNRESOLVED_REFERENCE} claims.
+    */
+   protected referenceTypeOf(containerType: string, property: string, refText: string): string | undefined {
+      try {
+         return this.reflection.getReferenceType({
+            container: { $type: containerType } as AstNode,
+            property,
+            reference: { $refText: refText }
+         } as Parameters<AstReflection['getReferenceType']>[0]);
+      } catch (err: unknown) {
+         this.tracer.debug(`cannot name the reference type for ${containerType}.${property}: ${describeError(err)}`);
+         return undefined;
+      }
    }
 
    protected override toDiagnostic<N extends AstNode>(

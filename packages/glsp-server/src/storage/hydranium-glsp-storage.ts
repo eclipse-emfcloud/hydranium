@@ -43,15 +43,16 @@ import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { DEFAULT_SAVE_CONFLICT_POLICY, SaveConflictPolicy } from './save-conflict-policy.js';
 
 /**
- * A save action arrived with nowhere to write to.
+ * A save action arrived with nowhere to write to. A save action carries no
+ * request id, so it falls through to the error handler and `message` becomes
+ * the toast text.
  *
- * The one framework-authored GLSP string that reaches a user verbatim: a save
- * action carries no request id, so it falls through to the error handler and
- * `message` becomes the toast text. Declared for enumeration only — GLSP's
- * action protocol has no slot for an identity on any of its notification
- * actions, so this code cannot travel and the English is what a client receives.
- * `MessageAction.details` is not a substitute: it is prose populated from
- * `cause?.toString?.()`, so a code there would sit inside human text.
+ * Rendered at the raise site rather than by a carrier method, because GLSP's
+ * action protocol has no slot for an identity anywhere — every member of its
+ * message, status and reject actions is prose or an enum, and
+ * `MessageAction.details` is not a substitute since it is prose populated from
+ * `cause?.toString?.()`, and a Theia host shows it to a user on demand. So the
+ * throw is the last place that still knows which message this is.
  */
 export const SAVE_TARGET_UNKNOWN = defineMessage(
    'hydranium/glsp-server/save-target-unknown',
@@ -60,10 +61,8 @@ export const SAVE_TARGET_UNKNOWN = defineMessage(
 
 /**
  * A model request arrived without the source URI it is required to carry.
- *
- * Declared for enumeration only, like its save-path sibling: GLSP's action
- * protocol has no slot for an identity, so the English is what a client
- * receives.
+ * Rendered at the raise site, like its save-path sibling and for the same
+ * reason.
  */
 export const SOURCE_URI_MISSING = defineMessage(
    'hydranium/glsp-server/source-uri-missing',
@@ -616,16 +615,19 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * A model request DOES carry a request id, so a throw here takes the
     * client-request path rather than the toast path — and on that path `detail`
     * comes from `cause?.toString?.()`. A single-argument throw therefore reaches
-    * neither the client nor the log: both print `undefined`. So the two readers
-    * are addressed separately, as on the save path: `message` names what failed
-    * in the user's terms, `cause` names the action and the option key that was
-    * missing.
+    * neither the server log nor the client console: both print `undefined`. So
+    * the two readers are addressed separately, as on the save path: `message`
+    * names what failed in the user's terms and is rendered, `cause` names the
+    * action and the option key that was missing and stays English. On THIS path
+    * the cause reaches only logs — `RejectAction.detail` is read by nothing but
+    * the client action-dispatcher's `logger.warn` — which is not what makes it
+    * English; its content is.
     */
    protected getSourceUri(action: RequestModelAction): string {
       const sourceUri = action.options?.[SOURCE_URI_ARG];
       if (typeof sourceUri !== 'string') {
          throw new GLSPServerError(
-            SOURCE_URI_MISSING.format(),
+            this.sharedServices.MessageRenderer.renderMessage(SOURCE_URI_MISSING),
             `no '${SOURCE_URI_ARG}' option on the ${action.kind} action (received ${typeof sourceUri})`
          );
       }
@@ -639,18 +641,24 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * {@link AbstractHydraniumGlspState.setSourceRoot}.
     *
     * A save action carries no request id, so a throw here reaches the user as a
-    * toast built from `message`, with `cause` behind its details control. The
-    * two therefore address different readers and must not be collapsed: the
-    * message names what failed in the user's terms, and the cause names which
-    * lookups came back empty for whom. Neither can name the URI — not having
-    * one IS the failure, and both sources are written together, so the typed
-    * `sourceUri` is equally empty whenever this fires.
+    * toast built from `message`, while `cause` travels in
+    * `MessageAction.details` — **which a Theia host DOES put in front of a
+    * user**, as a "Show details" button on the toast opening a dialog. So the
+    * two are not split by reachability; they are split by AUDIENCE, which is
+    * the older rule and the one that holds here. The message names what failed
+    * in the user's terms and is rendered; the cause names which lookups came
+    * back empty for whom, and stays English because a wire action kind, an
+    * option key and a client id address whoever composes the system — a
+    * translated developer string is a worse outcome than an untranslated one.
+    * Neither can name the URI — not having one IS the failure, and both sources
+    * are written together, so the typed `sourceUri` is equally empty whenever
+    * this fires.
     */
    protected getFileUri(action: SaveModelAction): string {
       const uri = action.fileUri ?? this.state.get<string>(SOURCE_URI_ARG);
       if (!uri) {
          throw new GLSPServerError(
-            SAVE_TARGET_UNKNOWN.format(),
+            this.sharedServices.MessageRenderer.renderMessage(SAVE_TARGET_UNKNOWN),
             `no fileUri on the save action and no ${SOURCE_URI_ARG} in the model state (clientId=${this.state.clientId})`
          );
       }

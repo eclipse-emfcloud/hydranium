@@ -35,5 +35,6 @@ export * from './langium/workspace/index.js';
 export * from './langium/service-registry.js';
 export * from './langium/language-types.js';
 export * from './launcher/index.js';
+export * from './locale/index.js';
 export * from './documents/index.js';
 export * from './util/index.js';

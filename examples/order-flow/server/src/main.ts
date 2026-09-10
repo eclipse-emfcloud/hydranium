@@ -30,7 +30,13 @@ import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server
 import { startGlspServer } from '@hydranium/glsp-server/node';
 import { NodeFileSystem, publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
-import { startLanguageServer } from '@hydranium/langium/lsp';
+// The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one. It is
+// signature-compatible and delegates straight through; what it adds first is
+// `assertLspHeadComposed`, which fails the start if the LSP head's SHARED module
+// was never composed. Reaching for Langium's is the natural mistake and it is
+// silent: the server boots, links and completes, while echo suppression, the
+// didChangeContent debounce and the last-client-close rebuild are all inert.
+import { startLanguageServer } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 import { OrderFlowProcessDiagramModule } from './glsp/order-flow-process-diagram-module.js';
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from './head-ports.js';

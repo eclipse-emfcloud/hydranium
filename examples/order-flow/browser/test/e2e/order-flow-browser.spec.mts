@@ -925,6 +925,72 @@ test.describe('order-flow in a web worker', () => {
       // too.
       await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT.replace('Ship 660,200', 'Ship 661,200'));
    });
+
+   /**
+    * The server renders in the locale the page declares at `initialize`, and
+    * `?locale=` is how a reader switches it in one reload.
+    *
+    * A worker has no host to ask for a language — no `vscode.env.language`, no
+    * Theia `localeId` — so the page states one, and this is the only host in the
+    * repo where the whole chain is visible on one screen: the query parameter,
+    * the `initialize` param, the server's catalogue, and the published sentence.
+    */
+   test('renders diagnostics in the locale the page declared', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator('#status')).toHaveText(
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      // The workspace's one intended error, worded by LANGIUM and claimed by the
+      // framework as `hydranium/core/unresolved-reference` — so seeing German
+      // here is the whole feature: an unowned upstream sentence, translated by
+      // the server, arriving on a surface that carries no catalogue at all.
+      // Matched on the invariant half of the German plus the ref text rather
+      // than the full sentence, so a `referenceType` change in the grammar does
+      // not break a test about locales.
+      const problems = page.locator('.problem-row');
+      await expect(problems.filter({ hasText: 'konnte nicht aufgelöst werden' }).filter({ hasText: 'AuditStamp' })).toHaveCount(1);
+   });
+
+   test('renders the tool palette in the declared locale too', async ({ page }) => {
+      // The seam is not error-shaped, which is the thing this asserts and
+      // nothing else does: a palette label is a NOUN an adopter owns, and it
+      // goes through the same one `MessageRenderer` binding as a framework
+      // diagnostic. On this page both are visible at once under `?locale=de` —
+      // the toolbox in German beside German squiggles.
+      //
+      // Read as the FULL label set rather than per-button, because the failure
+      // that actually happened while writing this was a stale cached worker
+      // bundle serving the pre-render palette: a per-button `hasText` reported
+      // "no German button" for it, which reads as a render that did not happen
+      // rather than as code the page never loaded. The whole set names what
+      // arrived.
+      await page.goto('/?locale=de');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Aufgabe', 'Verzweigung', 'Übergang', 'Effekt']);
+   });
+
+   test('labels the palette in English with no locale — the control on the row above', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Task', 'Gateway', 'Transition', 'Effect']);
+   });
+
+   test('renders the English when no locale is declared — the control on the row above', async ({ page }) => {
+      // Same page, same catalogue, only the query parameter differs. Without
+      // this the row above would pass against a page that always got German, and
+      // against a server that ignored the locale entirely.
+      await page.goto('/');
+      await expect(page.locator('#status')).toHaveText(
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      const problems = page.locator('.problem-row');
+      await expect(problems.filter({ hasText: 'Could not resolve reference to' }).filter({ hasText: 'AuditStamp' })).toHaveCount(1);
+      await expect(problems.filter({ hasText: 'konnte nicht aufgelöst werden' })).toHaveCount(0);
+   });
 });
 
 /**

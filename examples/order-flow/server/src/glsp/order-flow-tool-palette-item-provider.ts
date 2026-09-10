@@ -8,6 +8,9 @@
  ********************************************************************************/
 
 import { CreateOperationHandler, OperationHandlerRegistry, type PaletteItem, ToolPaletteItemProvider } from '@eclipse-glsp/server';
+import type { ServerSharedServices } from '@hydranium/core';
+import { HydraniumTypes } from '@hydranium/glsp-server';
+import { defineMessage, type MessageDefinition } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import {
    PROCESS_EFFECT_TYPE,
@@ -16,10 +19,38 @@ import {
    PROCESS_TRANSITION_EDGE_TYPE
 } from './order-flow-process-diagram-types.js';
 
-/** One palette entry: the element type it creates, and the codicon it wears. */
+/**
+ * The palette's word for each tool.
+ *
+ * **A LABEL, not an error, and that is the point of declaring them.** The
+ * framework's render seam is reached through one binding whatever the string is
+ * for, so an adopter's toolbox goes through the same `MessageRenderer` as a
+ * diagnostic — no second mechanism, no locale of its own. Nothing about
+ * `defineMessage` is diagnostic-shaped.
+ *
+ * Adopter-owned codes under `order-flow/`, because `hydranium/` is reserved for
+ * the framework. Parameterless: a tool name is a noun, and a noun with a
+ * placeholder in it is a sentence pretending to be a label.
+ */
+export const PALETTE_TASK = defineMessage('order-flow/palette/task', 'Task');
+export const PALETTE_GATEWAY = defineMessage('order-flow/palette/gateway', 'Gateway');
+export const PALETTE_TRANSITION = defineMessage('order-flow/palette/transition', 'Transition');
+export const PALETTE_EFFECT = defineMessage('order-flow/palette/effect', 'Effect');
+
+/** One palette entry: the element type it creates, the codicon it wears, and its word. */
 interface ProcessPaletteTool {
    readonly elementTypeId: string;
    readonly icon: string;
+   /**
+    * The declaration whose rendered text labels the button.
+    *
+    * Held HERE rather than on the create handler, even though the handler
+    * already has a `label`: that field is read twice — once for this palette and
+    * once for the undo/redo log line the recording command writes — and a
+    * rendering `label` would translate the log too. The handler keeps the
+    * English a log wants; the palette renders its own word.
+    */
+   readonly message: MessageDefinition<string>;
 }
 
 /**
@@ -44,11 +75,11 @@ interface ProcessPaletteTool {
  * protocol.
  */
 const PROCESS_PALETTE_TOOLS: readonly ProcessPaletteTool[] = [
-   { elementTypeId: PROCESS_TASK_NODE_TYPE, icon: 'symbol-method' },
-   { elementTypeId: PROCESS_GATEWAY_NODE_TYPE, icon: 'git-branch' },
-   { elementTypeId: PROCESS_TRANSITION_EDGE_TYPE, icon: 'arrow-right' },
+   { elementTypeId: PROCESS_TASK_NODE_TYPE, icon: 'symbol-method', message: PALETTE_TASK },
+   { elementTypeId: PROCESS_GATEWAY_NODE_TYPE, icon: 'git-branch', message: PALETTE_GATEWAY },
+   { elementTypeId: PROCESS_TRANSITION_EDGE_TYPE, icon: 'arrow-right', message: PALETTE_TRANSITION },
    // An effect reads or writes a `.domain` FIELD, which is what the icon names.
-   { elementTypeId: PROCESS_EFFECT_TYPE, icon: 'symbol-field' }
+   { elementTypeId: PROCESS_EFFECT_TYPE, icon: 'symbol-field', message: PALETTE_EFFECT }
 ];
 
 /**
@@ -63,12 +94,14 @@ const PROCESS_PALETTE_TOOLS: readonly ProcessPaletteTool[] = [
 @injectable()
 export class OrderFlowToolPaletteItemProvider extends ToolPaletteItemProvider {
    @inject(OperationHandlerRegistry) protected readonly operationHandlerRegistry!: OperationHandlerRegistry;
+   /** The framework's shared tree, for the one binding that renders every message this server sends. */
+   @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
 
    getItems(): PaletteItem[] {
       const handlers = this.operationHandlerRegistry.getAll().filter(CreateOperationHandler.is);
       const known = PROCESS_PALETTE_TOOLS.map(tool => tool.elementTypeId);
       const listed = PROCESS_PALETTE_TOOLS.flatMap((tool, index) =>
-         this.itemsFor(handlers, elementTypeId => elementTypeId === tool.elementTypeId, index, tool.icon)
+         this.itemsFor(handlers, elementTypeId => elementTypeId === tool.elementTypeId, index, tool.icon, tool.message)
       );
       const rest = this.itemsFor(handlers, elementTypeId => !known.includes(elementTypeId), PROCESS_PALETTE_TOOLS.length);
       return [...listed, ...rest];
@@ -89,7 +122,8 @@ export class OrderFlowToolPaletteItemProvider extends ToolPaletteItemProvider {
       handlers: CreateOperationHandler[],
       claims: (elementTypeId: string) => boolean,
       position: number,
-      icon?: string
+      icon?: string,
+      message?: MessageDefinition<string>
    ): PaletteItem[] {
       return handlers.flatMap(handler =>
          handler
@@ -97,7 +131,11 @@ export class OrderFlowToolPaletteItemProvider extends ToolPaletteItemProvider {
             .filter(action => claims(action.elementTypeId))
             .map(action => ({
                id: `palette-item-${action.elementTypeId}`,
-               label: handler.label,
+               // Rendered where the ITEM is built, not on the handler's `label`.
+               // A tool with no table entry falls back to that label, which is
+               // the same graceful path an unlisted tool already takes for its
+               // icon: it appears in English rather than disappearing.
+               label: message ? this.sharedServices.MessageRenderer.renderMessage(message) : handler.label,
                actions: [action],
                sortString: String.fromCharCode(65 + position),
                ...(icon ? { icon } : {})

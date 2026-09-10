@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 import { type Clock, type Logger, type Project, type Tracer, type TransferDiagnostic, NoopLogger, SystemClock } from '@hydranium/protocol';
+import { ServerLocale } from '../locale/server-locale.js';
+import { ServerMessageRenderer } from '../messages/renderer.js';
 import { ServerTracer } from './diagnostics/server-tracer.js';
 import { HydraniumLangiumProfiler } from './diagnostics/hydranium-langium-profiler.js';
 import { type AstNode, type Module } from '@hydranium/langium';
@@ -92,6 +94,24 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     * plain `DefaultTracer` with their own `MemoryReader`.
     */
    Tracer: Tracer;
+   /**
+    * Renders each user-facing message once, before the server sends it — so
+    * every message is rendered by the side that knows the reading user's
+    * language. All three heads inherit one diagnostics pass, which is what
+    * makes this the single slot an adopter with i18n rebinds; the same binding
+    * serves framework codes and their own `defineMessage` codes alike.
+    *
+    * The framework ships English only and selects no locale, so the default
+    * returns every sentence unchanged. Adopters subclass and override
+    * `translationsFor`.
+    */
+   MessageRenderer: ServerMessageRenderer;
+   /**
+    * The locale an init handed the server, for whoever renders in it. Held
+    * apart from the renderer so replacing the renderer cannot drop locale
+    * handling.
+    */
+   ServerLocale: ServerLocale;
    /**
     * LSP-bound slots layered on top of Langium's `LangiumSharedLSPServices`.
     * The framework contributes a single string slot here —
@@ -334,6 +354,8 @@ export function createServerSharedModule(
       ServiceRegistry: services => new ExtendedServiceRegistry<ServerLanguageServices>(services),
       Logger: () => new NoopLogger(),
       Tracer: services => new ServerTracer(services.Logger, services.Clock),
+      ServerLocale: services => new ServerLocale(services),
+      MessageRenderer: services => new ServerMessageRenderer(services),
       // Bind Langium's per-grammar-rule / per-`$type` parse/link/validate
       // profiler (the data the framework's own `Tracer`/`ProfileSession` passes
       // cannot produce), routed through our `Logger` and debug-gated. At the

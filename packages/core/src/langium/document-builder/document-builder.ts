@@ -21,8 +21,12 @@ import {
    interruptAndCheck,
    isOperationCancelled
 } from '@hydranium/langium';
-import { CancellationToken, type Diagnostic } from 'vscode-languageserver-protocol';
+// `Diagnostic` as a VALUE: `renderDiagnostics` needs its `getMessageString`
+// namespace helper to read the `string | MarkupContent` union without
+// restating it.
+import { CancellationToken, Diagnostic } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
+import type { ServerMessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
@@ -119,7 +123,9 @@ export interface DocumentBuilderOptions extends LogNameOptions {
  * - **In-place rebuild helpers** — {@link reparse} and
  *   {@link reparseAndRelink} — for a build-phase listener that mutated a
  *   document's AST and must reconcile it within the same build.
- * - **Diagnostic dedupe** at `Validated` ({@link dedupeDiagnostics}).
+ * - **Diagnostic dedupe** at `Validated` ({@link dedupeDiagnostics}), followed
+ *   by the **one server-side message render** every head inherits
+ *   ({@link renderDiagnostics}).
  * - **Build sessions** ({@link BuildSession}): each `update` / `build` call is
  *   one correlated unit carrying an id, a trigger label, a start time and
  *   cancellation lineage, so every line of a rebuild reads as belonging to it
@@ -152,6 +158,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly phaseDetailMs: ObservableValue<number>;
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly clock: Clock;
+   protected readonly messageRenderer: ServerMessageRenderer;
    /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
    protected readonly languageRegistry: ExtendedServiceRegistry;
    protected languageFileExtensions: string[] = [];
@@ -184,6 +191,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.languageRegistry = services.ServiceRegistry;
       this.uriPolicy = services.workspace.DocumentUriPolicy;
       this.clock = services.Clock;
+      this.messageRenderer = services.MessageRenderer;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -893,8 +901,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       // build settling inside that window therefore appends after this call has
       // already deduped, and the appended duplicate is published by the listener
       // of the build that deduped. Only `serializeBuilds` closes the window.
+      //
+      // Dedupe before rendering: rendering is deterministic, so it cannot
+      // change which entries are structurally equal, and fewer survive to render.
       if (state === DocumentState.Validated) {
          this.dedupeDiagnostics(document);
+         this.renderDiagnostics(document);
       }
       if (this.logLevel === 'off') {
          return super.notifyDocumentPhase(document, state, cancelToken);
@@ -1067,6 +1079,62 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       if (unique.length !== diagnostics.length) {
          this.tracer.debug(`collapsed ${diagnostics.length - unique.length} duplicate diagnostic(s) on ${this.formatUri(document.uri)}`);
          document.diagnostics = unique;
+      }
+   }
+
+   /**
+    * Render every diagnostic on `document` through the bound message renderer,
+    * in ONE pass over the finished list.
+    *
+    * All three heads read `document.diagnostics` — the LSP publish,
+    * `TransferEncoder.toTransferDiagnostic` and the GLSP validation path — so
+    * one pass here is what keeps the render from happening per head. It is also
+    * the only placement that covers lexer and parser errors, which Langium
+    * pushes onto the document without routing them through `toDiagnostic`.
+    *
+    * Running here rather than from a `Validated` phase listener needs no
+    * ordering assumption: Langium publishes from `addDiagnosticsHandler`, a free
+    * function it registers as such a listener, which can only be outrun.
+    *
+    * **It inherits {@link dedupeDiagnostics}'s window, and therefore the same
+    * precondition.** A build settling inside the listener window appends
+    * diagnostics this pass never saw, and the publisher of the build that
+    * rendered sends them — unrendered. `ModelServiceOptions.serializeBuilds`
+    * closes it and defaults to `true`, so "every diagnostic is rendered" holds
+    * by default and is an opt-out rather than a guarantee. Opting out accepts
+    * unrendered diagnostics on exactly the terms it already accepts duplicates.
+    *
+    * Entries are REPLACED rather than mutated: `sendDiagnostics` passes the
+    * array by reference and serialises later, so an in-place message mutation
+    * reaches the wire even when it runs after the publisher — which would make
+    * a test for the ordering pass in either state.
+    */
+   protected renderDiagnostics(document: LangiumDocument): void {
+      const diagnostics = document.diagnostics;
+      if (!diagnostics || diagnostics.length === 0) {
+         return;
+      }
+      let changed = false;
+      // No try/catch: `renderDiagnostic` carries a no-throw contract, because an
+      // error escaping this phase strands the document at `Validated` with
+      // Langium's publisher never invoked.
+      const rendered = diagnostics.map(diagnostic => {
+         const text = this.messageRenderer.renderDiagnostic(diagnostic);
+         // Against the message's STRING FORM, not the field. `renderDiagnostic`
+         // answers a `string` by contract, while `Diagnostic.message` is
+         // `string | MarkupContent` since LSP 3.17 — so comparing the answer
+         // against the field never matches for a markup message, and a pass
+         // that replaced on mismatch flattened every un-identified markup
+         // diagnostic to its own plain text. That is silent data loss on the
+         // path whose whole job is to leave such entries alone.
+         if (text === Diagnostic.getMessageString(diagnostic)) {
+            return diagnostic;
+         }
+         changed = true;
+         return { ...diagnostic, message: text };
+      });
+      if (changed) {
+         document.diagnostics = rendered;
       }
    }
 
