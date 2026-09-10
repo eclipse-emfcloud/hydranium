@@ -8,11 +8,21 @@
  ********************************************************************************/
 
 import { type FileSystemNode, URI } from '@hydranium/langium';
-import { type Tracer } from '@hydranium/protocol';
+import { defineMessage, type Tracer } from '@hydranium/protocol';
 import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../shared-services.js';
 import { serveVirtualDocument } from './virtual-document.js';
+
+/**
+ * The browser host's spelling of "the document is not there". Its Node
+ * counterpart is `NO_LOADABLE_CONTENT`: this provider has no `realpath`, so the
+ * URI policy cannot answer the existence question ahead of the read and the miss
+ * surfaces here instead.
+ */
+export const NO_SUCH_FILE = defineMessage('hydranium/core/no-such-file', 'No such file: {uri}');
+
+export const NO_SUCH_PATH = defineMessage('hydranium/core/no-such-path', 'No such file or directory: {uri}');
 
 /**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
@@ -127,7 +137,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       }
       const content = this.files.get(normalize(uri));
       if (content === undefined) {
-         throw new Error(`No such file: ${uri.toString()}`);
+         throw new Error(NO_SUCH_FILE.format({ uri: uri.toString() }));
       }
       return content;
    }
@@ -152,7 +162,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       if (this.hasChildren(path)) {
          return { isFile: false, isDirectory: true, uri };
       }
-      throw new Error(`No such file or directory: ${uri.toString()}`);
+      throw new Error(NO_SUCH_PATH.format({ uri: uri.toString() }));
    }
 
    exists(uri: URI): Promise<boolean> {

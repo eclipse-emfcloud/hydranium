@@ -22,13 +22,21 @@ import * as net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Message } from 'vscode-jsonrpc';
 import { SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
-import { relayToPostMessageChannel, type MessageRelay, type RelayTransport } from '../../src/client';
+import {
+   RELAY_TRANSPORT_OPEN_FAILED,
+   RELAY_TRANSPORT_READ_FAILED,
+   RELAY_TRANSPORT_WRITE_FAILED,
+   relayToPostMessageChannel,
+   type MessageRelay,
+   type RelayTransport
+} from '../../src/client';
+import type { ResolvedMessage } from '../../src/messages/primitives';
 import { tick, waitFor } from '../../src/testing';
 import { ClonePipeEnd, RecordingTransport, methodsOf, notification } from './clone-pipe';
 
 interface Failure {
    readonly error: unknown;
-   readonly context: string;
+   readonly message: ResolvedMessage;
 }
 
 const toDispose: Array<{ dispose(): void }> = [];
@@ -51,7 +59,7 @@ function setUp(options: { open?: () => Promise<RelayTransport> } = {}): {
    const transport = new RecordingTransport();
    const failures: Failure[] = [];
    const relay = relayToPostMessageChannel(channel, options.open ?? (() => Promise.resolve(transport)), {
-      reportError: (error, context) => failures.push({ error, context })
+      reportError: (error, message) => failures.push({ error, message })
    });
    toDispose.push(relay, channel);
    return { channel, transport, relay, failures };
@@ -114,7 +122,14 @@ describe('relayToPostMessageChannel', () => {
 
       await expect(relay.wired).resolves.toBe(false);
 
-      expect(failures).toEqual([{ error: boom, context: 'opening the transport to relay' }]);
+      // Keyed on the CODE, which is the contract; the English default is a
+      // fallback and may be reworded. `params` is asserted too, because a
+      // renderer given a translation reads the sentence out of those rather
+      // than out of `text` — a code that arrived with no `detail` would render
+      // correctly in English and lose the cause in every other language.
+      expect(failures.map(failure => failure.error)).toEqual([boom]);
+      expect(failures.map(failure => failure.message.code)).toEqual([RELAY_TRANSPORT_OPEN_FAILED.code]);
+      expect(failures[0].message.params).toEqual({ detail: 'no port' });
       expect(closes).toBe(1);
    });
 
@@ -138,7 +153,9 @@ describe('relayToPostMessageChannel', () => {
       const boom = new Error('socket reset');
       transport.reader.raiseError(boom);
 
-      expect(failures).toEqual([{ error: boom, context: 'reading from the relayed transport' }]);
+      expect(failures.map(failure => failure.error)).toEqual([boom]);
+      expect(failures.map(failure => failure.message.code)).toEqual([RELAY_TRANSPORT_READ_FAILED.code]);
+      expect(failures[0].message.params).toEqual({ detail: 'socket reset' });
       expect(closes).toBe(1);
    });
 
@@ -150,7 +167,8 @@ describe('relayToPostMessageChannel', () => {
       channel.deliver(notification('ns/doomed'));
       await waitFor(() => failures.length === 1, { message: 'the write rejection was swallowed' });
 
-      expect(failures[0].context).toBe('writing to the relayed transport');
+      expect(failures[0].message.code).toBe(RELAY_TRANSPORT_WRITE_FAILED.code);
+      expect(failures[0].message.params).toEqual({ detail: 'write after end' });
    });
 
    it('releases a transport that opened after the relay was disposed', async () => {

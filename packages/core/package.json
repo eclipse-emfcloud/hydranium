@@ -72,6 +72,14 @@
     "./lib/testing/playwright": {
       "types": "./lib/testing/playwright/index.d.ts",
       "default": "./lib/testing/playwright/index.js"
+    },
+    "./messages": {
+      "types": "./lib/messages/index.d.ts",
+      "default": "./lib/messages/index.js"
+    },
+    "./lib/messages": {
+      "types": "./lib/messages/index.d.ts",
+      "default": "./lib/messages/index.js"
     }
   },
   "main": "lib/index.js",

@@ -40,9 +40,11 @@ import { NodeFileSystem } from '@hydranium/core/lib/node';
 import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
+   DATA_SERVER_NOT_READY,
    DataSession,
    type DataClientProtocol,
    type DataPort,
+   type ResolvedMessage,
    type TransferDocumentSavedEvent,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol';
@@ -80,7 +82,7 @@ class FakeDataPort implements DataPort {
    /** Every `connect()` so far, so a test can assert the generation count. */
    readonly connections: DuplexConnectionPair[] = [];
    /** Everything reported through the port, for the failure-path assertions. */
-   readonly reported: Array<{ error: unknown; context: string }> = [];
+   readonly reported: Array<{ error: unknown; message: ResolvedMessage }> = [];
 
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose: Event<void> = this.disposeEmitter.event;
@@ -97,8 +99,8 @@ class FakeDataPort implements DataPort {
       return pair.right;
    }
 
-   reportError(error: unknown, context: string): void {
-      this.reported.push({ error, context });
+   reportError(error: unknown, message: ResolvedMessage): void {
+      this.reported.push({ error, message });
    }
 
    /** Simulate the host tearing the transport down — an LS restart. */
@@ -320,7 +322,10 @@ describe('order-flow data port', () => {
          // Nothing binds the wrong namespace, so the request is rejected as an
          // unhandled method rather than hanging.
          await expect(failing.connected()).rejects.toThrow();
-         expect(deadPort.reported.map(entry => entry.context)).toContain('waiting for the data server to become ready');
+         // The CODE, not the English: the code is the contract an adopter's
+         // catalogue keys on, while the default text is a fallback that may be
+         // reworded without breaking anyone.
+         expect(deadPort.reported.map(entry => entry.message.code)).toContain(DATA_SERVER_NOT_READY.code);
 
          // The retry half, which is what "and retries after it" claims: a
          // session that memoised the rejected promise would re-reject off the

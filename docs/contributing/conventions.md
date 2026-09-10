@@ -1200,6 +1200,121 @@ and the vocabulary drifts package by package once it starts.
 Comments in `examples/` follow the opposite pull: that code exists to be read
 and copied, so a worked example there is the point.
 
+## User-facing messages
+
+**The framework externalizes user-facing strings, never translates them, and
+holds no locale.** Every user-facing string carries a stable code beside its
+English text, and whoever owns the surface renders it. An adopter with their own
+i18n reads the code; an adopter without one shows the English and never learns
+any of this exists.
+
+The absence of a locale in the framework is what makes it non-conflicting. If the
+framework held one there would be two authorities, and the failure is concrete:
+one toast carrying a German adopter sentence and an English framework clause.
+
+### Which side resolves
+
+The axis is **which process knows the reading user's locale**, not "does this
+package know its host".
+
+- **Resolve-side** — the Theia client packages' *frontend* code. Use the host's
+  own mechanism directly (Theia `nls`), with the key **and** the English default
+  as inline string literals at the call site. `theia nls-extract` is a textual
+  extractor: an imported key or default throws a cross-file-reference error that
+  the tool *suppresses*, so the call is silently dropped from the catalogue and
+  nothing fails. Placeholders are positional (`{0}`), because Theia substitutes.
+- **Identity-side** — `core`, `protocol` (including its portable client tier),
+  `data-server`, `glsp-server`, and the `/node` half of a Theia package. Declare
+  with `defineMessage` and attach the identity to what you already send. Never
+  render. Placeholders are named (`{name}`), because our `interpolate`
+  substitutes.
+
+A Theia **backend** is identity-side even though it is a Theia package: `nls` is
+a process global whose localization is assigned only in the browser preload, so a
+backend holds one locale for every connected frontend, and in practice none.
+
+### Codes
+
+`hydranium/<unscoped-package>/<name>`, three `/`-separated segments, charset
+`[a-z0-9-]`. The package segment locates the declaration, so a message is
+declared in the package that raises it. `.` and `:` are forbidden — they are
+i18next's default key and namespace separators, where either silently becomes a
+nested lookup that misses. **No code may be a prefix of another**: a host
+catalogue is nested JSON and errors outright on the collision.
+
+Declarations live beside their call sites and are re-exported from the package's
+`./messages` barrel, which is enumeration rather than centralization. The barrel
+makes every code and English default public API, so renaming a code is a breaking
+change. The English is a fallback; the code is the contract.
+
+### Enumerating what exists
+
+The two layers enumerate differently, and neither needs a generated file
+committed:
+
+- **Identity-side** — the `./messages` barrel *is* the enumeration, because a
+  declaration is an exported constant carrying `.code` and `.text`. An adopter
+  whose tooling wants JSON emits it themselves with `collectMessages(barrel)`.
+- **Host-bound** — the keys are inline literals inside `nls.localize`, so the
+  host's own tool is the only way to list them:
+
+  ```
+  npx theia nls-extract -o nls.json -r packages/client-theia/src -f '**/*.ts' -l nls-extract.log
+  ```
+
+  **`-l` is mandatory, not optional.** The extractor *suppresses* its own
+  cross-file-reference errors, so a key built from an imported constant is
+  dropped from the catalogue silently and the exit code stays 0 — verified: it
+  emitted 33 keys instead of 34 and reported nothing. That log is the only
+  channel the suppressed diagnostics reach, which is also why this is not a
+  `check:` gate: a gate reading the exit status would certify an incomplete
+  catalogue. Read the log. (A *same-file* constant does resolve, so the
+  inline-literal convention is deliberately stricter than the tool requires.)
+
+### Audience triage comes first
+
+**A mechanism cannot fix a message that should not be shown.** Give a
+developer-addressed string a code and you have built a *translated* leak. So the
+first question is not "which carrier" but "who is this addressed to", and the
+answers include **rewrite** and **leave it a plain `Error`** — neither of which
+is a localization outcome. A message naming framework symbols, a DI slot or a
+wire method is addressed to whoever composes the system, and stays a plain
+`Error`.
+
+### Out of scope by policy
+
+Written once here so nobody re-audits them:
+
+- **The CLI** — developer audience, argv and stdout, no host; and its usage shape
+  is a grep contract for CI, which is a stronger reason than audience.
+- **Diagnostic report formatters and logs** — developer-facing under a different
+  externalization policy.
+- **Backend-origin dialogs** — one string, English. Localizing one needs a
+  frontend-facing RPC service, because the channel is a byte relay and its error
+  emitter carries an `Error` rather than an identity. The lint rule is scoped off
+  `src/node/` for exactly this reason.
+- **GLSP diagram errors** — no slot exists anywhere in the action protocol, so
+  English by upstream constraint. `MessageAction.details` is not a substitute: it
+  is prose populated from `cause?.toString?.()`.
+- **Product nouns are not i18n.** A framework product name leaking into an
+  adopter's UI is a branding defect wanting a configurable name (`serverName`),
+  not a catalogue entry — routing it through one would ask an adopter to
+  "translate" English into their own product name.
+
+### Fragments are not parameters
+
+A prose fragment interpolated into a sentence becomes **one code per value**, not
+one code with a parameter: the interpolated text is itself translatable, and a
+fragment dropped into a sentence the framework does not own leaves no translator
+in control of the whole. A **number** or a **technical error string** is safe as
+a parameter for the opposite reason.
+
+Where a message repeats a name the UI already owns — a command label quoted
+inside an instruction — the fix is structural, not a second catalogue entry: hold
+one field and offer the command as an action. A button labelled X that does X
+cannot send anyone hunting, so name agreement stops being load-bearing instead of
+being engineered.
+
 ## Test support
 
 Every framework package that ships reusable test scaffolding exposes it

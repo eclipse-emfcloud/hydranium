@@ -60,6 +60,7 @@ import {
    type DataPort,
    type MessageRelay,
    type PostMessageChannel,
+   type ResolvedMessage,
    createPostMessageTransport,
    relayToPostMessageChannel
 } from '@hydranium/protocol';
@@ -105,7 +106,7 @@ type Participant = 'host-extension' | 'webview' | 'other-webview';
  */
 class MessengerHopPort implements DataPort {
    readonly clientId = 'order-flow-properties-webview';
-   readonly errors: Array<{ error: unknown; context: string }> = [];
+   readonly errors: Array<{ error: unknown; message: ResolvedMessage }> = [];
    /** One entry per connection generation, so a reconnect is observable. */
    readonly generations: MessageConnection[] = [];
 
@@ -125,8 +126,8 @@ class MessengerHopPort implements DataPort {
       return connection;
    }
 
-   reportError(error: unknown, context: string): void {
-      this.errors.push({ error, context });
+   reportError(error: unknown, message: ResolvedMessage): void {
+      this.errors.push({ error, message });
    }
 
    /** What the panel's `connectionLost` notification triggers. */
@@ -173,7 +174,7 @@ function mountHop(webview: Participant = 'webview'): void {
    relay = relayToPostMessageChannel(
       createExtensionSideChannel(messengerHub.asExtension('host-extension'), webview),
       () => openSocketTransport(dataServer!.port),
-      { reportError: (error, context) => port?.reportError(error, context) }
+      { reportError: (error, reported) => port?.reportError(error, reported) }
    );
 
    // Webview: the mirror channel, and the whole host-invariant stack above it.

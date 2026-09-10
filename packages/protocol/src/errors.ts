@@ -8,6 +8,20 @@
  ********************************************************************************/
 
 import { ResponseError } from 'vscode-jsonrpc';
+import { defineMessage, type HydraniumMessageData, messageData } from './messages/primitives';
+
+/**
+ * The catalogue declaration behind {@link ConflictError}'s sentence.
+ *
+ * Its English must keep containing {@link CONFLICT_ERROR_MESSAGE_MARKER}: the
+ * marker is tier 3 of {@link isConflictError}'s ladder, and it matches on text.
+ * That tier only ever works untranslated, which is why it is the last resort
+ * behind the numeric code rather than the primary check.
+ */
+export const STALE_BASED_UPDATE = defineMessage(
+   'hydranium/protocol/stale-based-update',
+   'Stale-based update for {uri}: expected v{expected}, server is at v{actual}'
+);
 
 /**
  * Application-specific JSON-RPC error code for {@link ConflictError}.
@@ -24,7 +38,7 @@ export const CONFLICT_ERROR_CODE = 1001;
  * Structured payload carried in {@link ConflictError.data}, and the only place
  * a post-RPC caller can read the version mismatch from.
  */
-export interface ConflictErrorData {
+export interface ConflictErrorData extends HydraniumMessageData {
    readonly uri: string;
    /** The based-on version the caller authored against. */
    readonly expected: number;
@@ -65,11 +79,11 @@ export interface ConflictErrorData {
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
    constructor(uri: string, expected: number, actual: number) {
-      super(CONFLICT_ERROR_CODE, `Stale-based update for ${uri}: expected v${expected}, server is at v${actual}`, {
-         uri,
-         expected,
-         actual
-      });
+      const params = { uri, expected, actual };
+      // The identity rides alongside the typed payload rather than replacing
+      // it: this class's getters and `isConflictError`'s name check are surface
+      // an adopter may bind, so the payload widens rather than changing shape.
+      super(CONFLICT_ERROR_CODE, STALE_BASED_UPDATE.format(params), { ...params, ...messageData(STALE_BASED_UPDATE, params) });
       this.name = 'ConflictError';
       // ResponseError's constructor calls `Object.setPrototypeOf(this,
       // ResponseError.prototype)` to keep its own prototype chain intact across

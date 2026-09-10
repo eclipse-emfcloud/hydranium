@@ -107,6 +107,20 @@ const TARGETS = [
    // `./data` for the same reason as `./client` above: a webview loads it.
    { name: '@hydranium/protocol (./data)', entry: 'packages/protocol/lib/data/index.js', resolvePackages: [] },
 
+   // The message barrels, one per identity-side package. Gated rather than
+   // excused, and a webview is exactly the caller: the render happens on the side
+   // that knows the reading user's locale, so a form editor imports the barrel to
+   // map a code onto its own translation. Neutral by content today — declarations
+   // plus type-only carrier imports — which is the state a gate exists to keep.
+   { name: '@hydranium/protocol (./messages)', entry: 'packages/protocol/lib/messages/index.js', resolvePackages: [] },
+   { name: '@hydranium/core (./messages)', entry: 'packages/core/lib/messages/index.js', resolvePackages: [] },
+   { name: '@hydranium/data-server (./messages)', entry: 'packages/data-server/lib/messages/index.js', resolvePackages: [] },
+   {
+      name: '@hydranium/glsp-server (./messages)',
+      entry: 'packages/glsp-server/lib/messages/index.js',
+      resolvePackages: ['@eclipse-glsp/server']
+   },
+
    // The LSP head. Already covered transitively — `@hydranium/data-server`'s
    // gated `.` entry imports it — but named separately so a regression reports
    // against the LSP tier instead of against the data head, and because an

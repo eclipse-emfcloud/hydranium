@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import type { Event, MessageConnection } from 'vscode-jsonrpc';
+import type { ResolvedMessage } from '../messages/primitives';
 
 /**
  * The one thing a host has to supply for the data head: a live JSON-RPC
@@ -77,10 +78,16 @@ export interface DataPort {
     *
     * It exists because the alternative is worse in both directions: this tier
     * cannot import a host's UI, and swallowing the error makes a dead
-    * connection look like an empty model. `context` names what was being
-    * attempted, not where in the code it happened.
+    * connection look like an empty model.
+    *
+    * `reported` is a complete sentence plus the identity needed to render it in
+    * another language. It carries a value rather than using a protocol field
+    * because this tier does not know whether a process hop intervenes — in a
+    * webview host the render happens across one — and a `ResolvedMessage` is
+    * structured-clone safe either way. Render it with `renderFrameworkMessage`;
+    * passing no translation map yields the English.
     */
-   reportError(error: unknown, context: string): void;
+   reportError(error: unknown, reported: ResolvedMessage): void;
 
    /**
     * Fires when the host tears the transport down and the current connection

@@ -48,6 +48,14 @@
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
+    "./messages": {
+      "types": "./lib/messages/index.d.ts",
+      "default": "./lib/messages/index.js"
+    },
+    "./lib/messages": {
+      "types": "./lib/messages/index.d.ts",
+      "default": "./lib/messages/index.js"
+    },
     "./testing": {
       "types": "./lib/testing/index.d.ts",
       "default": "./lib/testing/index.js"

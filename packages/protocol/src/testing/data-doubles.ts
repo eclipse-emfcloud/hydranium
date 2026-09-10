@@ -35,6 +35,7 @@ import { Emitter, type MessageConnection } from 'vscode-jsonrpc';
 import type { DataPort } from '../client/data-port';
 import type { DataClientProtocol } from '../data/data-server-protocol';
 import type { ProjectsChangedEvent, TransferDocumentSavedEvent, TransferDocumentUpdatedEvent } from '../data/events';
+import type { ResolvedMessage } from '../messages/primitives';
 import type { Project } from '../project';
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
@@ -73,10 +74,11 @@ export interface FakeDataPort extends DataPort {
    /**
     * Every {@link DataPort.reportError} call, in order. Read from outside: this
     * is the only place a transport failure surfaces, so a test for the failure
-    * path asserts on the `context` string here rather than on a rejection that
-    * the consumer may legitimately swallow.
+    * path asserts here rather than on a rejection the consumer may legitimately
+    * swallow. Prefer asserting on `message.code`, which is stable, over
+    * `message.text`, which is the English default and may be reworded.
     */
-   readonly reported: readonly { readonly error: unknown; readonly context: string }[];
+   readonly reported: readonly { readonly error: unknown; readonly message: ResolvedMessage }[];
    /**
     * Fire {@link DataPort.onDispose} — the host tearing the transport down, a
     * language-server restart being the case that forces the event to exist.
@@ -96,7 +98,7 @@ export interface FakeDataPort extends DataPort {
  */
 export function makeFakeDataPort(options: FakeDataPortOptions): FakeDataPort {
    const connections: MessageConnection[] = [];
-   const reported: { error: unknown; context: string }[] = [];
+   const reported: { error: unknown; message: ResolvedMessage }[] = [];
    const disposeEmitter = new Emitter<void>();
    return {
       clientId: options.clientId ?? 'fake-data-port',
@@ -108,8 +110,8 @@ export function makeFakeDataPort(options: FakeDataPortOptions): FakeDataPort {
          connections.push(connection);
          return connection;
       },
-      reportError(error: unknown, context: string): void {
-         reported.push({ error, context });
+      reportError(error: unknown, message: ResolvedMessage): void {
+         reported.push({ error, message });
       },
       fireDispose(): void {
          disposeEmitter.fire(undefined);

@@ -9,10 +9,27 @@
 
 import type { MessageConnection } from 'vscode-jsonrpc';
 import { DATA_CLIENT_PROTOCOL_METHODS, DATA_SERVER_WIRE_PREFIX, type DataClientProtocol, type DataServerProtocol } from '../data';
+import { defineMessage, describeError, resolve } from '../messages/primitives';
 import { type RpcProxy, createRpcProxy } from '../rpc';
 import type { TransferDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 import type { DataPort } from './data-port';
+
+/**
+ * The transport never opened. A complete sentence rather than a fragment: a
+ * fragment is nested inside a sentence the framework does not own, so no
+ * translator controls the whole and the composition cannot be made to read
+ * correctly in every language.
+ */
+export const DATA_SERVER_CONNECT_FAILED = defineMessage(
+   'hydranium/protocol/data-server-connect-failed',
+   'Could not connect to the data server: {detail}'
+);
+
+export const DATA_SERVER_NOT_READY = defineMessage(
+   'hydranium/protocol/data-server-not-ready',
+   'The data server did not become ready: {detail}'
+);
 
 /** Options for {@link DataSession}. */
 export interface DataSessionOptions {
@@ -168,7 +185,9 @@ export class DataSession<TTransfer extends TransferElement> {
       // Rejection is reported here rather than left to float: an unhandled
       // rejection on a connection promise is the failure mode that reads as
       // "the model is empty" instead of "the transport never opened".
-      connection.catch((error: unknown) => this.port.reportError(error, 'connecting to the data server'));
+      connection.catch((error: unknown) =>
+         this.port.reportError(error, resolve(DATA_SERVER_CONNECT_FAILED, { detail: describeError(error) }))
+      );
       const server = createRpcProxy<DataServerProtocol<TTransfer>, DataClientProtocol<TTransfer>>(connection, {
          methodNamespace: this.methodNamespace,
          localTarget: this.client,
@@ -189,7 +208,7 @@ export class DataSession<TTransfer extends TransferElement> {
          if (this.generation === generation) {
             this.generation = undefined;
          }
-         this.port.reportError(error, 'waiting for the data server to become ready');
+         this.port.reportError(error, resolve(DATA_SERVER_NOT_READY, { detail: describeError(error) }));
          throw error;
       }
    }

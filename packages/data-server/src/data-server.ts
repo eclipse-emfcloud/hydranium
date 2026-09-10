@@ -9,12 +9,15 @@
 
 import {
    createRpcProxy,
+   defineMessage,
    DisposableCollection,
    isDocumentSource,
    isElementSource,
    isSyntheticSource,
+   messageError,
    ReferenceSource,
    type CloseModelArgs,
+   type HydraniumResponseError,
    type Disposable,
    type ElementSource,
    type FindNextNameArgs,
@@ -52,6 +55,28 @@ import {
 } from '@hydranium/protocol/data';
 import { REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
+
+/**
+ * Raised when a profiling command arrives with no capture running.
+ *
+ * A `ResponseError` rather than a plain `Error` so the identity survives the
+ * hop: an unwrapped throw inside an RPC handler reaches the client as a generic
+ * internal error, which carries no code for a caller to switch on and no
+ * envelope for a translating host to read.
+ */
+export const NO_ACTIVE_PROFILE = defineMessage(
+   'hydranium/data-server/no-active-profile',
+   'No profiling capture is active; call startProfiling first.'
+);
+
+/**
+ * The JSON-RPC code, unrelated to the catalogue code above: this one is numeric,
+ * survives reconstruction and is what a caller switches on.
+ */
+export const NO_ACTIVE_PROFILE_CODE = 1002;
+
+export const noActiveProfileError = (): HydraniumResponseError => messageError(NO_ACTIVE_PROFILE_CODE, NO_ACTIVE_PROFILE);
+
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './diagnostics-provider.js';
 import type {
    ClientTextDocumentChangeEvent,
@@ -1243,7 +1268,7 @@ export class DataServer<
 
    async stopProfiling(args: StopProfilingArgs): Promise<string> {
       if (!this.activeProfile) {
-         throw new Error('No profiling capture is active; call startProfiling first.');
+         throw noActiveProfileError();
       }
       const capture = this.activeProfile;
       this.activeProfile = undefined;

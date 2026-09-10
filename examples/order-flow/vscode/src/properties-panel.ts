@@ -48,7 +48,7 @@ import {
    ORDER_FLOW_PANEL_SET_DOCUMENT,
    type OrderFlowPanelDocument
 } from './properties-panel-protocol';
-import type { MessageRelay } from '@hydranium/protocol';
+import { renderFrameworkMessage, type MessageRelay } from '@hydranium/protocol';
 import * as vscode from 'vscode';
 // Type-only: the panel receives the shell's messenger instead of constructing
 // one, so nothing here reaches the value.
@@ -273,8 +273,13 @@ export class OrderFlowPropertiesPanel {
          ),
          messenger.onNotification(
             ORDER_FLOW_PANEL_REPORT_ERROR,
-            error => {
-               void vscode.window.showErrorMessage(`Order Flow properties — ${error.context}: ${error.message}`);
+            failure => {
+               // The host renders, and nothing here composes: the sentence
+               // arrives whole, so wrapping it would nest the webview's clause
+               // inside one this shell wrote and leave no translator in control.
+               // No translation map is passed because this example ships no
+               // catalogue, which is how an adopter without i18n opts out.
+               void vscode.window.showErrorMessage(renderFrameworkMessage(failure.reported));
             },
             { sender: participant }
          ),
@@ -286,8 +291,8 @@ export class OrderFlowPropertiesPanel {
          webview: participant,
          findPort: this.options.findPort,
          onWebviewDisposed: listener => panel.onDidDispose(listener),
-         reportError: (error, context) => {
-            void vscode.window.showErrorMessage(`Order Flow properties — ${context}: ${describe(error)}`);
+         reportError: (error, reported) => {
+            void vscode.window.showErrorMessage(renderFrameworkMessage(reported));
          }
       });
 
@@ -395,11 +400,6 @@ function toPanelDocument(document: vscode.TextDocument | undefined): OrderFlowPa
 /** The active editor's document, if it is one of ours — the restore fallback. */
 function activeOrderFlowDocument(): OrderFlowPanelDocument | undefined {
    return toPanelDocument(vscode.window.activeTextEditor?.document);
-}
-
-/** Flatten an unknown throw for a user-facing message. */
-function describe(error: unknown): string {
-   return error instanceof Error ? error.message : String(error);
 }
 
 /** A per-load CSP nonce. Not a secret — it only has to be unguessable per document. */
