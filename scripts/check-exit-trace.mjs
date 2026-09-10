@@ -211,7 +211,24 @@ for (const testCase of CASES) {
 // where the recorder was inert for every process that mattered: turbo 2's strict
 // environment mode had dropped `HYDRANIUM_EXIT_TRACE_DIR`, and nothing here ran
 // under turbo. These two cases are the ones that would have caught it.
-const REPO_TURBO_CONFIG = JSON.parse(readFileSync(join(REPO_ROOT, 'turbo.json'), 'utf8'));
+const TURBO = join(REPO_ROOT, 'node_modules/.bin/turbo');
+
+// That turbo can PARSE the real file. Nothing else here does: the probe below
+// builds a scratch config from one value, and `JSON.parse` accepts keys turbo's
+// schema rejects — a `"//key"` comment among them, which takes down every task
+// in the repository rather than only this feature. `--dry` validates without
+// executing.
+try {
+   execFileSync(TURBO, ['run', 'build', '--dry=json'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+} catch (error) {
+   const detail = String(error.stderr || error.stdout || error.message || error);
+   failures.push(`turbo cannot parse turbo.json: ${detail.replace(/\s+/g, ' ').slice(0, 300)}`);
+}
+
+// turbo.json is JSONC. Only WHOLE-line comments are stripped: a blanket `//`
+// strip would cut the `$schema` URL in half, and the truncated value would still
+// parse.
+const REPO_TURBO_CONFIG = JSON.parse(readFileSync(join(REPO_ROOT, 'turbo.json'), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
 
 // The declaration, read from the real config rather than a copy of it, because
 // deleting the line is the cheap way for this to regress.
@@ -245,8 +262,7 @@ if (!(REPO_TURBO_CONFIG.globalPassThroughEnv ?? []).includes('HYDRANIUM_EXIT_TRA
             scripts: { probe: 'node -e "process.stdout.write(String(process.env.HYDRANIUM_EXIT_TRACE_DIR))"' }
          })
       );
-      const turbo = join(REPO_ROOT, 'node_modules/.bin/turbo');
-      const stdout = execFileSync(turbo, ['run', 'probe', '--ui=stream'], {
+      const stdout = execFileSync(TURBO, ['run', 'probe', '--ui=stream'], {
          cwd: scratch,
          encoding: 'utf8',
          env: { ...process.env, HYDRANIUM_EXIT_TRACE_DIR: 'DELIVERED' },

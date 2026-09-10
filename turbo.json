@@ -1,7 +1,10 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "//globalPassThroughEnv": "turbo 2 defaults to a STRICT environment mode: a task receives NODE_OPTIONS and turbo's other built-in system variables, and NOTHING else that is not declared. An undeclared variable is dropped in silence, which is not a hypothetical here — the exit recorder wired into ci.yml's gate step reads this one, and without this line it loaded inside every task (NODE_OPTIONS does survive) and then went inert, so a red Windows run recorded only the two processes running OUTSIDE turbo and none of the ones that died inside it. passThroughEnv rather than globalEnv deliberately: globalEnv would fold the value into every task's hash, so setting it at all would bust the entire cache. The recorder also falls back to an `exit-trace` directory located from its own path, so losing this line degrades rather than silently disarms it; the self-test asserts both routes.",
+  // Strict env mode is turbo 2's default and drops any undeclared variable, so
+  // without this the gate's exit recorder loads inside every task and goes
+  // inert. Not globalEnv, which would hash the value and bust the cache. A
+  // line comment, because turbo rejects an unknown `"//key"` outright.
   "globalPassThroughEnv": ["HYDRANIUM_EXIT_TRACE_DIR"],
   "globalDependencies": [
     "tsconfig.base.json",
