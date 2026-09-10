@@ -160,16 +160,28 @@ export function serverLogSpecName(file: string): string {
  * Rename each `<token>.log` (backend) and `<token>.browser.log` (forwarded
  * browser console) to the spec name recorded in its `<token>.spec` sidecar
  * (written by {@link markServerLog}), then delete the sidecar. Colliding names —
- * a spec that opened more than one workspace — get a `-2`, `-3`, … suffix. Token
- * logs without a sidecar are left untouched. Run once, after all server processes
- * have exited (e.g. a reporter's `onEnd`). Best-effort.
+ * a spec that opened more than one workspace — get a `-2`, `-3`, … suffix. Run
+ * once, after all server processes have exited (e.g. a reporter's `onEnd`).
+ * Best-effort.
+ *
+ * Returns the workspace tokens left UNATTRIBUTED — a log the capture wrote that
+ * no test claimed, because that spec never reached
+ * {@link markServerLog} (no `serverLog` fixture, no `beforeEach` call).
+ *
+ * **Returned rather than ignored, because the unattributed state is the
+ * misleading one.** Such a log still exists, still has content, and is named by
+ * an opaque token with no test boundaries in it — so a capture run that covered
+ * nothing looks exactly like one that covered everything, and the logs are
+ * there to be read. A caller that can warn should warn.
  */
-export function renameServerLogs(dir: string): void {
+export function renameServerLogs(dir: string): string[] {
    let entries: string[];
    try {
       entries = readdirSync(dir);
    } catch {
-      return;
+      // An unreadable capture dir has nothing to report — including nothing
+      // unattributed, since no log was observed at all.
+      return [];
    }
    // Per suffix (`.log`, `.browser.log`) a `taken` set guards collisions, so the
    // backend and browser logs for one spec share the same friendly base name.
@@ -190,6 +202,11 @@ export function renameServerLogs(dir: string): void {
          // ignore
       }
    };
+   // Every token the capture produced a backend log for, so the ones no sidecar
+   // claims can be reported rather than silently left behind.
+   const unattributed = new Set(
+      entries.filter(entry => entry.endsWith('.log') && !entry.endsWith('.browser.log')).map(entry => entry.slice(0, -'.log'.length))
+   );
    for (const entry of entries) {
       if (!entry.endsWith('.spec')) {
          continue;
@@ -210,9 +227,11 @@ export function renameServerLogs(dir: string): void {
       if (!name) {
          continue;
       }
+      unattributed.delete(token);
       rename(token, name, '.log');
       rename(token, name, '.browser.log');
    }
+   return [...unattributed];
 }
 
 /**

@@ -13,7 +13,7 @@ import { DATA_SERVER_CONNECT_FAILED } from '@hydranium/protocol/lib/messages';
 import * as coreMessages from '@hydranium/core/lib/messages';
 import * as orderFlowMessages from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import * as orderFlowServerMessages from '@hydranium/example-order-flow-server/lib/messages';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -29,18 +29,21 @@ import { describe, expect, it } from 'vitest';
  */
 
 const CATALOGUE = path.join(__dirname, '..', 'src', 'nls', 'order-flow.de.json');
-const HOST_SOURCE = path.join(
-   __dirname,
-   '..',
-   '..',
-   '..',
-   '..',
-   'packages',
-   'client-theia',
-   'src',
-   'browser',
-   'memory-diagnostics-contribution.ts'
-);
+/**
+ * The whole tree, not the one file that happens to hold every host-bound key
+ * today. Scoping this to a single source encodes an assumption nothing states
+ * and nothing enforces, and it fails in the confusing direction: a key declared
+ * in a SECOND file and translated here would be reported as naming no real key,
+ * which reads as a typo in the catalogue rather than as a stale test.
+ */
+const HOST_SOURCE_ROOT = path.join(__dirname, '..', '..', '..', '..', 'packages', 'client-theia', 'src');
+
+function readHostSources(): { text: string; fileCount: number } {
+   const files = readdirSync(HOST_SOURCE_ROOT, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.ts'))
+      .map(entry => path.join(entry.parentPath, entry.name));
+   return { text: files.map(file => readFileSync(file, 'utf-8')).join('\n'), fileCount: files.length };
+}
 
 /** Theia joins nested catalogue keys with `/`, which is what the codes use. */
 function flatten(node: Record<string, unknown>, prefix = ''): Record<string, string> {
@@ -84,10 +87,14 @@ describe('the German catalogue', () => {
       // The host layer's keys are inline literals inside `nls.localize`, so the
       // source is the only place they exist — matched textually here for the same
       // reason the extractor does it textually.
-      const source = readFileSync(HOST_SOURCE, 'utf-8');
+      const { text, fileCount } = readHostSources();
+      // A glob that has stopped matching would make every assertion below pass
+      // against an empty string, which is the failure a widened scan invites and
+      // the reason the count is asserted rather than assumed.
+      expect(fileCount).toBeGreaterThan(1);
       const hostKeys = Object.keys(translations).filter(key => key.startsWith('hydranium/client-theia/'));
       expect(hostKeys.length).toBeGreaterThan(0);
-      expect(hostKeys.filter(key => !source.includes(`'${key}'`))).toEqual([]);
+      expect(hostKeys.filter(key => !text.includes(`'${key}'`))).toEqual([]);
    });
 
    it('renders a framework message into German through the host-neutral helper', () => {

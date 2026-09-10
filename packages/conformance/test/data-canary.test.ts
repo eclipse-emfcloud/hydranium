@@ -34,6 +34,7 @@ const INVALID_DIAGNOSTICS = 'getModelDocument(invalid) reports at least one diag
 const DIAGNOSTIC_PARAMS = 'a diagnostic carrying a framework message code also carries its params';
 const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
+const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -88,12 +89,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({})).toEqual([]);
    });
 
-   it('plans exactly the eight checks the must-fail cases below name', () => {
+   it('plans exactly the nine checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(8);
+      expect(titles).toHaveLength(9);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -102,9 +103,10 @@ describe('the /data battery discriminates', () => {
          INVALID_DIAGNOSTICS,
          DIAGNOSTIC_PARAMS,
          EDIT_REFLECTED,
-         SUBSCRIPTION
+         SUBSCRIPTION,
+         FOLDER_CANDIDATES
       ];
-      expect(matching(titles, covered)).toHaveLength(8);
+      expect(matching(titles, covered)).toHaveLength(9);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -126,7 +128,12 @@ describe('the /data battery discriminates', () => {
       },
       { label: 'an edit acknowledged but not stored', defects: { ignoreEdits: true }, expected: [EDIT_REFLECTED] },
       { label: 'a subscription that registers nothing', defects: { silentSubscriptions: true }, expected: [SUBSCRIPTION] },
-      { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] }
+      { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] },
+      {
+         label: 'a picker answering nothing for a source whose URI names no file',
+         defects: { noCandidatesAtFolder: true },
+         expected: [FOLDER_CANDIDATES]
+      }
    ];
 
    for (const canary of canaries) {

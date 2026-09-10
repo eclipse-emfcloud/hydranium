@@ -35,7 +35,17 @@
  * cost a full server implementation to reproduce over a wire.
  */
 
-import type { CloseModelArgs, OpenModelArgs, Project, TransferDiagnostic, TransferDocument, TransferElement } from '@hydranium/protocol';
+import { isDocumentSource, isSyntheticSource } from '@hydranium/protocol';
+import type {
+   CloseModelArgs,
+   OpenModelArgs,
+   Project,
+   ReferenceCandidate,
+   ReferenceContext,
+   TransferDiagnostic,
+   TransferDocument,
+   TransferElement
+} from '@hydranium/protocol';
 import type {
    GetModelDocumentArgs,
    GetProjectForUriArgs,
@@ -126,6 +136,13 @@ export interface CanaryDefects {
    readonly silentSubscriptions?: boolean;
    /** Updates are fanned out regardless of the subscription table. */
    readonly notifiesBeforeSubscribe?: boolean;
+   /**
+    * A synthetic source whose URI names no file answers `[]` instead of the
+    * project's candidates — the create-dialog defect: a head that routes only
+    * by URI extension has nothing to route a folder on, so the picker comes
+    * back empty and the dialog never opens.
+    */
+   readonly noCandidatesAtFolder?: boolean;
 }
 
 interface StoredDocument {
@@ -152,6 +169,43 @@ export class CanaryDataServer {
 
    get proxy(): this {
       return this;
+   }
+
+   /** The opt-in reference surface — the same object, as the real harness does. */
+   get references(): this {
+      return this;
+   }
+
+   /**
+    * Answers the one candidate {@link CANARY_FIXTURE} expects, for a source at
+    * any URI — including one naming no file, which is the property under test.
+    * Under `noCandidatesAtFolder` it answers only for a source whose URI has a
+    * file extension, which is exactly how a URI-extension-routed head behaves.
+    */
+   async findReferenceCandidates(ctx: ReferenceContext): Promise<ReferenceCandidate[]> {
+      // Only a document/synthetic source carries a URI; an id-based
+      // `ElementSource` has none, and answering it is not what this canary is
+      // for, so the empty string routes it down the no-file branch.
+      const uri = isDocumentSource(ctx.source) || isSyntheticSource(ctx.source) ? ctx.source.uri : '';
+      const namesAFile = /\.[^./]+$/.test(uri);
+      if (this.defects.noCandidatesAtFolder && !namesAFile) {
+         return [];
+      }
+      return [{ label: CANARY_CANDIDATE, value: `${CANARY_CANDIDATE}_id`, uri: 'file:///one.x', type: 'CanaryTarget' }];
+   }
+
+   /**
+    * Present to satisfy `ReferenceServerProtocol`, and rejecting rather than
+    * answering: no check calls it, so a check that silently grows a dependency
+    * on it surfaces here as a failure instead of passing against a fake.
+    */
+   async resolveReference(): Promise<never> {
+      throw new Error('the canary server does not implement resolveReference');
+   }
+
+   /** Same contract as {@link resolveReference}: no check calls it. */
+   async findNextName(): Promise<never> {
+      throw new Error('the canary server does not implement findNextName');
    }
 
    dispose(): void {
@@ -253,8 +307,21 @@ export class CanaryDataServer {
  * root through {@link isCanaryRoot} rather than trusting the shape, because
  * the kit hands it `unknown`.
  */
+/** The single candidate the canary's reference surface offers. */
+export const CANARY_CANDIDATE = 'CanaryTarget';
+
 export const CANARY_FIXTURE: LanguageFixture = {
    valid: { uri: 'file:///one.x', languageId: 'x', text: VALID_TEXT },
    invalid: { uri: 'file:///two.x', languageId: 'x', text: INVALID_TEXT },
-   edit: { to: EDITED_TEXT, expect: root => isCanaryRoot(root) && root.text === EDITED_TEXT }
+   edit: { to: EDITED_TEXT, expect: root => isCanaryRoot(root) && root.text === EDITED_TEXT },
+   // An explicit folder rather than the derived default: this fixture's `valid`
+   // sits at the URI root, so deriving a parent from it yields the degenerate
+   // `file://`. The derivation itself is covered where a real workspace makes it
+   // meaningful (the order-flow example), not here.
+   referenceQuery: {
+      type: 'CanarySource',
+      property: 'target',
+      folderUri: 'file:///folder',
+      expectCandidate: CANARY_CANDIDATE
+   }
 };

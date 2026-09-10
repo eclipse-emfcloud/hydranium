@@ -24,7 +24,6 @@ import {
    type AstNodeLocator,
    AstUtils,
    DefaultScopeProvider,
-   type LangiumDocuments,
    MapScope,
    type ReferenceInfo,
    type Scope,
@@ -38,6 +37,7 @@ import {
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
+import { type HydraniumDocumentRegistry } from '../workspace/langium-documents.js';
 import { type ScopeExtensionService } from './scope-extension-service.js';
 import { isTieredDescription } from './scoped-ast-node-description.js';
 
@@ -143,7 +143,7 @@ export interface ScopeContext {
  * `reference-candidate-provider.ts` module.
  */
 export class HydraniumScopeProvider extends DefaultScopeProvider {
-   protected readonly langiumDocuments: LangiumDocuments;
+   protected readonly langiumDocuments: HydraniumDocumentRegistry;
    protected readonly astNodeLocator: AstNodeLocator;
    protected readonly scopeExtensionService: ScopeExtensionService;
    protected readonly options: HydraniumScopeProviderOptions;
@@ -586,17 +586,31 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
-    * Build a transient AST-node stub for a {@link SyntheticSource} request.
-    * Default: looks up the document via `LangiumDocuments` and uses its parse
-    * root as the container; returns `undefined` if the document isn't loaded.
-    * Consumers that need to materialise an empty document on demand (e.g.
-    * to query the scope before a file exists) override this.
+    * Build a transient AST-node stub for a {@link SyntheticSource} request: a
+    * node of the requested type, contained by the document at `source.uri`.
+    *
+    * **The container is materialised when no document is loaded there**, which
+    * is the case the source type exists for — a `SyntheticSource` names a node
+    * that does not exist yet, and the create-element flow asks at the FOLDER
+    * the file is about to be written into. Abstaining there would answer an
+    * empty candidate list, which a client cannot tell from "nothing matches".
+    *
+    * The stand-in parses under THIS provider's grammar, because a folder URI
+    * carries no extension for the routing ladder to end on and this provider is
+    * bound per grammar. Reaching for `createEmptyDocument(uri)` without the id
+    * instead fails inside the parse, on an empty extension rather than on the
+    * URI.
+    *
+    * The materialised document is unregistered and transient; see
+    * `createEmptyDocument`. Overriding is still open to a consumer whose
+    * "container" is an inner element rather than the parse root, or one that
+    * deliberately declines to answer for an absent document.
     */
    protected resolveSyntheticSource(source: SyntheticSource): AstNode | undefined {
-      const document = this.langiumDocuments.getDocument(UriUtils.toUri(source.uri));
-      if (!document) {
-         return undefined;
-      }
+      const uri = UriUtils.toUri(source.uri);
+      const document =
+         this.langiumDocuments.getDocument(uri) ??
+         this.langiumDocuments.createEmptyDocument(uri, this.services.LanguageMetaData.languageId);
       return { $type: source.type, $container: document.parseResult.value };
    }
 

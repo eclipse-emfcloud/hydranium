@@ -11,6 +11,7 @@ import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type Langi
 import { defineMessage } from '@hydranium/protocol';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from './document-uri-policy.js';
+import { type HydraniumLangiumDocumentFactory } from './hydranium-langium-document-factory.js';
 
 /**
  * The document a caller asked to load is not there.
@@ -23,6 +24,19 @@ import { type DocumentUriPolicy } from './document-uri-policy.js';
 export const NO_LOADABLE_CONTENT = defineMessage('hydranium/core/no-loadable-content', 'No loadable content for {uri}');
 
 /**
+ * A stand-in was asked for at a URI that routes to no grammar, and no language
+ * id was given to route it instead.
+ *
+ * User-facing, and raised BEFORE the parse: left to Langium's ladder the same
+ * condition surfaces as `no services for the extension ''`, which names neither
+ * the URI nor the argument that would have answered.
+ */
+export const NO_LANGUAGE_FOR_STAND_IN = defineMessage(
+   'hydranium/core/no-language-for-stand-in',
+   'No grammar routes {uri}; pass a languageId to say which one the stand-in should parse with'
+);
+
+/**
  * The registry surface the framework adds on top of Langium's
  * {@link LangiumDocuments}. Declared separately from the implementing class so
  * the shared-services slot can narrow to it: the class takes the services tree
@@ -30,7 +44,7 @@ export const NO_LOADABLE_CONTENT = defineMessage('hydranium/core/no-loadable-con
  * depend on itself.
  */
 export interface HydraniumDocumentRegistry extends LangiumDocuments {
-   createEmptyDocument(uri: URI): LangiumDocument<AstNode>;
+   createEmptyDocument(uri: URI, languageId?: string): LangiumDocument<AstNode>;
 }
 
 /**
@@ -58,6 +72,13 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
    /** Document-identity seam, shared with the text store, event filters, and builder. */
    protected readonly uriPolicy: DocumentUriPolicy;
 
+   /**
+    * Narrows the inherited Langium factory field to the framework's, so the
+    * language-explicit `fromStringInLanguage` below needs no cast. The
+    * framework's shared module binds that class.
+    */
+   declare protected readonly langiumDocumentFactory: HydraniumLangiumDocumentFactory;
+
    constructor(protected override readonly services: ServerSharedServicesMinimal) {
       super(services);
       this.uriPolicy = services.workspace.DocumentUriPolicy;
@@ -65,8 +86,9 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
 
    /**
     * Build a transient document for `uri` by parsing empty text with the
-    * grammar `uri` routes to, so the root is that language's entry type with
-    * every containment list initialised.
+    * grammar `languageId` names, or the one `uri` routes to when it is
+    * omitted, so the root is that language's entry type with every containment
+    * list initialised.
     *
     * For callers that need a document at a URI with no content on disk — the
     * scope provider querying before a file exists is the case it was added for.
@@ -74,6 +96,15 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
     * a document behind a caller that asked to LOAD one hands back something
     * that silently is not the file, whereas calling this is a caller saying it
     * wants a stand-in.
+    *
+    * **Pass `languageId` whenever the URI names no file.** The create-element
+    * flow this exists for asks at the DIRECTORY a file is about to be written
+    * into, and a directory URI has no extension for the routing ladder to end
+    * on — so omitting the id there fails inside the parse, on an empty
+    * extension rather than on the URI. A caller in that position always knows
+    * its language: {@link HydraniumScopeProvider} is bound per grammar, and a
+    * request that names no document at all still carries the AST type
+    * `ExtendedServiceRegistry.soleServicesByType` routes on.
     *
     * The result is not registered, so nothing downstream can see it, and
     * `LangiumDocumentFactory.update` would read from disk. It is a probe, not a
@@ -86,7 +117,16 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
     * and it is kept: `AstReflection.isComplete` is `false` for such a root
     * however it is built, so the error states the same thing.
     */
-   createEmptyDocument(uri: URI): LangiumDocument<AstNode> {
+   createEmptyDocument(uri: URI, languageId?: string): LangiumDocument<AstNode> {
+      if (languageId !== undefined) {
+         return this.langiumDocumentFactory.fromStringInLanguage('', uri, languageId);
+      }
+      if (!this.services.ServiceRegistry.getServicesFor(uri)) {
+         // Reported here rather than left to the parse, which ends on the empty
+         // extension and so names neither the URI nor the id that would have
+         // answered.
+         throw new Error(NO_LANGUAGE_FOR_STAND_IN.format({ uri: uri.toString() }));
+      }
       // The two-argument overload is synchronous; passing a cancellation token
       // selects the promise-returning one, which this contract cannot await.
       return this.langiumDocumentFactory.fromString('', uri);

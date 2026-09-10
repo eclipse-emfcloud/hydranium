@@ -10,6 +10,8 @@
 import { codiconCSSString } from '@eclipse-glsp/client';
 import { GLSPDiagramManager } from '@eclipse-glsp/theia-integration';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
+import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/browser';
+import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { injectable } from '@theia/core/shared/inversify';
 
 /**
@@ -63,5 +65,32 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
 
    get label(): string {
       return this.managerLabel;
+   }
+
+   /**
+    * Drops a `selection` key that is present but `undefined` before the base
+    * class reads it.
+    *
+    * Without this, opening a diagram from Theia's file picker throws and the
+    * editor never leaves "Loading diagram…". Upstream's
+    * `OptionsWithSelection.is` tests `'selection' in options`, which is true for
+    * a key explicitly set to `undefined`, and the branch it guards then calls
+    * `Object.keys` on that value. Theia's own `QuickFileOpenService` always sets
+    * the key — its `buildOpenerOptions` returns `{ selection: range }`, and
+    * `range` is `undefined` unless the query carried a `:line:column` suffix —
+    * so the crash is reached by the ordinary act of opening a diagram by name.
+    *
+    * Normalising the OPTIONS rather than rebinding
+    * `TheiaOpenerOptionsNavigationService`: the service is shared by every
+    * diagram type in the container, so replacing it would make one adopter's
+    * fix silently global, and the guard belongs where the value enters rather
+    * than where it is consumed. The base method stays the single implementation.
+    */
+   protected override handleNavigations(widget: GLSPDiagramWidget, options?: WidgetOpenerOptions): boolean {
+      if (options && 'selection' in options && (options as { selection?: unknown }).selection === undefined) {
+         const { selection: _dropped, ...rest } = options as WidgetOpenerOptions & { selection?: unknown };
+         return super.handleNavigations(widget, rest);
+      }
+      return super.handleNavigations(widget, options);
    }
 }

@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
 import { HydraniumLangiumDocuments } from '@hydranium/core';
+import { DomainLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import { makeScratchWorkspaceHarness, makeServices, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 /** A URI that routes to a language but names no file, so nothing can be loaded. */
@@ -51,6 +52,29 @@ describe('LangiumDocuments over three real grammars', () => {
       expect(documents.createEmptyDocument(absentUri('domain')).parseResult.value.$type).toBe('DomainModel');
       expect(documents.createEmptyDocument(absentUri('process')).parseResult.value.$type).toBe('ProcessModel');
       expect(documents.createEmptyDocument(absentUri('layout')).parseResult.value.$type).toBe('LayoutModel');
+   });
+
+   it('builds a stand-in at a folder URI when told which grammar to parse with', () => {
+      const { shared } = makeServices();
+      const documents = shared.workspace.LangiumDocuments;
+      // The case the contract names: a create-element flow queries the scope at
+      // the FOLDER a file is about to be written into, so its URI names no file
+      // and carries no extension. Routing by extension has nothing to route on,
+      // and picking for the caller would be a guess across three grammars — so
+      // the caller, which knows the language it is resolving in, says.
+      const folder = URI.file('/nowhere/orders');
+
+      expect(documents.createEmptyDocument(folder, ProcessLanguageMetaData.languageId).parseResult.value.$type).toBe('ProcessModel');
+      expect(documents.createEmptyDocument(folder, DomainLanguageMetaData.languageId).parseResult.value.$type).toBe('DomainModel');
+   });
+
+   it('names the folder URI it cannot route, rather than reporting an empty extension', () => {
+      const { shared } = makeServices();
+
+      // Left to the extension ladder, this surfaces as "no services for the
+      // extension ''" from deep inside the parse — which names neither the URI
+      // nor what the caller should have done.
+      expect(() => shared.workspace.LangiumDocuments.createEmptyDocument(URI.file('/nowhere/orders'))).toThrow(/nowhere\/orders/);
    });
 
    it('initialises containment lists, which a hand-built root would leave undefined', () => {

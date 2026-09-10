@@ -1240,7 +1240,9 @@ backend holds one locale for every connected frontend, and in practice none.
 declared in the package that raises it. `.` and `:` are forbidden — they are
 i18next's default key and namespace separators, where either silently becomes a
 nested lookup that misses. **No code may be a prefix of another**: a host
-catalogue is nested JSON and errors outright on the collision.
+catalogue is nested JSON, so the longer code needs an object where the shorter
+one already put a string. The extractor does not error on that — it drops the
+longer key and exits 0, which is why `check:nls-extract` exists.
 
 Declarations live beside their call sites and are re-exported from the package's
 `./messages` barrel, which is enumeration rather than centralization. The barrel
@@ -1263,13 +1265,20 @@ committed:
   ```
 
   **`-l` is mandatory, not optional.** The extractor *suppresses* its own
-  cross-file-reference errors, so a key built from an imported constant is
-  dropped from the catalogue silently and the exit code stays 0 — verified: it
-  emitted 33 keys instead of 34 and reported nothing. That log is the only
-  channel the suppressed diagnostics reach, which is also why this is not a
-  `check:` gate: a gate reading the exit status would certify an incomplete
-  catalogue. Read the log. (A *same-file* constant does resolve, so the
-  inline-literal convention is deliberately stricter than the tool requires.)
+  diagnostics, so a key it cannot place is dropped from the catalogue silently
+  while the exit code stays 0 — measured: 33 keys instead of 34, and nothing
+  reported. Two shapes do this: a key built from a constant imported from
+  another module, and a key that is another key's prefix. That log is the only
+  channel the suppressed messages reach, so a gate reading the exit status would
+  certify an incomplete catalogue. Read the log.
+
+  `check:nls-extract` runs exactly this over `packages/*/src` on every `check`,
+  as one extraction rather than one per package — a prefix collision is a
+  property of the whole catalogue, so two packages whose keys collide each
+  extract cleanly alone. A clean extraction writes no log file at all, which is
+  the signal it reads. (A *same-file* constant does resolve, so the
+  inline-literal convention is deliberately stricter than the tool requires, and
+  the gate cannot enforce that half.)
 
 ### Audience triage comes first
 
