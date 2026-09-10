@@ -59,8 +59,8 @@ declared peer dependencies are:
 | Peer                  | Range         |
 | --------------------- | ------------- |
 | `@hydranium/protocol` | `^1.0.0-next` |
-| `@theia/core`         | `^1.71.0`     |
-| `@theia/output`       | `^1.71.0`     |
+| `@theia/core`         | `^1.70.0`     |
+| `@theia/output`       | `^1.70.0`     |
 | `inversify`           | `^6.0.0`      |
 
 `@theia/output` is easy to miss: the memory-diagnostics commands and the channel

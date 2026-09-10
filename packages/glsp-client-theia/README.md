@@ -72,10 +72,10 @@ hydranium GLSP server. The declared peer dependencies are:
 | `@eclipse-glsp/theia-integration` | `^2.6.0`      |
 | `@hydranium/client-theia`         | `^1.0.0-next` |
 | `@hydranium/protocol`             | `^1.0.0-next` |
-| `@theia/core`                     | `^1.71.0`     |
-| `@theia/output`                   | `^1.71.0`     |
-| `@theia/process`                  | `^1.71.0`     |
-| `@theia/workspace`                | `^1.71.0`     |
+| `@theia/core`                     | `^1.70.0`     |
+| `@theia/output`                   | `^1.70.0`     |
+| `@theia/process`                  | `^1.70.0`     |
+| `@theia/workspace`                | `^1.70.0`     |
 | `inversify`                       | `^6.0.0`      |
 | `snabbdom`                        | `^3.5.1`      |
 

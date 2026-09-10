@@ -67,8 +67,8 @@ running hydranium data server to connect to. The declared peer dependencies are:
 | `@hydranium/client-theia` | `^1.0.0-next`        |
 | `@hydranium/core`         | `^1.0.0-next`        |
 | `@hydranium/protocol`     | `^1.0.0-next`        |
-| `@theia/core`             | `^1.71.0`            |
-| `@theia/workspace`        | `^1.71.0`            |
+| `@theia/core`             | `^1.70.0`            |
+| `@theia/workspace`        | `^1.70.0`            |
 | `inversify`               | `^6.0.0`             |
 | `vscode-jsonrpc`          | `^8.0.0 \|\| ^9.0.0` |
 

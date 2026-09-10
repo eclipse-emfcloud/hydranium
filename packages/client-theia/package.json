@@ -71,8 +71,8 @@
   },
   "devDependencies": {
     "@hydranium/protocol": "1.0.0-next",
-    "@theia/core": "^1.71.0",
-    "@theia/output": "^1.71.0",
+    "@theia/core": "^1.70.0",
+    "@theia/output": "^1.70.0",
     "@types/node": "^22.0.0",
     "inversify": "6.2.2",
     "reflect-metadata": "0.2.2",
@@ -81,8 +81,8 @@
   },
   "peerDependencies": {
     "@hydranium/protocol": "^1.0.0-next",
-    "@theia/core": "^1.71.0",
-    "@theia/output": "^1.71.0",
+    "@theia/core": "^1.70.0",
+    "@theia/output": "^1.70.0",
     "inversify": "^6.0.0"
   },
   "engines": {
