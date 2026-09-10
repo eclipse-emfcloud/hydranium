@@ -10,7 +10,7 @@
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type Entity, type Field, Read, type Task, isEntity, isTask } from '../../language-server/ast.js';
-import { astNode } from '../../language-server/order-flow-ast-builder.js';
+import { processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
 import { PROCESS_EFFECT_TYPE } from '../order-flow-process-diagram-types.js';
@@ -65,7 +65,7 @@ export class OrderFlowCreateEffectOperationHandler extends JsonCreateNodeOperati
          this.modelState.logger.warn('Add effect skipped: the subject entity or its first field has no resolvable name');
          return;
       }
-      appendChild(task, 'effects', task.effects, astNode(Read, { entity: entityRef, field: fieldRef }));
+      appendChild(task, 'effects', task.effects, processNode(Read, { entity: entityRef, field: fieldRef }));
    }
 
    /**

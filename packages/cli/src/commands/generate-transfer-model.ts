@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { emitAstBuilder } from './generate-ast-builder.js';
 import {
    type Node,
    type ObjectLiteralExpression,
@@ -35,6 +36,15 @@ export interface GenerateTransferModelOptions {
    augmentationFile: string;
    /** Destination path for the generated transfer model. */
    outFile: string;
+   /**
+    * Destination for a generated AST-node builder module. Omitted by consumers
+    * that construct no AST nodes; the transfer model is emitted either way.
+    *
+    * Emitted from this command rather than its own because the AST source is
+    * already parsed here, and because a consumer that regenerates one artefact
+    * and not the other has the two disagreeing about the same grammar.
+    */
+   astBuilderFile?: string;
    /** Name used for the base element type in the output. Defaults to `TransferElement`. */
    elementTypeName?: string;
    /** Name used for the terminal-patterns const in the output. Defaults to `ModelTerminals`. */
@@ -396,10 +406,22 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
    fs.mkdirSync(path.dirname(options.outFile), { recursive: true });
    if (fs.existsSync(options.outFile) && fs.readFileSync(options.outFile, 'utf-8') === content) {
       console.log('Transfer model is up to date.');
-      return;
+   } else {
+      fs.writeFileSync(options.outFile, content, 'utf-8');
+      console.log(`Generated: ${options.outFile}`);
    }
-   fs.writeFileSync(options.outFile, content, 'utf-8');
-   console.log(`Generated: ${options.outFile}`);
+
+   if (options.astBuilderFile !== undefined) {
+      const emitted = emitAstBuilder(astSource, {
+         outFile: options.astBuilderFile,
+         astFile: options.astFile,
+         languageId,
+         regenCommand
+      });
+      if (!emitted) {
+         console.warn(`Warning: no '${languageId}AstType' alias in ${options.astFile}; skipping the AST builder.`);
+      }
+   }
 }
 
 // ---------------------------------------------------------------------------

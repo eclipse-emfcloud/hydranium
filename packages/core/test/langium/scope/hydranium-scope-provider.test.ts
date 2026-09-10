@@ -21,7 +21,7 @@ import { type AstNode, type AstReflection, MapScope, type Scope, URI } from '@hy
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
-import { makeFakeAstNode, makeFakeDescription, makeNoopTracer, makeTestServices } from '../../../src/testing/index.js';
+import { makeFakeAstNode, makeFakeDescription, makeFakeReflection, makeNoopTracer, makeTestServices } from '../../../src/testing/index.js';
 
 // Logger stub: `.for(name)` returns self, `.trace()` is a no-op, so the
 // `Logger.for(component).trace('instantiated')` line every framework service
@@ -29,6 +29,16 @@ import { makeFakeAstNode, makeFakeDescription, makeNoopTracer, makeTestServices 
 const noopLogger: { for: () => typeof noopLogger; trace: () => void } = {
    for: () => noopLogger,
    trace: () => undefined
+};
+
+/**
+ * Grammar metadata the stub reflection answers with. `Child` declares a
+ * containment list so a test can tell a stub built from reflection apart from a
+ * bare `{ $type }` literal; `Orphan` is deliberately absent from the map.
+ */
+const STUB_TYPE_META: Record<string, { name: string; properties: Record<string, { name: string; defaultValue?: unknown }> }> = {
+   Child: { name: 'Child', properties: { items: { name: 'items', defaultValue: [] } } },
+   StandIn: { name: 'StandIn', properties: { entries: { name: 'entries', defaultValue: [] } } }
 };
 
 /**
@@ -80,7 +90,15 @@ function makeStubServices(): HydraniumLanguageServices {
          },
          Logger: noopLogger,
          Tracer: makeNoopTracer(),
-         AstReflection: { getReferenceType: () => 'Fake', isSubtype: () => true } as unknown as AstReflection
+         AstReflection: {
+            getReferenceType: () => 'Fake',
+            isSubtype: () => true,
+            // The stubs the provider fabricates are built from this metadata, so
+            // a type declared here gets its containment arrays the way a parsed
+            // node would. Types absent from the map answer no metadata, which is
+            // what a real reflection does for a name it does not know.
+            getTypeMetaData: (type: string) => STUB_TYPE_META[type]
+         } as unknown as AstReflection
       }
    } as unknown as HydraniumLanguageServices;
 }
@@ -130,6 +148,46 @@ describe('HydraniumScopeProvider', () => {
             property: 'someRef'
          });
          expect(info.container.$containerIndex).toBe(2);
+      });
+
+      it("gives a fabricated stub its grammar's containment lists, not `undefined`", () => {
+         // Built as a bare `{ $type, $container… }` literal a stub leaves every
+         // declared list `undefined`, where a parsed node of the same type
+         // always has `[]` — so an extension or key provider reading one off a
+         // stub meets a shape that occurs nowhere else in the tree.
+         const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
+         class TestProvider extends HydraniumScopeProvider {
+            protected override resolveRootElement(): AstNode | undefined {
+               return root;
+            }
+         }
+         const provider = new TestProvider(makeStubServices());
+         const info = provider.referenceContextToInfo({
+            source: ReferenceSource.document('memory://root'),
+            syntheticPath: [SyntheticStep.of('children', 'Child')],
+            property: 'someRef'
+         });
+         expect((info.container as AstNode & { items?: unknown[] }).items).toEqual([]);
+      });
+
+      it('leaves a type the grammar does not declare carrying only its plumbing', () => {
+         // The permissive half: a synthetic path can name a type this grammar
+         // has no metadata for, and that must still produce a usable container
+         // rather than throwing inside the lookup.
+         const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
+         class TestProvider extends HydraniumScopeProvider {
+            protected override resolveRootElement(): AstNode | undefined {
+               return root;
+            }
+         }
+         const provider = new TestProvider(makeStubServices());
+         const info = provider.referenceContextToInfo({
+            source: ReferenceSource.document('memory://root'),
+            syntheticPath: [SyntheticStep.of('children', 'Orphan')],
+            property: 'someRef'
+         });
+         expect(info.container.$type).toBe('Orphan');
+         expect(info.container.$container).toBe(root);
       });
    });
 
@@ -310,7 +368,10 @@ describe('HydraniumScopeProvider', () => {
             AstNodeLocator: { getAstNode: () => undefined },
             AstNodeDescriptionProvider: { createDescription: () => ({}) }
          },
-         shared
+         // `makeTestServices` binds no reflection, but the stubs the provider
+         // fabricates are built from one — so supply it here rather than teach
+         // the builder to work without one, which production never needs.
+         shared: { AstReflection: makeFakeReflection({ Draft: { entries: { defaultValue: [] } } }), ...(shared as object) }
       } as unknown as HydraniumLanguageServices;
    }
 
@@ -431,6 +492,9 @@ describe('HydraniumScopeProvider', () => {
          expect(result).toBeDefined();
          expect(result?.$type).toBe('Draft');
          expect(result?.$container).toBe(root);
+         // Built from reflection like any other node of this type, so a caller
+         // that walks a declared list finds it present and empty.
+         expect((result as AstNode & { entries?: unknown[] }).entries).toEqual([]);
       });
    });
 });

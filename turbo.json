@@ -31,7 +31,7 @@
         "src-gen/**",
         "syntaxes/**",
         "src/language-server/generated/**",
-        "src/language-server/generated-transfer/**",
+        "src/language-server/generated-hydranium/**",
         "tsconfig.tsbuildinfo"
       ]
     },

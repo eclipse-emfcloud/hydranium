@@ -35,8 +35,8 @@ import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-transfer/transfer-model.js';
-import { isProcessModel, isTask } from '../src/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import { isProcessModel, isTask } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harness.js';
 
 type OrderFlowTransfer = DomainModel | ProcessModel;

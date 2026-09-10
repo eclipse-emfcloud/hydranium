@@ -310,9 +310,9 @@ __BIN__  },
   ],
   "scripts": {
     "build": "npm run generate && tsc",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-transfer tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-transfer/transfer-model.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
 __LINT__    "start": "node lib/main.js --stdio",
@@ -1003,7 +1003,7 @@ import { startGlspServer } from '@hydranium/glsp-server/node';
 // \`TransferElement\` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-${importList(roots, './language-server/generated-transfer/transfer-model.js', columns, true)}
+${importList(roots, './language-server/generated-hydranium/transfer-model.js', columns, true)}
 `
       : '';
 
@@ -1140,7 +1140,7 @@ function dataServerMainFile(composition: InitComposition): string {
 ${importList(['NodeFileSystem', 'startStdioServer'], '@hydranium/core/node', columns)}
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER root${plural}, not the AST one${plural} — same reasoning as \`main.ts\`.
-${importList(roots, './language-server/generated-transfer/transfer-model.js', columns, true)}
+${importList(roots, './language-server/generated-hydranium/transfer-model.js', columns, true)}
 import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 
 const { shared } = create__NAME__Services({ ...NodeFileSystem });
@@ -1270,7 +1270,7 @@ function serializationTest(composition: InitComposition): string {
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 ${importList(astTypes, '../src/language-server/ast.js', columns, true)}
-${importList(transferTypes, '../src/language-server/generated-transfer/transfer-model.js', columns, true)}
+${importList(transferTypes, '../src/language-server/generated-hydranium/transfer-model.js', columns, true)}
 import { createServices } from '../src/services.js';
 
 ${composition.grammars.map(grammar => render(SERIALIZATION_SUITE, composition, grammar)).join('\n\n')}

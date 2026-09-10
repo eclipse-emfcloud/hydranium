@@ -29,9 +29,9 @@
  * So the assertions here are on the resulting TEXT, and they are exact.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { URI } from '@hydranium/langium';
-import { copyFileSync, mkdtempSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { makeWorkspaceHarness, WORKSPACE_ROOT, type OrderFlowHarness } from './order-flow-harness.js';
@@ -47,6 +47,17 @@ import { makeWorkspaceHarness, WORKSPACE_ROOT, type OrderFlowHarness } from './o
  */
 async function loadCopy(harness: OrderFlowHarness, relativePath: string): Promise<string> {
    const scratch = mkdtempSync(path.join(tmpdir(), 'order-flow-write-'));
+   // Returns a URI string, not the directory, so ownership stays here. Kept on
+   // failure because this copy is what `update` wrote — the artefact that says
+   // what the write path actually produced. stderr, not `console`, because
+   // vitest drops output written after the test body.
+   onTestFinished(context => {
+      if (context.task.result?.state === 'fail') {
+         process.stderr.write(`[order-flow] kept the written copy at ${scratch}\n`);
+         return;
+      }
+      rmSync(scratch, { recursive: true, force: true });
+   });
    const copy = path.join(scratch, path.basename(relativePath));
    copyFileSync(path.join(WORKSPACE_ROOT, relativePath), copy);
    const uri = URI.file(copy);

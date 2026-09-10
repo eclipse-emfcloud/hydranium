@@ -130,7 +130,7 @@ describe('the emitted scaffold compiles', () => {
             generateTransferModel({
                astFile: path.join(targetDir, 'src/language-server/generated/ast.ts'),
                augmentationFile: path.join(targetDir, 'src/language-server/ast.ts'),
-               outFile: path.join(targetDir, 'src/language-server/generated-transfer/transfer-model.ts'),
+               outFile: path.join(targetDir, 'src/language-server/generated-hydranium/transfer-model.ts'),
                elementTypeName: `${name}Element`,
                terminalsName: `${name}Terminals`
             });

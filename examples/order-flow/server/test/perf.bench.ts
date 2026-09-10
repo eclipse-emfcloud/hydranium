@@ -63,14 +63,14 @@ import { type LangiumDocument, URI } from '@hydranium/langium';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { bench, describe } from 'vitest';
+import { afterAll, bench, describe } from 'vitest';
 import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import type { DomainModel, ProcessModel } from '../src/language-server/ast.js';
 import type {
    DomainModel as TransferDomainModel,
    ProcessModel as TransferProcessModel
-} from '../src/language-server/generated-transfer/transfer-model.js';
+} from '../src/language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { generateLargeWorkspace } from '../src/testing/large-workspace.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
@@ -249,6 +249,16 @@ function writeCorpus(projects: number): string {
 
 const smallCorpus = writeCorpus(SMALL_PROJECTS);
 const largeCorpus = writeCorpus(LARGE_PROJECTS);
+
+// Removed unconditionally, unlike the fixture copies the tests keep on failure:
+// a corpus is GENERATED input, reproducible from `writeCorpus` alone, so it
+// witnesses nothing about a run. It is also the largest artefact here, and it is
+// built at module scope, so nothing else bounds its lifetime.
+afterAll(() => {
+   for (const corpus of [smallCorpus, largeCorpus]) {
+      fs.rmSync(corpus, { recursive: true, force: true });
+   }
+});
 
 describe('large workspace cold build (scaling)', () => {
    bench(

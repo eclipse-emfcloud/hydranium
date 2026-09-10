@@ -23,11 +23,12 @@
 .yalc
 
 # Generated code — Langium parser/AST + Theia browser-app scaffolding.
-# `generated-transfer` is `hydranium-cli generate-transfer-model` output, kept
-# out of `generated` because langium-cli treats its own output directory as
-# exclusive and offers to delete anything else it finds there.
+# `generated-hydranium` is `hydranium-cli` output — named for the tool that owns
+# it rather than for one artefact — kept out of `generated` because langium-cli
+# deletes that directory outright on every run, prompting first about anything
+# unexpected it would take with it.
 **/generated
-**/generated-transfer
+**/generated-hydranium
 **/src-gen
 **/syntaxes
 examples/*/theia-app/plugins

@@ -64,7 +64,7 @@ import { Diagnostic } from 'vscode-languageserver-protocol';
 import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND } from '../../src/head-ports.js';
-import type { DomainModel, LayoutModel, ProcessModel } from '../../src/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '../../src/language-server/generated-hydranium/transfer-model.js';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from '../order-flow-harness.js';
 import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowServer } from './spawned-order-flow-server.js';
 

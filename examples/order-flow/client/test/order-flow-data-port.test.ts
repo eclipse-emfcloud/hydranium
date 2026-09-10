@@ -55,7 +55,7 @@ import type {
    DomainModel,
    LayoutModel,
    ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';

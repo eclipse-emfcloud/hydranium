@@ -222,13 +222,13 @@ const RESTRICT_HOST_FRAMEWORK_MSG =
 
 // The THIRD place "generated code is exempt" has to be said, after
 // `.prettierignore` and `HEADER_EXEMPT` in `scripts/header.mjs`. All three name
-// `generated` AND `generated-transfer` — the latter is
-// `hydranium-cli generate-transfer-model` output, kept out of `generated/`
-// because langium-cli treats its own output directory as exclusively its own and
-// offers to delete strangers. Adding a generated directory means editing all
+// `generated` AND `generated-hydranium` — the latter is `hydranium-cli` output,
+// named for the tool that owns it rather than for one artefact, kept out of
+// `generated/` because langium-cli deletes that directory outright on every run
+// and prompts about strangers. Adding a generated directory means editing all
 // three lists; missing this one is what surfaced a dead eslint-disable directive
 // in code nothing should have been linting.
-const GENERATED_DIRS = ['**/generated/**', '**/generated-transfer/**'];
+const GENERATED_DIRS = ['**/generated/**', '**/generated-hydranium/**'];
 
 module.exports = tseslint.config(
    {

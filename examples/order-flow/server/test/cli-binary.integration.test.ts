@@ -43,7 +43,7 @@
  * log-level-dependent and unbounded; it is reported on failure instead.
  *
  * Deliberately NOT here: an assertion that `generate-transfer-model` reproduces
- * the checked-in `generated-transfer/transfer-model.ts`. Freshness of a
+ * the checked-in `generated-hydranium/transfer-model.ts`. Freshness of a
  * generated artefact is the BUILD's job in this repo — the example's `build`
  * runs its own `generate` — so that case emits into a throwaway `--out-file` and
  * asserts the result is well-formed instead.

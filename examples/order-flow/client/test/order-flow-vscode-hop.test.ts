@@ -79,7 +79,7 @@ import {
    openSocketTransport,
    startSocketDataServer
 } from './testing/socket-data-server';
-import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 
 const WORKSPACE_ROOT = path.resolve(__dirname, '../../workspace');
 const FULFILLMENT_PROCESS = 'orders/fulfillment.process';

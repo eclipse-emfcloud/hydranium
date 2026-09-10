@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from 'vitest';
 import { AbstractAstReflection, type AstNode, type TypeMetaData } from '@hydranium/langium';
-import { makeAstNodeBuilder } from '../../../src/langium/ast-extension/ast-node-builder.js';
+import { buildAstNode, makeAstNodeBuilder } from '../../../src/langium/ast-extension/ast-node-builder.js';
 
 /**
  * Minimal stand-ins for the per-type interface + per-type constant pair that
@@ -289,5 +289,60 @@ describe('makeAstNodeBuilder', () => {
       const astNodeNoMeta = makeAstNodeBuilder<FakeAstType>(new NoMetaReflection());
       const leaf = astNodeNoMeta(FakeLeaf, { value: 5 });
       expect(leaf).toEqual({ $type: 'FakeLeaf', value: 5 });
+   });
+});
+
+describe('buildAstNode', () => {
+   const reflection = new FakeReflection();
+
+   test('defaults containment arrays from a runtime type string', () => {
+      // The whole point of the runtime variant: the caller has a `string`, not a
+      // `$type` literal, so no type map can resolve the metadata for it.
+      const type: string = 'FakeRoot';
+      const root = buildAstNode(reflection, type);
+      expect(root).toEqual({ $type: 'FakeRoot', children: [], tags: [] });
+   });
+
+   test('returns fresh arrays per call', () => {
+      const first = buildAstNode<FakeRoot>(reflection, 'FakeRoot');
+      const second = buildAstNode<FakeRoot>(reflection, 'FakeRoot');
+      first.children.push({ $type: 'FakeChild' } as FakeChild);
+      expect(second.children).toEqual([]);
+   });
+
+   test('init overrides the declared defaults', () => {
+      const seeded = buildAstNode(reflection, 'FakeSeeded', { modes: ['execute'] });
+      expect((seeded as unknown as { modes: string[] }).modes).toEqual(['execute']);
+   });
+
+   test('carries the Langium plumbing fields an init supplies', () => {
+      const root = buildAstNode<FakeRoot>(reflection, 'FakeRoot');
+      const child = buildAstNode<FakeChild>(reflection, 'FakeChild', {
+         $container: root,
+         $containerProperty: 'children',
+         $containerIndex: 2
+      });
+      expect(child.$container).toBe(root);
+      expect(child.$containerProperty).toBe('children');
+      expect(child.$containerIndex).toBe(2);
+      expect(child.labels).toEqual([]);
+   });
+
+   test('the type argument wins over a $type carried in by a spread init', () => {
+      // The retyping case: a caller producing a node of a DIFFERENT type from an
+      // existing one spreads the source in, and the source's own `$type` would
+      // otherwise overwrite the type actually requested — handing back a node of
+      // the wrong type with nothing reporting it.
+      const source = buildAstNode<FakeChild>(reflection, 'FakeChild', { id: 'c1' });
+      const retyped = buildAstNode(reflection, 'FakeLeaf', { ...source, value: 1 });
+      expect(retyped.$type).toBe('FakeLeaf');
+   });
+
+   test('an unknown type name yields $type plus init, without throwing', () => {
+      // A runtime type name arrives from a client, so it can name a type this
+      // grammar does not have. Refusing would turn a permissive lookup into a
+      // throw at a call site that can only guess.
+      const node = buildAstNode(reflection, 'NotAGrammarType', { hint: 'x' });
+      expect(node).toEqual({ $type: 'NotAGrammarType', hint: 'x' });
    });
 });

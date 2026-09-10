@@ -78,15 +78,13 @@ export type AstNodeBuilder<TMap> = <TType extends string & keyof TMap>(
  * AST-interface mapping, so call sites get full inference from the type
  * constant alone — no explicit generic parameter at every call site.
  *
- * Runtime behaviour: reads `reflection.getTypeMetaData(type).properties` and,
- * for every property whose metadata carries a `defaultValue`, pre-fills the
- * result before merging the caller's `init`. Array defaults are materialised
- * as a fresh `[]` per call (never shared with the metadata's array instance,
- * which downstream callers mutate); scalar defaults (`false`, `0`, `''`, …)
- * are copied as-is since they're immutable. Grammar-generated containment
- * lists and `?=`-style boolean flags therefore default automatically;
- * TS-augmented fields (declared via `declare module './generated/ast.js'`)
- * are unaffected by the runtime defaulting but remain typed at call sites.
+ * Runtime behaviour: pre-fills every grammar-declared default (see
+ * {@link withTypeDefaults}) before merging the caller's `init`, so containment
+ * lists and `?=`-style boolean flags default automatically. TS-augmented fields
+ * (declared via `declare module './generated/ast.js'`) are unaffected by the
+ * runtime defaulting but remain typed at call sites.
+ *
+ * Use {@link buildAstNode} instead when the type name is only known at runtime.
  *
  * The init shape only relaxes array-typed fields to optional (via
  * {@link ArrayKeys}) — there is no equivalent structural signal for "this
@@ -101,19 +99,7 @@ export function makeAstNodeBuilder<TMap>(reflection: AstReflection): AstNodeBuil
       init: AstNodeInit<Extract<TMap[TType], AstNode>>,
       extras?: Record<string, unknown>
    ): Extract<TMap[TType], AstNode> {
-      const meta = reflection.getTypeMetaData(typeConstant.$type);
-      const result: Record<string, unknown> = { $type: typeConstant.$type };
-      if (meta?.properties) {
-         for (const [propName, propInfo] of Object.entries(meta.properties)) {
-            const defaultValue = propInfo.defaultValue;
-            if (defaultValue === undefined) {
-               continue;
-            }
-            // Arrays are duplicated so each node carries its own mutable instance;
-            // scalars are immutable and safe to copy by reference.
-            result[propName] = Array.isArray(defaultValue) ? [...defaultValue] : defaultValue;
-         }
-      }
+      const result = withTypeDefaults(reflection, typeConstant.$type);
       Object.assign(result, init);
       if (extras) {
          // Extras win over init: this is the explicit escape hatch, so when a
@@ -122,4 +108,62 @@ export function makeAstNodeBuilder<TMap>(reflection: AstReflection): AstNodeBuil
       }
       return result as unknown as Extract<TMap[TType], AstNode>;
    };
+}
+
+/**
+ * Build a node whose type is only known as a RUNTIME string.
+ *
+ * The typed {@link makeAstNodeBuilder} cannot express this: its `TMap` generic
+ * resolves the AST interface from a `$type` literal, and a type name that
+ * arrives over the wire — a protocol-layer reference request naming a node that
+ * does not exist yet — has no literal to resolve from. Callers that DO know the
+ * type at compile time want the typed builder, which checks their mandatory
+ * fields; this one checks nothing beyond the reflection lookup.
+ *
+ * Applies the same reflection-driven defaulting, so a node built here carries
+ * grammar-declared containment arrays rather than leaving them `undefined`. An
+ * unknown type name yields a node with `$type` and whatever `init` supplied,
+ * because reflection answers no metadata for it and refusing would turn a
+ * permissive lookup into a throw at a call site that can only guess.
+ *
+ * **The `type` argument is authoritative: `init` cannot rebind `$type`.** The
+ * typed builder gets this for free — `AstNodeInit` omits `$type`, so a call site
+ * cannot reach it — but here `init` is loosely typed, and the case that needs
+ * the guarantee is RETYPING: a caller spreading an existing node to produce one
+ * of a different type (`{ ...source }`) carries the SOURCE's `$type` in, which
+ * would silently win over the type actually requested and hand back a node of
+ * the wrong type with no error anywhere.
+ */
+export function buildAstNode<TAst extends AstNode = AstNode>(
+   reflection: AstReflection,
+   type: string,
+   init?: Partial<AstNode> & Record<string, unknown>
+): TAst {
+   const result = withTypeDefaults(reflection, type);
+   if (init) {
+      Object.assign(result, init);
+      result.$type = type;
+   }
+   return result as unknown as TAst;
+}
+
+/**
+ * Seed a node with `$type` plus every property the grammar declares a default
+ * for. Array defaults are materialised as a fresh `[]` per call — never shared
+ * with the metadata's own array instance, which downstream callers mutate —
+ * while scalar defaults are copied as-is since they are immutable.
+ */
+function withTypeDefaults(reflection: AstReflection, type: string): Record<string, unknown> {
+   const result: Record<string, unknown> = { $type: type };
+   const meta = reflection.getTypeMetaData(type);
+   if (meta?.properties) {
+      for (const [propName, propInfo] of Object.entries(meta.properties)) {
+         const defaultValue = propInfo.defaultValue;
+         if (defaultValue === undefined) {
+            continue;
+         }
+         result[propName] = Array.isArray(defaultValue) ? [...defaultValue] : defaultValue;
+      }
+   }
+   return result;
 }

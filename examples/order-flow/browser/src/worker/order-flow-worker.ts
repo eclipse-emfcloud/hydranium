@@ -53,7 +53,7 @@ import type {
    DomainModel,
    LayoutModel,
    ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import { startLanguageServer } from '@hydranium/langium/lsp';
 import { URI } from '@hydranium/langium';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';

@@ -20,10 +20,10 @@
   "scripts": {
     "bench": "vitest bench --run",
     "build": "npm run generate && tsc",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-transfer tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
     "generate:large-workspace": "node scripts/generate-large-workspace.mjs",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-transfer/transfer-model.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix examples/order-flow/server run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix examples/order-flow/server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "lint": "eslint src test --max-warnings 0",

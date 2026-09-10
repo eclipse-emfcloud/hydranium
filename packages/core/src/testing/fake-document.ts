@@ -7,7 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DocumentState, type AstNode, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { DocumentState, type AstNode, type AstReflection, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { buildAstNode } from '../langium/ast-extension/ast-node-builder.js';
 
 /**
  * Build a typed AST-node fixture for unit tests.
@@ -23,12 +24,29 @@ import { DocumentState, type AstNode, type LangiumDocument, UriUtils, type URI }
  * framework synthetic node, and marking it would change scope/index behaviour.
  * A test that wants a genuine synthetic node calls `markSynthetic` explicitly.
  *
+ * **Without a `reflection`, the fixture carries only what the test spells out**,
+ * which is a shape production never produces: a parsed or built node always has
+ * its grammar-declared containment arrays, so a fixture that omits one lets a
+ * test pass against an impossible node, and lets code that walks a list crash
+ * only under test. Pass the grammar's reflection whenever the type is a real
+ * one and the code under test reads a collection off it. Fixtures typed against
+ * ad-hoc names have no reflection to pass and keep the plain form.
+ *
  * @param node the node shape — `$type` is required; every other property is a
  *   value the test cares about (`$container`, cross-reference values, internal
- *   `_id` fields, …). The object is returned by reference, not copied.
+ *   `_id` fields, …).
+ * @param reflection when given, pre-fills the grammar's declared defaults the
+ *   same way {@link buildAstNode} does, and the result is a fresh object rather
+ *   than `node` itself. Omitted, `node` is returned by reference.
  */
-export function makeFakeAstNode<TAst extends AstNode = AstNode>(node: { $type: string } & Record<string, unknown>): TAst {
-   return node as unknown as TAst;
+export function makeFakeAstNode<TAst extends AstNode = AstNode>(
+   node: { $type: string } & Record<string, unknown>,
+   reflection?: AstReflection
+): TAst {
+   if (!reflection) {
+      return node as unknown as TAst;
+   }
+   return buildAstNode<TAst>(reflection, node.$type, node);
 }
 
 /**

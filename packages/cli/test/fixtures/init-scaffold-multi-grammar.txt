@@ -28,9 +28,9 @@ package.json
   ],
   "scripts": {
     "build": "npm run generate && tsc",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-transfer tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-transfer/transfer-model.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "start": "node lib/main.js --stdio",
@@ -747,7 +747,7 @@ import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 // `TransferElement` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND } from './head-ports.js';
@@ -809,7 +809,7 @@ src/data-server-main.ts
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER roots, not the AST ones — same reasoning as `main.ts`.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 const { shared } = createOrderFlowServices({ ...NodeFileSystem });
@@ -1201,7 +1201,7 @@ import type {
    DomainModel as TransferDomainModel,
    ProcessModel as TransferProcessModel,
    LayoutModel as TransferLayoutModel
-} from '../src/language-server/generated-transfer/transfer-model.js';
+} from '../src/language-server/generated-hydranium/transfer-model.js';
 import { createServices } from '../src/services.js';
 
 describe('Domain serialization', () => {
