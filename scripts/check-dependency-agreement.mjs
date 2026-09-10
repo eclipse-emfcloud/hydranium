@@ -9,7 +9,7 @@
  ********************************************************************************/
 
 /**
- * Two agreements about declared dependency RANGES that nothing else asserts.
+ * Three agreements about declared dependency RANGES that nothing else asserts.
  *
  * **Pass A — the lockfile against the manifests.** Every dependency block of
  * every workspace manifest must be reproduced verbatim in that workspace's
@@ -55,6 +55,29 @@
  *   is recorded in its provenance table, and the on-ramp example pins exactly
  *   what the scaffold emits. Extending this pass over `examples/*` reports four
  *   further groups, every one of them deliberate.
+ *
+ * **Pass C — no example pins the framework at the base version.** The root
+ * `version` is a base that NEVER publishes: releases carry a prerelease
+ * counter, so the bare base matches nothing on the registry. Inside the
+ * workspace such a pin resolves by symlink and breaks nothing, which is how
+ * twenty-three of them survived thirteen releases unnoticed — the failure is
+ * silent here and only fires for someone who copies an example manifest
+ * instead of scaffolding, and `examples/` is explicitly code that exists to be
+ * copied.
+ *
+ * The rule is scoped and narrow in two ways that are both load-bearing:
+ *
+ * - **It applies to `examples/*` and NOT to `packages/*`**, which pin each
+ *   other at the base deliberately — a framework devDependency states what we
+ *   compile against and is rewritten to the published version at release,
+ *   while the peerDependency beside it carries the caret. An example stands in
+ *   for an adopter, so the adopter-facing shape is the one it should declare.
+ *   Extending this pass over `packages/*` would report all ten.
+ * - **It forbids the BASE, not exactness.** An exact published version is a
+ *   legitimate shape that other projects use; it was rejected here because it
+ *   means re-committing versions every release, which is a policy call rather
+ *   than a defect. Forbidding only the unpublishable base needs no knowledge
+ *   of the versioning scheme, so this pass survives cutting a stable release.
  *
  * Usage: node scripts/check-dependency-agreement.mjs
  */
@@ -176,6 +199,28 @@ export function mirrorDisagreements(manifests, exemptions = MIRROR_EXEMPTIONS) {
 }
 
 /**
+ * Pass C, likewise pure. `manifests` maps an `examples/<example>/<package>`
+ * directory to its parsed manifest, `frameworkNames` is the set of names
+ * `packages/*` publishes, and `baseVersion` is the root manifest's own
+ * `version` — read rather than spelled out, so cutting a release moves it here
+ * without an edit.
+ */
+export function unpublishableExamplePins(manifests, frameworkNames, baseVersion) {
+   const problems = [];
+   for (const [directory, manifest] of Object.entries(manifests)) {
+      for (const block of DEPENDENCY_BLOCKS) {
+         for (const [name, range] of Object.entries(manifest[block] ?? {})) {
+            if (!frameworkNames.has(name) || range !== baseVersion) continue;
+            problems.push(
+               `${directory} ${block}.${name}: pinned at the base version ${baseVersion}, which never publishes — declare ^${baseVersion}`
+            );
+         }
+      }
+   }
+   return problems;
+}
+
+/**
  * Fabricated inputs that MUST be judged a particular way, in both directions.
  * The repo agrees with itself today, so a clean run says nothing about whether
  * either pass still discriminates — and a comparison gate degrades silently
@@ -255,6 +300,42 @@ const SELF_TESTS = [
          mirrorDisagreements({ 'packages/a': { devDependencies: { dep: '1.0.0' } }, 'packages/b': { devDependencies: { dep: '1.0.0' } } }, [
             { block: 'devDependencies', name: 'dep', reason: 'fabricated' }
          ])
+   },
+   {
+      name: 'pass C: an example pinning a framework package at the base is reported',
+      expect: 1,
+      run: () =>
+         unpublishableExamplePins(
+            { 'examples/x/y': { dependencies: { '@scope/core': '9.0.0-next' } } },
+            new Set(['@scope/core']),
+            '9.0.0-next'
+         )
+   },
+   {
+      name: 'pass C: the caret over the same package is not reported',
+      expect: 0,
+      run: () =>
+         unpublishableExamplePins(
+            { 'examples/x/y': { dependencies: { '@scope/core': '^9.0.0-next' } } },
+            new Set(['@scope/core']),
+            '9.0.0-next'
+         )
+   },
+   {
+      name: 'pass C: an exact PUBLISHED version is not reported — the base is what is forbidden',
+      expect: 0,
+      run: () =>
+         unpublishableExamplePins(
+            { 'examples/x/y': { dependencies: { '@scope/core': '9.0.0-next.7' } } },
+            new Set(['@scope/core']),
+            '9.0.0-next'
+         )
+   },
+   {
+      name: 'pass C: a non-framework dependency at the same literal is not reported',
+      expect: 0,
+      run: () =>
+         unpublishableExamplePins({ 'examples/x/y': { dependencies: { elsewhere: '9.0.0-next' } } }, new Set(['@scope/core']), '9.0.0-next')
    }
 ];
 
@@ -308,6 +389,25 @@ if (mirrorProblems.length > 0) {
 } else {
    const exempted = MIRROR_EXEMPTIONS.length === 0 ? '' : `, bar ${MIRROR_EXEMPTIONS.length} recorded exemption(s)`;
    console.log(`✓ every range mirrored across ${Object.keys(frameworkManifests).length} framework package(s) agrees${exempted}`);
+}
+
+const exampleManifests = Object.fromEntries(Object.entries(manifests).filter(([directory]) => directory.startsWith('examples/')));
+// Same hazard as the `workspaces` guard above, one level in: a prefix that has
+// stopped matching reports universal compliance rather than failing.
+if (Object.keys(exampleManifests).length === 0) {
+   console.error('✗ SELF-TEST FAILED: no `examples/` workspace manifest was found — pass C checked nothing');
+   process.exit(1);
+}
+const frameworkNames = new Set(Object.values(frameworkManifests).map(manifest => manifest.name));
+const basePinProblems = unpublishableExamplePins(exampleManifests, frameworkNames, rootManifest.version);
+if (basePinProblems.length > 0) {
+   failed = true;
+   console.error(`✗ ${basePinProblems.length} example pin(s) name the unpublishable base version:`);
+   for (const problem of basePinProblems) console.error(`    ${problem}`);
+} else {
+   console.log(
+      `✓ no framework pin in ${Object.keys(exampleManifests).length} example manifest(s) names the base version ${rootManifest.version}`
+   );
 }
 
 if (failed) {
