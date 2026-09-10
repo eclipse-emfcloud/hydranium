@@ -19,7 +19,8 @@ import {
    OperationCancelled
 } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { CancellationToken, type Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
+import { CancellationToken, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
+import { ServerMessageRenderer } from '../../../src/messages/renderer.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
@@ -140,12 +141,19 @@ function makeTestBuilder(
  * `DocumentBuilder` constructor that wants `LangiumDocuments`, `IndexManager`,
  * `TextDocuments`, etc.
  */
-function makeStubServices(logger: Logger): ServerSharedServicesMinimal {
+function makeStubServices(
+   logger: Logger,
+   // Overridable for the render pass, whose default answer is a pass-through —
+   // so a test that needs the REPLACING branch has to install a renderer that
+   // changes the text.
+   messageRenderer?: (services: ServerSharedServicesMinimal) => ServerMessageRenderer
+): ServerSharedServicesMinimal {
    // The builder defaults Tracer (a DefaultTracer over `logger`) and an empty
    // ServiceRegistry; only the LangiumDocuments stub is test-specific. Every
    // other slot resolves to undefined, which the builder tests never read.
    return makeNoopSharedServices({
       Logger: logger,
+      MessageRenderer: messageRenderer,
       workspace: {
          LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
          // Identity policy so `formatBuildStatus` resolves; the canonicalization
@@ -878,6 +886,98 @@ describe('HydraniumDocumentBuilder', () => {
          const single = withDiagnostics([at(1)]);
          builder().callDedupe(single);
          expect(single.diagnostics).toHaveLength(1);
+      });
+   });
+
+   describe('renderDiagnostics', () => {
+      // The pass is a PASS-THROUGH for anything the framework has no identity
+      // for — Langium's own sentences, and anything an adopter's validator
+      // raised without `acceptMessage`. What it must not do is change such an
+      // entry, and the shape where it silently did is a `MarkupContent`
+      // message: the renderer answers with a string by contract, so comparing
+      // the answer against the message OBJECT never matches and the entry was
+      // replaced with its own plain text.
+      class ExposedBuilder extends HydraniumDocumentBuilder {
+         callRender(document: LangiumDocument): void {
+            this.renderDiagnostics(document);
+         }
+      }
+      const builder = (): ExposedBuilder => new ExposedBuilder(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
+      const withDiagnostics = (diagnostics: Diagnostic[]): LangiumDocument =>
+         ({ uri: URI.parse('file:///a.a'), diagnostics }) as unknown as LangiumDocument;
+      const markup = (value: string): Diagnostic =>
+         ({
+            range: { start: { line: 1, character: 0 }, end: { line: 1, character: 4 } },
+            severity: DiagnosticSeverity.Error,
+            message: { kind: 'markdown', value }
+         }) as unknown as Diagnostic;
+
+      it('leaves a MarkupContent message with no identity as MARKUP', () => {
+         // LSP 3.17 widened `Diagnostic.message` to `string | MarkupContent`, so
+         // this is a legal diagnostic an adopter can raise. Flattening it here
+         // is silent data loss on the pass-through path — the client renders
+         // plain text where the server sent markdown, and nothing reports it.
+         const document = withDiagnostics([markup('**bold** finding')]);
+
+         builder().callRender(document);
+
+         expect(document.diagnostics?.[0].message).toEqual({ kind: 'markdown', value: '**bold** finding' });
+      });
+
+      it('leaves the array instance alone when nothing rendered', () => {
+         // Same claim as dedupe's: no reassignment when nothing changed, so a
+         // caller holding a reference sees no churn. Also the discriminating
+         // read for the row above — a replaced entry means a replaced array.
+         const diagnostics = [markup('**bold** finding')];
+         const document = withDiagnostics(diagnostics);
+
+         builder().callRender(document);
+
+         expect(document.diagnostics).toBe(diagnostics);
+      });
+
+      it('leaves a plain string message with no identity untouched', () => {
+         const diagnostics = [
+            {
+               range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+               severity: DiagnosticSeverity.Error,
+               message: "Could not resolve reference to Entity named 'X'."
+            } as Diagnostic
+         ];
+         const document = withDiagnostics(diagnostics);
+
+         builder().callRender(document);
+
+         expect(document.diagnostics).toBe(diagnostics);
+      });
+
+      it('DOES replace an entry whose renderer changed the text', () => {
+         // The control on the three rows above: they assert the pass leaves
+         // things alone, and a pass that rendered NOTHING would satisfy all of
+         // them. This is the same comparison from the other side.
+         const shouting = new (class extends ServerMessageRenderer {
+            override renderDiagnostic(diagnostic: Diagnostic): string {
+               return Diagnostic.getMessageString(diagnostic).toUpperCase();
+            }
+         })(makeNoopSharedServices());
+         const local = new ExposedBuilder(
+            makeStubServices(makeNoopLogger(), () => shouting),
+            { logLevel: 'off' }
+         );
+         const diagnostics = [markup('**bold** finding')];
+         const document = withDiagnostics(diagnostics);
+
+         local.callRender(document);
+
+         expect(document.diagnostics).not.toBe(diagnostics);
+         expect(document.diagnostics?.[0].message).toBe('**BOLD** FINDING');
+      });
+
+      it('tolerates absent and empty diagnostics', () => {
+         const empty = { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument;
+         expect(() => builder().callRender(empty)).not.toThrow();
+         const none = withDiagnostics([]);
+         expect(() => builder().callRender(none)).not.toThrow();
       });
    });
 });

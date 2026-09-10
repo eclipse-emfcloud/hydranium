@@ -10,12 +10,18 @@
 import { ResponseError } from 'vscode-jsonrpc';
 
 /**
- * The framework externalizes user-facing strings and never translates them: it
- * holds no locale, so it cannot know what the reading user reads. Every such
- * string carries a stable code beside its English text, and whoever owns the
- * surface renders it. A framework-held locale would give one toast two
- * authorities — an adopter sentence in one language wrapping a framework clause
- * in another.
+ * The framework externalizes user-facing strings and SELECTS no locale: it
+ * relays the one its client declared and renders with whatever templates the
+ * adopter installed, defaulting to its English. Every such string carries a
+ * stable code beside that English, and exactly one side renders it — the side
+ * that knows the reading user's language.
+ *
+ * Which side that is depends on the message, not on the package. A server
+ * message is rendered by the server, at the one seam every carrier passes
+ * through, in the locale it was handed at init. A message the client tier raises
+ * is rendered there, because those fire when the server is unreachable. Nothing
+ * is rendered twice: two renders of one sentence are two authorities over it,
+ * and they diverge on the first reword.
  *
  * Codes are `hydranium/<unscoped-package>/<name>`. The package segment locates
  * the declaration, so a message is declared in the package that raises it and a

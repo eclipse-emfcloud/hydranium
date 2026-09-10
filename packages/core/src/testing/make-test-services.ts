@@ -18,6 +18,8 @@ import {
    type TransferDiagnostic,
    type TransferElement
 } from '@hydranium/protocol';
+import { ServerLocale } from '../locale/server-locale.js';
+import { ServerMessageRenderer } from '../messages/renderer.js';
 import type { Harness } from '@hydranium/protocol/testing';
 import { type AstNode, type AstNodeDescription, type WorkspaceLock } from '@hydranium/langium';
 import type { ModelService, ModelServiceOptions } from '../langium/model-service/model-service.js';
@@ -93,6 +95,15 @@ export interface TestSharedServices<
       TransferEncoder: TransferEncoder<unknown, TDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
    };
+   /**
+    * The REAL services, not stubs — the framework renderer's no-catalogue
+    * behaviour is a pass-through, so the stub tree agrees with a production one
+    * unless a test installs a catalogue. Bound rather than omitted because
+    * `HydraniumDocumentBuilder` renders through the renderer on every
+    * `Validated` phase, where an omitted slot is a `TypeError`.
+    */
+   readonly ServerLocale: ServerLocale;
+   readonly MessageRenderer: ServerMessageRenderer;
 }
 
 /** Optional configuration for {@link makeTestServices}. */
@@ -112,6 +123,14 @@ export interface MakeTestServicesOptions<
     * for tests that don't assert on the produced text.
     */
    serialize?: (uri: string, root: TTransfer) => string;
+   /**
+    * Renderer bound on `MessageRenderer`. Default: the framework's own, which
+    * passes every sentence through unchanged. Supply one to install a catalogue
+    * or to drive the throwing path.
+    */
+   messageRenderer?: (services: ServerSharedServices<TProject>) => ServerMessageRenderer;
+   /** Locale handed to the bundle's {@link ServerLocale}. Default: none, i.e. the framework's English. */
+   locale?: string;
    /**
     * Languages to register on a {@link StubServiceRegistry} bound on the
     * `ServiceRegistry` slot. This is how a test gets multi-language routing:
@@ -233,6 +252,14 @@ export interface TestServicesBundle<
    readonly logger: Logger;
    /** The clock bound on the `Clock` slot — a `makeFakeClock()` if one was passed. */
    readonly clock: Clock;
+   /**
+    * The service bound on `ServerLocale`, so a test can hand over a locale
+    * mid-run — which is also how it verifies the renderer reads the locale per
+    * render rather than caching it at construction.
+    */
+   readonly serverLocale: ServerLocale;
+   /** The renderer bound on `MessageRenderer` — the framework's own unless one was supplied. */
+   readonly messageRenderer: ServerMessageRenderer;
 }
 
 /**
@@ -311,9 +338,22 @@ export function makeTestServices<
          ...(indexManager ? { IndexManager: indexManager } : {}),
          WorkspaceLock: new HydraniumWorkspaceLock()
       },
-      model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject>['model']
+      model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject>['model'],
+      ServerLocale: {} as ServerLocale,
+      MessageRenderer: {} as ServerMessageRenderer
    };
    const sharedServices = services as unknown as ServerSharedServices<TProject>;
+
+   // Patched in after the literal, like `model` below: both read the tree they
+   // belong to, and the renderer reads the locale service.
+   const mutableMessages = services as { ServerLocale: ServerLocale; MessageRenderer: ServerMessageRenderer };
+   const serverLocale = new ServerLocale(sharedServices);
+   if (options.locale) {
+      serverLocale.accept(options.locale);
+   }
+   mutableMessages.ServerLocale = serverLocale;
+   const messageRenderer = options.messageRenderer?.(sharedServices) ?? new ServerMessageRenderer(sharedServices);
+   mutableMessages.MessageRenderer = messageRenderer;
 
    const serialize = options.serialize ?? ((_uri: string, root: TTransfer) => JSON.stringify(root));
    const transferEncoder = options.transferEncoder
@@ -346,6 +386,8 @@ export function makeTestServices<
       transferEncoder,
       logger,
       clock,
+      serverLocale,
+      messageRenderer,
       dispose: () => {
          // No-op: the bundled stubs hold only in-memory state (maps, arrays),
          // released with the bundle when it goes out of scope. The hook exists

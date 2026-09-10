@@ -9,9 +9,10 @@
 
 import { Deferred, type Logger, type Tracer } from '@hydranium/protocol';
 import { DefaultWorkspaceManager, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
-import { type CancellationToken } from 'vscode-languageserver';
+import { type CancellationToken, type InitializeParams } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import { type LogNameOptions, resolveLogFilePlaceholder, toLogFileWorkspaceToken } from '../diagnostics/logger.js';
+import type { ServerLocale } from '../../locale/server-locale.js';
 import type { ProjectChangeEvent } from '../project/project-change-event.js';
 import type { ProjectManager } from '../project/project-manager.js';
 import type { ServerSharedServicesMinimal } from '../shared-services.js';
@@ -156,6 +157,8 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    readonly workspaceInitialized: Promise<unknown> = this.workspaceInitializedDeferred.promise;
 
    protected readonly uriPolicy: DocumentUriPolicy;
+   /** Handed the client's locale at init; read by whoever renders in it. */
+   protected readonly serverLocale: ServerLocale;
    protected readonly writableFileSystemProvider: WritableFileSystemProvider;
    protected readonly additionalDocuments: Record<string, AdditionalDocumentContribution>;
    /** Registry consulted by {@link warnIfUnroutable} to check a seeded document routes. */
@@ -166,6 +169,7 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
       this.projectManager = services.workspace.ProjectManager;
       this.projectManager.onProjectsChanged(event => this.onProjectsChanged(event));
       this.uriPolicy = services.workspace.DocumentUriPolicy;
+      this.serverLocale = services.ServerLocale;
       this.writableFileSystemProvider = services.workspace.FileSystemProvider;
       this.additionalDocuments = services.additionalDocuments;
       this.languageRegistry = services.ServiceRegistry;
@@ -358,6 +362,19 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
       if (first) {
          resolveLogFilePlaceholder('workspace', toLogFileWorkspaceToken(first.uri));
       }
+   }
+
+   /**
+    * Forward the locale the client declared, then Langium's own read of the
+    * params. `DefaultWorkspaceManager.initialize` reads `workspaceFolders`
+    * alone, so `params.locale` would otherwise be discarded — and this is the
+    * only place it arrives, which the headless init seams route through too.
+    */
+   override initialize(params: InitializeParams): void {
+      if (params.locale) {
+         this.serverLocale.accept(params.locale);
+      }
+      super.initialize(params);
    }
 
    /**

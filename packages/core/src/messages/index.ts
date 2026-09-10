@@ -18,7 +18,10 @@
  */
 
 export * from './carriers.js';
+export * from './renderer.js';
 
+export { MODEL_UPDATE_EDIT } from '../langium/model-service/model-service.js';
 export { SEPARATOR_IN_NAME } from '../langium/naming/name-separator-validation.js';
+export { UNRESOLVED_REFERENCE } from '../langium/validation/document-validator.js';
 export { NO_LOADABLE_CONTENT } from '../langium/workspace/langium-documents.js';
 export { NO_SUCH_FILE, NO_SUCH_PATH } from '../langium/workspace/in-memory-file-system-provider.js';

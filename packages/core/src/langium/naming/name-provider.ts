@@ -59,6 +59,16 @@ export interface NameProviderOptions {
     * an `id` field) override explicitly; the explicit override at
     * the adopter side documents the grammar's convention rather than
     * burying it in a framework default.
+    *
+    * **The override is not optional where `name` is a display LABEL rather
+    * than an identifier**, and getting it wrong is quiet at first and then
+    * loud. A `name=STRING` holding `"Order.Line"` is legitimate content, but
+    * the default reads it as the identifier: `getName` composes a qualified
+    * name whose segments cannot be told apart from the label's own dots, and
+    * `nameSeparatorCheck` reports `hydranium/core/separator-in-name` on every
+    * such node. That diagnostic then names the wrong remedy — it asks for a
+    * different character, when the fix is to point this option at the property
+    * that really is the identifier.
     */
    readonly nameProperties?: readonly string[];
 }

@@ -439,6 +439,11 @@ const TSCONFIG_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
    ['outDir', 'lib'],
    ['strict', true],
    ['esModuleInterop', true],
+   // A server that renders its own user-facing messages loads a catalogue, and
+   // a catalogue is JSON. Without this the import does not resolve at all, and
+   // without the `include` glob below a composite project rejects it with
+   // TS6307 naming neither cause.
+   ['resolveJsonModule', true],
    ['skipLibCheck', true],
    ['declaration', true],
    ['experimentalDecorators', true],
@@ -480,7 +485,7 @@ function tsconfigJson(composition: InitComposition): string {
            ];
    const extendsLine = workspace?.baseTsconfig === undefined ? '' : `  "extends": "${workspace.baseTsconfig}",\n`;
    const body = options.map(([key, value]) => `    "${key}": ${JSON.stringify(value)}`).join(',\n');
-   return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ["src"]\n}\n`;
+   return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ["src", "src/**/*.json"]\n}\n`;
 }
 
 // `isolatedModules` is what makes this check agree with the transform that
@@ -498,7 +503,7 @@ const TSCONFIG_TEST = `{
     "isolatedModules": true,
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "src/**/*.json"]
 }
 `;
 
@@ -1086,7 +1091,13 @@ void glspServer;
 // than a library entry — import \`./index.js\` instead to compose the language.
 
 ${reflectImport}${glspImports}${importList(coreNodeSymbols, '@hydranium/core/node', columns)}
-${data ? "import { DataServer } from '@hydranium/data-server';\n" : ''}import { startLanguageServer } from '@hydranium/langium/lsp';
+${data ? "import { DataServer } from '@hydranium/data-server';\n" : ''}// The framework's entry point, NOT Langium's \`@hydranium/langium/lsp\` one. It is
+// signature-compatible and delegates straight through; what it adds first is
+// \`assertLspHeadComposed\`, which fails the start if the LSP head's SHARED module
+// was never composed. Reaching for Langium's is the natural mistake and it is
+// silent: the server boots, links and completes, while echo suppression, the
+// didChangeContent debounce and the last-client-close rebuild are all inert.
+import { startLanguageServer } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 ${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 ${portCommands === '' ? '' : '\n' + portCommands}

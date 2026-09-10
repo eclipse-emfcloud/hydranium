@@ -73,7 +73,14 @@ const EXPECTED_SHARED_SLOTS: readonly ExpectedSlot[] = [
       side: 'shared',
       path: 'workspace.BuildPipelineIntegration',
       get: services => nested(services, 'workspace', 'BuildPipelineIntegration')
-   }
+   },
+   // Unbound, this fails where the cause is least visible: the render pass runs
+   // inside the `Validated` phase, so a `TypeError` there propagates out of
+   // `notifyDocumentPhase` and the document reaches `Validated` with Langium's
+   // publisher never invoked — the client receives no diagnostics for the file
+   // and the stack names the document builder.
+   { side: 'shared', path: 'MessageRenderer', get: services => nested(services, 'MessageRenderer') },
+   { side: 'shared', path: 'ServerLocale', get: services => nested(services, 'ServerLocale') }
 ];
 
 /**

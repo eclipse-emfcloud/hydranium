@@ -36,6 +36,7 @@ import {
    ProcessGeneratedModule
 } from './generated/module.js';
 import { OrderFlowHoverProvider } from './order-flow-hover.js';
+import { OrderFlowMessageRenderer } from './order-flow-message-renderer.js';
 import { OrderFlowProjectManager } from './order-flow-project-manager.js';
 import { OrderFlowScopeComputation } from './order-flow-scope-computation.js';
 import { OrderFlowSemanticTokenProvider } from './order-flow-semantic-tokens.js';
@@ -129,7 +130,7 @@ const OrderFlowSharedModule: Module<
    OrderFlowSharedServices,
    PartialLangiumSharedServices &
       OrderFlowAddedSharedServices &
-      Pick<ServerAddedSharedServices, 'additionalDocuments'> & { Logger: LspLogger; lsp: { configurationRoot: string } }
+      Pick<ServerAddedSharedServices, 'additionalDocuments' | 'MessageRenderer'> & { Logger: LspLogger; lsp: { configurationRoot: string } }
 > = {
    /**
     * Rebound purely to honour the `order-flow.log.level` setting the host
@@ -168,6 +169,12 @@ const OrderFlowSharedModule: Module<
       // registered id") would be registration order rather than a choice.
       configurationRoot: () => ORDER_FLOW_CONFIGURATION_ROOT
    },
+   // The one binding server-side rendering asks of an adopter. Every
+   // user-facing message this server sends — the framework's diagnostics, this
+   // example's validation codes, Langium's unresolved-reference sentence, the
+   // data head's rejections and the GLSP toasts — goes through it, in the locale
+   // the client declared at `initialize`.
+   MessageRenderer: services => new OrderFlowMessageRenderer(services),
    workspace: {
       ProjectManager: services => new OrderFlowProjectManager(services, { logName: 'OrderFlowProjectManager' })
    },

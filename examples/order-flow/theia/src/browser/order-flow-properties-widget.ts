@@ -74,10 +74,12 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       const host = document.createElement('div');
       host.className = 'order-flow-properties-body';
       this.node.appendChild(host);
+      // No diagnostic renderer: the server renders what it publishes, so this
+      // host supplies a catalogue only for the messages the CLIENT tier raises,
+      // which fire when the server is unreachable and it alone can word.
       this.form = new PropertiesForm(host, {
          setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, reported) => this.port.reportError(error, reported),
-         renderDiagnostic: diagnostic => this.port.renderDiagnostic(diagnostic)
+         reportError: (error, reported) => this.port.reportError(error, reported)
       });
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));

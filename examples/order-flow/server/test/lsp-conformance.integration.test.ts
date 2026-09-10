@@ -90,7 +90,27 @@ const domainFixture: LanguageFixture = {
    // Inside a field's type position, so the candidates are declarations rather
    // than keywords. The kit asserts only a well-formed list; the actual
    // candidate sets are asserted in `lsp-harness.integration.test.ts`.
-   completionPosition: { line: 1, character: 13 }
+   completionPosition: { line: 1, character: 13 },
+   /**
+    * Server-side rendering, opted into on THIS grammar only.
+    *
+    * One fixture is enough: the render is one shared pass over
+    * `document.diagnostics`, not a per-grammar behaviour, so opting in three
+    * times would triple the boots for no new information — and the other two
+    * grammars report skipped, which says the opt-in is per fixture rather than
+    * that coverage is missing.
+    *
+    * `NoSuchType` produces Langium's unresolved-reference sentence, which the
+    * framework claims as `hydranium/core/unresolved-reference` and this example
+    * translates — so what is asserted is a sentence NO ONE HERE WROTE arriving
+    * in German. The fragments are the invariant halves of each wording, so a
+    * `referenceType` change in the grammar does not break a locale check.
+    */
+   renderedDiagnostic: {
+      locale: 'de',
+      expected: 'konnte nicht aufgelöst werden',
+      absentWithLocale: 'Could not resolve reference to'
+   }
    // No `edit`: the LSP slice never reads it. Its didChange check drives
    // `valid → invalid` using `invalid.text`, so there is no adopter-supplied
    // assertion for it to run.
@@ -165,10 +185,15 @@ runLspConformance({
       });
       return {
          ...harness,
-         // The driver port declares `initialize()` with NO parameters, so the
-         // folders cannot be threaded in from the kit — the adopter has to bind
-         // them here. That is the one line of glue an adopter has to write.
-         initialize: () => harness.initialize({ workspaceFolders: [{ uri: workspaceUri, name: 'order-flow' }] })
+         // The one line of glue an adopter writes. The workspace folders are
+         // the adopter's — the kit cannot know them — while `params` is the
+         // kit's, carrying the locale the render check declares.
+         //
+         // **Spreading `params` is load-bearing.** Dropping it silently
+         // discards the locale, and the render check then reads English and
+         // fails — loudly, which is the right failure, but the cause is here
+         // rather than in the server.
+         initialize: params => harness.initialize({ ...params, workspaceFolders: [{ uri: workspaceUri, name: 'order-flow' }] })
       };
    },
    languages: [domainFixture, processFixture, layoutFixture],

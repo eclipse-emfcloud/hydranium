@@ -10,11 +10,16 @@
 /**
  * Every user-facing message `@hydranium/glsp-server` raises.
  *
- * Enumeration only: GLSP's action protocol carries no slot for a message
- * identity on any of its notification actions, so a diagram error reaches the
- * client as English by upstream constraint. The declarations still earn their
- * place — an adopter rendering their own diagram chrome can key on the code, and
- * the barrel is how they discover the codes exist.
+ * **Each one is rendered AT ITS RAISE SITE**, through the shared
+ * `MessageRenderer`, because GLSP's action protocol carries no slot for an
+ * identity on any of its actions — so the identity is gone the moment a raise
+ * site formats its text, and there is nothing at the error boundary to render
+ * from. That makes this head the one place where a new message can ship
+ * unrendered without any single chokepoint noticing, which is why the package's
+ * own test suite scans for a declaration reached by `.format()` instead.
+ *
+ * The barrel is also how an adopter rendering their own diagram chrome
+ * discovers the codes exist.
  */
 
 export { SAVE_TARGET_UNKNOWN, SOURCE_URI_MISSING } from '../storage/hydranium-glsp-storage.js';

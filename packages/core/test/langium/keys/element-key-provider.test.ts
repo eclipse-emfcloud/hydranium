@@ -276,6 +276,8 @@ describe('ElementKeyProvider — swap interface', () => {
          Logger: { warn: (message: string) => warns.push(message) },
          Tracer: makeNoopTracer(),
          lsp: { configurationRoot: 'test-language' },
+         MessageRenderer: {},
+         ServerLocale: {},
          workspace: {
             WorkspaceManager: {},
             ProjectManager: {},

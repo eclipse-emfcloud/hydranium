@@ -29,6 +29,13 @@ author, and that keeps checking you as the framework moves.
 - **A false-green guard in the fixture type.** `LanguageFixture` requires **both** a `valid` and an
   `invalid` model, so an "invalid" model that in fact parses clean fails the diagnostics checks
   instead of passing vacuously.
+- **Server-side rendering, opt-in.** Supply `renderedDiagnostic: { locale, expected,
+  absentWithLocale }` on a fixture and the `/lsp` battery declares that locale at `initialize`,
+  then asserts the fragment appears — and, from `absentWithLocale`, that the untranslated fragment
+  DISAPPEARS with the locale and is present without it. It is opt-in because the framework ships no
+  catalogue and selects no locale, so a server that renders nothing is correct; and it is a PAIR
+  because "the message contains X" alone passes for a server whose English contains X. Omit
+  `absentWithLocale` and the control reports skipped rather than being quietly dropped.
 
 ## Install
 

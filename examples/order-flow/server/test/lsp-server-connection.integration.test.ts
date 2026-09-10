@@ -39,7 +39,9 @@
  */
 
 import { makeLspServerConnection, type LspServerConnection } from '@hydranium/core/testing/node';
-import { startLanguageServer } from '@hydranium/langium/lsp';
+// The framework's entry point, as `main.ts` uses — so what this suite starts is
+// the composition an adopter ships, `assertLspHeadComposed` included.
+import { startLanguageServer } from '@hydranium/core/lsp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 

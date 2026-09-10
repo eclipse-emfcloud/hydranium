@@ -136,6 +136,14 @@ export interface CreateRpcProxyOptions<TLocal extends object = never> {
     * `bindRpcMethods` call) still capture per-method latency. Absent by default.
     */
    readonly latency?: BindRpcMethodsOptions['latency'];
+
+   /**
+    * Forwarded to the inbound {@link localTarget} binding: renders the message
+    * an outgoing rejection carries. Only the inbound direction has rejections
+    * to render — the outbound proxy is this side making requests, and a
+    * rejection it receives was rendered by whoever answered.
+    */
+   readonly renderErrorMessage?: BindRpcMethodsOptions['renderErrorMessage'];
 }
 
 /**
@@ -225,7 +233,12 @@ export function createRpcProxy<T extends object, TLocal extends object = never>(
    // connection; see `localTarget` for why no `Disposable` is surfaced.
    const { localTarget, localMethods } = options;
    if (localTarget && localMethods && localMethods.length > 0) {
-      const binding = bindRpcMethods(connection, localTarget, localMethods, { methodNamespace, isNotification, latency: options.latency });
+      const binding = bindRpcMethods(connection, localTarget, localMethods, {
+         methodNamespace,
+         isNotification,
+         latency: options.latency,
+         renderErrorMessage: options.renderErrorMessage
+      });
       resolvedConnection.then(conn => conn.onClose(() => binding.dispose())).catch(() => undefined);
    }
 

@@ -42,6 +42,8 @@ function fullyBoundShared(): LangiumSharedServices & ServerSharedServicesMinimal
       Logger: {},
       Tracer: makeNoopTracer(),
       lsp: { configurationRoot: 'test-language' },
+      MessageRenderer: {},
+      ServerLocale: {},
       workspace: {
          WorkspaceManager: {},
          ProjectManager: {},

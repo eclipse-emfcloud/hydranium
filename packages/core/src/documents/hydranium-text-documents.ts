@@ -985,9 +985,20 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // it is exactly what the caller retries with after a rejection, so
             // gating it there would refuse the recovery too.
             const version = isFullReplace(edits) ? UNKNOWN_CLIENT_VERSION : this.languageClientVersion(uri);
+            // A full `ApplyWorkspaceEditParams`, `edit` and all — NOT a bare
+            // `WorkspaceEdit` with a `label` beside it. `applyEdit` takes
+            // `ApplyWorkspaceEditParams | WorkspaceEdit` and discriminates on
+            // `!!value.edit`, so `{ label, documentChanges }` is wrapped as
+            // `{ edit: { label, documentChanges } }` — putting the label inside
+            // the edit, where LSP defines no such field and no client reads it.
+            // The union is also what hides it at compile time: excess-property
+            // checking admits a property present in EITHER member, so an object
+            // matching neither type-checks against the union.
             const result = await connection.workspace.applyEdit({
                label: options?.label,
-               documentChanges: [TextDocumentEdit.create(OptionalVersionedTextDocumentIdentifier.create(targetUri, version), edits)]
+               edit: {
+                  documentChanges: [TextDocumentEdit.create(OptionalVersionedTextDocumentIdentifier.create(targetUri, version), edits)]
+               }
             });
             if (result && result.applied === false) {
                this.__shadow.invalidate(targetUri);

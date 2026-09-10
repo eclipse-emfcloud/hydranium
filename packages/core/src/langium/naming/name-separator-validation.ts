@@ -10,14 +10,36 @@
 import { type AstNode, type ValidationAcceptor, type ValidationChecks } from '@hydranium/langium';
 import { defineMessage } from '@hydranium/protocol';
 import { acceptMessage } from '../../messages/carriers.js';
+import { type ServerLanguageServices } from '../language-module.js';
+import { type ValidationCheckContribution, type ValidationCheckRegistry } from '../validation/validation-contribution.js';
+import type { NameProvider } from './name-provider.js';
 
+/**
+ * A name value that collides with the qualified-name separator.
+ *
+ * **The sentence addresses a MODELLER, and the remedy it names is theirs**:
+ * where `name` really is the identifier, a different character is the fix and
+ * the only one available to whoever is typing.
+ *
+ * **The adopter-facing failure is a different one, and this message cannot
+ * carry it.** With `nameProperties` left at its default `['name']` over a
+ * grammar where `name` is a display LABEL — a `STRING` legitimately holding
+ * `"Order.Line"` — this fires on every dotted label at once, and "use a
+ * different character" is then advice nobody can act on: the content is
+ * correct and the configuration is not. A burst of this diagnostic across
+ * unrelated nodes is that misconfiguration, not a naming problem, and the fix
+ * is `nameProperties`. Widening the sentence to say both was rejected: a
+ * modeller cannot act on a DI option, and naming one in an editor squiggle
+ * teaches the wrong audience.
+ *
+ * Unreachable from a grammar whose identifier charset excludes the separator,
+ * which is every example here and the reference adopter — so it reads as dead
+ * and is not: it guards the configuration, not the content.
+ */
 export const SEPARATOR_IN_NAME = defineMessage(
    'hydranium/core/separator-in-name',
    "Name '{name}' contains the configured name separator '{separator}', which is reserved for qualified-name composition — use a different character."
 );
-import { type ServerLanguageServices } from '../language-module.js';
-import { type ValidationCheckContribution, type ValidationCheckRegistry } from '../validation/validation-contribution.js';
-import type { NameProvider } from './name-provider.js';
 
 /**
  * Per-node validation check: flag name-bearing AST nodes whose name

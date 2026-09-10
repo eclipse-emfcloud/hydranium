@@ -60,7 +60,7 @@ names, a worked example — is in
 @hydranium/protocol               # transfer documents, references, RPC machinery
 @hydranium/protocol/data          # DataServerProtocol / DataClientProtocol
 @hydranium/protocol/client        # the host-neutral client tier
-@hydranium/protocol/testing       # test doubles and waiters
+@hydranium/protocol/testing       # test doubles, waiters, catalogue audit
 @hydranium/protocol/testing/node  # the Node-only doubles
 ```
 
@@ -68,6 +68,40 @@ The root barrel re-exports `data` and `client`, so those two subpaths buy a
 narrower surface rather than reach; `testing` is only reachable by its own
 specifier, which is what keeps the doubles out of a production bundle. The RPC
 machinery documents itself in [`src/rpc/README.md`](./src/rpc/README.md).
+
+### Auditing a translation catalogue
+
+An adopter with i18n has one failure mode nothing else catches: a catalogue key
+naming no declared code falls back to the English, which is byte-identical to
+the deliberately-partial behaviour every adopter relies on. So a typo is
+invisible at runtime, and `theia nls-extract` reports what the source declares
+rather than whether a catalogue matches it.
+
+`@hydranium/protocol/testing` ships the audit for it — call it from your own
+test, over your own barrels:
+
+<!-- snippet-preamble
+import { flattenCatalogue, findUndeclaredCodes, findSharedCodes } from '@hydranium/protocol/testing';
+import * as protocolMessages from '@hydranium/protocol';
+declare const readFileSync: (path: string, encoding: string) => string;
+declare const expect: (actual: unknown) => { toEqual(expected: unknown): void };
+-->
+
+```ts
+const keys = Object.keys(flattenCatalogue(JSON.parse(readFileSync('nls/de.json', 'utf-8'))));
+
+// Every key names a code some barrel declares. `exemptPrefixes` is for keys no
+// barrel CAN declare — a host mechanism taking its key as an inline literal.
+expect(findUndeclaredCodes(keys, [protocolMessages])).toEqual([]);
+```
+
+`flattenCatalogue` joins nested keys with `/` (the separator a code already
+uses, and what Theia does to a nested catalogue) and drops `_`-prefixed note
+keys, so a flat server-side catalogue and a nested host-side one both go through
+it. `findSharedCodes` covers the other half: exactly one side renders a given
+message, so two catalogues holding one code are two authorities over one
+sentence — assert both key sets non-empty first, since an empty one satisfies
+disjointness while proving nothing.
 
 ## Status
 

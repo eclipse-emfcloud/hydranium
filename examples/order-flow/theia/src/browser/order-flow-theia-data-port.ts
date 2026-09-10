@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type ChannelConnectionHandle, openChannelConnection, whenWorkspaceOpen } from '@hydranium/data-client-theia/lib/browser';
-import { DATA_SERVER_PATH, renderFrameworkMessage, TransferDiagnostic, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { DATA_SERVER_PATH, renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 import { Emitter, MessageService, nls, type Event } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { RemoteConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
@@ -107,25 +107,6 @@ export class OrderFlowTheiaDataPort implements DataPort {
     */
    reportError(error: unknown, reported: ResolvedMessage): void {
       this.messageService.error(renderFrameworkMessage(reported, nls.localization?.translations));
-   }
-
-   /**
-    * The sentence to show for one document diagnostic, in the reading user's
-    * language where this host has a translation for it.
-    *
-    * Same split as {@link reportError} and for the same reason — the framework
-    * holds no locale — but reached from the form rather than from a failure, so
-    * a diagnostic the server publishes is translated in the panel too.
-    *
-    * A diagnostic with no framework identity falls through to its own message,
-    * which covers a syntactic error and any check the adopter's own validator
-    * raises. `TransferDiagnostic.resolved` is what decides that: a `code` alone
-    * does not establish one, since Langium's internal codes live in the same
-    * field.
-    */
-   renderDiagnostic(diagnostic: TransferDiagnostic): string {
-      const resolved = TransferDiagnostic.resolved(diagnostic);
-      return resolved ? renderFrameworkMessage(resolved, nls.localization?.translations) : diagnostic.message;
    }
 
    dispose(): void {

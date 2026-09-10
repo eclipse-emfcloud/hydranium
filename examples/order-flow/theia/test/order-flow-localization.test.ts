@@ -7,7 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { collectMessages, renderFrameworkMessage, resolve, TransferDiagnostic } from '@hydranium/protocol';
+import { renderFrameworkMessage, resolve } from '@hydranium/protocol';
+// The `./lib/testing` twin, not the short `./testing` specifier: this package
+// resolves with `moduleResolution: "Node"`, which reaches no `exports` subpath —
+// the same reason the message barrels below are spelled `/lib/messages`.
+import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/lib/testing';
 import * as protocolMessages from '@hydranium/protocol/lib/messages';
 import { DATA_SERVER_CONNECT_FAILED } from '@hydranium/protocol/lib/messages';
 import * as coreMessages from '@hydranium/core/lib/messages';
@@ -45,25 +49,38 @@ function readHostSources(): { text: string; fileCount: number } {
    return { text: files.map(file => readFileSync(file, 'utf-8')).join('\n'), fileCount: files.length };
 }
 
-/** Theia joins nested catalogue keys with `/`, which is what the codes use. */
-function flatten(node: Record<string, unknown>, prefix = ''): Record<string, string> {
-   const flat: Record<string, string> = {};
-   for (const [key, value] of Object.entries(node)) {
-      // A `_`-prefixed key is a note to a human reader, not a translation.
-      if (key.startsWith('_')) {
-         continue;
-      }
-      const joined = prefix ? `${prefix}/${key}` : key;
-      if (typeof value === 'string') {
-         flat[joined] = value;
-      } else if (typeof value === 'object' && value !== null) {
-         Object.assign(flat, flatten(value as Record<string, unknown>, joined));
-      }
-   }
-   return flat;
+/** Read a catalogue file and flatten it to the `/`-joined keys a code is spelled with. */
+function readCatalogue(file: string): Record<string, string> {
+   return flattenCatalogue(JSON.parse(readFileSync(file, 'utf-8')) as Record<string, unknown>);
 }
 
-const translations = flatten(JSON.parse(readFileSync(CATALOGUE, 'utf-8')) as Record<string, unknown>);
+const translations = readCatalogue(CATALOGUE);
+
+/**
+ * The catalogue the SERVER renders from. Flat already — it is handed straight to
+ * the framework's renderer, with no Theia flattening in between — so it goes
+ * through the same helper only to drop the `_comment` note.
+ */
+const SERVER_CATALOGUE = path.join(__dirname, '..', '..', 'server', 'src', 'nls', 'order-flow.de.json');
+const serverTranslations = readCatalogue(SERVER_CATALOGUE);
+
+/**
+ * Every barrel a key here may name. Passed to the framework's audit rather than
+ * unioned by hand: `collectMessages` is what discriminates a declaration from a
+ * barrel's other exports, and a hand-rolled union over `Object.values` does not
+ * narrow.
+ */
+const BARRELS = [protocolMessages, coreMessages, orderFlowMessages, orderFlowServerMessages];
+
+/**
+ * The one exemption, and it has to be exactly this narrow.
+ *
+ * `hydranium/client-theia/*` keys are inline literals inside `nls.localize`, so
+ * no barrel can enumerate them — they are checked against the SOURCE below
+ * instead. Exempting any wider namespace would exempt every typo in it, which is
+ * what the audit exists to find.
+ */
+const HOST_BOUND_PREFIX = 'hydranium/client-theia/';
 
 describe('the German catalogue', () => {
    it('is not empty, so a broken read cannot pass every case below vacuously', () => {
@@ -71,16 +88,15 @@ describe('the German catalogue', () => {
    });
 
    it('names a real code for every identity-side and adopter-owned key', () => {
-      const declared = new Set(
-         [protocolMessages, coreMessages, orderFlowMessages, orderFlowServerMessages].flatMap(barrel =>
-            collectMessages(barrel).map(message => message.code)
-         )
-      );
-      // Every key EXCEPT the host-bound ones, which are inline literals with no
-      // barrel to enumerate and are checked against the source below. Nothing
-      // else is exempt: exempting a namespace here would let a typo in it pass.
-      const orphans = Object.keys(translations).filter(key => !key.startsWith('hydranium/client-theia/') && !declared.has(key));
-      expect(orphans).toEqual([]);
+      // The framework's own audit rather than a local union, so an adopter
+      // copying this file copies a supported helper and not fifteen lines of
+      // set arithmetic. What stays local is the two decisions only this project
+      // can make: which barrels, and which prefix is exempt.
+      expect(findUndeclaredCodes(Object.keys(translations), BARRELS, { exemptPrefixes: [HOST_BOUND_PREFIX] })).toEqual([]);
+
+      // The server catalogue over the same barrels, with NO exemption: nothing
+      // there resolves through `nls.localize`, so every key is checkable.
+      expect(findUndeclaredCodes(Object.keys(serverTranslations), BARRELS)).toEqual([]);
    });
 
    it('names a real key for every host-bound entry', () => {
@@ -92,7 +108,9 @@ describe('the German catalogue', () => {
       // against an empty string, which is the failure a widened scan invites and
       // the reason the count is asserted rather than assumed.
       expect(fileCount).toBeGreaterThan(1);
-      const hostKeys = Object.keys(translations).filter(key => key.startsWith('hydranium/client-theia/'));
+      // The same prefix the audit above exempts, so the exemption and this check
+      // cannot drift apart into a namespace nothing verifies.
+      const hostKeys = Object.keys(translations).filter(key => key.startsWith(HOST_BOUND_PREFIX));
       expect(hostKeys.length).toBeGreaterThan(0);
       expect(hostKeys.filter(key => !text.includes(`'${key}'`))).toEqual([]);
    });
@@ -107,28 +125,31 @@ describe('the German catalogue', () => {
       expect(renderFrameworkMessage(reported)).toBe('Could not connect to the data server: ECONNREFUSED');
    });
 
-   it('renders the parameterised validation diagnostic with no placeholder left standing', () => {
-      // The entry that could not work until `TransferDiagnostic` carried
-      // `params`, and the reason its absence was invisible: substitution leaves
-      // an unmatched token in place rather than raising, so a half-carried
-      // identity renders a German sentence with a literal `{name}` in it and
-      // nothing anywhere reports a fault.
-      const diagnostic: TransferDiagnostic = {
-         type: 'validation-error',
-         element: '/root@0',
-         message: coreMessages.SEPARATOR_IN_NAME.format({ name: 'Order.Line', separator: '.' }),
-         severity: 'error',
-         code: coreMessages.SEPARATOR_IN_NAME.code,
-         params: { name: 'Order.Line', separator: '.' }
-      };
+   it('shares no key with the catalogue the SERVER renders from', () => {
+      // The invariant, made checkable: a message rendered on both sides has two
+      // authorities over one sentence, and the two would drift on the first
+      // reword. Which side renders a message decides which file it belongs in,
+      // so an overlap is the defect — not a duplicate translation.
+      const serverKeys = Object.keys(serverTranslations);
+      // Both non-empty first, which `findSharedCodes` documents as the caller's
+      // job: an empty set on either side satisfies a disjointness assertion
+      // while proving nothing, and empty is the shape a failed read takes.
+      expect(serverKeys.length).toBeGreaterThan(0);
+      expect(Object.keys(translations).length).toBeGreaterThan(0);
 
-      const rendered = renderFrameworkMessage(TransferDiagnostic.resolved(diagnostic)!, translations);
+      expect(findSharedCodes(serverKeys, Object.keys(translations))).toEqual([]);
+   });
 
-      expect(rendered).toContain("'Order.Line'");
-      expect(rendered).toContain("'.'");
-      expect(rendered).not.toMatch(/\{[^}]+\}/);
-      // Not merely "some German": the assertion above passes for the English too.
-      expect(rendered).toContain('Namenstrennzeichen');
+   it('leaves every server-rendered code to the server, including the ones it used to hold', () => {
+      // Named explicitly rather than left to the disjointness check, because
+      // these two MOVED: both were rendered on this side before the server
+      // rendered its own messages, and a merge that reinstated either would
+      // still pass a disjointness test if the server's copy were dropped in the
+      // same edit.
+      expect(translations).not.toHaveProperty(coreMessages.SEPARATOR_IN_NAME.code);
+      expect(translations).not.toHaveProperty(orderFlowServerMessages.SELF_TRANSITION.code);
+      expect(serverTranslations).toHaveProperty(coreMessages.SEPARATOR_IN_NAME.code);
+      expect(serverTranslations).toHaveProperty(orderFlowServerMessages.SELF_TRANSITION.code);
    });
 
    it('falls back to English for a code it deliberately does not carry', () => {

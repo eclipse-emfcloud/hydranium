@@ -17,10 +17,12 @@ import {
    Disposable,
    LatencyCollector,
    ReferenceSource,
+   resolvedFromResponseError,
    type ReferenceCandidate,
    type ReferenceContext,
    type TransferDiagnostic
 } from '@hydranium/protocol';
+import type { ResponseError } from 'vscode-jsonrpc';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
    DATA_SERVER_WIRE_PREFIX,
@@ -45,9 +47,10 @@ import {
    type StubLanguageDescriptor,
    type TestServicesBundle
 } from '@hydranium/core/testing';
+import { ServerMessageRenderer } from '@hydranium/core/messages';
 import { ProfileCapture } from '@hydranium/core/node';
 import { DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
-import { DataServer } from '../src/data-server.js';
+import { DataServer, NO_ACTIVE_PROFILE, NO_ACTIVE_PROFILE_CODE } from '../src/data-server.js';
 import { defaultDataServerDiagnostics as browserDefaultDiagnostics } from '../src/default-diagnostics.browser.js';
 import { nodeDataServerDiagnostics } from '../src/node/node-diagnostics-provider.js';
 import { type DataServerHarness, makeDataServerHarness } from '../src/testing/data-server-harness.js';
@@ -85,6 +88,18 @@ function buildBundle(): Bundle {
 }
 
 class TestDataServer extends DataServer<FakeRoot, FakeDiagnostic> {}
+
+/**
+ * Adds one method that rejects with a plain `Error`, so the rendering boundary
+ * can be probed with a rejection carrying no identity. An `additionalMethods`
+ * entry rather than an existing internal path, so which layer throws what is
+ * not part of what the test depends on.
+ */
+class PlainFailureServer extends TestDataServer {
+   async failPlain(): Promise<never> {
+      throw new Error('a developer-facing failure');
+   }
+}
 
 type TestHarness = DataServerHarness<TestDataServer, FakeRoot, FakeDiagnostic>;
 
@@ -1138,6 +1153,157 @@ describe('DataServer', () => {
          } finally {
             pair.dispose();
          }
+      });
+
+      describe('server-side rendering of the rejection', () => {
+         /**
+          * Renders `NO_ACTIVE_PROFILE` and nothing else, so an assertion says
+          * which message was rendered rather than that something was.
+          */
+         class ProfileCatalogueRenderer extends ServerMessageRenderer {
+            protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
+               return locale === 'xx-AA' ? { [NO_ACTIVE_PROFILE.code]: 'AA: kein Profil' } : undefined;
+            }
+         }
+
+         /** Drive `stopProfiling` with no capture active and return the rejection message. */
+         async function rejectionMessage(bundle: Bundle): Promise<string> {
+            const pair = makeDuplexConnectionPair();
+            try {
+               new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics() });
+               const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
+                  methodNamespace: DATA_SERVER_WIRE_PREFIX
+               });
+               // The message as it CROSSED THE WIRE — the identity is rendered at
+               // the response boundary, so reading the thrown object server-side
+               // would not distinguish rendered from unrendered.
+               return await diagnostics.stopProfiling({}).then(
+                  () => 'resolved, but the guard should have rejected',
+                  (err: unknown) => (err instanceof Error ? err.message : String(err))
+               );
+            } finally {
+               pair.dispose();
+            }
+         }
+
+         it('renders an identity-bearing rejection in the installed locale', async () => {
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+               serialize: (_uri, root) => `name:${root.name}`,
+               locale: 'xx-AA',
+               messageRenderer: services => new ProfileCatalogueRenderer(services)
+            });
+
+            expect(await rejectionMessage(bundle)).toBe('AA: kein Profil');
+         });
+
+         it('sends the English when no catalogue matches — the control on the row above', async () => {
+            // Same renderer, different locale: a default-English assertion would
+            // otherwise pass with the render never happening at all.
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+               serialize: (_uri, root) => `name:${root.name}`,
+               locale: 'zz-ZZ',
+               messageRenderer: services => new ProfileCatalogueRenderer(services)
+            });
+
+            expect(await rejectionMessage(bundle)).toBe(NO_ACTIVE_PROFILE.text);
+         });
+
+         it('keeps the numeric code and the identity envelope, which the render must not consume', async () => {
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+               serialize: (_uri, root) => `name:${root.name}`,
+               locale: 'xx-AA',
+               messageRenderer: services => new ProfileCatalogueRenderer(services)
+            });
+            const pair = makeDuplexConnectionPair();
+            try {
+               new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics() });
+               const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
+                  methodNamespace: DATA_SERVER_WIRE_PREFIX
+               });
+               const rejection = await diagnostics.stopProfiling({}).then(
+                  () => undefined,
+                  (err: unknown) => err as ResponseError<unknown>
+               );
+
+               // The boundary RECONSTRUCTS the rejection, so this pins that it
+               // reconstructs it faithfully: the numeric code is what a caller
+               // switches on, and the envelope is what identifies the message
+               // now that nothing renders from it client-side.
+               expect(rejection?.code).toBe(NO_ACTIVE_PROFILE_CODE);
+               expect(resolvedFromResponseError(rejection!)?.code).toBe(NO_ACTIVE_PROFILE.code);
+            } finally {
+               pair.dispose();
+            }
+         });
+
+         it('leaves a plain Error alone, since it carries no identity to render', async () => {
+            // A developer-facing failure must not be relabelled as a translated
+            // one, so only a ResponseError reaches the renderer. Asserted by
+            // whether the renderer was CONSULTED: the message being unchanged is
+            // also what a renderer with no catalogue produces, so it cannot
+            // distinguish "not consulted" from "consulted and passed through".
+            const consulted: string[] = [];
+            class RecordingRenderer extends ServerMessageRenderer {
+               override renderError(error: ResponseError<unknown>): string {
+                  consulted.push(error.message);
+                  return super.renderError(error);
+               }
+            }
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+               serialize: (_uri, root) => `name:${root.name}`,
+               messageRenderer: services => new RecordingRenderer(services)
+            });
+            const pair = makeDuplexConnectionPair();
+            try {
+               new PlainFailureServer(pair.left, bundle.services, {
+                  diagnostics: nodeDataServerDiagnostics(),
+                  additionalMethods: ['failPlain']
+               });
+               const proxy = createRpcProxy<{ failPlain(): Promise<never> }>(pair.right, {
+                  methodNamespace: DATA_SERVER_WIRE_PREFIX
+               });
+
+               const message = await proxy.failPlain().then(
+                  () => 'resolved',
+                  (err: unknown) => (err instanceof Error ? err.message : String(err))
+               );
+
+               expect(message).toContain('a developer-facing failure');
+               expect(consulted).toEqual([]);
+            } finally {
+               pair.dispose();
+            }
+         });
+
+         it('consults the renderer for a ResponseError — the control on the row above', async () => {
+            // Same server, same recording renderer: only the thrown TYPE differs,
+            // so an empty `consulted` above means the guard discriminated rather
+            // than that the hook was never wired.
+            const consulted: string[] = [];
+            class RecordingRenderer extends ServerMessageRenderer {
+               override renderError(error: ResponseError<unknown>): string {
+                  consulted.push(error.message);
+                  return super.renderError(error);
+               }
+            }
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+               serialize: (_uri, root) => `name:${root.name}`,
+               messageRenderer: services => new RecordingRenderer(services)
+            });
+            const pair = makeDuplexConnectionPair();
+            try {
+               new PlainFailureServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics() });
+               const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
+                  methodNamespace: DATA_SERVER_WIRE_PREFIX
+               });
+
+               await diagnostics.stopProfiling({}).catch(() => undefined);
+
+               expect(consulted).toEqual([NO_ACTIVE_PROFILE.text]);
+            } finally {
+               pair.dispose();
+            }
+         });
       });
 
       it('dispose() stops an in-flight capture and releases the process-wide singleton', async () => {

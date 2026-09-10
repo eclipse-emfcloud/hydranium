@@ -11,6 +11,7 @@ import {
    type CanonicalUri,
    type CloseModelArgs,
    ConflictError,
+   defineMessage,
    Logger,
    type MaybeObservableValue,
    type MaybePromise,
@@ -33,6 +34,23 @@ import { IntegrityService } from '../integrity/integrity-service.js';
 import { labelPhaseListener } from '../document-builder/labeled-phase-listener.js';
 import { LANGUAGE_CLIENT_ID } from '../../documents/client-ids.js';
 import { type ServerSharedServices } from '../module.js';
+
+/**
+ * The undo-stack entry for a server-authored write pushed to the editor.
+ *
+ * **A user-facing LABEL, not a log string**, which is easy to miss because it
+ * travels as an options field rather than as a message: LSP specifies
+ * `ApplyWorkspaceEditParams.label` as "presented in the user interface for
+ * example on an undo stack to undo the workspace edit". So a user who edits
+ * through a form or drags a diagram node reads this in their editor's undo menu
+ * — which is why it is rendered like any other message the server sends rather
+ * than left as the English literal it was.
+ *
+ * Parameterless deliberately. The obvious improvement is to name the document,
+ * and it is the wrong one: an undo menu is already grouped under the file, so
+ * the URI would be noise in the one place it is redundant.
+ */
+export const MODEL_UPDATE_EDIT = defineMessage('hydranium/core/model-update-edit', 'Update Model');
 
 /** Max time {@link ModelService.settleSave} waits for the build to settle and the sync chain to drain. */
 const SAVE_SETTLE_TIMEOUT_MS = 10_000;
@@ -878,13 +896,26 @@ export class ModelService<
       this.syncChains.set(uri, chain);
    }
 
+   /**
+    * The undo-stack label for a server-authored write, in the locale the server
+    * was handed at init.
+    *
+    * One method rather than the literal at each `applyEdit`, because the two
+    * call sites are the same edit — a push and its full-replace retry — and an
+    * undo menu showing two different words for one operation would read as two
+    * operations.
+    */
+   protected editLabel(): string {
+      return this.services.MessageRenderer.renderMessage(MODEL_UPDATE_EDIT);
+   }
+
    protected async drainSyncQueue(uri: string): Promise<void> {
       const uriLogger = this.tracer.withUri(uri);
       while (this.pendingSync.has(uri)) {
          const text = this.pendingSync.get(uri)!;
          this.pendingSync.delete(uri);
          try {
-            let result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: 'Update Model' });
+            let result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
             if (result?.applied === false && !this.pendingSync.has(uri)) {
                // The push is addressed at the client's LAST DECLARED VERSION, so a
                // rejection normally means the client's buffer moved while the
@@ -905,7 +936,7 @@ export class ModelService<
                // queued — best-effort, since a settle arriving later simply pushes
                // after this and still wins.
                uriLogger.warn(`Language client rejected applyEdit at its declared version — re-pushing a full replace`);
-               result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: 'Update Model' });
+               result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
                if (result?.applied === false) {
                   uriLogger.warn(`Language client rejected the full-replace retry too — client content is stale`);
                }

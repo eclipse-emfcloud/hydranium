@@ -25,7 +25,18 @@
 import assert from 'node:assert/strict';
 import type { Harness } from '@hydranium/protocol/testing';
 import type { ConformanceCheck } from '../conformance-suite.js';
-import { type LanguageFixture, resolveDeferred, resolveModel } from '../model.js';
+import { type ConformanceModel, type LanguageFixture, resolveDeferred, resolveModel } from '../model.js';
+
+/**
+ * Structural minimum of the `initialize` params the kit sends — only `locale`,
+ * which is the one field a check needs to vary.
+ *
+ * A real `InitializeParams` is assignable to this, so a driver typed against
+ * upstream's shape satisfies the port with no adapter.
+ */
+export interface LspConformanceInitializeParams {
+   readonly locale?: string;
+}
 
 /** Structural minimum of an LSP `InitializeResult` — only the baseline capabilities the kit asserts. */
 export interface LspConformanceInitializeResult {
@@ -76,8 +87,17 @@ function hasTextMessage(diagnostic: LspConformanceDiagnostic): boolean {
  * gives the kit the universal `dispose()` teardown.
  */
 export interface LspConformanceDriver extends Harness {
-   /** Drive the `initialize` → `initialized` handshake; resolve with the (structurally-minimal) result. */
-   initialize(): Promise<LspConformanceInitializeResult>;
+   /**
+    * Drive the `initialize` → `initialized` handshake; resolve with the
+    * (structurally-minimal) result.
+    *
+    * `params` is optional and every field in it is too, so a driver that ignores
+    * the argument entirely still satisfies this port — which is what keeps
+    * adding a field here from being a breaking change. `locale` is the reading
+    * user's language, declared by the client because only the client knows it;
+    * the render check below is the only caller that passes anything.
+    */
+   initialize(params?: LspConformanceInitializeParams): Promise<LspConformanceInitializeResult>;
    /** Send `didOpen` for `uri` with full `text` under `languageId`. */
    openDocument(uri: string, text: string, languageId: string, version?: number): void;
    /** Send `didChange` for `uri` as a single full-text replacement at `version`. */
@@ -177,7 +197,7 @@ export function buildLspChecks(options: LspConformanceOptions): ConformanceCheck
    });
 
    for (const language of options.languages) {
-      const { valid, invalid, completionPosition } = language;
+      const { valid, invalid, completionPosition, renderedDiagnostic } = language;
       const tag = `[${valid.languageId}]`;
 
       checks.push({
@@ -273,7 +293,88 @@ export function buildLspChecks(options: LspConformanceOptions): ConformanceCheck
             skipReason: 'fixture supplied no completionPosition'
          });
       }
+
+      // Opt-in: server-side rendering runs only when the fixture names a locale
+      // and the sentence it expects in it. The framework ships no catalogue, so
+      // a server that renders nothing is CORRECT and must not be failed.
+      const renderTitle = `a diagnostic is published rendered in the locale initialize declared ${tag}`;
+      const renderControlTitle = `the same diagnostic is NOT rendered when no locale is declared ${tag}`;
+      if (renderedDiagnostic) {
+         checks.push({
+            title: renderTitle,
+            body: async () => {
+               const published = await publishedMessagesFor(connect, invalid, { locale: renderedDiagnostic.locale });
+               assert.ok(
+                  published.some(message => message.includes(renderedDiagnostic.expected)),
+                  `no published diagnostic contained ${JSON.stringify(renderedDiagnostic.expected)}: ${JSON.stringify(published)}`
+               );
+            }
+         });
+
+         // The second half of the pair. "Contains X" also passes for a server
+         // whose English contains X, and for one that renders whatever the
+         // locale — so the discriminating read is the fragment that must
+         // disappear. Reported as skipped rather than silently dropped when the
+         // fixture omits it, because a lone containment check IS weaker and a
+         // reader has to be able to see that from the report.
+         if (renderedDiagnostic.absentWithLocale) {
+            const { absentWithLocale } = renderedDiagnostic;
+            checks.push({
+               title: renderControlTitle,
+               body: async () => {
+                  const withLocale = await publishedMessagesFor(connect, invalid, { locale: renderedDiagnostic.locale });
+                  assert.ok(
+                     !withLocale.some(message => message.includes(absentWithLocale)),
+                     `a diagnostic still contained ${JSON.stringify(absentWithLocale)} with the locale declared: ${JSON.stringify(withLocale)}`
+                  );
+
+                  // And present without it, which is what rules out a fragment
+                  // that never appears in either state — a typo in the fixture
+                  // would otherwise make the assertion above pass for free.
+                  const withoutLocale = await publishedMessagesFor(connect, invalid);
+                  assert.ok(
+                     withoutLocale.some(message => message.includes(absentWithLocale)),
+                     `no diagnostic contained ${JSON.stringify(absentWithLocale)} with no locale declared, so it cannot witness the render: ${JSON.stringify(withoutLocale)}`
+                  );
+               }
+            });
+         } else {
+            checks.push({
+               title: renderControlTitle,
+               skipReason: 'fixture supplied no absentWithLocale, so the render check is a containment test only'
+            });
+         }
+      } else {
+         checks.push({ title: renderTitle, skipReason: 'fixture supplied no renderedDiagnostic (server-side rendering is opt-in)' });
+         checks.push({ title: renderControlTitle, skipReason: 'fixture supplied no renderedDiagnostic (server-side rendering is opt-in)' });
+      }
    }
 
    return checks;
+}
+
+/**
+ * Open `model` on a fresh driver and return the messages of the diagnostics
+ * published for it, as plain strings.
+ *
+ * A fresh driver per call because `initialize` is once-only per connection and
+ * the locale rides it — so the two states this compares cannot share one.
+ */
+async function publishedMessagesFor(
+   connect: LspConformanceOptions['connect'],
+   model: ConformanceModel,
+   params?: LspConformanceInitializeParams
+): Promise<string[]> {
+   const driver = await connect();
+   try {
+      await driver.initialize(params);
+      const resolved = resolveModel(model);
+      const diagnostics = driver.nextDiagnostics(resolved.uri);
+      driver.openDocument(resolved.uri, resolved.text, resolved.languageId);
+      return (await diagnostics).map(diagnostic =>
+         typeof diagnostic.message === 'string' ? diagnostic.message : (diagnostic.message?.value ?? '')
+      );
+   } finally {
+      driver.dispose();
+   }
 }

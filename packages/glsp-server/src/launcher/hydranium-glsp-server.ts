@@ -26,9 +26,10 @@ import { injectable } from 'inversify';
  * `error.cause?.toString()` whenever the error is a {@link GLSPServerError},
  * and that one value feeds both the server log and the client's
  * {@link RejectAction}. A {@link GLSPServerError} carrying no `cause` therefore
- * reaches no reader at all — not the toast, not the details pane, not the log —
- * while a plain `Error` survives, because the other branch reads the error
- * itself. The typed error is the trap, and it is the one upstream's own
+ * reaches its readers as `undefined` — the log line and the client's
+ * action-dispatcher warning both print it — while a plain `Error` survives,
+ * because the other branch reads the error itself. The typed error is the trap,
+ * and it is the one upstream's own
  * `getOrThrow` helper raises: that helper's signature cannot pass a `cause`, so
  * an adopter using the sanctioned helper has no fix available on their side.
  * Restating the cause at each throw site is the alternative, and it costs

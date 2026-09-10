@@ -42,6 +42,23 @@ static server as the debuggee, and opens Chrome against it once the server print
 its URL. Breakpoints in the page read as written; the three heads run in a web
 worker, which appears as its own target in the call-stack view.
 
+**`?locale=de` renders the server's messages in German** —
+`http://localhost:3002/?locale=de`. The page reads the tag off its own URL and
+declares it in LSP `initialize`, the server hands it to
+`OrderFlowMessageRenderer`, and the diagnostics in the problems list come back
+translated. Try it on `orders/audit-leak.domain`'s unresolved reference: that
+sentence is **Langium's**, not this example's, and it arrives in German because
+the framework claims it as `hydranium/core/unresolved-reference` and the server
+renders before publishing. Nothing on the page holds a catalogue.
+
+A query parameter rather than a picker, and rather than `navigator.language`: the
+point is to switch it in one reload while watching the same diagnostics, and you
+cannot ask a reader to change their browser's language to see a feature. Any
+other tag falls back to English, which is the same pass-through an adopter with
+no entry for a code gets. A worker has no host to ask for a language — no
+`vscode.env.language`, no Theia `localeId` — so declaring one is the page's job
+here, and `initialize` is the same slot every other host uses.
+
 The page starts the worker, hands each head its own `MessageChannel`, sends LSP
 `initialize` for a workspace it never had on disk, and reports five things: the
 diagnostics the LSP head publishes, one document read back through the data
