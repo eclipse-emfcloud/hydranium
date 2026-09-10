@@ -51,10 +51,20 @@ export interface LspConformanceDiagnostic {
    readonly message: string | { readonly value: string };
 }
 
-/** True when `diagnostic` carries a message in either LSP shape (plain string or markup). */
+/**
+ * True when `diagnostic` carries a NON-EMPTY message in either LSP shape
+ * (plain string or markup).
+ *
+ * Emptiness is part of the claim, not a refinement of it: `message: ''` is a
+ * diagnostic a user cannot act on, and a type-only test admits it — which
+ * makes "every diagnostic carries a message" pass for a head that publishes
+ * none. LSP declares the field required without forbidding the empty string,
+ * so nothing upstream rules it out either.
+ */
 function hasTextMessage(diagnostic: LspConformanceDiagnostic): boolean {
    const { message } = diagnostic;
-   return typeof message === 'string' || typeof message?.value === 'string';
+   const text = typeof message === 'string' ? message : message?.value;
+   return typeof text === 'string' && text.length > 0;
 }
 
 /**
@@ -199,7 +209,7 @@ export function buildLspChecks(options: LspConformanceOptions): ConformanceCheck
                driver.openDocument(model.uri, model.text, model.languageId);
                const published = await diagnostics;
                assert.ok(published.length >= 1, 'didOpen(invalid) published no diagnostics');
-               assert.ok(published.every(hasTextMessage), 'a published diagnostic was missing a message');
+               assert.ok(published.every(hasTextMessage), 'a published diagnostic was missing a non-empty message');
             } finally {
                driver.dispose();
             }
