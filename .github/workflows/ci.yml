@@ -79,7 +79,11 @@ jobs:
         os: [ubuntu-22.04, windows-2025]
 
     env:
-      NODE_OPTIONS: --max_old_space_size=4096
+      # `--report-on-fatalerror` makes a V8 fatal error drop a report naming
+      # the trigger and the heap and system memory at that moment, which is
+      # the evidence the silent Windows death currently leaves none of. Also
+      # in `release.yml`, because the step above compares the two.
+      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
       # Empty is what turbo reads as unset, so a push and a pull request keep
@@ -431,6 +435,57 @@ jobs:
       - name: Full gate
         run: npm run check
 
+      # A turbo task that dies writing nothing leaves no failure to read. These
+      # are the records that outlive it. `continue-on-error` because this runs
+      # only when the job has already failed, and a second red would bury the
+      # first. No live memory figure: by now the process has released it all.
+      - name: Post-mortem for a silent child death
+        if: failure() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($log in 'Application', 'System') {
+            Write-Host "=== $log (last 30 minutes, Critical/Error/Warning) ==="
+            $events = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{
+              LogName   = $log
+              StartTime = (Get-Date).AddMinutes(-30)
+              Level     = 1, 2, 3
+            }
+            if ($events) {
+              $events | Select-Object -First 25 |
+                Format-List TimeCreated, ProviderName, Id, LevelDisplayName, Message
+            } else {
+              Write-Host "no Critical/Error/Warning entries in the window"
+            }
+          }
+          # The commit limit is what a Windows allocation fails against, and
+          # unlike free memory it does not decay after the death.
+          Write-Host "=== commit limit and pagefile ==="
+          Get-CimInstance Win32_OperatingSystem |
+            Format-List TotalVisibleMemorySize, TotalVirtualMemorySize
+          Get-CimInstance Win32_PageFileUsage | Format-List Name, AllocatedBaseSize, PeakUsage
+
+      # Separate from the upload below because it needs `include-hidden-files`,
+      # which defaults to FALSE: turbo's logs are in a dot directory and would
+      # be dropped in silence, leaving an artefact that looks complete.
+      - name: Upload post-mortem evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: post-mortem-${{ matrix.os }}
+          # Node writes its report into the dying process's working directory,
+          # which under turbo is the task's own package, so every depth needs
+          # naming — two for an example, because `*` does not cross a separator.
+          path: |
+            report.*.json
+            packages/*/report.*.json
+            examples/*/*/report.*.json
+            packages/*/.turbo/*.log
+            examples/*/*/.turbo/*.log
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+
       # The one piece of this that a reader sees without downloading anything:
       # the artefact below is a zip, and GitHub renders no JUnit of its own. It
       # is a REPORTER, so it never fails the job — `always()` and it swallows
@@ -484,7 +539,7 @@ jobs:
     if: ${{ inputs.skip_e2e != true }}
 
     env:
-      NODE_OPTIONS: --max_old_space_size=4096
+      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
 
