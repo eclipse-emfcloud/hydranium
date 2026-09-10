@@ -65,8 +65,15 @@ export function diagnosticsToMarkers(diagnostics: readonly TransferLspDiagnostic
  * The ids of the elements drawn on this diagram for the diagnostic's target,
  * starting at the node it points at and walking up its containers; empty when
  * the path does not resolve or nothing on the chain is rendered.
+ *
+ * @param elementPath absent for a lexer or parser error, which Langium pushes
+ *    onto the document without one — such a diagnostic points at text no node
+ *    was built from, so it marks nothing.
  */
-function renderedElementIds(elementPath: string, lookups: DiagnosticMarkerLookups): readonly string[] {
+function renderedElementIds(elementPath: string | undefined, lookups: DiagnosticMarkerLookups): readonly string[] {
+   if (elementPath === undefined) {
+      return [];
+   }
    let node: AstNode | undefined = lookups.resolveElement(elementPath);
    while (node !== undefined) {
       const ids = lookups.renderedIdsFor(node);

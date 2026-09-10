@@ -225,7 +225,7 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * demand by the identity-preserving graft of {@link rehydrateNode} /
  * {@link rehydrate}, driven transparently from the framework
  * `NameProvider.getNameNode` chokepoint, the comment provider, and
- * `AbstractHydraniumLangiumDocuments.getOrCreateDocument`.
+ * `HydraniumLangiumDocuments.getOrCreateDocument`.
  */
 export class CstResidencyService {
    protected readonly strategy: CstResidencyStrategy;

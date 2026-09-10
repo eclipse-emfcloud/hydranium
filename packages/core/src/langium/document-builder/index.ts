@@ -8,5 +8,6 @@
  ********************************************************************************/
 
 export * from './build-pipeline-integration.js';
+export * from './build-session.js';
 export * from './document-builder.js';
 export * from './labeled-phase-listener.js';

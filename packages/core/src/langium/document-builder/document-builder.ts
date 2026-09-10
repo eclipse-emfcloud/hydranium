@@ -9,6 +9,7 @@
 
 import { type Clock, type LogThreshold, type MaybeObservableValue, ObservableValue, type Tracer } from '@hydranium/protocol';
 import {
+   type AstNode,
    type BuildOptions,
    DefaultDocumentBuilder,
    type DocumentPhaseListener,
@@ -26,6 +27,7 @@ import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residen
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
+import { BuildSession, type BuildSessionContext } from './build-session.js';
 import { type LabeledPhaseListener, labelPhaseListener } from './labeled-phase-listener.js';
 
 /** Document states a phase-reached line is emitted for by default — every built phase. */
@@ -79,6 +81,18 @@ export interface DocumentBuilderOptions extends LogNameOptions {
     */
    readonly slowBuildMs?: MaybeObservableValue<number>;
    /**
+    * Build duration at or above which a build's phase-reached and slow-listener
+    * lines are emitted; they are held for the duration of the build and dropped
+    * when it finishes faster. Default `0` — no buffering, every line emitted as
+    * it is produced, which is the only setting that keeps lines interleaved with
+    * the rest of the log in real time.
+    *
+    * Set it to make a fast rebuild log nothing but its one build line. The
+    * decision needs the build's TOTAL duration, so it cannot be made by any
+    * per-line hook. Read once per build; accepts a {@link MaybeObservableValue}.
+    */
+   readonly phaseDetailMs?: MaybeObservableValue<number>;
+   /**
     * Refresh cross-document `ComputedScopes` derivations when a referencing
     * document is cascade-rebuilt (see
     * {@link HydraniumDocumentBuilder.resetToState}). An `AstExtension` at
@@ -106,14 +120,21 @@ export interface DocumentBuilderOptions extends LogNameOptions {
  *   {@link reparseAndRelink} — for a build-phase listener that mutated a
  *   document's AST and must reconcile it within the same build.
  * - **Diagnostic dedupe** at `Validated` ({@link dedupeDiagnostics}).
+ * - **Build sessions** ({@link BuildSession}): each `update` / `build` call is
+ *   one correlated unit carrying an id, a trigger label, a start time and
+ *   cancellation lineage, so every line of a rebuild reads as belonging to it
+ *   and a preempted build is distinguishable from the winner.
  * - **Logging instrumentation** (default on, opt-out via `logLevel: 'off'`):
- *   phase-reached lines, slow-listener breakdowns on `notifyDocumentPhase`,
- *   and slow-build-phase totals on `notifyBuildPhase`.
+ *   a per-build line, phase-reached lines, slow-listener breakdowns on
+ *   `notifyDocumentPhase`, and slow-build-phase totals on `notifyBuildPhase`.
  *
  * Adopters extend this class — the configuration knobs cover what most
  * adopters need; the `format*Line` methods, `formatUri`, and
  * `collectDeletedURIs` are protected so subclasses can customise wording or
- * domain-aware cascades without re-implementing surrounding logic.
+ * domain-aware cascades without re-implementing surrounding logic. An adopter
+ * with build-scoped state of its own subclasses {@link BuildSession} and
+ * overrides {@link createBuildSession}, which puts that state under the same
+ * preemption-correct teardown rather than a reimplementation of it.
  */
 export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly tracer: Tracer;
@@ -127,6 +148,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly slowListenerMs: ObservableValue<number>;
    /** Live slow-build-phase-total threshold; read `.value` per phase. */
    protected readonly slowBuildMs: ObservableValue<number>;
+   /** Live phase-detail buffering threshold; read `.value` once per build, onto the session. */
+   protected readonly phaseDetailMs: ObservableValue<number>;
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly clock: Clock;
    /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
@@ -139,6 +162,22 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly refreshCrossDocumentComputedScopes: boolean;
    /** LSP event name (e.g. `'didChangeWatchedFiles'`) staged for the next `update()` call. */
    protected pendingUpdateReason?: string;
+   /**
+    * The build currently in progress, or `undefined` between builds.
+    *
+    * A subclass carrying its own build-scoped state returns a {@link BuildSession}
+    * subclass from {@link createBuildSession} and narrows this with a typeguard
+    * where it reads that state — rather than redeclaring the field, whose
+    * initialiser would run after `super()` and clear a session opened during
+    * construction.
+    */
+   protected activeSession?: BuildSession;
+   /**
+    * `traceId` of the last build that ended in cancellation, for the successor's
+    * "cancels #N" tag. Held here rather than on a session because the session
+    * that carries it is already gone by the time its successor is opened.
+    */
+   protected lastCancelledTraceId?: number;
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -151,6 +190,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.slowPhaseMs = ObservableValue.from(options.slowPhaseMs ?? 25);
       this.slowListenerMs = ObservableValue.from(options.slowListenerMs ?? 5);
       this.slowBuildMs = ObservableValue.from(options.slowBuildMs ?? 25);
+      this.phaseDetailMs = ObservableValue.from(options.phaseDetailMs ?? 0);
       this.refreshCrossDocumentComputedScopes = options.refreshCrossDocumentComputedScopes ?? false;
       if (this.logLevel !== 'off') {
          this.registerPhaseListeners();
@@ -193,7 +233,16 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       const doc = this.langiumDocuments.getDocument(UriUtils.toUri(this.uriPolicy.canonicalUri(uri)));
       const docState = doc ? DocumentState[doc.state] : 'unknown (document not loaded)';
       const lastPhase = this.lastPhaseMs > 0 ? `${Math.round(performance.now() - this.lastPhaseMs)}ms ago` : 'no phase observed';
-      return `current state: '${docState}', last phase: ${lastPhase}`;
+      return `current state: '${docState}', last phase: ${lastPhase}, active build: ${this.formatSession(this.activeSession)}`;
+   }
+
+   /** Render a session for a status line. `undefined` — no build in progress — reads as `none`. */
+   protected formatSession(session: BuildSession | undefined): string {
+      if (!session) {
+         return 'none';
+      }
+      const id = session.traceId !== undefined ? `#${session.traceId}` : 'untimed';
+      return `${id} (${session.trigger}, ${Math.round(performance.now() - session.startMs)}ms in)`;
    }
 
    // ============================================================
@@ -409,7 +458,35 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.ensureLanguageFileExtensions();
       const changedURIs = changed.flatMap(uri => this.flattenAndAdaptURI(uri));
       const deletedURIs = deleted.flatMap(uri => this.collectDeletedURIs(uri));
-      return super.update(changedURIs, deletedURIs, cancelToken);
+      return this.runInSession(
+         {
+            kind: 'update',
+            trigger: this.buildTriggerLabel(changedURIs, deletedURIs),
+            triggerCountsDocs: changedURIs.length + deletedURIs.length !== 1,
+            changed: changedURIs,
+            deleted: deletedURIs
+         },
+         this.rebuildLabel(changedURIs, deletedURIs),
+         () => super.update(changedURIs, deletedURIs, cancelToken)
+      );
+   }
+
+   /**
+    * The workspace-initialization entry point, bracketed by a session like
+    * {@link update}. Langium's `update` reaches `buildDocuments` directly rather
+    * than through here, so the two never nest.
+    */
+   override build<T extends AstNode>(
+      documents: Array<LangiumDocument<T>>,
+      options?: BuildOptions,
+      cancelToken?: CancellationToken
+   ): Promise<void> {
+      const uris = documents.map(document => document.uri);
+      return this.runInSession(
+         { kind: 'build', trigger: `${documents.length} docs`, triggerCountsDocs: true, changed: uris, deleted: [] },
+         `Build documents (${documents.length} docs)`,
+         () => super.build(documents, options, cancelToken)
+      );
    }
 
    /**
@@ -616,6 +693,149 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    }
 
    // ============================================================
+   // Build sessions — one rebuild as a correlated unit
+   // ============================================================
+
+   /**
+    * Open a session, run `body` inside it, and close it — the bracket every
+    * line of a rebuild is emitted within.
+    *
+    * The session is installed **synchronously**, before the timed body runs, so
+    * that state a subclass computed in {@link createBuildSession} is already
+    * readable by the time Langium's `update` consults `shouldRelink`.
+    *
+    * Teardown is preemption-correct, which is the reason this is framework code
+    * rather than a recipe. Langium's write mutex cancels an in-flight build when
+    * a later one arrives, so two sessions overlap: the successor installs itself
+    * as {@link activeSession} while the predecessor is still unwinding, and the
+    * predecessor's `finally` runs LAST. Clearing unconditionally there would
+    * discard the winner's state mid-build. Only the session that is still
+    * current clears — and the check is reference equality on the session object,
+    * not on {@link BuildSession.traceId}, which is `undefined` for every build
+    * whenever the timing level is suppressed and would compare equal to itself
+    * across two different builds.
+    *
+    * Re-entrancy is not hypothetical even without an adopter: {@link
+    * requeueOrphaned} calls `update` from inside a wait, while a build may be
+    * running.
+    */
+   protected runInSession(context: BuildSessionContext, label: string, body: () => Promise<void>): Promise<void> {
+      // Read before installing the new session: the id being superseded belongs
+      // to the OUTGOING build, or — when the previous one already finished
+      // cancelled — to the id it parked for its successor.
+      const supersededId = this.activeSession?.traceId ?? this.lastCancelledTraceId;
+      this.lastCancelledTraceId = undefined;
+      const reason = this.pendingUpdateReason;
+      this.pendingUpdateReason = undefined;
+      const tags: string[] = [];
+      if (reason) {
+         tags.push(`event: ${reason}`);
+      }
+      if (supersededId !== undefined) {
+         tags.push(`cancels #${supersededId}`);
+      }
+
+      const session = this.createBuildSession(context);
+      this.activeSession = session;
+      // A phase's "since previous phase" must measure from the build's start,
+      // not from whenever the last build's final phase happened to land.
+      this.lastPhaseMs = session.startMs;
+      return this.tracer.time(
+         label,
+         async () => {
+            try {
+               await body();
+            } catch (err: unknown) {
+               if (isOperationCancelled(err)) {
+                  session.cancelled = true;
+               }
+               throw err;
+            } finally {
+               this.endSession(session);
+            }
+         },
+         this.logLevel,
+         {
+            logAfterMs: 0,
+            forceMemoryAboveMs: session.buffers ? session.detailThresholdMs : undefined,
+            captureId: id => {
+               session.traceId = id;
+            },
+            tags
+         }
+      );
+   }
+
+   /**
+    * Construct the session for one build. Override to return a
+    * {@link BuildSession} subclass carrying adopter build-scoped state — it is
+    * called before the build body, so anything derived here is readable
+    * throughout it.
+    */
+   protected createBuildSession(context: BuildSessionContext): BuildSession {
+      return new BuildSession(performance.now(), context.trigger, context.triggerCountsDocs, this.phaseDetailMs.value);
+   }
+
+   /**
+    * Close `session`: flush what it buffered, then release it if it is still the
+    * current one (see {@link runInSession} on why that check is conditional).
+    * The flush is unconditional — a preempted build's lines still describe work
+    * that happened.
+    */
+   protected endSession(session: BuildSession): void {
+      this.flushSession(session);
+      if (this.activeSession === session) {
+         this.activeSession = undefined;
+         if (session.cancelled) {
+            this.lastCancelledTraceId = session.traceId;
+         }
+      }
+   }
+
+   /**
+    * Emit the lines `session` held back, if it ran long enough to be worth the
+    * detail; drop them otherwise. Emits through {@link emit} rather than
+    * {@link log}, which would route them straight back into the buffer.
+    */
+   protected flushSession(session: BuildSession): void {
+      const elapsedMs = performance.now() - session.startMs;
+      if (elapsedMs >= session.detailThresholdMs) {
+         for (const line of session.bufferedLines) {
+            this.emit(line);
+         }
+      }
+      session.bufferedLines.length = 0;
+   }
+
+   /** Label for the build's own log line. Override to customise wording. */
+   protected rebuildLabel(changed: URI[], deleted: URI[]): string {
+      if (changed.length === 0 && deleted.length === 0) {
+         return 'Rebuild documents (nothing to do)';
+      }
+      if (changed.length === 1 && deleted.length === 0) {
+         return `Rebuild document: ${this.formatUri(changed[0])}`;
+      }
+      if (changed.length === 0 && deleted.length === 1) {
+         return `Rebuild after delete: ${this.formatUri(deleted[0])}`;
+      }
+      return `Rebuild documents (${changed.length} changed, ${deleted.length} deleted)`;
+   }
+
+   /** Short description of what triggered the build, repeated on every phase line. Override to customise wording. */
+   protected buildTriggerLabel(changed: URI[], deleted: URI[]): string {
+      if (changed.length === 0 && deleted.length === 0) {
+         return 'nothing';
+      }
+      if (changed.length === 1 && deleted.length === 0) {
+         return this.formatUri(changed[0]);
+      }
+      if (changed.length === 0 && deleted.length === 1) {
+         return `deleted ${this.formatUri(deleted[0])}`;
+      }
+      return `${changed.length} changed, ${deleted.length} deleted`;
+   }
+
+   // ============================================================
    // Logging — phase-reached listeners
    // ============================================================
 
@@ -630,13 +850,35 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       const now = performance.now();
       const elapsedMs = Math.round(now - this.lastPhaseMs);
       this.lastPhaseMs = now;
+      // Counted before the line is formatted, so the formatter stays a pure
+      // function of state a caller can also set up in a test.
+      if (this.activeSession) {
+         this.activeSession.phasesLogged++;
+      }
       this.log(this.phaseReachedLine(state, documents, elapsedMs));
    }
 
-   /** Format the phase-reached log line. Override to customise wording. */
+   /**
+    * Format the phase-reached log line. Override to customise wording.
+    *
+    * Within a session the line names what triggered the build, so a phase read
+    * in isolation still says which rebuild it belongs to. `elapsedMs` is ignored
+    * for the FIRST phase of a session: it measures from the previous build's
+    * last phase, an idle gap that says nothing about this build.
+    */
    protected phaseReachedLine(state: DocumentState, documents: LangiumDocument[], elapsedMs: number): string {
-      const docInfo = documents.length === 1 ? this.formatUri(documents[0].uri) : `${documents.length} docs`;
-      return `Reached phase '${DocumentState[state]}' [${docInfo}, ${elapsedMs}ms since previous phase]`;
+      const session = this.activeSession;
+      let docInfo: string;
+      if (session) {
+         docInfo = session.triggerCountsDocs ? `building ${session.trigger}` : `building ${session.trigger}, ${documents.length} docs`;
+      } else {
+         docInfo = documents.length === 1 ? this.formatUri(documents[0].uri) : `${documents.length} docs`;
+      }
+      const elapsedInfo =
+         session && session.phasesLogged <= 1
+            ? `${Math.round(performance.now() - session.startMs)}ms since build start`
+            : `${elapsedMs}ms since previous phase`;
+      return `Reached phase '${DocumentState[state]}' [${docInfo}, ${elapsedInfo}]`;
    }
 
    // ============================================================
@@ -832,8 +1074,26 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    // Internal helpers
    // ============================================================
 
-   /** Dispatch a log line at the configured log level; a no-op when `logLevel === 'off'`. */
+   /**
+    * Dispatch a log line at the configured log level; a no-op when `logLevel ===
+    * 'off'`.
+    *
+    * Held on the active session when it buffers, so the "was this build worth a
+    * per-phase breakdown" decision — which needs the build's total duration, and
+    * so cannot be taken by anything that runs while the lines are produced — is
+    * deferred to {@link flushSession}.
+    */
    protected log(message: string): void {
+      const session = this.activeSession;
+      if (session?.buffers) {
+         session.bufferedLines.push(message);
+         return;
+      }
+      this.emit(message);
+   }
+
+   /** Write a line out, bypassing session buffering. The single sink every framework log line reaches. */
+   protected emit(message: string): void {
       this.tracer.logAt(this.logLevel, message);
    }
 }

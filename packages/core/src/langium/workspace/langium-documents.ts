@@ -7,14 +7,24 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Tracer } from '@hydranium/protocol';
-import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type URI } from '@hydranium/langium';
+import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type LangiumDocuments, type URI } from '@hydranium/langium';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from './document-uri-policy.js';
 
 /**
- * Default `LangiumDocuments` for `@hydranium/core` consumers. Layers two
- * extensions on top of Langium's {@link DefaultLangiumDocuments}:
+ * The registry surface the framework adds on top of Langium's
+ * {@link LangiumDocuments}. Declared separately from the implementing class so
+ * the shared-services slot can narrow to it: the class takes the services tree
+ * as its constructor parameter, so naming the CLASS there would make that type
+ * depend on itself.
+ */
+export interface HydraniumDocumentRegistry extends LangiumDocuments {
+   createEmptyDocument(uri: URI): LangiumDocument<AstNode>;
+}
+
+/**
+ * Default `LangiumDocuments` for `@hydranium/core` consumers, extending
+ * Langium's {@link DefaultLangiumDocuments} with:
  *
  * 1. **Identity via the {@link DocumentUriPolicy} seam.**
  *    `getOrCreateDocument` resolves the requested URI through the seam — the
@@ -24,31 +34,52 @@ import { type DocumentUriPolicy } from './document-uri-policy.js';
  *    `LangiumDocuments` override. The default resolves to the URI unchanged
  *    (`DefaultDocumentUriPolicy`), matching Langium's own keying.
  *
- * 2. **`createEmptyDocument(uri)` — synchronous** factory for a transient
- *    document with no loadable on-disk content. `getOrCreateDocument` falls
- *    back to it when the seam reports no loadable URI, or when `super` cannot
- *    load it, so callers always receive a document. Abstract because the
- *    parse-result root is grammar-specific (each grammar returns its own
- *    root node type). The fallback document is deliberately
- *    **not** registered: a transient placeholder must not mask the real
- *    document once it appears.
+ * 2. **A load that finds nothing rejects**, rather than answering with a
+ *    transient empty document. An empty AST validates clean, so a placeholder
+ *    hands the caller something that silently is not the file, and a caller
+ *    that wants a document for a URI with no content on disk cannot use one
+ *    anyway: it is unregistered, so no build, index or save can see it, and
+ *    `LangiumDocumentFactory.update` reads from disk. Content that legitimately
+ *    lives outside the filesystem belongs in a virtual document, which carries
+ *    real source text.
  */
-export abstract class AbstractHydraniumLangiumDocuments extends DefaultLangiumDocuments {
+export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implements HydraniumDocumentRegistry {
    /** Document-identity seam, shared with the text store, event filters, and builder. */
    protected readonly uriPolicy: DocumentUriPolicy;
-   protected readonly tracer: Tracer;
 
    constructor(protected override readonly services: ServerSharedServicesMinimal) {
       super(services);
       this.uriPolicy = services.workspace.DocumentUriPolicy;
-      this.tracer = services.Tracer.for('LangiumDocuments');
    }
 
    /**
-    * Build a transient empty document for `uri`. Implemented by consumers
-    * because the parse-result root is grammar-specific.
+    * Build a transient document for `uri` by parsing empty text with the
+    * grammar `uri` routes to, so the root is that language's entry type with
+    * every containment list initialised.
+    *
+    * For callers that need a document at a URI with no content on disk — the
+    * scope provider querying before a file exists is the case it was added for.
+    * `getOrCreateDocument` deliberately does NOT fall back to this: fabricating
+    * a document behind a caller that asked to LOAD one hands back something
+    * that silently is not the file, whereas calling this is a caller saying it
+    * wants a stand-in.
+    *
+    * The result is not registered, so nothing downstream can see it, and
+    * `LangiumDocumentFactory.update` would read from disk. It is a probe, not a
+    * document under construction; content that must survive belongs in a
+    * virtual document, which carries real source text.
+    *
+    * Building the root by hand instead needs the entry type name and a cast
+    * past the generated types, and leaves those lists `undefined`. A grammar
+    * whose entry rule opens with mandatory syntax yields a parse error here,
+    * and it is kept: `AstReflection.isComplete` is `false` for such a root
+    * however it is built, so the error states the same thing.
     */
-   abstract createEmptyDocument(uri: URI): LangiumDocument<AstNode>;
+   createEmptyDocument(uri: URI): LangiumDocument<AstNode> {
+      // The two-argument overload is synchronous; passing a cancellation token
+      // selects the promise-returning one, which this contract cannot await.
+      return this.langiumDocumentFactory.fromString('', uri);
+   }
 
    override async getOrCreateDocument(uri: URI): Promise<LangiumDocument<AstNode>> {
       const resolved = this.uriPolicy.loadUri(uri);
@@ -68,27 +99,18 @@ export abstract class AbstractHydraniumLangiumDocuments extends DefaultLangiumDo
             return await super.getOrCreateDocument(resolved);
          } catch (error: unknown) {
             // Load lost a race with a concurrent create — return that document.
+            // Checked before propagating, so a race is not reported as a
+            // missing file; cancellation carries no document and falls through.
             const reentrant = this.getDocument(resolved);
             if (reentrant) {
                this.services.workspace.CstResidencyService.rehydrate(reentrant);
                return reentrant;
             }
-            // No concurrent document, so the load genuinely failed. The fallback
-            // below still runs, because the file-not-found case is the ordinary
-            // one here and no provider-independent way to recognise it exists:
-            // Node's provider throws `ENOENT`, the in-memory one a bare `Error`,
-            // and the provider is a seam an adopter rebinds. Discriminating on
-            // message text across that seam would be a worse defect than the
-            // one it fixes. So the failure is TRACED rather than propagated —
-            // an unreadable-but-present file still degrades to an empty
-            // document, but it stops doing so silently.
-            this.tracer
-               .with(resolved.toString())
-               .debug(`Load failed, falling back to an empty document: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
          }
       }
-      // No loadable content (missing / synthetic / not yet written): a transient
-      // empty placeholder keyed canonically — not registered (see the class doc).
-      return this.createEmptyDocument(resolved ?? uri);
+      // The seam reports no loadable content, so there is nothing to read and
+      // no error from a read to carry.
+      throw new Error(`No loadable content for ${uri.toString()}`);
    }
 }

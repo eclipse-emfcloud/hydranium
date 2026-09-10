@@ -20,7 +20,9 @@ function node(type: string, container?: AstNode): AstNode {
    return makeFakeAstNode<AstNode>({ $type: type, $container: container });
 }
 
-function diagnostic(overrides: Partial<TransferLspDiagnostic> & Pick<TransferLspDiagnostic, 'element'>): TransferLspDiagnostic {
+// `element` stays required here though optional on the type: a fixture that
+// omits it would exercise the no-element path instead of the case it names.
+function diagnostic(overrides: Partial<TransferLspDiagnostic> & Required<Pick<TransferLspDiagnostic, 'element'>>): TransferLspDiagnostic {
    return {
       message: 'boom',
       range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
@@ -37,7 +39,15 @@ function diagnostic(overrides: Partial<TransferLspDiagnostic> & Pick<TransferLsp
  */
 function lookups(paths: Map<string, AstNode>, renderedIds: Map<AstNode, string[]>): DiagnosticMarkerLookups {
    return {
-      resolveElement: path => paths.get(path),
+      resolveElement: path => {
+         // Declared to take a `string`, so anything else is a contract
+         // violation. A plain `Map.get` answers `undefined` for it, which no
+         // assertion can tell from an unresolvable path.
+         if (typeof path !== 'string') {
+            throw new Error(`resolveElement called with ${String(path)} rather than a path`);
+         }
+         return paths.get(path);
+      },
       renderedIdsFor: astNode => renderedIds.get(astNode) ?? []
    };
 }
@@ -122,6 +132,16 @@ describe('diagnosticsToMarkers', () => {
    it('drops a diagnostic whose element path does not resolve to a node', () => {
       const markers = diagnosticsToMarkers(
          [diagnostic({ element: 'elements@99' })],
+         lookups(new Map(), new Map([[node('X'), ['anything']]]))
+      );
+      expect(markers).toEqual([]);
+   });
+
+   it('drops a diagnostic that carries no element path at all', () => {
+      // What an open diagram sees once its source stops parsing: a lexer or
+      // parser error reaches here with `element` absent, not empty.
+      const markers = diagnosticsToMarkers(
+         [{ message: 'boom', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }],
          lookups(new Map(), new Map([[node('X'), ['anything']]]))
       );
       expect(markers).toEqual([]);

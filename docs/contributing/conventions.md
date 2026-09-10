@@ -294,11 +294,11 @@ Examples on framework classes:
 
 **Why methods, not flat utilities:**
 
-- Adopters routinely want to enrich these (one adds `active
-  rebuild #N` to `formatBuildStatus`, and emits per-shape counts via
-  `formatSourceRoot`). Override-via-subclass keeps the override local
-  to the owner and preserves access to `this`-state the formatter often
-  needs.
+- Adopters routinely want to enrich these (one renders `formatUri` as a
+  workspace-relative path, which every line the builder emits then picks
+  up, and emits per-shape counts via `formatSourceRoot`).
+  Override-via-subclass keeps the override local to the owner and
+  preserves access to `this`-state the formatter often needs.
 - Each formatter has exactly one consumer (the owner's own log line).
   There's no cross-cutting "describe this thing of unknown type" call
   pattern that would justify a central registry or strategy service.
