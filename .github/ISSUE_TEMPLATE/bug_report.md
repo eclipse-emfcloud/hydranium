@@ -6,13 +6,15 @@ labels: bug
 assignees: ''
 ---
 
-<!-- Not for security vulnerabilities: report those via SECURITY.md. Public
-     vulnerability reports here will be deleted. -->
+> **Not for security vulnerabilities.** Report those via [SECURITY.md](../../SECURITY.md) — public vulnerability reports here will be deleted.
+
 <!-- Partial reports are welcome — fill in what you have. -->
 
 ### Bug Description
 
+
 ### Expected Behavior
+
 
 ### Steps to Reproduce
 
