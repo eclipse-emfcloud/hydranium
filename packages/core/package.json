@@ -112,9 +112,9 @@
     "@hydranium/langium": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "@playwright/test": "^1.40.0",
-    "vscode-jsonrpc": "^8.0.0 || ^9.0.0",
-    "vscode-languageserver": "^9.0.0 || ^10.0.0",
-    "vscode-languageserver-protocol": "^3.17.5",
+    "vscode-jsonrpc": "9.0.1",
+    "vscode-languageserver": "~10.0.1",
+    "vscode-languageserver-protocol": "~3.18.1",
     "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-languageserver-types": "^3.17.5"
   },
@@ -129,6 +129,7 @@
   "publishConfig": {
     "access": "public"
   },
+  "//peerDependencies": "`vscode-jsonrpc` is EXACT rather than a range, because it is one link of an atomic chain with no independently movable link: `vscode-languageserver-protocol` depends on it at exactly 9.0.1, so any other value an adopter supplies is a SECOND physical copy rather than an upgrade. This wire stack breaks on copy identity rather than on structure — `ParameterStructures.auto` is a singleton compared by `===` in connection.js, so a request type built by one copy and sent over a connection owned by the other throws `Unknown parameter structure auto`. A caret or union range was rejected because npm then resolves a `vscode-jsonrpc@8.2.0` tree SILENTLY, with no diagnostic at all, and the failure surfaces only later at server init. Exact does not fail the install either — npm downgrades an unsatisfiable peer to a warning — but it is a NAMED ERESOLVE warning printing the required version beside the found one, and a hard error for anyone installing with `--strict-peer-deps`. It does NOT prevent a NESTED copy — `@eclipse-glsp/*` carries its own exact `vscode-jsonrpc@8.2.0` dependency and root `overrides` do not ship — so a consumer of the GLSP head must pin the chain in its own manifest, and docs/adopting/requirements.md carries the block to paste. This manifest declares the two links ABOVE the transport as well, and they carry `~` for the same reason: each admits exactly what `langium@4.3.1` itself admits, and a wider range reaches a `vscode-languageserver@9` / `vscode-languageserver-protocol@3.17.x` that depends on the 8.x transport, which is the same split one level up. `vscode-languageserver-types` and `vscode-languageserver-textdocument` are deliberately NOT narrowed: both declare zero dependencies and expose structural APIs, so a duplicate of either drags no transport in and no identity check reads it.",
   "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
   "//sideEffects": "NOT `false`: two barrels do work at module load that their re-exports do not account for, and a bundler skips an unflagged re-export barrel outright. `node/index.js` calls `installNodeLogFileSink()` and `installNodeWriteLockScope()`, which is how a Node host gets the log file-tee and write-lock reentrancy detection merely by importing `@hydranium/core/node`. `util/index.js` carries a bare `import '@hydranium/langium'` so the `UriUtils` namespace augmentation stays loaded for anything importing from here. Both failures are runtime-only and silent — a missing log file, a `UriUtils.toUri` that is `undefined`."
 }

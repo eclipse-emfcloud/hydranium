@@ -28,8 +28,21 @@ langium 4.3.1
 ```
 
 Bumping one link alone reintroduces the split. So does downgrading
-`vscode-jsonrpc` to `8.x`, which the declared peer range `^8.0.0 || ^9.0.0`
-still permits — see the section below for why that is not an option.
+`vscode-jsonrpc` to `8.x` — see the section below for why that is not an option.
+
+The peer declarations say exactly this and nothing wider: every head declares
+`vscode-jsonrpc` at the exact version `9.0.1`, and `@hydranium/core` declares
+`vscode-languageserver` at `~10.0.1` and `vscode-languageserver-protocol` at
+`~3.18.1`, each admitting what `langium@4.3.1` itself admits. A range that
+reached further would say a version works when it in fact produces a second
+copy. Supplying something else does not stop the install — npm downgrades an
+unsatisfiable peer to a warning — but you get a named `ERESOLVE` line that
+prints the required version beside the one it found, instead of the silent
+resolution a wider range would have accepted. Under `--strict-peer-deps` it is
+an error.
+`vscode-languageserver-types` and `vscode-languageserver-textdocument` are
+deliberately left on a caret: both declare no dependencies of their own and
+expose structural APIs, so a duplicate of either pulls no transport in.
 
 Pins and patches take effect only on a **from-scratch install**. Deleting the
 lockfile alone leaves stale nested copies behind:
@@ -81,9 +94,20 @@ connection owned by the other throws `Unknown parameter structure auto`.
 
 ### Pinning it in your own root manifest
 
-The published packages declare peer *ranges*, not overrides, and a graph that
-satisfies every range can still contain two copies. If yours does, pin the
-chain yourself:
+An exact peer declaration forces the copy at the TOP of your tree. It cannot
+reach a **nested** one, because a peer states what you must supply and says
+nothing about what your other dependencies bring with them.
+
+**For the GLSP head that is not a caveat but a requirement.**
+`@eclipse-glsp/server`, `@eclipse-glsp/protocol` and `@eclipse-glsp/client` each
+depend on `vscode-jsonrpc@8.2.0` exactly. This repository collapses that onto one
+copy with a root `overrides` block, and `overrides` are not published — nothing
+in a `@hydranium/*` tarball can apply them to your tree. So a first install of
+`@hydranium/glsp-server` alongside `@eclipse-glsp/*` contains two copies every
+time, and the symptom is the `Unknown parameter structure auto` above, thrown
+during GLSP server init.
+
+Pin the chain yourself:
 
 ```json
 {

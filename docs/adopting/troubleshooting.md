@@ -47,10 +47,12 @@ This is the same class of fault as the `langium` entry above and has the same
 remedy — a from-scratch install, so the root `overrides` and the
 `patch-package` patch both apply.
 
-The published packages declare peer ranges, not overrides, and a graph that
-satisfies every range can still contain two `vscode-jsonrpc` copies. Add the pin
-to your own root manifest; [Requirements](requirements.md) gives the exact
-block.
+The published packages declare `vscode-jsonrpc` as an exact peer, which forces
+the copy at the TOP of your tree and cannot reach a nested one. `@eclipse-glsp/*`
+depends on `vscode-jsonrpc@8.2.0` exactly and this repository's root `overrides`
+are not published, so a first install of the GLSP head lands two copies every
+time — for that head the pin is mandatory rather than a fallback. Add it to your
+own root manifest; [Requirements](requirements.md) gives the exact block.
 
 ## `MethodNotFound` on `workspace/applyEdit`, or a server-side write that never appears
 

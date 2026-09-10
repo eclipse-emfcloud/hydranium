@@ -70,7 +70,7 @@ running hydranium data server to connect to. The declared peer dependencies are:
 | `@theia/core`             | `^1.70.0`            |
 | `@theia/workspace`        | `^1.70.0`            |
 | `inversify`               | `^6.0.0`             |
-| `vscode-jsonrpc`          | `^8.0.0 \|\| ^9.0.0` |
+| `vscode-jsonrpc`          | `9.0.1`              |
 
 `@hydranium/core` is reached only from the `./node` tier (the host-diagnostics
 service), so a frontend-only consumer never loads it.
