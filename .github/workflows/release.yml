@@ -20,15 +20,112 @@ defaults:
 # release any more — the version is stamped in the runner's tree and thrown
 # away — so write access would be a grant this job has no use for, in the one
 # job that also holds `id-token: write`.
+#
+# `id-token: write` is NOT here. Granted at the top it would reach the trigger
+# job below too, which reads paths and needs no credential of any kind; a job
+# that can mint one is the last place to widen by default. It is granted on
+# the publishing job alone, which restates `contents: read` because a
+# job-level block replaces this one rather than adding to it.
 permissions:
   contents: read
-  id-token: write
 
 jobs:
+  # Every merge used to publish, so a commit touching only a workflow minted a
+  # version byte-identical to the one before it. Measured on one day: of four
+  # releases, three changed nothing that could reach a tarball.
+  #
+  # A JOB rather than a `paths-ignore:` on the trigger above, and the
+  # difference is what a reader sees afterwards. A filtered-out trigger
+  # produces no run at all, so "why was there no release for that commit" is
+  # answerable only by re-deriving the filter by hand; a job whose dependant is
+  # `skipped` records the decision on the commit, with the paths it read in the
+  # step summary. It also survives the next change to this file: folding the
+  # publish into `ci.yml` behind `needs:` needs the verdict as a job output,
+  # while a `paths-ignore:` there would suppress CI itself on a docs-only
+  # commit — the opposite of what it is for.
+  #
+  # The classification lives in a script because the skip list is the part that
+  # rots, and an over-broad entry fails SILENTLY in the dangerous direction: an
+  # under-trigger withholds a real release and nothing reports it. The script
+  # self-tests against the paths of real merges, and `check` runs that.
+  #
+  # A consequence to expect rather than to debug: the published numbers stop
+  # being contiguous. The rolling suffix counts COMMITS since the last release
+  # tag, not releases, so suppressing one leaves a gap — `next.13` followed by
+  # `next.17`. That is the number continuing to identify a commit, which is
+  # what it is for, and not a lost release.
+  changes:
+    name: Shippable change
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      publishable: ${{ steps.decide.outputs.publishable }}
+
+    steps:
+      # `fetch-depth: 0` so the pushed range's base resolves. A shallow clone
+      # leaves it unreachable, which the step below reads as "cannot tell" and
+      # publishes — correct, but it would publish every time and the filter
+      # would be decorative.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Same Node as everything else here, even for a script that only reads
+      # strings: the alternative is the runner image's Node, which moves on
+      # someone else's schedule. `node-version-file` matches the release job's
+      # value, which is what the drift check in ci.yml compares.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # Both fallbacks publish, because the failure modes are asymmetric: an
+      # over-trigger costs one content-identical version, an under-trigger
+      # silently withholds a real release.
+      - name: Classify the pushed range
+        id: decide
+        env:
+          BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          # Both fallbacks say WHY in the log and in the summary, in the same
+          # shape the script uses, so every path through this step leaves one
+          # readable record of the decision rather than a bare verdict.
+          publish() {
+            echo "publishable=true" >> "$GITHUB_OUTPUT"
+            echo "publishable=true"
+            echo "- verdict: publish — $1"
+            printf '### Publish trigger\n- verdict: `publish` — %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # A dispatch exists to re-release an unchanged commit, so the filter
+          # must never see one. Stated rather than left to the empty `before`
+          # a dispatch happens to carry.
+          if [ "$GITHUB_EVENT_NAME" != 'push' ]; then
+            publish "a $GITHUB_EVENT_NAME is never filtered"
+            exit 0
+          fi
+          if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            publish "the pushed range's base ($BEFORE) does not resolve, so what changed cannot be read"
+            exit 0
+          fi
+          git diff --name-only "$BEFORE" "$HEAD_SHA" | node scripts/release-changed.mjs
+
   release:
     name: Release
+    needs: [changes]
+    # One condition, not two: the dispatch carve-out is inside the job above,
+    # so this cannot be satisfied by an event name while the verdict says
+    # otherwise. `needs` also means a `changes` job that DIED skips the
+    # release rather than publishing on an empty output.
+    if: needs.changes.outputs.publishable == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+
+    permissions:
+      contents: read
+      id-token: write
 
     # This job runs the same `npm run build:all` as CI, so it needs the same
     # build environment; CI compares the two files and reddens if they diverge.

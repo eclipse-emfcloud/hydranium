@@ -40,6 +40,17 @@ const CURRENT_YEAR = new Date().getFullYear();
 /**
  * The copyright line for a file that carries none. Used on new files only —
  * existing holders are preserved verbatim, never supplemented.
+ *
+ * This is the right line for work written here, and it is the DEFAULT rather
+ * than the only answer: a file whose content was taken from a co-holder's own
+ * work names that holder too, written by hand at creation. What decides is
+ * provenance, not whether the file is new — so this is not checkable, and
+ * `--check` deliberately has no opinion on which holder a header names.
+ *
+ * The way it goes wrong is copying a neighbouring file's header. Most of this
+ * repository's files carry a co-holder because they were extracted from that
+ * holder's work, so the nearest sibling is usually the wrong model for a file
+ * written from scratch.
  */
 const DEFAULT_COPYRIGHT = `Copyright (c) ${CURRENT_YEAR} EclipseSource and others.`;
 
