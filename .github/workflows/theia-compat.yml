@@ -18,12 +18,25 @@ on:
         description: Version or dist-tag to run instead of the floor+latest pair, e.g. 1.71.0 or next
         required: false
         default: ''
-  # Weekly, not per push. Nothing in a pull request can move what Theia has
-  # published, and this leg deletes the lockfile — so it resolves a fresh
-  # tree every run, cannot be cached, and answers a question about the
-  # REGISTRY rather than about the commit. Monday morning UTC puts the
-  # verdict in front of someone before the week's work lands on top of it.
+  # The registry half of the risk cannot move on a pull request. OUR half
+  # can: adopting an API added after the floor breaks the published range,
+  # and a schedule reports that days later against whatever merged in
+  # between. Confined to the three packages that carry the range plus this
+  # file, because nothing else changes the answer.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/client-theia/**'
+      - 'packages/data-client-theia/**'
+      - 'packages/glsp-client-theia/**'
+      - '.github/workflows/theia-compat.yml'
+  # Split by what can actually change. A released tarball is immutable, so
+  # re-running a pinned version nightly re-tests bytes that cannot have
+  # moved; only the dist-tags do. `next` therefore runs nightly, and the
+  # enumerated range weekly, on Monday morning UTC so the verdict is in
+  # front of someone before the week's work lands on top of it.
   schedule:
+    - cron: '0 3 * * *'
     - cron: '0 8 * * 1'
 
 # Reads the repository and reports through the run's own conclusion. It
@@ -38,8 +51,83 @@ defaults:
     shell: bash
 
 jobs:
+  # The floor is READ from the peer range rather than repeated here. Repeating
+  # it is the drift this job exists to prevent: the range is what we publish,
+  # and a workflow carrying its own copy goes on testing the old floor while
+  # the claim moves, which is a green leg certifying a version nobody promised.
+  plan:
+    name: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.matrix.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Work out which versions to run
+        id: matrix
+        env:
+          DISPATCH_VERSION: ${{ inputs.theia_version }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require('node:child_process');
+          const { readFileSync } = require('node:fs');
+
+          // client-theia is the narrowest source that is still authoritative:
+          // all three published packages declare the same range, and
+          // `check:deps` fails if they ever disagree.
+          const manifest = JSON.parse(readFileSync('packages/client-theia/package.json', 'utf8'));
+          const declared = manifest.peerDependencies['@theia/core'];
+          const floor = declared.replace(/^[^0-9]*/, '');
+          if (!/^\d+\.\d+\.\d+$/.test(floor)) {
+            console.error('Cannot read a floor out of ' + declared);
+            process.exit(1);
+          }
+
+          // Every released minor from the floor up, highest patch of each.
+          // Derived from the registry so a new Theia minor joins the weekly
+          // matrix without anyone editing this file.
+          const enumerateFrom = () => {
+            const all = JSON.parse(execFileSync('npm', ['view', '@theia/core', 'versions', '--json'], { encoding: 'utf8' }));
+            const rank = (version) => version.split('.').map(Number);
+            const [floorMajor, floorMinor] = rank(floor);
+            const highest = new Map();
+            for (const version of all) {
+              if (version.includes('-')) continue;
+              const [major, minor, patch] = rank(version);
+              if (major < floorMajor || (major === floorMajor && minor < floorMinor)) continue;
+              const key = major + '.' + minor;
+              const seen = highest.get(key);
+              if (!seen || patch > rank(seen)[2]) highest.set(key, version);
+            }
+            return [...highest.values()];
+          };
+
+          // An absent input and the empty-string default must collapse to the
+          // same thing: `inputs` is not populated at all under `schedule`.
+          const requested = (process.env.DISPATCH_VERSION ?? '').trim();
+
+          let versions;
+          if (requested) {
+            versions = [requested];
+          } else if (process.env.SCHEDULE === '0 3 * * *') {
+            versions = ['next'];
+          } else if (process.env.SCHEDULE === '0 8 * * 1') {
+            versions = [...enumerateFrom(), 'next'];
+          } else {
+            versions = [floor, 'latest'];
+          }
+          console.log('versions=' + JSON.stringify(versions));
+          NODE
+
+      - name: Show the plan
+        run: echo "planned legs -> ${{ steps.matrix.outputs.versions }}"
+
   compat:
     name: Theia ${{ matrix.theia }}
+    needs: plan
     runs-on: ubuntu-22.04
     # A backstop, not a target. The install is the long pole and its cost is
     # a fresh resolution of the whole graph rather than a lockfile replay.
@@ -51,28 +139,11 @@ jobs:
       # ceiling moved as well.
       fail-fast: false
       matrix:
-        # `&&` and `||` yield an OPERAND here rather than a boolean, so this
-        # reads as: a supplied target becomes the only leg, and anything
-        # falsy falls through to the standard pair. Three things are falsy
-        # for this purpose — an omitted input, the empty-string default, and
-        # the `inputs` context under `schedule`, where it is not populated at
-        # all.
-        #
-        # `1.71.0` is the declared floor and the only value that tests the
-        # published range. `latest` is the ceiling, and it resolves today to
-        # what the lockfile already holds — a standing probe that begins
-        # saying something the day Theia's next minor ships, rather than a
-        # leg that tests anything now.
-        #
-        # This interpolates the target into JSON, so it does NOT constrain
-        # what a target may be. An unbalanced quote makes `fromJSON` fail and
-        # takes the run down before any leg starts; a balanced one splits
-        # into several legs instead, and a partial version such as `1.71`
-        # survives to become a leg of its own. The resolve step below is the
-        # gate on all three, because it is the only place a target is
-        # compared against what the registry actually publishes.
-        theia: ${{ inputs.theia_version && fromJSON(format('["{0}"]',
-          inputs.theia_version)) || fromJSON('["1.71.0", "latest"]') }}
+        # Chosen by `plan`, which reads the floor off the peer range and picks
+        # the set from the trigger. Nothing here constrains what a target may
+        # be — the resolve step below is the gate on all of them, because it
+        # is the only place a target meets what the registry publishes.
+        theia: ${{ fromJSON(needs.plan.outputs.versions) }}
 
     env:
       NODE_OPTIONS: --max_old_space_size=4096
@@ -223,8 +294,8 @@ jobs:
             // Only a trailing single-segment `*` is understood, and any
             // other shape is REFUSED rather than skipped. A glob this cannot
             // expand yields fewer pinned packages, and the assertion below
-            // covers @theia/core alone — so the leg would go green having
-            // pinned part of the tree.
+            // checks what was pinned — so a package silently dropped here is
+            // dropped there too, and the leg goes green on a partial tree.
             if (!entry.endsWith('/*') || entry.slice(0, -2).includes('*')) {
               console.error('Unsupported workspace glob: ' + entry);
               process.exit(1);
@@ -334,20 +405,50 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const expected = process.env.THEIA_VERSION;
+          // Build metadata is excluded from semver precedence, and Theia
+          // stamps a commit SHA into its prereleases — `1.76.0-next.14`
+          // resolves to `1.76.0-next.14+6f8fdc2e7` on disk. Comparing raw
+          // strings fails a `next` leg whose override applied perfectly.
+          const core = (version) => version.split('+')[0];
+          const expected = core(process.env.THEIA_VERSION);
+          // Assert exactly what the pin step could move, read back from the
+          // overrides it wrote. A package missing from that map was left
+          // alone on purpose — published later than the target, like
+          // `bundle-plugin`, or reached only transitively and declared by
+          // nobody, like `monaco-editor-core` on Monaco's version line.
+          // Deriving it here rather than repeating the exclusions keeps the
+          // two steps from disagreeing about what this leg is testing.
+          const overrides = JSON.parse(fs.readFileSync('package.json', 'utf8')).overrides ?? {};
+          const pinned = new Set(
+            Object.entries(overrides)
+              .filter(([name, value]) => name.startsWith('@theia/') && core(String(value)) === expected)
+              .map(([name]) => name)
+          );
           const found = [];
           // A walk, not `require.resolve` and not the hoisted copy alone.
           // The override exists to force ONE physical copy, so a second
           // version surviving anywhere is a partially applied override —
           // and that state reads as success from the hoisted path, which is
           // precisely what must not be certified.
+          //
+          // EVERY `@theia/*`, not `core` alone: the override is applied to
+          // all of them, so checking one certifies a tree in which the rest
+          // may have stayed where the lockfile put them.
           const visit = (dir) => {
-            const manifest = path.join(dir, '@theia', 'core', 'package.json');
-            if (fs.existsSync(manifest)) {
-              found.push({
-                version: JSON.parse(fs.readFileSync(manifest, 'utf8')).version,
-                at: path.relative(process.cwd(), manifest),
-              });
+            const scope = path.join(dir, '@theia');
+            if (fs.existsSync(scope)) {
+              for (const pkg of fs.readdirSync(scope, { withFileTypes: true })) {
+                const manifest = path.join(scope, pkg.name, 'package.json');
+                if (!pkg.isDirectory() || !fs.existsSync(manifest)) {
+                  continue;
+                }
+                found.push({
+                  name: '@theia/' + pkg.name,
+                  version: core(JSON.parse(fs.readFileSync(manifest, 'utf8')).version),
+                  asserted: pinned.has('@theia/' + pkg.name),
+                  at: path.relative(process.cwd(), manifest),
+                });
+              }
             }
             for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
               if (!entry.isDirectory()) {
@@ -374,21 +475,30 @@ jobs:
           // against the expected version finds no mismatch, so a check
           // written the other way round certifies a tree with no Theia in it.
           if (found.length === 0) {
-            console.error('No @theia/core under node_modules: nothing was installed to check.');
+            console.error('No @theia/* under node_modules: nothing was installed to check.');
+            process.exit(1);
+          }
+          // The target itself must be among them, or the walk found only
+          // packages this check does not assert and would pass on a tree
+          // with no Theia proper in it at all.
+          if (!found.some((copy) => copy.asserted)) {
+            console.error('Only unasserted @theia/* packages were found, so nothing was checked.');
             process.exit(1);
           }
           for (const copy of found) {
-            const mark = copy.version === expected ? 'ok   ' : 'WRONG';
-            console.log(mark + ' ' + copy.version + '  ' + copy.at);
+            const mark = !copy.asserted ? 'skip ' : copy.version === expected ? 'ok   ' : 'WRONG';
+            console.log(mark + ' ' + copy.name + '@' + copy.version + '  ' + copy.at);
           }
-          if (found.some((copy) => copy.version !== expected)) {
+          const wrong = found.filter((copy) => copy.asserted && copy.version !== expected);
+          if (wrong.length > 0) {
             console.error('');
-            console.error('Expected every @theia/core copy at ' + expected + '.');
+            console.error('Expected every asserted @theia/* copy at ' + expected + '.');
             console.error('The overrides did not take effect, so this leg ran against the');
             console.error('version the committed lockfile resolves and proves nothing.');
             process.exit(1);
           }
-          console.log('@theia/core is ' + expected + ' in all ' + found.length + ' copies.');
+          const asserted = found.filter((copy) => copy.asserted);
+          console.log(asserted.length + ' @theia/* copies are all at ' + expected + '.');
           NODE
 
       # `tsc -b` over `packages/*`, which is what compiles the three packages
@@ -435,11 +545,37 @@ jobs:
       # which is the first thing anyone reading the failure needs.
       - name: Record what this leg tested
         if: always()
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           {
             echo "### Theia ${{ matrix.theia }}"
             echo "- requested: \`${{ matrix.theia }}\`"
             echo "- resolved: \`${{ steps.resolve.outputs.version || 'unresolved' }}\`"
             echo "- node: \`$(node --version)\`, npm: \`$(npm --version)\`"
-            node -e 'const fs = require("node:fs"); const at = "node_modules/@theia/core/package.json"; console.log("- installed @theia/core: `" + (fs.existsSync(at) ? JSON.parse(fs.readFileSync(at, "utf8")).version : "not installed") + "`");'
+            # Every DISTINCT installed version, not `@theia/core` alone: the
+            # override moves all of them, and one straggler is the failure
+            # this line exists to make visible. `monaco-editor-core` is on
+            # Monaco's version line and shows up as its own entry.
+            node -e '
+              const fs = require("node:fs");
+              const scope = "node_modules/@theia";
+              if (!fs.existsSync(scope)) { console.log("- installed @theia/*: `none`"); process.exit(0); }
+              const byVersion = new Map();
+              for (const name of fs.readdirSync(scope)) {
+                const at = scope + "/" + name + "/package.json";
+                if (!fs.existsSync(at)) continue;
+                const version = JSON.parse(fs.readFileSync(at, "utf8")).version;
+                if (!byVersion.has(version)) byVersion.set(version, []);
+                byVersion.get(version).push("@theia/" + name);
+              }
+              // The target gets a count; anything else gets NAMED. A lone
+              // straggler is the thing worth reading, and a bare count makes
+              // identifying it a separate trip to the log.
+              const target = process.env.RESOLVED_VERSION;
+              for (const [version, names] of [...byVersion].sort()) {
+                const detail = version === target ? names.length + " packages" : names.join(", ");
+                console.log("- installed @theia/*: `" + version + "` (" + detail + ")");
+              }
+            '
           } | tee -a "$GITHUB_STEP_SUMMARY"
