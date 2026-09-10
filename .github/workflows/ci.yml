@@ -452,8 +452,57 @@ jobs:
       # Teed so the re-run step below can read which task turbo reported as
       # failed. `pipefail` is on for this shell, so the gate's own status
       # still decides the step.
+      #
+      # `trace-exits.cjs` is preloaded into every Node process the gate starts,
+      # for the Windows failure where one exits non-zero having written nothing.
+      # It sits under all of them rather than on any one tool because the victim
+      # is not a tool: captured task logs show the same silent exit from `tsc`
+      # with no diagnostic, from `eslint` — which exits 1 only when it found
+      # something it would have printed — from a vitest fork worker, and from an
+      # intermediate `npm run` that never printed npm's own failure block. What
+      # they have in common is being a Node child on Windows.
+      #
+      # It records to FILES, because both streams a dying process would
+      # otherwise use are already known to lose exactly this: vitest pipes a
+      # fork's stdout and stderr into its own console interception, which
+      # attributes output to the running test and drops what arrives once one
+      # has finished, and turbo merges every task's streams into a single pipe.
+      #
+      # APPENDED in the shell, not declared as a second `NODE_OPTIONS:` key, for
+      # the reason the re-run step below gives at length: a second key would be
+      # a second value for the drift check against release.yml to compare, and
+      # it cannot tell a deliberate extra flag from the environments diverging.
+      #
+      # An ABSOLUTE path, because turbo runs each task in its own package
+      # directory and a relative `--require` resolves against that — it would
+      # find the file for no task at all. Forward slashes so one spelling serves
+      # both runners; neither workspace path contains a space.
+      #
+      # The preflight is not ceremony. A `--require` that Node cannot resolve
+      # kills EVERY Node process the gate starts, so the failure would present
+      # as sixty-six unrelated dead tasks rather than as one wiring mistake.
+      # Proving it loads costs one process, once, before anything depends on it,
+      # and asserting on the RECORD rather than on the exit status is what makes
+      # it a test of the recorder instead of a test that node runs.
       - name: Full gate
-        run: npm run check 2>&1 | tee gate.log
+        run: |
+          root="${GITHUB_WORKSPACE//\\//}"
+          export HYDRANIUM_EXIT_TRACE_DIR="$root/exit-trace"
+          export NODE_OPTIONS="$NODE_OPTIONS --require $root/scripts/trace-exits.cjs"
+          mkdir -p "$HYDRANIUM_EXIT_TRACE_DIR"
+
+          node -e 'process.exit(9)' || true
+          if [ -z "$(ls -A "$HYDRANIUM_EXIT_TRACE_DIR" 2>/dev/null)" ]; then
+            echo "The exit recorder wrote nothing for a process that exited 9, so it is" >&2
+            echo "not in force and an empty exit-trace/ would be read as a finding." >&2
+            echo "NODE_OPTIONS=$NODE_OPTIONS" >&2
+            exit 1
+          fi
+          # The preflight's own record is not evidence, and leaving it in the
+          # artefact would put a known-cause entry beside the ones being read.
+          rm -f "$HYDRANIUM_EXIT_TRACE_DIR"/exit-*.json
+
+          npm run check 2>&1 | tee gate.log
 
       # Ask the dead task again, on its own, with its streams kept APART.
       #
@@ -559,14 +608,21 @@ jobs:
           # Node writes its report into the dying process's working directory,
           # which under turbo is the task's own package, so every depth needs
           # naming — two for an example, because `*` does not cross a separator.
-          # `gate.log` and the two re-run captures are at the root. Uploading
-          # them matters more than it looks: GitHub REPLACES a job's log on
-          # re-attempt, so an artefact is the only copy of the first failure
-          # that survives someone hitting re-run.
+          # `gate.log`, the two re-run captures and `exit-trace/` are at the
+          # root. Uploading them matters more than it looks: GitHub REPLACES a
+          # job's log on re-attempt, so an artefact is the only copy of the
+          # first failure that survives someone hitting re-run.
+          #
+          # `exit-trace/` holds one record per Node process that exited
+          # non-zero, and it is the one part of this artefact whose EMPTINESS is
+          # a result: a task turbo reported as failing with no record here never
+          # reached a JS exit handler. The gate step proves the recorder was in
+          # force before running anything, so empty cannot mean it was off.
           path: |
             gate.log
             rerun-stdout.log
             rerun-stderr.log
+            exit-trace/
             report.*.json
             packages/*/report.*.json
             examples/*/*/report.*.json
