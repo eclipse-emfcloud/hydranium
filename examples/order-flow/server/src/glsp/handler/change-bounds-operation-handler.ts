@@ -17,7 +17,7 @@ import {
 } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { DiagramNode, type FlowNode, type LayoutModel, isFlowNode } from '../../language-server/ast.js';
-import { astNode } from '../../language-server/order-flow-ast-builder.js';
+import { layoutNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
 import { appendChild } from './containment.js';
@@ -158,7 +158,7 @@ export class OrderFlowChangeBoundsOperationHandler extends JsonOperationHandler 
       }
       // `x` / `y` are mandatory in the grammar, so the builder requires them
       // here; the caller overwrites them from the operation immediately.
-      return appendChild(layout, 'nodes', layout.nodes, astNode(DiagramNode, { flowNode: reference, x: 0, y: 0 }));
+      return appendChild(layout, 'nodes', layout.nodes, layoutNode(DiagramNode, { flowNode: reference, x: 0, y: 0 }));
    }
 
    /**

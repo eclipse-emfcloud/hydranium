@@ -43,7 +43,7 @@ import type {
    DomainModel,
    LayoutModel,
    ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import * as path from 'node:path';
 import { Emitter, type Event, type Message, type MessageConnection } from 'vscode-jsonrpc';
 // `/node` because this suite runs in Node. A webview imports `/browser`; the

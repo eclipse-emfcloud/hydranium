@@ -11,8 +11,8 @@ import { type MultiDocumentSourceModel, ReconcilingMultiDocumentGlspState } from
 import { type TransferElement } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
-import { astNode } from '../language-server/order-flow-ast-builder.js';
-import type { ProcessModel as TransferProcessModel } from '../language-server/generated-transfer/transfer-model.js';
+import { layoutNode } from '../language-server/order-flow-ast-builder.js';
+import type { ProcessModel as TransferProcessModel } from '../language-server/generated-hydranium/transfer-model.js';
 import type { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 
 /**
@@ -109,7 +109,7 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     */
    protected createLayoutRoot(): LayoutModel {
       const process = this.languageServicesFor(this.sourceRoot)?.references.ReferenceBuilder.toOwnReference(this.sourceRoot);
-      return astNode(LayoutModel, {
+      return layoutNode(LayoutModel, {
          name: `${this.sourceRoot.name}Layout`,
          process: process as LayoutModel['process'],
          nodes: []

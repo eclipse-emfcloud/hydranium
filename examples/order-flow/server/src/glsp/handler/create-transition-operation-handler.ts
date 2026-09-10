@@ -10,7 +10,7 @@
 import { type Command, type CreateEdgeOperation, JsonCreateEdgeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type FlowNode, Transition, isFlowNode } from '../../language-server/ast.js';
-import { astNode } from '../../language-server/order-flow-ast-builder.js';
+import { processNode } from '../../language-server/order-flow-ast-builder.js';
 import { canAddTransition } from '../../language-server/process-transition-rules.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
@@ -73,7 +73,7 @@ export class OrderFlowCreateTransitionOperationHandler extends JsonCreateEdgeOpe
          this.modelState.logger.warn('Create transition skipped: an endpoint has no resolvable name');
          return;
       }
-      appendChild(root, 'transitions', root.transitions, astNode(Transition, { source: sourceRef, target: targetRef }));
+      appendChild(root, 'transitions', root.transitions, processNode(Transition, { source: sourceRef, target: targetRef }));
    }
 
    protected resolveFlowNode(elementId: string): FlowNode | undefined {

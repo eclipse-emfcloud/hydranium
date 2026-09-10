@@ -35,7 +35,7 @@ import { BookstoreDiagramModule } from './glsp/bookstore/diagram-module.js';
 // `TransferElement` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-import type { BookstoreModel } from './language-server/generated-transfer/transfer-model.js';
+import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from './head-ports.js';

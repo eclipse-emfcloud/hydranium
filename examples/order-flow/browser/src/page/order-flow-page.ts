@@ -53,7 +53,7 @@ import {
    isLayoutModel,
    type LayoutModel,
    type ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import {
    BOOTSTRAP_MESSAGE_TYPE,
    isWorkerErrorMessage,

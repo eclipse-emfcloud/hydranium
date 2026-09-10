@@ -165,9 +165,9 @@ from the scaffold.
 | `src/language-server/process-transition-rules.ts` | hand-written — the transition well-formedness rules, as free functions the validator, the edge-creation checker and the create-transition handler all call, so text and diagram cannot disagree |
 | `src/language-server/order-flow-stdlib.ts` | hand-written — the primitive types, seeded as an indexed virtual document with no `project` header so they resolve from anywhere |
 | `src/language-server/order-flow-ast-extension.ts` | hand-written — the cross-grammar computed property |
-| `src/language-server/order-flow-ast-builder.ts` | hand-written — a node factory pre-bound to this project's reflection, so the GLSP handlers build AST nodes without casting past the generated types |
+| `src/language-server/order-flow-ast-builder.ts` | hand-written — a re-export of the generated node factories, carrying the prose that is order-flow's rather than every adopter's, so the GLSP handlers build AST nodes without casting past the generated types |
 | `src/language-server/generated/**` | `langium generate` output, committed |
-| `src/language-server/generated-transfer/**` | `hydranium-cli generate-transfer-model` output, committed |
+| `src/language-server/generated-hydranium/**` | `hydranium-cli generate-transfer-model` output, committed — the transfer model and the AST-node builder (`--ast-builder-file`) |
 | `src/glsp/**` | hand-written — the `.process` diagram on the reconciling multi-document strategy, with `.process` as the primary document and `.layout` as the secondary |
 | `src/measure-memory.ts` | hand-written — the entry point the `measure-memory` script runs |
 | `src/testing/large-workspace.ts` | hand-written — the large perf fixture's generator |

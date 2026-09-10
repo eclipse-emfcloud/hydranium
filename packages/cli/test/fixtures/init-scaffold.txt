@@ -28,9 +28,9 @@ package.json
   ],
   "scripts": {
     "build": "npm run generate && tsc",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-transfer tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-transfer/transfer-model.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "start": "node lib/main.js --stdio",
@@ -500,7 +500,7 @@ import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 // `TransferElement` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-import type { BookstoreModel } from './language-server/generated-transfer/transfer-model.js';
+import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 import { BOOKSTORE_DATA_SERVER_PORT_COMMAND } from './head-ports.js';
@@ -562,7 +562,7 @@ src/data-server-main.ts
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER root, not the AST one — same reasoning as `main.ts`.
-import type { BookstoreModel } from './language-server/generated-transfer/transfer-model.js';
+import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 const { shared } = createBookstoreServices({ ...NodeFileSystem });
@@ -788,7 +788,7 @@ import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
 import type {
    BookstoreModel as TransferBookstoreModel
-} from '../src/language-server/generated-transfer/transfer-model.js';
+} from '../src/language-server/generated-hydranium/transfer-model.js';
 import { createServices } from '../src/services.js';
 
 describe('Bookstore serialization', () => {

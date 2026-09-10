@@ -33,7 +33,7 @@ import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { makeScratchWorkspaceHarness } from './order-flow-harness.js';
 
 type OrderFlowTransfer = DomainModel | ProcessModel;

@@ -43,7 +43,7 @@ import {
 } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/lib/testing';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
-import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model';
+import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { Emitter, Message, type Event, type MessageConnection, type PartialMessageInfo } from 'vscode-jsonrpc';

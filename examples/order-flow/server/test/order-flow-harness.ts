@@ -26,10 +26,11 @@ import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/tes
 import { NodeFileSystem } from '@hydranium/core/node';
 import type { AstNode, LangiumDocument } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { copyFileSync, mkdtempSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { onTestFinished } from 'vitest';
 import { createOrderFlowServices, type OrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -183,6 +184,25 @@ export function documentFor<TRoot extends AstNode>(harness: OrderFlowHarness, re
  */
 export async function loadFixture<TRoot extends AstNode>(harness: OrderFlowHarness, fileName: string): Promise<LangiumDocument<TRoot>> {
    const scratch = mkdtempSync(path.join(tmpdir(), 'order-flow-fixture-'));
+   // This helper returns a document and never the directory, so the caller
+   // CANNOT dispose it — unlike `makeScratchWorkspaceHarness`, whose handle
+   // makes that obligation visible. Ownership therefore has to live here.
+   // Registered against the running test rather than in an `afterAll` so the
+   // helper stays callable from anywhere inside a test.
+   //
+   // KEPT ON FAILURE, which is the whole point of the copy: the integrity
+   // service's silent mode rewrites the fixture in place, so after a failing
+   // build this directory holds what the repair actually produced. Deleting it
+   // unconditionally would trade a disk leak for a harder diagnosis. The path
+   // goes to stderr because vitest drops `console` output written from a
+   // continuation that runs after the test body.
+   onTestFinished(context => {
+      if (context.task.result?.state === 'fail') {
+         process.stderr.write(`[order-flow] kept the repaired fixture copy at ${scratch}\n`);
+         return;
+      }
+      rmSync(scratch, { recursive: true, force: true });
+   });
    const copy = path.join(scratch, fileName);
    copyFileSync(path.join(FIXTURE_ROOT, fileName), copy);
    const document = await harness.shared.workspace.LangiumDocuments.getOrCreateDocument(URI.file(copy));

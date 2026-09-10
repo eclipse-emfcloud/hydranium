@@ -34,6 +34,7 @@ import {
    WorkspaceCache,
    stream
 } from '@hydranium/langium';
+import { buildAstNode } from '../ast-extension/ast-node-builder.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
@@ -469,12 +470,13 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * Convert a protocol-layer {@link ReferenceContext} into a Langium
     * {@link ReferenceInfo} the rest of the scope/linking machinery accepts.
     *
-    * Walks `syntheticPath` by FABRICATING a type-only stub per step, so a
-    * scope can be queried for an element that does not exist yet — which is
-    * what synthetic paths are for. The stubs carry no children, so a caller
-    * that needs to read a collection off the leaf wants
-    * {@link resolveReferenceSource} instead, which walks the same path into
-    * the real tree.
+    * Walks `syntheticPath` by FABRICATING a stub per step, so a scope can be
+    * queried for an element that does not exist yet — which is what synthetic
+    * paths are for. A stub carries the grammar's declared defaults and nothing
+    * else, so its containment lists are present but EMPTY: a caller that needs
+    * to read a populated collection off the leaf wants
+    * {@link resolveReferenceSource} instead, which walks the same path into the
+    * real tree.
     *
     * Throws if the context references an unresolvable source; callers
     * that prefer a soft failure should catch and fall back to
@@ -486,16 +488,15 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
          throw new Error('Invalid reference source');
       }
       for (const step of ctx.syntheticPath ?? []) {
-         container = {
+         container = buildAstNode(this.services.shared.AstReflection, step.type, {
             $container: container,
             $containerProperty: step.containerProperty,
             // Part of Langium's own container contract, so a stub that omits it
             // is an under-specified node: anything reading position off the
             // chain (a key provider, an adopter scope extension) sees
             // `undefined` where the caller named a slot.
-            $containerIndex: step.index,
-            $type: step.type
-         };
+            $containerIndex: step.index
+         });
       }
       return {
          reference: { $refText: '', ref: undefined },
@@ -605,13 +606,16 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * `createEmptyDocument`. Overriding is still open to a consumer whose
     * "container" is an inner element rather than the parse root, or one that
     * deliberately declines to answer for an absent document.
+    *
+    * The stub carries the grammar's declared defaults, so an extension reading a
+    * containment list off it sees an empty array rather than `undefined`.
     */
    protected resolveSyntheticSource(source: SyntheticSource): AstNode | undefined {
       const uri = UriUtils.toUri(source.uri);
       const document =
          this.langiumDocuments.getDocument(uri) ??
          this.langiumDocuments.createEmptyDocument(uri, this.services.LanguageMetaData.languageId);
-      return { $type: source.type, $container: document.parseResult.value };
+      return buildAstNode(this.services.shared.AstReflection, source.type, { $container: document.parseResult.value });
    }
 
    /**

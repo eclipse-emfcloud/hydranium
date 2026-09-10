@@ -123,7 +123,7 @@ follows the document as it changes. A host renders `fields` and calls
 <!-- snippet-preamble
 import { DataEvents, DataSession, type DataPort } from '@hydranium/protocol';
 import { OrderFlowPropertiesModel, type PropertyField } from '@hydranium/example-order-flow-client';
-import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model.js';
 declare const port: DataPort;
 declare const uri: string;
 declare const render: (fields: readonly PropertyField[]) => void;

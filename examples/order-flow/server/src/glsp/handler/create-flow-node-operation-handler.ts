@@ -22,7 +22,7 @@ import {
 import { findNextUnique } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { DiagramNode, type FlowNode, Gateway, Task } from '../../language-server/generated/ast.js';
-import { astNode } from '../../language-server/order-flow-ast-builder.js';
+import { layoutNode, processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
 import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../order-flow-process-diagram-types.js';
@@ -141,7 +141,7 @@ export abstract class OrderFlowCreateFlowNodeOperationHandler extends JsonCreate
          return;
       }
       const layout = this.modelState.layoutRoot;
-      appendChild(layout, 'nodes', layout.nodes, astNode(DiagramNode, { flowNode: reference, x: location.x, y: location.y }));
+      appendChild(layout, 'nodes', layout.nodes, layoutNode(DiagramNode, { flowNode: reference, x: location.x, y: location.y }));
    }
 
    /**
@@ -172,7 +172,7 @@ export class OrderFlowCreateTaskOperationHandler extends OrderFlowCreateFlowNode
    protected readonly ghostSize = NODE_LAYOUT_OPTIONS;
 
    protected createAstNode(name: string): FlowNode {
-      return astNode(Task, { name });
+      return processNode(Task, { name });
    }
 }
 
@@ -186,6 +186,6 @@ export class OrderFlowCreateGatewayOperationHandler extends OrderFlowCreateFlowN
    protected readonly ghostSize = GATEWAY_LAYOUT_OPTIONS;
 
    protected createAstNode(name: string): FlowNode {
-      return astNode(Gateway, { name });
+      return processNode(Gateway, { name });
    }
 }

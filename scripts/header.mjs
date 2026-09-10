@@ -166,13 +166,16 @@ const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.cjs', '.js', '.css'];
  * nowhere:
  *
  * - `**\/generated/` — langium-cli output, rewritten by every codegen run.
- * - `**\/generated-transfer/` — `hydranium-cli generate-transfer-model` output.
- *   Same rewritten-by-codegen reason, plus one specific to this generator: it
- *   runs in ADOPTER repos, so teaching it to emit this repo's copyright header
- *   would stamp our notice onto someone else's generated code. It emits its own
- *   "DO NOT EDIT" banner with the regen command instead. The directory is
+ * - `**\/generated-hydranium/` — `hydranium-cli` output (the transfer model, and
+ *   the AST-node builder when the consumer asks for one). Same
+ *   rewritten-by-codegen reason, plus one specific to these generators: they run
+ *   in ADOPTER repos, so teaching them to emit this repo's copyright header
+ *   would stamp our notice onto someone else's generated code. They emit their
+ *   own "DO NOT EDIT" banner with the regen command instead. The directory is
+ *   named for the tool that owns it rather than for one artefact, and is
  *   separate from `generated/` because langium-cli treats its own output
- *   directory as exclusive and offers to delete anything else there.
+ *   directory as exclusive — it deletes that directory outright on every run and
+ *   prompts before taking anything unexpected with it.
  * - `esbuild.mjs` — Theia app scaffolding; deleting it and re-running
  *   `theia build` regenerates it.
  * - `.prettierrc.js` — formatter config, never published.
@@ -180,7 +183,7 @@ const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.cjs', '.js', '.css'];
  * `.langium` grammars are absent from {@link HEADER_EXTENSIONS} for the same
  * reason: they carry no header today.
  */
-const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-transfer\//, /(^|\/)esbuild\.mjs$/, /(^|\/)\.prettierrc\.js$/];
+const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-hydranium\//, /(^|\/)esbuild\.mjs$/, /(^|\/)\.prettierrc\.js$/];
 
 /**
  * Every source file the header gate covers: tracked files plus new untracked

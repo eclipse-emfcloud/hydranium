@@ -72,7 +72,7 @@ import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
-import type { DomainModel, LayoutModel, ProcessModel } from '../src/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { makeScratchWorkspaceHarness } from './order-flow-harness.js';
 
 /** The wire root type: one server, three grammars, so the root is a union. */

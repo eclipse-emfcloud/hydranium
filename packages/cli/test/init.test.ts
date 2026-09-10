@@ -227,7 +227,7 @@ describe('planInitFiles, heads', () => {
       expect(main).not.toContain('DataServer');
       expect(main).not.toContain('startGlspServer');
       // No transfer-root import either, since nothing consumes it.
-      expect(main).not.toContain('generated-transfer/transfer-model.js');
+      expect(main).not.toContain('generated-hydranium/transfer-model.js');
       expect(files.map(file => file.path).filter(path => path.startsWith('src/glsp/'))).toEqual([]);
       // The stdio data entry follows the head, not the project: with no data
       // head there is nothing for `hydranium-cli query` to talk to and the file
@@ -599,7 +599,7 @@ describe('planInitFiles, multi-grammar', () => {
       // One data server per process serves every grammar.
       expect(byPath('src/main.ts')).toContain('new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared)');
       expect(byPath('src/main.ts')).toContain(
-         "import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-transfer/transfer-model.js';"
+         "import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';"
       );
    });
 

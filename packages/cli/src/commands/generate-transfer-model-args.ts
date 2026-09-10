@@ -29,6 +29,7 @@ export const GENERATE_TRANSFER_MODEL_FLAGS: readonly string[] = [
    '--ast-file',
    '--augmentation-file',
    '--out-file',
+   '--ast-builder-file',
    '--element-type-name',
    '--terminals-name',
    '--terminals-source-name',
@@ -48,7 +49,8 @@ export const GENERATE_TRANSFER_MODEL_VALUE_FLAGS: readonly string[] = GENERATE_T
 export const GENERATE_TRANSFER_MODEL_HELP: readonly string[] = [
    'Usage: hydranium-cli generate-transfer-model [options]',
    '',
-   'Generate a serializable transfer-model TypeScript file from a Langium AST. The',
+   'Generate a serializable transfer-model TypeScript file from a Langium AST, and',
+   'optionally an AST-node builder module bound to the same reflection. The',
    'required inputs (--ast-file / --augmentation-file / --out-file) may instead come',
    'from a --config JSON file, and --ast-file can be auto-discovered from a Langium',
    "config's `out` directory. Precedence, highest first: explicit flags, then the",
@@ -67,6 +69,11 @@ export const GENERATE_TRANSFER_MODEL_HELP: readonly string[] = [
    '                                directory: it treats that directory as exclusively',
    '                                its own, so every `langium generate` reports this',
    '                                file as unexpected and offers to delete it.',
+   '  --ast-builder-file <path>     Also emit an AST-node builder module here: one',
+   '                                makeAstNodeBuilder binding per grammar, plus one',
+   '                                spanning all of them. Omit if nothing constructs',
+   '                                AST nodes. Same restriction as --out-file: keep it',
+   "                                out of langium-cli's own `out` directory.",
    '  --element-type-name <name>    Base element type name in output. Default: TransferElement.',
    '  --terminals-name <name>       Terminals const name in output. Default: ModelTerminals.',
    '  --terminals-source-name <n>   Source-side terminals variable name. Default: <LanguageId>Terminals.',
@@ -119,6 +126,9 @@ export function parseGenerateOptions(args: string[], onError: UsageError = exitW
             break;
          case '--out-file':
             flags.outFile = next();
+            break;
+         case '--ast-builder-file':
+            flags.astBuilderFile = next();
             break;
          case '--element-type-name':
             flags.elementTypeName = next();

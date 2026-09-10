@@ -11,6 +11,7 @@ import { DocumentState, URI, type AstNode } from '@hydranium/langium';
 import type { TransferDiagnostic } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
 import { makeFakeAstNode, makeFakeDocument } from '../../src/testing/fake-document.js';
+import { makeFakeReflection } from '../../src/testing/fake-reflection.js';
 
 interface FakeRoot extends AstNode {
    readonly $type: 'FakeRoot';
@@ -38,6 +39,34 @@ describe('makeFakeAstNode', () => {
    it('hands back the same reference it was given (no copy)', () => {
       const input = { $type: 'Node' };
       expect(makeFakeAstNode(input)).toBe(input);
+   });
+
+   describe('with a reflection', () => {
+      const reflection = makeFakeReflection({
+         TypeOne: { children: { defaultValue: [] }, active: { defaultValue: false } }
+      });
+
+      it("fills the grammar's declared defaults, so a fixture matches what parsing produces", () => {
+         const node = makeFakeAstNode<AstNode>({ $type: 'TypeOne' }, reflection);
+         expect(node).toEqual({ $type: 'TypeOne', children: [], active: false });
+      });
+
+      it('lets the fixture override a default', () => {
+         const node = makeFakeAstNode({ $type: 'TypeOne', active: true }, reflection);
+         expect((node as AstNode & { active: boolean }).active).toBe(true);
+      });
+
+      it('copies rather than aliasing the input, so a shared literal cannot leak defaults', () => {
+         const input = { $type: 'TypeOne' };
+         const node = makeFakeAstNode(input, reflection);
+         expect(node).not.toBe(input);
+         expect(input).toEqual({ $type: 'TypeOne' });
+      });
+
+      it('adds nothing for a type the reflection does not declare', () => {
+         const node = makeFakeAstNode({ $type: 'ns.Element' }, reflection);
+         expect(node).toEqual({ $type: 'ns.Element' });
+      });
    });
 });
 

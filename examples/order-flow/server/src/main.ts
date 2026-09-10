@@ -39,7 +39,7 @@ import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } fro
 // reference object with `.ref` / `.$refText`. Both satisfy `TransferElement`
 // structurally, so naming the AST types here compiles fine and silently tells
 // every typed client that `subject` is a resolvable object rather than a name.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 const connection = createConnection(ProposedFeatures.all);

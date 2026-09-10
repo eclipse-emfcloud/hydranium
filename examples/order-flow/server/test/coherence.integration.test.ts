@@ -65,7 +65,7 @@ import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../src/glsp/o
 import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-transfer/transfer-model.js';
+import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
