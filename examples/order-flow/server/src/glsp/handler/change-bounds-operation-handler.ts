@@ -20,7 +20,7 @@ import { DiagramNode, type FlowNode, type LayoutModel, isFlowNode } from '../../
 import { layoutNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
-import { appendChild } from './containment.js';
+import { appendChild } from '@hydranium/core';
 
 /** One resolved move/resize: the flow node the client addressed, and its new bounds. */
 interface ResolvedBounds {

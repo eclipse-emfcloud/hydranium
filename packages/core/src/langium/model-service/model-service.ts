@@ -502,10 +502,21 @@ export class ModelService<
     *
     * Phase invariants encoded in the return type:
     * - `parsed` / `linked` / `settled` / `indexed` return
-    *   `AstDocument<TAst, never>` — diagnostics array is empty by phase
-    *   contract.
+    *   `AstDocument<TAst, never>` — no diagnostics have been computed at
+    *   those phases.
     * - `validated` returns `AstDocument<TAst, TDiagnostic>` — diagnostics
     *   are populated.
+    *
+    * **The `never` is a claim about the PHASE, not a guarantee about the
+    * instance, and the gap is reachable rather than theoretical.** The wait
+    * underneath resolves at or ABOVE the requested state, so a document
+    * something else already carried past `Validated` comes back from
+    * `settled()` with a populated diagnostics array typed `never`. Nothing
+    * strips it — the envelope copies the live document's array verbatim — and
+    * any host that validates its workspace before a consumer asks produces
+    * exactly that. So read an empty array as "none were computed, or there are
+    * none", never as "this document is clean", and call {@link validated} when
+    * the answer has to mean the second.
     *
     * `settled` is the integrity-overlay name for "all integrity rules
     * have fired"; it maps to {@link IntegrityService.SettledState} (which

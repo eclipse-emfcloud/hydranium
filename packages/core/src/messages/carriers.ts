@@ -29,6 +29,13 @@ import { Diagnostic } from 'vscode-languageserver-protocol';
  * be able to request a quick fix. The identity is merged OVER whatever they
  * pass, which makes the two conventions co-exist rather than compete.
  *
+ * `data` admits adopter-owned keys beside Langium's, which is why the index
+ * signature is there rather than a bare `Partial<DiagnosticData>`. Langium's
+ * shape is closed, and a diagnostic that carries a COMPANION payload for its own
+ * surface to read — the field a form must highlight, say — has nowhere else to
+ * put it: an encoder projecting that payload reads `diagnostic.data`, so the
+ * narrower type made the identity and the companion mutually exclusive.
+ *
  * The identity lands in both `code` and `data.hydranium` on purpose. `code` is
  * what survives to the editor surface; Theia's converter drops `data` before the
  * squiggle, so a parameterised diagnostic falls back to the server's English
@@ -44,10 +51,13 @@ export function acceptMessage<S extends string, N extends AstNode, P extends Pro
    accept: ValidationAcceptor,
    severity: 'error' | 'warning' | 'info' | 'hint',
    message: MessageDefinition<S>,
-   info: Omit<DiagnosticInfo<N, P>, 'code' | 'data'> & { data?: Partial<DiagnosticData> },
+   info: Omit<DiagnosticInfo<N, P>, 'code' | 'data'> & { data?: Partial<DiagnosticData> & Record<string, unknown> },
    ...params: ParamsArg<S>
 ): void {
-   const data: HydraniumMessageData & Partial<DiagnosticData> = { ...info.data, ...messageData(message, ...params) };
+   const data: HydraniumMessageData & Partial<DiagnosticData> & Record<string, unknown> = {
+      ...info.data,
+      ...messageData(message, ...params)
+   };
    accept(severity, message.format(...params), { ...info, code: message.code, data });
 }
 

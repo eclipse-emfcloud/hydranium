@@ -22,6 +22,24 @@
          whole mechanism.
       -->
       <link rel="stylesheet" href="./out/order-flow-page.css" />
+      <!--
+         COPIED here by esbuild from the repository's brand asset rather than
+         committed beside this file, so a logo change cannot leave the page
+         serving the previous mark. `out/` because that is the one directory the
+         document already loads from.
+
+         The variant with WHITE book pages, which is the one the root README
+         pairs with a LIGHT background — so the pairing here is INVERTED on
+         purpose and a reader who "corrects" it makes the icon worse. The brand
+         variants differ by making the paper match the background they sit on,
+         which is right on a page and wrong on a tab strip: a favicon is
+         composited onto browser chrome whose colour this document neither
+         controls nor can read, so matching an assumed background yields a thin
+         outline in both schemes, and at 16px the filled paper is most of what
+         survives. Making it adapt instead would need dark paper on a light
+         strip, a colour the brand set does not define.
+      -->
+      <link rel="icon" href="./out/hydranium-mark.svg" />
       <style>
          /*
             The light role set — what this SHELL contributes to the diagram's
@@ -32,7 +50,7 @@
 
             Scoped to `[data-theme='light']` on the root element rather than to a
             `prefers-color-scheme` query, because the switch has to be able to
-            overrule the OS. `order-flow-page.ts` seeds the attribute from
+            overrule the OS. `workbench.ts` seeds the attribute from
             `prefers-color-scheme` at startup and the checkbox writes it after.
             A media query cannot be overridden from script without duplicating
             every rule.
@@ -165,9 +183,14 @@
          .titlebar .spacer {
             flex: 1 1 auto;
          }
+         /*
+            Sized in the document rather than here, because an `<img>` with no
+            intrinsic-ratio box shifts the whole title bar as it decodes. `block`
+            so the inline baseline does not add a descender gap under it.
+         */
          .titlebar .app-mark {
-            color: var(--order-flow-task-accent);
-            font-size: 1.1rem;
+            display: block;
+            flex: none;
          }
          .actions {
             display: flex;
@@ -214,6 +237,35 @@
             gap: 0.4rem;
             color: var(--order-flow-panel-foreground);
             user-select: none;
+         }
+         /*
+            The language picker. A REAL `<select>`, and deliberately not restyled
+            past its colours: the popup is the platform's, so a reader gets their
+            own keyboard conventions and the list stays usable at any length,
+            where a hand-built menu would re-implement all of it. `appearance` is
+            left alone for the same reason the checkbox below takes the opposite
+            treatment — a two-state switch reads better as a switch, an open set
+            reads better as the control the platform already has.
+
+            `color-scheme` is what makes the native popup follow the page: without
+            it a dark chrome opens a white menu, because the popup is drawn by the
+            browser and CSS colours do not reach it.
+         */
+         .scheme-switch select {
+            font: inherit;
+            font-size: 0.85rem;
+            color: inherit;
+            background: var(--order-flow-recessed);
+            color-scheme: dark;
+            border: 1px solid var(--order-flow-panel-border);
+            border-radius: 4px;
+            padding: 0.05rem 0.2rem;
+         }
+         :root[data-theme='light'] .scheme-switch select {
+            color-scheme: light;
+         }
+         .scheme-switch select:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
          }
          /*
             A REAL checkbox, restyled as a switch rather than replaced by a
@@ -822,8 +874,26 @@
    </head>
    <body>
       <header class="titlebar">
-         <span class="app-mark codicon codicon-type-hierarchy-sub" aria-hidden="true"></span>
-         <h1>Order Flow<span class="subtitle">three heads, one language server, one web worker</span></h1>
+         <!--
+            The BRAND mark, not a codicon. The codicon that was here was
+            `type-hierarchy-sub` — a sibling of the one the GLSP status entry
+            uses, so the page's identity and one of its three heads were drawn
+            with the same glyph and the title bar read as a diagram label.
+            The same file the tab icon uses, so the two cannot disagree.
+
+            `alt=""` rather than a description: the `<h1>` beside it already
+            names the application, so a described image would have a screen
+            reader announce the name twice.
+         -->
+         <img class="app-mark" src="./out/hydranium-mark.svg" alt="" width="20" height="20" />
+         <!--
+            `Order Flow` carries no `data-nls`, and that is a decision: a product
+            name is not i18n, so routing it through a catalogue would ask a
+            translator to render a name. The tagline beside it is prose.
+         -->
+         <h1>
+            Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">three heads, one language server, one web worker</span>
+         </h1>
          <span class="spacer"></span>
          <div class="actions">
             <!--
@@ -837,19 +907,46 @@
                has: an edit lives in the server's in-memory text document until
                something persists it, in a browser exactly as on a disk.
             -->
+            <!--
+               Each label is a `<span>` rather than a bare text node beside the
+               icon, because that is the element a translation can replace: the
+               switch writes `textContent`, and writing it on the button would
+               take the `<i>` with it and leave an iconless label.
+            -->
             <button type="button" id="save-workspace" class="action" disabled>
-               <i class="codicon codicon-save" aria-hidden="true"></i> Save workspace
+               <i class="codicon codicon-save" aria-hidden="true"></i> <span data-nls="order-flow/page/save-workspace">Save workspace</span>
             </button>
             <button type="button" id="reset-workspace" class="action" disabled>
-               <i class="codicon codicon-discard" aria-hidden="true"></i> Reset workspace
+               <i class="codicon codicon-discard" aria-hidden="true"></i>
+               <span data-nls="order-flow/page/reset-workspace">Reset workspace</span>
             </button>
-            <button type="button" id="reset-layout" class="action" title="Restore the default pane sizes">
-               <i class="codicon codicon-screen-normal" aria-hidden="true"></i> Reset layout
+            <button
+               type="button"
+               id="reset-layout"
+               class="action"
+               title="Restore the default pane sizes"
+               data-nls-title="order-flow/page/reset-layout-hint"
+            >
+               <i class="codicon codicon-screen-normal" aria-hidden="true"></i>
+               <span data-nls="order-flow/page/reset-layout">Reset layout</span>
             </button>
-            <label class="scheme-switch action" title="Light or dark">
+            <label class="scheme-switch action" title="Light or dark" data-nls-title="order-flow/page/scheme-hint">
                <input type="checkbox" id="dark-scheme" />
                <i class="codicon codicon-color-mode" aria-hidden="true"></i>
-               Dark
+               <span data-nls="order-flow/page/scheme-dark">Dark</span>
+            </label>
+            <!--
+               The language switch, and it is a `<select>` rather than a second
+               checkbox because the set is open: a third catalogue is a row in
+               `PAGE_LOCALES` and nothing else. Its options are NOT translated —
+               a reader looking for their own language looks for its name in that
+               language, which is why every picker of this kind lists `Deutsch`
+               and not `German`. Populated from script so the list has one
+               source; see `src/page/page-nls.ts`.
+            -->
+            <label class="scheme-switch action" title="Language" data-nls-title="order-flow/page/language">
+               <i class="codicon codicon-globe" aria-hidden="true"></i>
+               <select id="page-locale" aria-label="Language" data-nls-aria-label="order-flow/page/language"></select>
             </label>
          </div>
       </header>
@@ -863,13 +960,20 @@
          <section class="panel sidebar" id="document-panel">
             <div class="panel-head">
                <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
-               <h2>Workspace</h2>
+               <h2 data-nls="order-flow/page/workspace">Workspace</h2>
                <span class="spacer"></span>
-               <span class="badge" id="document-list-count" title="documents">0</span>
+               <span class="badge" id="document-list-count" title="documents" data-nls-title="order-flow/page/documents">0</span>
             </div>
             <div class="panel-body" id="document-list"></div>
          </section>
 
+         <!--
+            This one DOES carry an absolute ceiling, and the difference is the
+            default: `--sidebar-width` is a length, so no window width can push
+            the divider past 600 and leave it there. A list of file names has a
+            width past which it is only whitespace, which no measurement of the
+            neighbouring pane expresses.
+         -->
          <div
             class="splitter"
             data-splitter="--sidebar-width"
@@ -888,19 +992,13 @@
             <div class="pane-head">
                <i class="codicon codicon-go-to-file" aria-hidden="true"></i>
                <span class="pane-title" id="selected-editor-title">…</span>
-               <span class="hint">selected</span>
+               <span class="hint" data-nls="order-flow/page/selected">selected</span>
             </div>
             <div id="selected-editor" class="editor"></div>
          </section>
 
-         <div
-            class="splitter"
-            data-splitter="--selected-width"
-            data-measure="#selected-pane"
-            data-axis="x"
-            data-min="220"
-            data-max="900"
-         ></div>
+         <!-- `--selected-width` defaults to a fraction, so no absolute ceiling. -->
+         <div class="splitter" data-splitter="--selected-width" data-measure="#selected-pane" data-axis="x" data-min="220"></div>
 
          <!--
             The subject: the diagram over the two documents it is a view of, both
@@ -915,40 +1013,28 @@
                <div class="pane-head">
                   <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i>
                   <span class="pane-title">orders/fulfillment.process</span>
-                  <span class="hint">drag a node; the layout editor follows</span>
+                  <span class="hint" data-nls="order-flow/page/diagram-hint">drag a node; the layout editor follows</span>
                </div>
                <div id="order-flow-process-diagram"></div>
             </section>
-            <div
-               class="splitter"
-               data-splitter="--diagram-split"
-               data-measure="#diagram-pane"
-               data-axis="y"
-               data-min="120"
-               data-max="900"
-            ></div>
+            <!-- `--diagram-split` defaults to a percentage, so no absolute ceiling. -->
+            <div class="splitter" data-splitter="--diagram-split" data-measure="#diagram-pane" data-axis="y" data-min="120"></div>
             <div class="fixed-editors">
                <section class="pane" id="process-pane">
                   <div class="pane-head">
                      <i class="codicon codicon-symbol-event" aria-hidden="true"></i>
                      <span class="pane-title" id="process-editor-title">…</span>
-                     <span class="hint">semantics</span>
+                     <span class="hint" data-nls="order-flow/page/semantics">semantics</span>
                   </div>
                   <div id="process-editor" class="editor"></div>
                </section>
-               <div
-                  class="splitter"
-                  data-splitter="--fixed-split"
-                  data-measure="#process-pane"
-                  data-axis="x"
-                  data-min="180"
-                  data-max="1200"
-               ></div>
+               <!-- `--fixed-split` defaults to a percentage, so no absolute ceiling. -->
+               <div class="splitter" data-splitter="--fixed-split" data-measure="#process-pane" data-axis="x" data-min="180"></div>
                <section class="pane">
                   <div class="pane-head">
                      <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i>
                      <span class="pane-title" id="layout-editor-title">…</span>
-                     <span class="hint">coordinates</span>
+                     <span class="hint" data-nls="order-flow/page/coordinates">coordinates</span>
                   </div>
                   <div id="layout-editor" class="editor"></div>
                </section>
@@ -962,20 +1048,40 @@
          <section class="panel" id="log-panel">
             <div class="panel-head">
                <i class="codicon codicon-output" aria-hidden="true"></i>
-               <h2>Server log</h2>
-               <span class="badge" id="log-summary" title="lines received">0</span>
+               <h2 data-nls="order-flow/page/server-log">Server log</h2>
+               <span class="badge" id="log-summary" title="lines received" data-nls-title="order-flow/page/lines-received">0</span>
                <span class="spacer"></span>
                <span class="filter-box">
                   <i class="codicon codicon-filter" aria-hidden="true"></i>
-                  <input type="text" id="log-filter" placeholder="filter" aria-label="Filter the server log" />
+                  <input
+                     type="text"
+                     id="log-filter"
+                     placeholder="filter"
+                     aria-label="Filter the server log"
+                     data-nls-placeholder="order-flow/page/filter"
+                     data-nls-aria-label="order-flow/page/filter-hint"
+                  />
                </span>
-               <button type="button" id="log-clear" class="action" title="Clear the lines held here">
+               <button
+                  type="button"
+                  id="log-clear"
+                  class="action"
+                  title="Clear the lines held here"
+                  data-nls-title="order-flow/page/clear-log"
+               >
                   <i class="codicon codicon-clear-all" aria-hidden="true"></i>
                </button>
             </div>
             <div id="log"></div>
          </section>
-         <div class="splitter" data-splitter="--dock-split" data-measure="#log-panel" data-axis="x" data-min="240" data-max="1400"></div>
+         <!--
+            No `data-max`: this divider's default is a SHARE of the dock, so any
+            fixed ceiling is smaller than the default once the window is wide
+            enough, and a divider whose bound sits below where it already is can
+            only be dragged one way. The problems panel keeping `data-min` is the
+            bound that means something here. See `src/page/splitters.ts`.
+         -->
+         <div class="splitter" data-splitter="--dock-split" data-measure="#log-panel" data-axis="x" data-min="240"></div>
          <!--
             NOT filtered to the open documents, and that is the demonstration:
             `orders/audit-leak.domain` exists so a diagnostic is published for a
@@ -984,10 +1090,16 @@
          <section class="panel">
             <div class="panel-head">
                <i class="codicon codicon-warning" aria-hidden="true"></i>
-               <h2>Problems</h2>
-               <span class="badge" id="problem-list-count" title="diagnostics">0</span>
+               <h2 data-nls="order-flow/page/problems">Problems</h2>
+               <span class="badge" id="problem-list-count" title="diagnostics" data-nls-title="order-flow/page/diagnostics">0</span>
                <span class="spacer"></span>
-               <span class="hint-text" title="click a diagnostic to open its document at the line">click to open</span>
+               <span
+                  class="hint-text"
+                  title="click a diagnostic to open its document at the line"
+                  data-nls-title="order-flow/page/click-to-open-hint"
+                  data-nls="order-flow/page/click-to-open"
+                  >click to open</span
+               >
             </div>
             <div class="panel-body" id="problem-list"></div>
          </section>

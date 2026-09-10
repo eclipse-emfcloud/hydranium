@@ -14,7 +14,7 @@ import { processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
 import { PROCESS_EFFECT_TYPE } from '../order-flow-process-diagram-types.js';
-import { appendChild } from './containment.js';
+import { appendChild } from '@hydranium/core';
 
 /**
  * Adds a `reads <subject>.<field>` effect to a task.

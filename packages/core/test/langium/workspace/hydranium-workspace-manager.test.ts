@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Logger, NoopLogger, type Project, type Tracer } from '@hydranium/protocol';
-import { makeCapturingLogger } from '../../../src/testing/make-test-tracer.js';
+import { type CapturedLine, makeCapturingLogger } from '../../../src/testing/make-test-tracer.js';
 import { type DocumentBuilder, DocumentState, type LangiumDocument, type LangiumDocuments, URI } from '@hydranium/langium';
 import { Disposable } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
@@ -264,6 +264,64 @@ describe('HydraniumWorkspaceManager — workspace log target', () => {
 
       // Target still pending — no folder to resolve the placeholder from.
       expect(getLogFilePath()).toBeUndefined();
+   });
+});
+
+/**
+ * The language the server renders in reaches the server LOG, in both outcomes.
+ *
+ * **The level is the property under test, not the wording.** The framework
+ * ships no catalogue, so an undeclared locale and a code with no entry both
+ * render the English and are indistinguishable in the output — which makes the
+ * log the only thing that separates them, and makes a line below the default
+ * threshold worth nothing. Both tests therefore run at `'info'` (the framework
+ * default when no `HYDRANIUM_LOG_LEVEL` is set) and assert the captured level,
+ * so a line demoted back to `'debug'` fails here rather than silently
+ * disappearing from the log someone would be reading.
+ *
+ * Two tests because the two outcomes are emitted by two different objects —
+ * `ServerLocale.accept` and this manager — for the reason `initialize`'s doc
+ * gives. One of them passing says nothing about the other.
+ */
+describe('HydraniumWorkspaceManager — the declared locale in the log', () => {
+   function initializeWith(locale: string | undefined): CapturedLine[] {
+      const { tracer, lines } = makeCapturingTracer();
+      const stubs = makeStubs(new FakeProjectManager());
+      // Before the manager is constructed, so the lazily-built `ServerLocale`
+      // takes this tracer too — it is the object that reports the declared case.
+      (stubs.services as unknown as { Tracer: Tracer }).Tracer = tracer;
+      const mgr = new HydraniumWorkspaceManager(stubs.services);
+
+      mgr.initialize({ workspaceFolders: [], locale } as unknown as Parameters<HydraniumWorkspaceManager['initialize']>[0]);
+
+      return lines;
+   }
+
+   function atInfo(run: () => CapturedLine[]): CapturedLine[] {
+      const previousLevel = Logger.getLevel();
+      Logger.setLevel('info');
+      try {
+         return run();
+      } finally {
+         Logger.setLevel(previousLevel);
+      }
+   }
+
+   it('names the locale an init declared', () => {
+      const locale = atInfo(() => initializeWith('xx-AA')).filter(line => line.message.includes('xx-AA'));
+
+      expect(locale).toHaveLength(1);
+      expect(locale[0].level).toBe('info');
+   });
+
+   it('says so when an init declared none, rather than leaving the log silent', () => {
+      const lines = atInfo(() => initializeWith(undefined));
+
+      const locale = lines.filter(line => line.message.includes('no locale declared'));
+      expect(locale).toHaveLength(1);
+      expect(locale[0].level).toBe('info');
+      // And nothing claims a language — the failure a `''` fallback would make.
+      expect(lines.filter(line => line.message.includes("locale '"))).toEqual([]);
    });
 });
 

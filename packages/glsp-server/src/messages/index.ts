@@ -22,4 +22,4 @@
  * discovers the codes exist.
  */
 
-export { SAVE_TARGET_UNKNOWN, SOURCE_URI_MISSING } from '../storage/hydranium-glsp-storage.js';
+export { DIAGRAM_READONLY_PARSE_ERROR, SAVE_TARGET_UNKNOWN, SOURCE_URI_MISSING } from '../storage/hydranium-glsp-storage.js';

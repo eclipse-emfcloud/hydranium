@@ -359,11 +359,11 @@ describe('order-flow .process GModel projection', () => {
       expect(cancel.layoutOptions?.prefHeight).toBeUndefined();
    });
 
-   it('leaves a flow node with no diagram entry to client layout', async () => {
+   it('leaves a flow node with no diagram entry on its own size, not the positioned one', async () => {
       // `Cancel` is deliberately absent from the sample workspace's `.layout`
-      // file. GLSP's builder default is the origin with a -1 size, which is
-      // its "unset" marker — the point is that the factory does not invent a
-      // position, not the particular sentinel.
+      // file, so it takes the fallback position and the notation's size floors
+      // rather than anything persisted. The point is that neither is borrowed
+      // from a node that HAS an entry — the two differ on both axes.
       const harness = await makeWorkspaceHarness();
       const graph = await buildGraph(harness, 'orders/fulfillment.process');
 
@@ -423,9 +423,31 @@ describe('order-flow .process GModel projection', () => {
          expect((byType(graph, PROCESS_TASK_NODE_TYPE) as GNode[]).map(node => node.id)).toEqual(['Pay', 'Pick', 'Ship', 'Cancel']);
          const pay = (byType(graph, PROCESS_TASK_NODE_TYPE) as GNode[]).find(node => node.id === 'Pay')!;
          const cancel = (byType(graph, PROCESS_TASK_NODE_TYPE) as GNode[]).find(node => node.id === 'Cancel')!;
-         expect(pay.position).toEqual(cancel.position);
+         // `Pay`'s entry is now stale, so `Pay` and `Cancel` are BOTH
+         // unpositioned — and they must not coincide. Two nodes at one point
+         // means the wider one hides the other completely, and a diagram drawing
+         // four shapes for a five-node model reads as the head having dropped an
+         // element rather than as a node with nowhere to be.
+         expect(pay.position).not.toEqual(cancel.position);
+         // The stacking order is document order, so it is stable across
+         // rebuilds: `Pay` is first in `root.nodes`, `Cancel` last.
+         expect(pay.position).toEqual({ x: 0, y: 0 });
+         expect(cancel.position).toEqual({ x: 0, y: 80 });
       } finally {
          entry.flowNode = original;
       }
+   });
+
+   it('keeps a SINGLE unpositioned node at the origin', async () => {
+      // The sample workspace has exactly one — `Cancel` — and the browser tier's
+      // append-on-drag test reads `Cancel 0,0` as the signature of a write that
+      // arrived without a `newPosition`. Stacking must therefore start at the
+      // origin rather than at the first row, or that test loses the one value it
+      // can distinguish a half-completed write by.
+      const harness = await makeWorkspaceHarness();
+      const graph = await buildGraph(harness, 'orders/fulfillment.process');
+
+      const cancel = (byType(graph, PROCESS_TASK_NODE_TYPE) as GNode[]).find(node => node.id === 'Cancel')!;
+      expect(cancel.position).toEqual({ x: 0, y: 0 });
    });
 });

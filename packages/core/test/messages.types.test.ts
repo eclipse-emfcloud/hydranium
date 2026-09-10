@@ -74,6 +74,20 @@ describe('acceptMessage', () => {
       expect(data.code).toBe('fix-separator');
       expect(data.hydranium?.code).toBe(SEPARATOR.code);
    });
+
+   it("carries an adopter's own companion key beside the identity", () => {
+      const raised: Raised[] = [];
+      // The shape an adopter needs when a diagnostic names WHICH element its own
+      // surface must highlight. Langium's `DiagnosticData` is closed, so a narrower
+      // `data` type would make the companion and the identity mutually exclusive —
+      // and an encoder projecting the companion reads exactly this field.
+      acceptMessage(recordingAcceptor(raised), 'warning', PLAIN, { node, data: { code: 'missing-value', ownedByAdopter: 'PropertyOne' } });
+
+      const data = raised[0].info.data as { code?: string; ownedByAdopter?: string; hydranium?: { code: string } };
+      expect(data.ownedByAdopter).toBe('PropertyOne');
+      expect(data.code).toBe('missing-value');
+      expect(data.hydranium?.code).toBe(PLAIN.code);
+   });
 });
 
 /**

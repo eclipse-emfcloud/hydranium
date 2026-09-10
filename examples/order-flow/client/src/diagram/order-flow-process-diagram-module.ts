@@ -17,6 +17,7 @@ import {
    GNode,
    RoundedCornerNodeView,
    StructureCompartmentView,
+   ToolPalette,
    configureDefaultModelElements,
    configureModelElement,
    initializeDiagramContainer
@@ -32,6 +33,7 @@ import {
    type ProcessElementType
 } from './order-flow-process-diagram-types';
 import { ProcessGatewayNode } from './order-flow-process-model';
+import { OrderFlowProcessToolPalette } from './order-flow-process-tool-palette';
 import { ProcessEdgeView } from './order-flow-process-views';
 
 /**
@@ -86,9 +88,16 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
  * own `ContainerModule` alongside this one; see
  * {@link initializeOrderFlowProcessDiagramContainer}.
  *
- * The tool palette needs no entries here: GLSP drives it from the server's
+ * The tool palette needs no ENTRIES here: GLSP drives it from the server's
  * `shapeTypeHints` / `edgeTypeHints`, which is why the palette and the
- * operation handlers backing it live in `order-flow-server`.
+ * operation handlers backing it live in `order-flow-server`. Its CLASS is
+ * rebound, for the read-only reason {@link OrderFlowProcessToolPalette} gives.
+ *
+ * A `rebind` of the class rather than of each token it serves: upstream binds
+ * `ToolPalette` to itself and then routes four other tokens — the UI-extension
+ * list, the diagram startup and three action handlers — to that one service, so
+ * replacing the class replaces every one of them, while rebinding the tokens
+ * would leave the original palette instance still built and still listening.
  */
 export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, isBound, rebind) => {
    const context = { bind, unbind, isBound, rebind };
@@ -96,6 +105,7 @@ export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, 
    for (const [elementTypeId, registration] of Object.entries(PROCESS_ELEMENT_REGISTRATIONS)) {
       configureModelElement(context, elementTypeId, registration.model, registration.view);
    }
+   rebind(ToolPalette).to(OrderFlowProcessToolPalette).inSingletonScope();
 });
 
 /**

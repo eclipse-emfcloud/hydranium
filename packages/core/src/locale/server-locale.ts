@@ -53,9 +53,19 @@ export class ServerLocale {
     *
     * Override to ignore the argument, which is how a host pins a locale it
     * already knows but has no LSP client to declare.
+    *
+    * **The line is at `info`, which is a deliberate exception to the
+    * per-service default.** A locale is written once per process and it is the
+    * one setting that silently changes every user-facing sentence the server
+    * produces, so a reader trying to explain an unexpected language has nothing
+    * else to look at: the framework ships no catalogue, so "no entry for this
+    * code" and "no locale declared" both render the English and are
+    * indistinguishable in the output. At `debug` the line is below the default
+    * threshold and therefore absent from exactly the log someone would be
+    * reading.
     */
    accept(locale: string): void {
       this.current = locale;
-      this.tracer.debug(`locale set to '${locale}'`);
+      this.tracer.info(`rendering messages in locale '${locale}'`);
    }
 }

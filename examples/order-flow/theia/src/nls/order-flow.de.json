@@ -5,10 +5,10 @@
       "command-dump-server-state": "Serverzustand ausgeben",
       "command-dump-pod-memory": "Pod-Speicher ausgeben",
       "command-dump-frontend-state": "Frontend-Zustand ausgeben",
-      "command-write-heap-snapshot-server": "Heap-Abbild schreiben (Server)",
-      "command-write-heap-snapshot-backend": "Heap-Abbild schreiben (Backend)",
-      "command-start-profiling-server": "Profilierung starten (Server)",
-      "command-stop-profiling-server": "Profilierung beenden (Server)",
+      "command-write-heap-snapshot-server": "Heap-Snapshot schreiben (Server)",
+      "command-write-heap-snapshot-backend": "Heap-Snapshot schreiben (Backend)",
+      "command-start-profiling-server": "Profiling starten (Server)",
+      "command-stop-profiling-server": "Profiling beenden (Server)",
       "command-record-profile": "Leistungsprofil aufzeichnen (Server, {0}s)",
       "command-dump-latency": "RPC/LSP-Latenz ausgeben (Server)",
       "command-dump-backend-state": "Backend-Zustand ausgeben",
@@ -17,7 +17,7 @@
     },
     "protocol": {
       "data-server-connect-failed": "Verbindung zum Datenserver fehlgeschlagen: {detail}",
-      "data-server-not-ready": "Der Datenserver ist nicht bereit geworden: {detail}"
+      "data-server-not-ready": "Der Datenserver war nicht rechtzeitig bereit: {detail}"
     }
   },
   "order-flow": {

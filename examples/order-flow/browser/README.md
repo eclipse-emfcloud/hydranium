@@ -22,13 +22,22 @@ ask for the validating build workspace initialization does not do, answer
 LSP puts the file write on the client and a page is a client with no disk.
 
 The three bundles, because a page whose subject is what its bundle contains
-should state it: **10.8 MB** for the page, **3.0 MB** for the head worker,
-**625 kB** for Monaco's editor worker — about **14.5 MB** in total, of which
+should state it: **11.7 MB** for the page, **3.2 MB** for the head worker,
+**625 kB** for Monaco's editor worker — about **15.5 MB** in total, of which
 Monaco is roughly 8 MB. Read those as a measurement rather than a fact about
 your build: taken unminified against `monaco-editor-core` 0.56, and no gate
 asserts them, so a dependency bump moves them without anything here noticing.
 Nothing is minified or split, deliberately: a worker-hosted language server
 can only be debugged in devtools.
+
+**Just under a megabyte of the page bundle is the price of Monaco's German**,
+and only a seventh of it is the German. Loading a locale bundle before Monaco
+means loading Monaco through a dynamic `import()` — see `src/page/order-flow-page.ts`
+for why — and esbuild then wraps every module reachable only from that import in
+a lazy initializer. Measured: 10.8 MB before, 11.0 MB with the catalogue reached
+by a static import, 11.7 MB with the deferral that makes it work. The wrappers
+are the 700 kB. Worth stating because the obvious reading of the jump is that a
+translation table costs a megabyte, and it does not.
 
 ## Running it
 
@@ -42,22 +51,53 @@ static server as the debuggee, and opens Chrome against it once the server print
 its URL. Breakpoints in the page read as written; the three heads run in a web
 worker, which appears as its own target in the call-stack view.
 
-**`?locale=de` renders the server's messages in German** —
-`http://localhost:3002/?locale=de`. The page reads the tag off its own URL and
-declares it in LSP `initialize`, the server hands it to
-`OrderFlowMessageRenderer`, and the diagnostics in the problems list come back
-translated. Try it on `orders/audit-leak.domain`'s unresolved reference: that
-sentence is **Langium's**, not this example's, and it arrives in German because
-the framework claims it as `hydranium/core/unresolved-reference` and the server
-renders before publishing. Nothing on the page holds a catalogue.
+**One language switch moves the whole page, server messages included** — the
+globe in the title bar, or `http://localhost:3002/?locale=de` directly. It
+covers two halves that work by completely different mechanisms, and seeing them
+move together is the point:
 
-A query parameter rather than a picker, and rather than `navigator.language`: the
-point is to switch it in one reload while watching the same diagnostics, and you
-cannot ask a reader to change their browser's language to see a feature. Any
-other tag falls back to English, which is the same pass-through an adopter with
-no entry for a code gets. A worker has no host to ask for a language — no
-`vscode.env.language`, no Theia `localeId` — so declaring one is the page's job
-here, and `initialize` is the same slot every other host uses.
+- **The server's messages.** The page declares the language in LSP `initialize`,
+  the server hands it to `OrderFlowMessageRenderer`, and the diagnostics in the
+  problems list and the labels on the tool palette come back translated. Try it
+  on `orders/audit-leak.domain`'s unresolved reference: that sentence is
+  **Langium's**, not this example's, and it arrives in German because the
+  framework claims it as `hydranium/core/unresolved-reference` and the server
+  renders before publishing. Then type a character no token can start with —
+  `§` — into `fulfillment.process`: that one is **chevrotain's**, a dependency
+  further out still, claimed as `hydranium/core/lexing-error` with the offending
+  character carried as a parameter. It is the first message a user of a new
+  language meets, and before the identity existed no adopter catalogue could
+  reach it.
+- **The page's own chrome.** The panel titles, buttons, hints and tooltips, from
+  a catalogue in `src/page/nls/`. A plain document has no host to resolve
+  `nls.localize` against, so this is one more seam a browser host implements
+  itself — like the filesystem and the transport. The English stays in
+  `index.html` and the catalogue is a partial overlay keyed by `data-nls`
+  attributes, so a missing key degrades to English rather than to nothing.
+- **Monaco's own menus.** Right-click in an editor: `Ausschneiden`, `Kopieren`,
+  `Befehlspalette`. That German is `monaco-editor-core`'s, shipped in the
+  package as one of thirteen locale bundles, and it costs no catalogue at all —
+  what it costs is an ORDERING, because Monaco resolves its menu titles when its
+  modules are evaluated rather than when a menu opens. `src/page/order-flow-page.ts`
+  exists for that one reason and explains it.
+
+`Order Flow` is not translated, because a product name is not i18n. Neither are
+the status-bar reports: they are measurements read against `hydranium-cli
+validate` from Node, which prints English, and a translated count cannot be
+compared with the oracle it exists to be compared with.
+
+**The switch writes the URL rather than holding the choice, and it reloads.** The
+URL keeps the state addressable — you can send someone the link, and the e2e
+tier names a language by navigating — where `navigator.language` would allow
+neither. The reload is the *server* half's requirement, not the chrome's: the
+language reaches the server once, at `initialize`, and the worker holds that
+connection for its lifetime, so changing it live would mean tearing down all
+three heads and the store they share. One switch drives both, so it moves at the
+pace of the half that cannot change in place — which also means you never get
+German chrome around English diagnostics.
+
+Any unknown tag falls back to English on both halves, which is the same
+pass-through an adopter with no entry for a code gets.
 
 The page starts the worker, hands each head its own `MessageChannel`, sends LSP
 `initialize` for a workspace it never had on disk, and reports five things: the
@@ -296,6 +336,7 @@ flakiness in the code and is not.
 | Workspace navigation | ✅ every seeded document with its diagnostic count, and a problems list that opens a document at the line |
 | Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models, so a drag moves the `.layout` editor |
 | Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme; seeded from `prefers-color-scheme` |
+| Localization | ✅ one switch over the page's own chrome *and* the server's diagnostics and palette; the URL carries it, and the reload is the server half's requirement |
 | Server log | ✅ a dock panel over `window/logMessage`, carrying all three heads on one channel, filterable |
 | Resizable layout | ✅ pointer-event dividers on every area, no UI framework — the shape GLSP's own `workflow-standalone` example uses |
 | Workspace persistence | ✅ a save mirrors into `IndexedDB` and the next load restores it, seed as the baseline; *reset* drops it |

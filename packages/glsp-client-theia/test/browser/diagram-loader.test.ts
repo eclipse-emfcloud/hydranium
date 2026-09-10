@@ -15,6 +15,7 @@ vi.mock('@hydranium/client-theia/lib/browser', () => ({
 }));
 
 import { type Action, StatusAction } from '@eclipse-glsp/client';
+import { nls } from '@theia/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
 
@@ -111,6 +112,28 @@ describe('HydraniumDiagramLoader', () => {
 
    it('reports whether the failure reached the status overlay', async () => {
       await expect(loader.exposeReportLoadFailure(new Error('connection refused'))).resolves.toBe(true);
+   });
+
+   /**
+    * The KEY, not the sentence. Every assertion above reads the English default,
+    * which `nls.localize` returns unchanged when no catalogue is loaded — so all
+    * of them pass just as well with the key renamed, or with the call removed
+    * entirely. The code is the contract and the English is the fallback, so the
+    * contract needs an assertion of its own.
+    *
+    * The parameter is asserted here too, because `{0}` is what makes this one
+    * entry rather than one per error text: a catalogue cannot hold a translation
+    * for a sentence whose detail is baked into the key's default.
+    */
+   it('renders the failure through its catalogue key, with the detail as a parameter', async () => {
+      const localize = vi.spyOn(nls, 'localize');
+      loader.loadFailureLabel(new Error('connection refused'));
+      expect(localize).toHaveBeenCalledWith(
+         'hydranium/glsp-client-theia/diagram-load-failed',
+         'Diagram failed to load: {0}',
+         'connection refused'
+      );
+      localize.mockRestore();
    });
 
    describe('load outcome', () => {

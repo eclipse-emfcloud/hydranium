@@ -1301,6 +1301,26 @@ is a localization outcome. A message naming framework symbols, a DI slot or a
 wire method is addressed to whoever composes the system, and stays a plain
 `Error`.
 
+### An override seam is not a localization carrier
+
+**A `protected` or public method an adopter overrides to change wording is not
+an alternative to a catalogue key, and a string that has one still needs the
+key.** The two answer different questions: an override changes the sentence for
+every user of one adopter's product, while the key is what gives a reader the
+sentence in their own language. An adopter cannot substitute the first for the
+second without writing a subclass per locale, which is what a catalogue exists
+to avoid — so "the seam is where an adopter localizes it" is not a policy, it is
+an unbuilt catalogue.
+
+Both therefore coexist on the same string: render through `nls.localize` *inside*
+the overridable method. The seam stays worth having, because rewording is a real
+adopter need that a translation cannot serve.
+
+The one shape that genuinely stays out is a string whose VALUE is load-bearing —
+a literal that has to equal something a foreign component sends. That is not an
+audience judgement and does not belong in the list below; it is a correctness
+constraint, and it is documented at the constant.
+
 ### Out of scope by policy
 
 Written once here so nobody re-audits them:
@@ -1359,6 +1379,17 @@ which Langium pushes onto the document without routing them through
 `toDiagnostic`, and it is where Langium's own unresolved-reference sentence
 picks up a framework identity.
 
+**Two of the three uncoded upstream sentences now carry one.** The framework
+claims the unresolved-reference message as `hydranium/core/unresolved-reference`
+and the unexpected-character one as `hydranium/core/lexing-error`, each attached
+only when the diagnostic's message is byte-identical to what the declaration
+renders — so a reworded linker error or a custom lexer's own report keeps its
+prose and gains no identity. Both attachments are derived from STRUCTURED
+fields and then checked against the prose, never parsed out of it. Parser errors
+are the remaining gap: Langium's `LangiumParserErrorMessageProvider` produces
+four distinct sentences, so claiming them is four declarations rather than one,
+and nothing has needed it yet.
+
 **The identity still travels** — `acceptMessage` puts it on both
 `Diagnostic.code` and `data.hydranium`, and `TransferEncoder.toTransferDiagnostic`
 lifts it onto `TransferDiagnostic` as `code` + `params`. Its purpose is now
@@ -1375,12 +1406,14 @@ internal codes share the field.
   Nothing enforces this, so two catalogues holding one code is the shape to look
   for in review.
 - **An interceptor matches structured fields, never the sentence.** A renderer
-  wanting Langium's uncoded messages matches `Diagnostic.data.code`
-  (`linking-error`, `lexing-error`, `parsing-error`) and the `refText` /
-  `containerType` / `property` beside it. Matching English prose breaks on the
-  first upstream reword — and it cannot even tell an identity-bearing message
-  with no catalogue entry from one that has no identity, since both come back
-  unchanged.
+  wanting an upstream message the framework has not claimed matches
+  `Diagnostic.data.code` (`parsing-error`, and the non-standard variants of
+  `linking-error` / `lexing-error`) and the `refText` / `containerType` /
+  `property` beside it. Matching English prose breaks on the first upstream
+  reword — and it cannot even tell an identity-bearing message with no
+  catalogue entry from one that has no identity, since both come back
+  unchanged. Langium's codes survive alongside a framework identity when one is
+  attached, so the field stays usable either way.
 - **A renderer must not throw**, and the contract lives on
   `ServerMessageRenderer`'s public methods rather than at each call site. The
   framework's `interpolate` cannot throw, but an adopter's catalogue lookup can,

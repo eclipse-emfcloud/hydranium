@@ -369,10 +369,22 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
     * params. `DefaultWorkspaceManager.initialize` reads `workspaceFolders`
     * alone, so `params.locale` would otherwise be discarded — and this is the
     * only place it arrives, which the headless init seams route through too.
+    *
+    * **The ABSENT case is reported from here rather than from `ServerLocale`,
+    * because this is the only end that can see it.** `accept` is not called
+    * when no locale was declared — nor should it be, since `''` is a claim
+    * about a language rather than the absence of one — so a log written there
+    * covers one of the two outcomes and leaves the other looking like a server
+    * that never reached init. Both lines are at `info` for the reason `accept`
+    * gives: the framework ships no catalogue, so an undeclared locale and an
+    * untranslated code produce the same English and the log is what separates
+    * them.
     */
    override initialize(params: InitializeParams): void {
       if (params.locale) {
          this.serverLocale.accept(params.locale);
+      } else {
+         this.tracer.info("no locale declared at init — rendering messages in the framework's English");
       }
       super.initialize(params);
    }

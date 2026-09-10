@@ -18,8 +18,10 @@ import {
 } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver-protocol';
 import { Range } from 'vscode-languageserver-types';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
    HydraniumDocumentValidator,
+   LEXING_ERROR,
    UNRESOLVED_REFERENCE,
    type DocumentValidatorOptions
 } from '../../../src/langium/validation/document-validator.js';
@@ -426,6 +428,122 @@ describe('HydraniumDocumentValidator', () => {
 
          expect(diagnostics[0]).toBe(preexisting);
          expect(diagnostics[0].code).toBeUndefined();
+      });
+   });
+
+   describe('identifyLexingError', () => {
+      /**
+       * A source whose second line begins with a character no token can start
+       * with, and the offset the lexer reports for it.
+       *
+       * Two lines, not one, so the range→offset round trip the pass depends on
+       * actually crosses a line break — a single-line fixture makes
+       * `offsetAt(start)` and `range.start.character` the same number, and would
+       * pass against a pass that used the column as the offset.
+       */
+      const SOURCE = 'element Foo\n§ trailing';
+      const OFFSET = SOURCE.indexOf('§');
+
+      /**
+       * The range Langium's `processLexingErrors` computes for a one-character
+       * lexer error on the second line: `line - 1`, `column - 1`, and an end one
+       * character further on.
+       */
+      const STRAY_RANGE = Range.create(1, 0, 1, 1);
+
+      /**
+       * Byte-identical to chevrotain's
+       * `defaultLexerErrorProvider.buildUnexpectedCharactersMessage`, which is
+       * the contract {@link LEXING_ERROR} claims.
+       */
+      const CHEVROTAIN = `unexpected character: ->§<- at offset: ${OFFSET}, skipped 1 characters.`;
+
+      /** Exposes the protected pass, which its caller reaches only through a full validation. */
+      class LexingProbe extends HydraniumDocumentValidator {
+         run(target: LangiumDocument, diagnostic: Diagnostic): Diagnostic {
+            return this.identifyLexingError(target, diagnostic);
+         }
+      }
+
+      /**
+       * A document over {@link SOURCE} with a REAL `TextDocument` behind it.
+       *
+       * The fake's default `textDocument` has no `offsetAt`, and stubbing one
+       * would be stubbing the very computation under test: the pass reconstructs
+       * chevrotain's offset from an LSP range, and only upstream's own position
+       * arithmetic can say whether that round-trips.
+       */
+      function document(): LangiumDocument {
+         return makeFakeDocument('file:///a.test', makeFakeAstNode({ $type: 'Root' }), {
+            textDocument: TextDocument.create('file:///a.test', 'test', 1, SOURCE)
+         });
+      }
+
+      function runPass(diagnostic: Diagnostic): Diagnostic {
+         return new LexingProbe(makeStubServices({ getAstNodePath: () => '/x' }, makeLogger())).run(document(), diagnostic);
+      }
+
+      function lexingDiagnostic(overrides: Partial<Diagnostic> = {}): Diagnostic {
+         return { range: STRAY_RANGE, message: CHEVROTAIN, data: { code: 'lexing-error' }, ...overrides };
+      }
+
+      it('attaches the identity, with the character and offset a translation needs', () => {
+         const diagnostic = runPass(lexingDiagnostic());
+
+         expect(diagnostic.code).toBe(LEXING_ERROR.code);
+         // The PARAMS, not just the code: an identity with no character is the
+         // half-measure this whole pass exists to avoid, and it would render a
+         // German sentence with a literal `{character}` in it.
+         expect(diagnostic.data).toMatchObject({
+            code: 'lexing-error',
+            hydranium: { code: LEXING_ERROR.code, params: { character: '§', offset: OFFSET, skipped: 1 } }
+         });
+      });
+
+      it('renders back to chevrotain’s own sentence, so an adopter with no catalogue is unaffected', () => {
+         const diagnostic = runPass(lexingDiagnostic());
+         const params = (diagnostic.data as { hydranium: { params: Parameters<typeof LEXING_ERROR.format>[0] } }).hydranium.params;
+
+         expect(LEXING_ERROR.format(params)).toBe(CHEVROTAIN);
+      });
+
+      it('identifies a lexing WARNING too, not only the error severity', () => {
+         // `lexerReport` admits warnings and below, and a token builder that
+         // downgrades a stray character still produces the same sentence.
+         const diagnostic = runPass(lexingDiagnostic({ data: { code: 'lexing-warning' } }));
+
+         expect(diagnostic.code).toBe(LEXING_ERROR.code);
+      });
+
+      it("declines a custom lexer's own diagnostic, which carries the same code", () => {
+         // The shape a `lexerReport` entry from an indentation-aware lexer has:
+         // Langium's lexing code, arbitrary prose. Labelling it would have a
+         // catalogue render "unexpected character" over an unrelated report.
+         const diagnostic = runPass(lexingDiagnostic({ message: 'Inconsistent indentation: expected 3 spaces.' }));
+
+         expect(diagnostic.code).toBeUndefined();
+         expect(diagnostic.data).not.toHaveProperty('hydranium');
+      });
+
+      it('declines a non-lexing diagnostic whose message is identical', () => {
+         // The guard the code check exists for. A parsing error cannot word
+         // itself this way today, so nothing but the code separates "the lexer
+         // said this" from "something else said the same thing" — and an
+         // adopter validator is free to say anything.
+         const diagnostic = runPass(lexingDiagnostic({ data: { code: 'parsing-error' } }));
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('declines when the range does not round-trip to the reported offset', () => {
+         // The reconstruction validating itself. A range one line off yields a
+         // different offset and therefore a different sentence, so a wrong
+         // parameter set can never be attached to a right-looking message —
+         // which is what makes reading the range safe in place of correlating
+         // Langium's own error list.
+         const diagnostic = runPass(lexingDiagnostic({ range: Range.create(0, 0, 0, 1) }));
+
+         expect(diagnostic.code).toBeUndefined();
       });
    });
 });
