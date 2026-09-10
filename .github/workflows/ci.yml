@@ -484,7 +484,16 @@ jobs:
       # Proving it loads costs one process, once, before anything depends on it,
       # and asserting on the RECORD rather than on the exit status is what makes
       # it a test of the recorder instead of a test that node runs.
+      # The gate's status is CAPTURED rather than allowed to fail the step, so
+      # the verdict step at the end can quarantine the known Windows flake. Every
+      # evidence step below therefore keys off this output instead of
+      # `failure()`, which a quarantined pass would switch off — taking the
+      # artefact upload with it, and with it the records the diagnosis needs.
+      #
+      # The preflight above it still exits outright: a recorder that is not in
+      # force is a wiring fault, not a gate result.
       - name: Full gate
+        id: gate
         run: |
           root="${GITHUB_WORKSPACE//\\//}"
           export HYDRANIUM_EXIT_TRACE_DIR="$root/exit-trace"
@@ -502,7 +511,9 @@ jobs:
           # artefact would put a known-cause entry beside the ones being read.
           rm -f "$HYDRANIUM_EXIT_TRACE_DIR"/exit-*.json
 
-          npm run check 2>&1 | tee gate.log
+          status=0
+          npm run check 2>&1 | tee gate.log || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
 
       # Ask the dead task again, on its own, with its streams kept APART.
       #
@@ -527,7 +538,8 @@ jobs:
       # the caller when a tool exits explicitly, which tsc does, and `DEBUG`
       # traces eslint, which sets `process.exitCode` and returns instead.
       - name: Re-run the failed task with its streams apart
-        if: failure()
+        id: rerun
+        if: steps.gate.outputs.status != '0'
         continue-on-error: true
         env:
           DEBUG: 'eslint:*'
@@ -554,6 +566,10 @@ jobs:
 
           code=0
           npm run "$script" -w "$package" > rerun-stdout.log 2> rerun-stderr.log || code=$?
+          # The verdict step reads this. It is written only where the re-run
+          # actually ran, so a step that was skipped leaves it EMPTY rather than
+          # zero — the classifier refuses to quarantine on an absent status.
+          echo "status=$code" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Re-run of \`$task\`"
@@ -572,7 +588,7 @@ jobs:
       # only when the job has already failed, and a second red would bury the
       # first. No live memory figure: by now the process has released it all.
       - name: Post-mortem for a silent child death
-        if: failure() && runner.os == 'Windows'
+        if: steps.gate.outputs.status != '0' && runner.os == 'Windows'
         continue-on-error: true
         shell: pwsh
         run: |
@@ -601,7 +617,7 @@ jobs:
       # which defaults to FALSE: turbo's logs are in a dot directory and would
       # be dropped in silence, leaving an artefact that looks complete.
       - name: Upload post-mortem evidence
-        if: failure()
+        if: steps.gate.outputs.status != '0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: post-mortem-${{ matrix.os }}
@@ -631,6 +647,38 @@ jobs:
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: ignore
+
+      # Where the gate's status finally becomes the job's, after the evidence
+      # above has been captured and uploaded.
+      #
+      # A quarantine needs EVERY condition the classifier checks, and the
+      # decisive one is that the task passed on re-run — a real failure
+      # reproduces. Windows only, because the flake has never appeared
+      # elsewhere and a quarantine that could hide a Linux regression buys
+      # nothing.
+      #
+      # It still reports as a pass, which is the honest cost: a quarantined run
+      # is green with a summary line saying why. The alternative, leaving the
+      # leg red on two runs in five, is what trains everyone to merge past red —
+      # and that hides real failures far more effectively than this does.
+      - name: Verdict
+        if: always() && steps.gate.outputs.status != ''
+        env:
+          HYDRANIUM_RERUN_STATUS: ${{ steps.rerun.outputs.status }}
+        run: |
+          if [ "${{ steps.gate.outputs.status }}" = "0" ]; then
+            exit 0
+          fi
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            echo "The gate failed on ${{ runner.os }}, where the flake has never occurred." >&2
+            exit 1
+          fi
+          node scripts/classify-gate-failure.mjs | tee verdict.log
+          if grep -q '^quarantine=true' verdict.log; then
+            echo "::warning title=Known Windows flake::The gate failed on the known silent-exit signature and passed on re-run. The post-mortem artefact holds the evidence."
+            exit 0
+          fi
+          exit 1
 
       # The one piece of this that a reader sees without downloading anything:
       # the artefact below is a zip, and GitHub renders no JUnit of its own. It

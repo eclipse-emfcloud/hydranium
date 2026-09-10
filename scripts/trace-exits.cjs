@@ -139,8 +139,21 @@ function describe(error) {
 }
 
 function install() {
-   const { appendFileSync, mkdirSync } = require('node:fs');
+   const { appendFileSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
    const { join } = require('node:path');
+
+   // A START marker, removed by the `exit` handler however the process ends. It
+   // splits the previously ambiguous outcome: an absent exit record meant
+   // EITHER that the process never reached JS or that it ran and was then
+   // killed past every handler, and those need different investigations.
+   //
+   // The gate legitimately kills spawned servers, so surviving markers are
+   // read against the failed task rather than counted.
+   const startMarker = join(TRACE_DIR, `start-${process.pid}.json`);
+   safely(() => {
+      mkdirSync(TRACE_DIR, { recursive: true });
+      writeFileSync(startMarker, `${JSON.stringify({ pid: process.pid, ppid: process.ppid, argv: process.argv, cwd: process.cwd() })}\n`);
+   });
 
    // `uncaughtExceptionMonitor` and NOT `uncaughtException`: the monitor
    // observes and leaves Node's default crash behaviour in place, whereas a
@@ -168,6 +181,9 @@ function install() {
    };
 
    process.on('exit', code => {
+      // Cleared for EVERY exit, zero or not: the marker means "ran no exit
+      // handler", so one left behind by a normal exit destroys the signal.
+      safely(() => rmSync(startMarker, { force: true }));
       if (code === 0) {
          return;
       }
