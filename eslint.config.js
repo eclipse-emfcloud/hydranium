@@ -242,6 +242,17 @@ module.exports = tseslint.config(
    importPlugin.flatConfigs.typescript,
    prettierConfig,
 
+   // A `.cjs` file cannot use `import`, so the baseline's ban on `require()` is
+   // unsatisfiable there rather than merely inconvenient. The extension is the
+   // whole condition: it is chosen only where CommonJS is forced, which for a
+   // `--require` preload it is — Node's `--require` cannot load an ES module.
+   {
+      files: ['**/*.cjs'],
+      rules: {
+         '@typescript-eslint/no-require-imports': 'off'
+      }
+   },
+
    {
       languageOptions: {
          ecmaVersion: 2022,
