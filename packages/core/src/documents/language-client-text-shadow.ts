@@ -57,11 +57,22 @@ export function isFullReplace(edits: readonly TextEdit[]): boolean {
  *  - {@link computeEdits} after each outgoing server→client sync (updates the shadow optimistically).
  *  - {@link set} when the server receives a `didChange` from the language client (the client now
  *    holds that text; we shouldn't resend it).
+ *  - {@link setOpenedText} when the client opens a document the server did not baseline for it —
+ *    an equality-only baseline, since that text is a snapshot rather than a tracked one.
  *  - {@link invalidate} when the client rejects an edit (`applied=false`) or a doc is closed —
  *    the shadow is now stale and the next sync must fall back to a full replace.
  */
 export class LanguageClientTextShadow {
    protected shadow = new Map<string, string>();
+
+   /**
+    * Per URI, the text the client declared it opened the document with, held
+    * only until a real baseline exists. Consulted by {@link computeEdits} when
+    * there is no shadow, and dropped on {@link invalidate}: a snapshot that
+    * outlived what the client holds would let the equality check skip an edit
+    * the client still needs.
+    */
+   protected opened = new Map<string, string>();
 
    /**
     * @param onFallback invoked when {@link computeEdits} falls back to a full-range replace due to
@@ -85,6 +96,20 @@ export class LanguageClientTextShadow {
    }
 
    /**
+    * Record the buffer the language client declared at `didOpen`, for a URI
+    * with no baseline yet.
+    *
+    * Deliberately NOT a {@link set}: this text is only ever compared for
+    * EQUALITY, never diffed against. A line-keyed diff is position-dependent,
+    * so keying one to a `didOpen` snapshot the client may have moved past
+    * splices its buffer — the failure {@link computeEdits}'s full-replace
+    * fallback exists to avoid.
+    */
+   setOpenedText(uri: string, text: string): void {
+      this.opened.set(uri, text);
+   }
+
+   /**
     * The text the language client is believed to hold, or `undefined` when
     * there is no baseline (first sync, or after an {@link invalidate}).
     *
@@ -102,6 +127,11 @@ export class LanguageClientTextShadow {
    /** Forget the shadow for a URI; next {@link computeEdits} falls back to a full-document replace. */
    invalidate(uri: string): void {
       this.shadow.delete(uri);
+      // Drops the opened snapshot too, and this is the only place that has to:
+      // `computeEdits` clears it whenever it consults it, so the sole way it can
+      // outlive what the client holds is surviving under a live shadow until that
+      // shadow is dropped here.
+      this.opened.delete(uri);
    }
 
    /**
@@ -109,7 +139,9 @@ export class LanguageClientTextShadow {
     * the tracked shadow to `newText`. Updates the shadow to `newText` so subsequent calls diff
     * against it.
     *
-    *  - Empty array when the shadow already equals `newText` (caller should skip the RPC).
+    *  - Empty array when the shadow already equals `newText` (caller should skip the RPC),
+    *    or when there is no shadow and the client opened the document with exactly `newText`
+    *    (see {@link setOpenedText}) — pushing it anyway dirties the client's buffer on open.
     *  - Full-range replace when there is no shadow (first sync or post-{@link invalidate}).
     *  - Line-level diff otherwise. Before returning, we locally reconstruct `newText` by applying
     *    the diff to `old`; if that doesn't match, we fall back to a full-range replace and notify
@@ -124,7 +156,11 @@ export class LanguageClientTextShadow {
       this.shadow.set(uri, newText);
       const fullReplace: TextEdit = { range: FULL_RANGE, newText };
       if (old === undefined) {
-         return [fullReplace];
+         // The opened snapshot has served its purpose either way: the shadow above
+         // is now the baseline, so leaving it would only risk a later stale match.
+         const openedText = this.opened.get(uri);
+         this.opened.delete(uri);
+         return openedText === newText ? [] : [fullReplace];
       }
       const edits = diffToEdits(old, newText);
       const verifyDoc = this.documents.create(uri, 'plaintext', 0, old);

@@ -644,18 +644,20 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (this.isOpenInClient(uri, clientId)) {
          // Already open for this client under this canonical identity. If this is a
          // NEW client-facing URI for the same file (a second tab reached via a
-         // divergent path, e.g. a symlink and its real path), record it and baseline
-         // its shadow so outbound edits reach this tab too — but do NOT re-fire
-         // open/rebuild; the document is already live.
+         // divergent path, e.g. a symlink and its real path), record it so outbound
+         // edits reach this tab too — but do NOT re-fire open/rebuild; the document
+         // is already live.
          if (clientId === LANGUAGE_CLIENT_ID) {
             const clientFacing = this.toLanguageClientUri(td.uri);
             const record = this.__documents.get(uri);
             if (record && !record.languageClientUris?.has(clientFacing)) {
                (record.languageClientUris ??= new Set<LanguageClientUri>()).add(clientFacing);
-               const open = this.__syncedDocuments.get(uri);
-               if (open) {
-                  this.__shadow.set(clientFacing, open.getText());
-               }
+               // This tab's own buffer, NOT the synced text: a second tab is a second
+               // client model, read from disk, so a server-authored write already
+               // applied to the first tab leaves it BEHIND the synced document. Keying
+               // a diff to the synced text here addresses lines this tab does not have
+               // and drops content it does.
+               this.__shadow.setOpenedText(clientFacing, td.text);
             }
          }
          return;
@@ -694,7 +696,18 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // Baseline the shadow to what Monaco just opened so the next outbound
             // applyEditToLanguageClient diffs against the right starting point. Keyed by the
             // language-client URI (what Monaco holds), not the canonical document key.
-            this.__shadow.set(this.toLanguageClientUri(td.uri), document.getText());
+            //
+            // The CLIENT's declared text, never the synced document: staged content
+            // consumed above leaves the two different, and a baseline asserting the
+            // client already holds the staged text suppresses the one sync that would
+            // deliver it. Skipped entirely when a push is already outstanding for this
+            // URI — an `applyEdit` to a closed file has the client open from disk and
+            // apply afterwards, so that shadow records what it is about to hold and
+            // disk text would key the next diff to a buffer nobody has.
+            const clientFacing = this.toLanguageClientUri(td.uri);
+            if (this.__shadow.get(clientFacing) === undefined) {
+               this.__shadow.set(clientFacing, td.text);
+            }
          }
          const toFire = Object.freeze({ document, clientId });
          this.__onDidOpen.fire(toFire);
@@ -706,6 +719,14 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             `Attach client: ${clientId} joined existing document (version ${document.version}, ` +
                `now open in: ${[...existingClients, clientId].join(', ')})`
          );
+         if (clientId === LANGUAGE_CLIENT_ID) {
+            // Monaco's own buffer, which on this path is NOT the synced text — another
+            // client opened the document and may already have changed it. Recorded as
+            // an equality-only baseline (never a diff one, see `setOpenedText`) so the
+            // refresh below does not push a full replace of content Monaco already
+            // holds, which would dirty the file on open.
+            this.__shadow.setOpenedText(this.toLanguageClientUri(td.uri), td.text);
+         }
          this.refreshContent(uri, clientId);
       }
    }

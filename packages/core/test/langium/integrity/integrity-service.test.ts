@@ -11,10 +11,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { asMutable, Disposable, Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, isOperationCancelled, type LangiumDocument } from '@hydranium/langium';
-import type { CancellationToken } from 'vscode-languageserver';
+import type { ApplyWorkspaceEditParams, CancellationToken, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
+import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { DefaultIntegrityService } from '../../../src/langium/integrity/integrity-service.js';
 import type { ServerLanguageServices } from '../../../src/langium/language-module.js';
+import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from '../../../src/langium/integrity/integrity-rule.js';
 import {
    makeCapturingLogger,
@@ -22,6 +25,7 @@ import {
    makeFakeAstNode,
    makeFakeDocument,
    makeNoopLanguageServices,
+   makeNoopSharedServices,
    type NoopLanguageServicesOverrides
 } from '../../../src/testing/index.js';
 
@@ -397,6 +401,71 @@ function makeResyncDocument(uri: string, text: string, state: DocumentState): La
       textDocument: TextDocument.create(uri, 'fake', 1, text)
    });
 }
+
+/**
+ * The editor-mode staging chain against the REAL text store rather than
+ * {@link RecordingTextDocuments}: integrity stages, the store consumes the
+ * staged text at the next `didOpen`, and the open's own sync is the only
+ * delivery this path has. Each half is covered against a stub elsewhere, which
+ * cannot see whether a correction actually reaches the client — the store could
+ * baseline its shadow to the staged text and answer the sync with no edits at
+ * all, leaving the editor on stale disk content while the server believes
+ * otherwise.
+ */
+function makeEditorStagingHarness(): {
+   probe: CorrectionsProbe;
+   docs: HydraniumTextDocuments<TextDocument>;
+   recorded: ApplyWorkspaceEditParams[];
+} {
+   const recorded: ApplyWorkspaceEditParams[] = [];
+   const storeServices = makeNoopSharedServices({
+      lsp: {
+         Connection: {
+            workspace: {
+               applyEdit: async (params: ApplyWorkspaceEditParams) => {
+                  recorded.push(params);
+                  return { applied: true };
+               }
+            }
+         }
+      },
+      workspace: {
+         LangiumDocuments: { getDocument: () => undefined },
+         DocumentBuilder: { update: () => undefined, resetToState: () => undefined },
+         WorkspaceManager: { workspaceInitialized: Promise.resolve(), wsRelativePath: () => 'doc.fake' },
+         DocumentUriPolicy: new DefaultDocumentUriPolicy()
+      }
+   });
+   // `makeNoopSharedServices` answers the MINIMAL tree; the store declares the full
+   // one and reads only the slots stubbed above.
+   const docs = new HydraniumTextDocuments<TextDocument>(storeServices as unknown as ServerSharedServices);
+   // One instance in both trees: the store the integrity service stages into is
+   // the store the client opens against, which is the whole point of the probe.
+   const probe = new CorrectionsProbe(makeIntegrityServices({ shared: { workspace: { TextDocuments: docs, FileSystemProvider: {} } } }), {
+      syncMode: 'editor'
+   });
+   return { probe, docs, recorded };
+}
+
+describe('IntegrityService editor-mode staging against the real text store', () => {
+   it('delivers a staged correction to the client that opened the file from disk', async () => {
+      const { probe, docs, recorded } = makeEditorStagingHarness();
+      const uri = 'file:///staged.fake';
+
+      // Integrity corrects a document no client has open, so editor mode stages it.
+      await probe.syncCorrectionsNow(TextDocument.create(uri, 'fake', 4, 'corrected\n'));
+      // The client opens the file afterwards and reads the STALE text from disk.
+      docs.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'fake', version: 1, text: 'original\n' } });
+      expect(docs.get(uri)?.getText()).toBe('corrected\n');
+
+      await docs.applyEditToLanguageClient(uri, 'corrected\n');
+
+      expect(recorded).toHaveLength(1);
+      const edits = (recorded[0].edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      const heldByClient = TextDocument.create(uri, 'fake', 0, 'original\n');
+      expect(TextDocument.applyEdits(heldByClient, edits)).toBe('corrected\n');
+   });
+});
 
 describe('IntegrityService corrections sync', () => {
    it('does not rewrite authorship or touch disk for an open file (the content listener delivers)', async () => {
