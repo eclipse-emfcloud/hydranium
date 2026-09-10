@@ -50,6 +50,7 @@ function makeStubServices(): HydraniumLanguageServices {
       getVisibleProjects: () => []
    };
    return {
+      LanguageMetaData: { languageId: 'stub-language', fileExtensions: ['.stub'] },
       references: {
          NameProvider: { getName: () => undefined, getNameNode: () => undefined },
          ScopeExtensionService: {}
@@ -63,7 +64,16 @@ function makeStubServices(): HydraniumLanguageServices {
       },
       shared: {
          workspace: {
-            LangiumDocuments: { getDocument: () => undefined },
+            LangiumDocuments: {
+               getDocument: () => undefined,
+               // The new `resolveSyntheticSource` default materialises when
+               // nothing is loaded, and records the language it was told to
+               // parse under so a test can assert the provider supplied its own.
+               createEmptyDocument: (uri: URI, languageId?: string) => ({
+                  uri,
+                  parseResult: { value: { $type: 'StandInRoot', languageId } }
+               })
+            },
             DocumentBuilder: documentBuilderStub,
             IndexManager: indexManagerStub,
             ProjectManager: projectManagerStub
@@ -215,11 +225,28 @@ describe('HydraniumScopeProvider', () => {
          expect(result).toBeUndefined();
       });
 
-      it('default resolveSyntheticSource returns undefined when document is not loaded', () => {
+      it('default resolveSyntheticSource materialises a container when no document is loaded', () => {
          const provider = new HydraniumScopeProvider(makeStubServices());
          const source: SyntheticSource = ReferenceSource.synthetic('memory://missing', 'X');
+
          const result = provider.resolveReferenceSource(source);
-         expect(result).toBeUndefined();
+
+         // A synthetic source names a node that does not exist yet, so abstaining
+         // here would answer an empty candidate list — indistinguishable to a
+         // client from "nothing matches". The container is the stand-in's root.
+         expect(result?.$type).toBe('X');
+         expect(result?.$container?.$type).toBe('StandInRoot');
+      });
+
+      it('default resolveSyntheticSource parses the stand-in under its OWN language', () => {
+         const provider = new HydraniumScopeProvider(makeStubServices());
+         const source: SyntheticSource = ReferenceSource.synthetic('memory://a-folder', 'X');
+
+         const result = provider.resolveReferenceSource(source);
+
+         // A folder URI carries no extension, so the provider's own language is
+         // the only routing signal left; deriving it from the URI is what fails.
+         expect((result?.$container as { languageId?: string } | undefined)?.languageId).toBe('stub-language');
       });
    });
 

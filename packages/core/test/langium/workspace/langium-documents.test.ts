@@ -12,7 +12,7 @@ import { type AstNode, type LangiumDocument, OperationCancelled, URI } from '@hy
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
-import { makeFakeAstNode, makeFakeDocument, makeNoopSharedServices } from '../../../src/testing/index.js';
+import { makeFakeAstNode, makeFakeDocument, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
 
 const TARGET = URI.parse('file:///ws/a.txt');
 
@@ -51,6 +51,10 @@ function harness(options: HarnessOptions = {}): Harness {
    const wired: { instance?: HydraniumLangiumDocuments } = {};
 
    const services = makeNoopSharedServices<ServerSharedServicesMinimal>({
+      // A stand-in derives its grammar from the URI unless told one, so the
+      // registry is what decides whether this URI routes at all — a stub
+      // without it cannot reach the extension ladder the class guards.
+      ServiceRegistry: makeStubServiceRegistry([{ languageId: 'text', fileExtensions: ['.txt'], services: {} }]),
       workspace: {
          DocumentUriPolicy: options.loadable === false ? new UnloadableUriPolicy() : new DefaultDocumentUriPolicy(),
          CstResidencyService: { rehydrate: (document: LangiumDocument<AstNode>) => rehydrated.push(document) },

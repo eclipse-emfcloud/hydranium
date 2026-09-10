@@ -16,8 +16,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { TransferDocument, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
-import type { DataServerProtocol, TransferDocumentUpdatedEvent } from '@hydranium/protocol/data';
+import { ReferenceSource, SyntheticStep, TransferDocument, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
+import type { DataServerProtocol, ReferenceServerProtocol, TransferDocumentUpdatedEvent } from '@hydranium/protocol/data';
 import { type Harness, waitFor } from '@hydranium/protocol/testing';
 import type { ConformanceCheck } from '../conformance-suite.js';
 import { type LanguageFixture, resolveDeferred, resolveModel } from '../model.js';
@@ -43,6 +43,15 @@ export interface DataConformanceDriver<
    readonly proxy: DataServerProtocol<TTransfer, TDiagnostic>;
    /** Captured `onDocumentUpdated` events, append order — the subscription check's observation target. */
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
+   /**
+    * The opt-in reference surface, when the head serves it.
+    *
+    * Separate from {@link proxy} because `ReferenceServerProtocol` is NOT part
+    * of `DataServerProtocol` — a head may serve documents and no references at
+    * all. Absent means the reference check reports skipped with a named reason
+    * rather than failing a head that never claimed the surface.
+    */
+   readonly references?: ReferenceServerProtocol<TTransfer>;
 }
 
 /** Options for `runDataConformance`. */
@@ -266,6 +275,70 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                driver.dispose();
             }
          }
+      });
+
+      // The create-dialog query, and the reason it is its own check: it is the
+      // only request a head receives whose URI names no file. Everything else
+      // in this battery addresses a document, so a head that routes purely by
+      // URI extension passes all of them and still cannot open a create dialog.
+      //
+      // Doubly opt-in — the fixture must name a query AND the driver must serve
+      // the reference surface — because either half missing means the head never
+      // claimed this behaviour. The reasons are reported separately so a skip
+      // says which half is absent.
+      const referenceQuery = language.referenceQuery;
+      const referenceSkipReason = !referenceQuery
+         ? 'fixture supplies no `referenceQuery` (omit it if this language has no create-element dialog)'
+         : undefined;
+
+      checks.push({
+         title: `findReferenceCandidates answers for a synthetic source at a folder URI ${tag}`,
+         skipReason: referenceSkipReason,
+         body: referenceQuery
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    if (!driver.references) {
+                       // Checked here rather than in `skipReason`: the driver only
+                       // exists once `connect` has run, and skip reasons are
+                       // computed while the battery is being planned.
+                       return;
+                    }
+                    const model = resolveModel(valid);
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+
+                    // Default to the folder holding the valid model: a sibling of
+                    // it is where a create flow would put the new file.
+                    const folderUri = referenceQuery.folderUri
+                       ? resolveDeferred(referenceQuery.folderUri)
+                       : model.uri.slice(0, model.uri.lastIndexOf('/'));
+                    assert.ok(
+                       folderUri.length > 0 && folderUri !== model.uri,
+                       `could not derive a folder URI from ${model.uri}; supply referenceQuery.folderUri`
+                    );
+
+                    const candidates = await driver.references.findReferenceCandidates({
+                       source: ReferenceSource.synthetic(folderUri, referenceQuery.type),
+                       syntheticPath: referenceQuery.path?.map(([containerProperty, type]) => SyntheticStep.of(containerProperty, type)),
+                       property: referenceQuery.property
+                    });
+
+                    // The expected label, not merely a non-empty array: the defect
+                    // this guards against answers `[]`, and an empty result is
+                    // also what a head with a genuinely empty index answers, so
+                    // only a named candidate tells the two apart.
+                    const labels = candidates.map(candidate => candidate.label);
+                    assert.ok(
+                       labels.includes(referenceQuery.expectCandidate),
+                       `findReferenceCandidates at the folder ${folderUri} did not offer ${JSON.stringify(
+                          referenceQuery.expectCandidate
+                       )}; got [${labels.join(', ')}]`
+                    );
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
       });
 
       // Opt-in: both remaining checks need a second, observably different model

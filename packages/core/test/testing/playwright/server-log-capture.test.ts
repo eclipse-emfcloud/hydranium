@@ -162,6 +162,39 @@ describe('renameServerLogs', () => {
    });
    afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+   it('reports a token log no test claimed, which is the misleading state', () => {
+      // Capture wrote a log, but the spec never marked a boundary — so the file
+      // is named by an opaque token and has nothing in it saying whose it is.
+      writeFileSync(join(dir, 'cloud-ws-orphan.log'), 'A');
+      writeFileSync(join(dir, 'cloud-ws-claimed.log'), 'B');
+      writeFileSync(join(dir, 'cloud-ws-claimed.spec'), 'claimed-spec');
+
+      const unattributed = renameServerLogs(dir);
+
+      // Only the unclaimed one, and the claimed one is still renamed: a run
+      // that partly opted in has to report the gap without losing the rest.
+      expect(unattributed).toEqual(['cloud-ws-orphan']);
+      expect(existsSync(join(dir, 'claimed-spec.log'))).toBe(true);
+   });
+
+   it('reports nothing when every log was claimed', () => {
+      writeFileSync(join(dir, 'cloud-ws-abc.log'), 'A');
+      writeFileSync(join(dir, 'cloud-ws-abc.spec'), 'attributes-spec');
+
+      // The negative case matters as much: a warning on a fully-marked run
+      // would train the reader to ignore it.
+      expect(renameServerLogs(dir)).toEqual([]);
+   });
+
+   it('does not count a browser log as a separate unattributed workspace', () => {
+      // `.browser.log` is the same workspace's second file, so counting it
+      // would double-report every orphan and make the number meaningless.
+      writeFileSync(join(dir, 'cloud-ws-orphan.log'), 'A');
+      writeFileSync(join(dir, 'cloud-ws-orphan.browser.log'), 'B');
+
+      expect(renameServerLogs(dir)).toEqual(['cloud-ws-orphan']);
+   });
+
    it('renames each <token>.log to its sidecar name and removes the sidecar', () => {
       writeFileSync(join(dir, 'cloud-ws-abc.log'), 'A');
       writeFileSync(join(dir, 'cloud-ws-abc.spec'), 'attributes-spec');
