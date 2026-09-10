@@ -105,10 +105,9 @@ export class DefaultDocumentUriPolicy implements DocumentUriPolicy {
    /**
     * No filesystem access, so existence cannot be checked — every URI is
     * treated as loadable and returned unchanged. A later load that misses
-    * therefore reaches the filesystem and throws, which
-    * `AbstractHydraniumLangiumDocuments.getOrCreateDocument` absorbs into its
-    * empty-document fallback: under this policy that fallback, not this method,
-    * is what makes a missing file a placeholder rather than an error.
+    * therefore reaches the filesystem and throws, which reports the miss with
+    * the reason the read failed. Under a policy that CAN check, the miss is
+    * caught earlier and reported without one.
     */
    loadUri(uri: URI | string): URI | undefined {
       return UriUtils.toUri(uri);

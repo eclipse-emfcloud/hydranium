@@ -11,6 +11,7 @@ import type { Clock, Logger, Project, Tracer } from '@hydranium/protocol';
 import type { LangiumSharedCoreServices } from '@hydranium/langium';
 import type { SelfSaveRegistry } from '../documents/self-save-registry.js';
 import type { WritableFileSystemProvider } from '../documents/ast-document-manager.js';
+import type { HydraniumDocumentRegistry } from './workspace/langium-documents.js';
 import type { BuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
 import type { CstResidencyService } from './residency/cst-residency-service.js';
 import type { BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
@@ -75,6 +76,11 @@ export interface ServerSharedServicesMinimal<TProject extends Project = Project>
       // framework always binds, so `wsRelativePath` and the folder-walk are
       // reachable from the minimal surface without a cast.
       WorkspaceManager: HydraniumWorkspaceManager;
+      // Same, for the registry: the framework always binds
+      // `HydraniumLangiumDocuments`, and `createEmptyDocument` is reachable
+      // only through this narrowing — a scope provider querying a URI before
+      // the file exists is the caller that needs it.
+      /* override */ LangiumDocuments: HydraniumDocumentRegistry;
       ProjectManager: ProjectManager<TProject>;
       SelfSaveRegistry: SelfSaveRegistry;
       BuildPipelineIntegration: BuildPipelineIntegration;

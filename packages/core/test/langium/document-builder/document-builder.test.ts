@@ -7,26 +7,34 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
-import { type CanonicalUri, Disposable, type LogThreshold, type Logger } from '@hydranium/protocol';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { type CanonicalUri, Disposable, Logger, type LogThreshold } from '@hydranium/protocol';
 import {
    type BuildOptions,
    DocumentState,
    type DocumentPhaseListener,
    type FileSystemNode,
    type FileSystemProvider,
-   type LangiumDocument
+   type LangiumDocument,
+   OperationCancelled
 } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import { CancellationToken, type Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
+import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
 import {
    DEFAULT_LOGGED_PHASES,
    type DocumentBuilderOptions,
    HydraniumDocumentBuilder
 } from '../../../src/langium/document-builder/document-builder.js';
-import { makeNoopLanguageServices, makeNoopLogger, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
+import {
+   makeCapturingLogger,
+   makeNoopLanguageServices,
+   makeNoopLogger,
+   makeNoopSharedServices,
+   makeStubServiceRegistry
+} from '../../../src/testing/index.js';
 
 /**
  * Test subclass exposing the framework's protected instrumentation surface as
@@ -45,6 +53,22 @@ abstract class CapturingBuilder extends HydraniumDocumentBuilder {
 
    callPhaseReachedLine(state: DocumentState, docs: LangiumDocument[], elapsedMs: number): string {
       return this.phaseReachedLine(state, docs, elapsedMs);
+   }
+   callRunInSession(context: BuildSessionContext, label: string, body: () => Promise<void>): Promise<void> {
+      return this.runInSession(context, label, body);
+   }
+   callOnPhaseReached(state: DocumentState, docs: LangiumDocument[]): void {
+      this.onPhaseReached(state, docs);
+   }
+   callRebuildLabel(changed: URI[], deleted: URI[]): string {
+      return this.rebuildLabel(changed, deleted);
+   }
+   callBuildTriggerLabel(changed: URI[], deleted: URI[]): string {
+      return this.buildTriggerLabel(changed, deleted);
+   }
+   /** The build in progress, so a test can assert on session identity across an overlap. */
+   get currentSession(): BuildSession | undefined {
+      return this.activeSession;
    }
    callSlowBuildPhaseLine(state: DocumentState, listenerCount: number, docs: LangiumDocument[], totalMs: number): string {
       return this.slowBuildPhaseLine(state, listenerCount, docs, totalMs);
@@ -89,6 +113,9 @@ abstract class CapturingBuilder extends HydraniumDocumentBuilder {
    get resolvedSlowBuildMs(): number {
       return this.slowBuildMs.value;
    }
+   get resolvedPhaseDetailMs(): number {
+      return this.phaseDetailMs.value;
+   }
 }
 
 function makeTestBuilder(
@@ -120,7 +147,13 @@ function makeStubServices(logger: Logger): ServerSharedServicesMinimal {
    return makeNoopSharedServices({
       Logger: logger,
       workspace: {
-         LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } }
+         LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
+         // Identity policy so `formatBuildStatus` resolves; the canonicalization
+         // test below replaces it with a link-aware one.
+         DocumentUriPolicy: {
+            canonicalUri: (uri: URI | string) => (typeof uri === 'string' ? uri : uri.toString()),
+            loadUri: (uri: URI | string) => (typeof uri === 'string' ? URI.parse(uri) : uri)
+         }
       }
    });
 }
@@ -280,6 +313,192 @@ describe('HydraniumDocumentBuilder', () => {
          const status = builder.formatBuildStatus(URI.parse(LINK));
          expect(status).toContain('Validated');
          expect(status).not.toContain('not loaded');
+      });
+   });
+
+   /**
+    * The build session — one rebuild as a correlated unit.
+    *
+    * Every test here drives `runInSession` directly rather than `update`: the
+    * stub services tree has no `LangiumDocuments` to build against, and the
+    * bracket is the thing under test, not what Langium does inside it.
+    */
+   describe('build sessions', () => {
+      const doc = { uri: URI.parse('memory://x') } as LangiumDocument;
+      let previousLevel: LogThreshold;
+
+      beforeEach(() => {
+         // `Tracer.time` short-circuits on a suppressed level and then emits
+         // nothing AND never calls `captureId` — so a session test at the
+         // default threshold would assert against an empty log.
+         previousLevel = Logger.getLevel();
+         Logger.setLevel('debug');
+      });
+      afterEach(() => Logger.setLevel(previousLevel));
+
+      function sessionContext(overrides: Partial<BuildSessionContext> = {}): BuildSessionContext {
+         return { kind: 'update', trigger: 'a.x', triggerCountsDocs: false, changed: [], deleted: [], ...overrides };
+      }
+      function phaseLines(lines: Array<{ message: string }>): string[] {
+         return lines.filter(line => line.message.includes('Reached phase')).map(line => line.message);
+      }
+
+      it('tags the build line with the staged LSP event, and stages it for one build only', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const { builder } = makeTestBuilder(logger);
+         builder.markNextReason('didChangeWatchedFiles');
+         await builder.callRunInSession(sessionContext(), 'Rebuild document: a.x', async () => {});
+         expect(lines.some(line => line.message.includes('event: didChangeWatchedFiles'))).toBe(true);
+         lines.length = 0;
+         await builder.callRunInSession(sessionContext(), 'Rebuild document: a.x', async () => {});
+         expect(lines.some(line => line.message.includes('event:'))).toBe(false);
+      });
+
+      it('emits a phase line as it is produced when buffering is off (the default)', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const { builder } = makeTestBuilder(logger);
+         expect(builder.resolvedPhaseDetailMs).toBe(0);
+         await builder.callRunInSession(sessionContext(), 'Rebuild document: a.x', async () => {
+            builder.callOnPhaseReached(DocumentState.Parsed, [doc]);
+            // Asserted INSIDE the build: after it, a flush would look identical.
+            expect(phaseLines(lines)).toHaveLength(1);
+         });
+         expect(phaseLines(lines)).toHaveLength(1);
+      });
+
+      it('drops the phase lines of a build that finished under the detail threshold', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         // Unreachably high, so "fast" is a property of the threshold rather
+         // than of how long the test happens to take.
+         const { builder } = makeTestBuilder(logger, { phaseDetailMs: 100_000 });
+         await builder.callRunInSession(sessionContext(), 'Rebuild document: a.x', async () => {
+            builder.callOnPhaseReached(DocumentState.Parsed, [doc]);
+            expect(phaseLines(lines)).toHaveLength(0);
+         });
+         expect(phaseLines(lines)).toHaveLength(0);
+      });
+
+      it('flushes the held phase lines once the build exceeds the detail threshold', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const { builder } = makeTestBuilder(logger, { phaseDetailMs: 1 });
+         await builder.callRunInSession(sessionContext(), 'Rebuild document: a.x', async () => {
+            builder.callOnPhaseReached(DocumentState.Parsed, [doc]);
+            expect(phaseLines(lines)).toHaveLength(0);
+            await new Promise(resolve => setTimeout(resolve, 20));
+         });
+         expect(phaseLines(lines)).toHaveLength(1);
+      });
+
+      it('names the trigger on every phase line and measures the first one from build start', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const { builder } = makeTestBuilder(logger);
+         await builder.callRunInSession(sessionContext({ trigger: 'model/a.x' }), 'Rebuild document: model/a.x', async () => {
+            builder.callOnPhaseReached(DocumentState.Parsed, [doc]);
+            builder.callOnPhaseReached(DocumentState.Linked, [doc]);
+         });
+         const [first, second] = phaseLines(lines);
+         expect(first).toContain('building model/a.x');
+         expect(first).toContain('since build start');
+         expect(second).toContain('building model/a.x');
+         expect(second).toContain('since previous phase');
+      });
+
+      it('tags the successor of a cancelled build with the id it supersedes', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const { builder } = makeTestBuilder(logger);
+         await expect(
+            builder.callRunInSession(sessionContext(), 'Rebuild A', async () => {
+               throw OperationCancelled;
+            })
+         ).rejects.toBe(OperationCancelled);
+         lines.length = 0;
+         await builder.callRunInSession(sessionContext(), 'Rebuild B', async () => {});
+         expect(lines.some(line => line.message.includes('Rebuild B') && /cancels #\d+/.test(line.message))).toBe(true);
+         // Consumed once — the build after that supersedes nothing.
+         lines.length = 0;
+         await builder.callRunInSession(sessionContext(), 'Rebuild C', async () => {});
+         expect(lines.some(line => line.message.includes('cancels #'))).toBe(false);
+      });
+
+      /**
+       * The teardown guard, which is the whole reason the session is framework
+       * code rather than a recipe. Langium's write mutex lets a later build
+       * preempt an earlier one, so the two overlap and the PREDECESSOR unwinds
+       * while the successor is still running. A `finally` that released the
+       * shared session unconditionally would strip the running build of its
+       * trigger, its start time and any adopter state riding on it.
+       */
+      it('a preempted build does not release the session of the one that superseded it', async () => {
+         const { builder } = makeTestBuilder(makeNoopLogger());
+         let releaseFirst = (): void => {};
+         let releaseSecond = (): void => {};
+         const firstBody = new Promise<void>(resolve => (releaseFirst = resolve));
+         const secondBody = new Promise<void>(resolve => (releaseSecond = resolve));
+
+         const first = builder.callRunInSession(sessionContext({ trigger: 'first' }), 'Rebuild first', () => firstBody);
+         const firstSession = builder.currentSession;
+         const second = builder.callRunInSession(sessionContext({ trigger: 'second' }), 'Rebuild second', () => secondBody);
+         const secondSession = builder.currentSession;
+         expect(firstSession).toBeDefined();
+         expect(secondSession).not.toBe(firstSession);
+
+         releaseFirst();
+         await first;
+         expect(builder.currentSession).toBe(secondSession);
+
+         releaseSecond();
+         await second;
+         expect(builder.currentSession).toBeUndefined();
+      });
+
+      it('honours a createBuildSession override, so adopter build-scoped state rides the same teardown', async () => {
+         class AffectedSession extends BuildSession {
+            readonly affected = new Set<string>();
+         }
+         class WideningBuilder extends CapturingBuilder {
+            override onBuildPhase(): { dispose: () => void } {
+               return Disposable.EMPTY;
+            }
+            protected override createBuildSession(context: BuildSessionContext): BuildSession {
+               const session = new AffectedSession(performance.now(), context.trigger, context.triggerCountsDocs, 0);
+               for (const uri of context.changed) {
+                  session.affected.add(uri.toString());
+               }
+               return session;
+            }
+         }
+         const builder = new WideningBuilder(makeNoopLogger());
+         const changed = [URI.parse('memory://a'), URI.parse('memory://b')];
+         await builder.callRunInSession(sessionContext({ changed }), 'Rebuild', async () => {
+            const session = builder.currentSession;
+            expect(session).toBeInstanceOf(AffectedSession);
+            expect((session as AffectedSession).affected).toEqual(new Set(['memory://a', 'memory://b']));
+         });
+         expect(builder.currentSession).toBeUndefined();
+      });
+
+      it('formatBuildStatus names the build in progress, and reports none between builds', async () => {
+         const { builder } = makeTestBuilder(makeNoopLogger());
+         const uri = URI.parse('memory://x');
+         expect(builder.formatBuildStatus(uri)).toContain('active build: none');
+         await builder.callRunInSession(sessionContext({ trigger: 'model/a.x' }), 'Rebuild', async () => {
+            expect(builder.formatBuildStatus(uri)).toContain('model/a.x');
+         });
+         expect(builder.formatBuildStatus(uri)).toContain('active build: none');
+      });
+
+      it('labels the single-document, delete-only and batch builds distinctly', () => {
+         const { builder } = makeTestBuilder(makeNoopLogger());
+         const one = URI.parse('memory://a');
+         const two = URI.parse('memory://b');
+         expect(builder.callRebuildLabel([], [])).toContain('nothing to do');
+         expect(builder.callRebuildLabel([one], [])).toBe('Rebuild document: memory://a');
+         expect(builder.callRebuildLabel([], [one])).toBe('Rebuild after delete: memory://a');
+         expect(builder.callRebuildLabel([one, two], [])).toBe('Rebuild documents (2 changed, 0 deleted)');
+         expect(builder.callBuildTriggerLabel([], [])).toBe('nothing');
+         expect(builder.callBuildTriggerLabel([one], [])).toBe('memory://a');
+         expect(builder.callBuildTriggerLabel([], [one])).toBe('deleted memory://a');
+         expect(builder.callBuildTriggerLabel([one, two], [one])).toBe('2 changed, 1 deleted');
       });
    });
 

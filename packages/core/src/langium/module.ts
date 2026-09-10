@@ -26,6 +26,7 @@ import { HydraniumIndexManager } from './workspace/index-manager.js';
 import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
 import { HydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import { type HydraniumDocumentRegistry, HydraniumLangiumDocuments } from './workspace/langium-documents.js';
 import { type AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/document-uri-policy.js';
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
@@ -113,6 +114,12 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
    workspace: {
       /* override */ TextDocuments: HydraniumTextDocuments<TextDocument>;
       /* override */ WorkspaceManager: HydraniumWorkspaceManager;
+      /**
+       * Narrow Langium's registry slot to the framework surface, which adds
+       * `createEmptyDocument` — reachable only through this narrowing, and
+       * wanted by a scope provider querying a URI before the file exists.
+       */
+      /* override */ LangiumDocuments: HydraniumDocumentRegistry;
       /**
        * Narrow Langium's `IndexManager` slot to the framework subclass, which
        * layers an `elementsByName` map over Langium's index and exposes
@@ -392,6 +399,10 @@ export function createServerSharedModule(
          // document retains serialized text via the per-language Serializer,
          // making it re-read-safe through the virtual-aware FileSystemProvider.
          LangiumDocumentFactory: services => new HydraniumLangiumDocumentFactory(services),
+         // Langium's default routes through no identity seam and treats every
+         // failed load alike, so leaving this unbound opts a server out of both
+         // with nothing to signal it.
+         LangiumDocuments: services => new HydraniumLangiumDocuments(services),
          DocumentBuilder: services => new HydraniumDocumentBuilder(services),
          // The write-lock scope this marks is inert unless a host installs a
          // scope tracker — `@hydranium/core/node` does.

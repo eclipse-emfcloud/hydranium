@@ -139,16 +139,19 @@ between two defensible answers:
   the one asymmetry on this page a reader is most likely to take for an
   oversight.
 
-(Most of Langium's own shared slots — `LangiumDocuments`, the `lsp.Connection` /
-`LanguageServer` surface — flow through unchanged. Seven are narrowed at the
-*type* level as well as rebound: `ServiceRegistry`, `TextDocuments`,
-`WorkspaceManager`, `IndexManager`, `DocumentBuilder`, `WorkspaceLock` and
-`FileSystemProvider`, each marked `/* override */` at its declaration in
+(Some of Langium's own shared slots — the `lsp.Connection` / `LanguageServer`
+surface — flow through unchanged. Seven are narrowed at the *type* level as well
+as rebound: `ServiceRegistry`, `TextDocuments`, `WorkspaceManager`,
+`IndexManager`, `DocumentBuilder`, `WorkspaceLock` and `FileSystemProvider`,
+each marked `/* override */` at its declaration in
 `core/src/langium/module.ts` — grep that marker rather than trusting this list.
-`LangiumDocumentFactory` is rebound too, to `HydraniumLangiumDocumentFactory`,
-but carries no `/* override */`: the subclass adds no public surface, only a
-`fromModel` that links containers and fills in text via the per-language
-`Serializer`, so narrowing the declared type would buy a consumer nothing.)
+`LangiumDocumentFactory` and `LangiumDocuments` are rebound too, to
+`HydraniumLangiumDocumentFactory` and `HydraniumLangiumDocuments`, but carry no
+`/* override */`: neither subclass adds public surface a consumer would reach
+for, so narrowing the declared type would buy nothing. The factory's `fromModel`
+links containers and fills in text via the per-language `Serializer`; the
+registry routes lookups through `DocumentUriPolicy` and tells an absent file
+apart from an unreadable one.)
 
 ## Per-language services
 

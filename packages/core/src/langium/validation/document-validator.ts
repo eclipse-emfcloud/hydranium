@@ -26,12 +26,25 @@ import { isSyntheticNode } from '../workspace/synthetic.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 
 /**
- * Diagnostic shape produced by {@link HydraniumDocumentValidator}: an LSP
- * {@link Diagnostic} extended with the protocol-level `element` path and
- * optional `property` name from {@link TransferDiagnostic}.
+ * Diagnostic read off a `LangiumDocument`: an LSP {@link Diagnostic} that MAY
+ * carry the protocol-level `element` path and `property` name from
+ * {@link TransferDiagnostic}.
+ *
+ * `element` is optional because a document's diagnostics do not all come from
+ * this validator. {@link HydraniumDocumentValidator.toDiagnostic} always sets
+ * one, but Langium pushes lexer and parser errors straight onto the document
+ * without routing them through it, so a document that fails to parse carries
+ * diagnostics with no path at all. Treat it as absent, not empty.
+ *
+ * Narrowing `LangiumDocument.diagnostics` to this type instead is unavailable:
+ * declaration merging may add a member but not retype one, and augmenting the
+ * LSP `Diagnostic` reaches only one of the two declaration files its package
+ * ships, since the `exports` map splits `import` from `default` with no `types`
+ * condition. Consumers therefore cast at the read, and the cast is sound only
+ * because this field is optional.
  */
 export interface TransferLspDiagnostic extends Diagnostic {
-   element: string;
+   element?: string;
    property?: string;
 }
 
