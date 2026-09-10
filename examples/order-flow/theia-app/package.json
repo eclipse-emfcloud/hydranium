@@ -46,7 +46,7 @@
     "@theia/workspace": "^1.72.0"
   },
   "devDependencies": {
-    "@hydranium/core": "1.0.0-next",
+    "@hydranium/core": "^1.0.0-next",
     "@hydranium/example-order-flow-server": "0.0.0",
     "@hydranium/example-order-flow-vscode-servers": "0.0.0",
     "@playwright/test": "^1.49.0",
