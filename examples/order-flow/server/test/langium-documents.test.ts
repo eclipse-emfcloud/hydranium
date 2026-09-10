@@ -15,7 +15,7 @@
  * The example binds nothing for this: the framework binds the class.
  */
 
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -80,14 +80,28 @@ describe('LangiumDocuments failure reporting, through a real server', () => {
       scratch = undefined;
    });
 
-   it('carries the reason a present file could not be read', async () => {
+   // A directory rather than a permission bit, so the case is constructible on
+   // every platform: `chmod` cannot remove read permission on Windows, where
+   // only the write flag exists, so a mode of 0 leaves the file readable and
+   // the load succeeds.
+   it('carries the reason a present path could not be read', async () => {
+      scratch = await makeScratchWorkspaceHarness();
+      const unreadable = path.join(scratch.workspace.root, 'unreadable.domain');
+      mkdirSync(unreadable);
+
+      // A miss and an unreadable path both reject, so the reason is the only
+      // thing that tells them apart.
+      await expect(scratch.harness.shared.workspace.LangiumDocuments.getOrCreateDocument(URI.file(unreadable))).rejects.toThrow(
+         /EISDIR|illegal operation on a directory/i
+      );
+   });
+
+   it.skipIf(process.platform === 'win32')('carries the reason a present file could not be read', async () => {
       scratch = await makeScratchWorkspaceHarness();
       const unreadable = path.join(scratch.workspace.root, 'unreadable.domain');
       writeFileSync(unreadable, 'entity Order {}');
       chmodSync(unreadable, 0o000);
 
-      // A miss and an unreadable file both reject, so the reason is the only
-      // thing that tells them apart.
       await expect(scratch.harness.shared.workspace.LangiumDocuments.getOrCreateDocument(URI.file(unreadable))).rejects.toThrow(
          /EACCES|permission/i
       );
