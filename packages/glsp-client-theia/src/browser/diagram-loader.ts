@@ -10,6 +10,7 @@
 import { DiagramLoader, type DiagramLoadingOptions, StatusAction } from '@eclipse-glsp/client';
 import { ChannelLogger } from '@hydranium/client-theia/lib/browser';
 import { Deferred } from '@hydranium/protocol';
+import { nls } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';
 
 /**
@@ -156,13 +157,25 @@ export class HydraniumDiagramLoader extends DiagramLoader {
 
    /**
     * The sentence a failed load is reported with, on every surface that reports
-    * it, and the only seam an adopter rewords or localizes it at. Public
-    * because the canvas overlay is one of those surfaces and lives in another
-    * class: it renders this failure exactly when the `StatusAction` did not
-    * land, so a second copy of the sentence there could only ever drift unseen.
+    * it. Public because the canvas overlay is one of those surfaces and lives in
+    * another class: it renders this failure exactly when the `StatusAction` did
+    * not land, so a second copy of the sentence there could only ever drift
+    * unseen.
+    *
+    * **The seam and the catalogue key answer different questions, so it carries
+    * both.** Overriding this method changes the WORDING for every user of one
+    * adopter's product; the key is what gives a reader the sentence in their own
+    * language, and no override can supply that without an adopter writing a
+    * subclass per locale — which is the thing a catalogue exists to avoid. Two
+    * of the three surfaces this reaches are user-visible, so the audience
+    * triage answers it: a host-bound string a user sees takes an inline key.
+    *
+    * The Output-channel line is therefore localized too, which is deliberate
+    * rather than overlooked — the alternative is a second English copy of one
+    * sentence, and the reason for a single source here has not changed.
     */
    loadFailureLabel(err: unknown): string {
-      return `Diagram failed to load: ${this.formatError(err)}`;
+      return nls.localize('hydranium/glsp-client-theia/diagram-load-failed', 'Diagram failed to load: {0}', this.formatError(err));
    }
 
    /** Render a thrown value as a message. Shared so the channel line, the status

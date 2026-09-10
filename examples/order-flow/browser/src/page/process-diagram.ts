@@ -35,6 +35,9 @@ import {
    DiagramLoader,
    EditorContextService,
    FitToScreenAction,
+   GEdge,
+   type GParentElement,
+   GNode,
    InitializeCanvasBoundsAction,
    type GLSPActionDispatcher,
    type IDiagramOptions,
@@ -134,48 +137,75 @@ export async function mountProcessDiagram(glspPort: MessagePort, sourceUri: stri
    // pending, and a pointer gesture started in it is measured against one
    // viewport and applied in another.
    await frameDiagram(container);
-   const report = describeRenderedDiagram(await waitForRenderedShapes());
+   // The DOM is consulted ONCE, here, and for a different question than the
+   // report answers: whether anything was drawn at all. That failure — a model
+   // whose element types have no view registration — is invisible in the model,
+   // which is fully populated either way, so it needs the one measurement the
+   // model cannot make. Every later reading is of the model; see `countGraph`.
+   const report = (await waitForAnyRenderedShape())
+      ? describeGraph(countGraph(container.get(EditorContextService).modelRoot))
+      : nothingDrawnReport();
    trackCanvasSize(container);
-   trackShapeCount(container, onReport);
+   trackGraphCount(container, onReport);
    return report;
 }
 
 /**
- * Keep the rendered-shape report current as the model changes.
+ * Count the nodes and edges in the graph the GLSP head sent.
  *
- * **A one-shot report is worse than none once anything can be created**: the line
- * says `rendered 5 node(s) and 4 edge(s)`, so a reader who then adds a task from
- * the palette sees a count that is now wrong sitting beside a layout report that
- * updated — and the honest reading of that pair is that the GLSP head has stopped
- * answering. It is the only one of the three head reports that was written once
- * and never revised.
+ * **Off the MODEL, not off the DOM, and the difference is not a detail.**
+ * sprotty culls: `ShapeView.isVisible` tests each element against the canvas
+ * bounds, so a node outside them is absent from the document while very much
+ * present in the model. A DOM count therefore reports the VIEWPORT, and the
+ * number moves when nothing about the model has — measured, shrinking the
+ * diagram pane takes the same five-node graph through three drawn nodes to zero.
+ * Beside a data-head line that is a statement about the store, a viewport
+ * measurement labelled `GLSP` reads as the head having lost elements.
  *
- * Counted off the DOM rather than off the model root the event carries, so the
- * report keeps meaning what it says: it is a statement about what reached the
- * page, and the number that matters is the one culling and view registration have
- * already had their say over. A count taken from the model would report five
- * nodes for a diagram drawing two.
+ * Edges hide this rather than sharing it, which is what makes it a trap: edge
+ * views do not cull on bounds, so the edge count stays right while the node
+ * count drops, and a wrong report looks like a node-specific defect.
  *
- * The count is taken on the next frame, not in the handler: the event fires when
- * the root is swapped in and sprotty patches the DOM afterwards, so reading
- * immediately reports the PREVIOUS render — off by exactly one operation, which
- * is the least obvious way for a counter to be wrong.
+ * Recursive, because containment is the adopter's choice: this graph is flat,
+ * and a nested one would have a count that silently omitted whatever a
+ * compartment held. `GParentElement` rather than `GModelElement` because that is
+ * the class `children` is declared on, and every child is itself one — sprotty
+ * keeps no separate leaf type.
  */
-function trackShapeCount(container: Container, onReport: (report: string) => void): void {
-   container.get(EditorContextService).onModelRootChanged(() => {
-      requestAnimationFrame(() => {
-         const mount = document.getElementById(PROCESS_DIAGRAM_ELEMENT_ID);
-         if (mount === null) {
-            return;
-         }
-         onReport(
-            describeRenderedDiagram({
-               nodes: mount.querySelectorAll('.sprotty-node').length,
-               edges: mount.querySelectorAll('g.sprotty-edge').length
-            })
-         );
-      });
-   });
+function countGraph(root: Readonly<GParentElement>): { nodes: number; edges: number } {
+   let nodes = 0;
+   let edges = 0;
+   for (const child of root.children) {
+      // `GNode` is sprotty's `SNodeImpl` under a GLSP name, so this also counts
+      // the shape subclasses an adopter registers for anchoring — a gateway is a
+      // `DiamondNode`, and a check against a narrower class would miss it.
+      if (child instanceof GNode) {
+         nodes++;
+      } else if (child instanceof GEdge) {
+         edges++;
+      }
+      const nested = countGraph(child);
+      nodes += nested.nodes;
+      edges += nested.edges;
+   }
+   return { nodes, edges };
+}
+
+/**
+ * Keep the graph report current as the model changes.
+ *
+ * **A one-shot report is worse than none once anything can be created**: the
+ * line names five nodes, so a reader who then adds a task from the palette sees
+ * a count that is now wrong sitting beside a layout report that updated — and
+ * the honest reading of that pair is that the GLSP head has stopped answering.
+ *
+ * Read in the handler and not on the next frame: the event fires once the new
+ * root is in place, so the model is current immediately. Only a DOM count has to
+ * wait for sprotty to patch.
+ */
+function trackGraphCount(container: Container, onReport: (report: string) => void): void {
+   const editorContext = container.get(EditorContextService);
+   editorContext.onModelRootChanged(root => onReport(describeGraph(countGraph(root))));
 }
 
 /**
@@ -273,43 +303,42 @@ async function frameDiagram(container: Container): Promise<void> {
 }
 
 /**
- * Count the shapes under the mount point once there are any, or give up at
+ * Whether any shape reached the document, or `false` at
  * {@link RENDER_DEADLINE_MS}.
  *
- * `.sprotty-node` / `.sprotty-edge` are the classes sprotty's own views put on
- * the drawn shape — the same ones the shared stylesheet selects on, so a rename
- * would break the appearance too rather than this check alone.
+ * WHETHER rather than how many, because a count off the DOM is a count of what
+ * is currently in view — see `countGraph`. The existence question is the one the
+ * document can answer and the model cannot.
  *
- * Edges are matched as `g.sprotty-edge`, not bare: an edge's group AND the
- * `<path>` inside it both carry the class, so the unqualified selector reports
- * every edge twice. Nodes carry it once, on the shape.
+ * `.sprotty-node` is the class sprotty's own views put on a drawn shape — the
+ * same one the shared stylesheet selects on, so a rename would break the
+ * appearance too rather than this check alone.
  *
  * Polled rather than observed: the question is "is there a graph NOW", asked
  * repeatedly. A `MutationObserver` answers "did something change", which a
  * diagram that finished rendering before this ran would never say.
  */
-async function waitForRenderedShapes(): Promise<{ nodes: number; edges: number } | undefined> {
+async function waitForAnyRenderedShape(): Promise<boolean> {
    const deadline = performance.now() + RENDER_DEADLINE_MS;
    for (;;) {
       const mount = document.getElementById(PROCESS_DIAGRAM_ELEMENT_ID);
-      const nodes = mount?.querySelectorAll('.sprotty-node').length ?? 0;
-      const edges = mount?.querySelectorAll('g.sprotty-edge').length ?? 0;
-      if (nodes > 0) {
-         return { nodes, edges };
+      if ((mount?.querySelectorAll('.sprotty-node').length ?? 0) > 0) {
+         return true;
       }
       if (performance.now() >= deadline) {
-         return undefined;
+         return false;
       }
       await new Promise(resolve => setTimeout(resolve, 100));
    }
 }
 
-function describeRenderedDiagram(shapes: { nodes: number; edges: number } | undefined): string {
-   if (shapes === undefined) {
-      return (
-         `nothing drawn after ${RENDER_DEADLINE_MS / 1000}s — the server answered the model request but no shape ` +
-         'reached the page, which is what an unregistered element type looks like'
-      );
-   }
-   return `rendered ${shapes.nodes} node(s) and ${shapes.edges} edge(s)`;
+function nothingDrawnReport(): string {
+   return (
+      `nothing drawn after ${RENDER_DEADLINE_MS / 1000}s — the server answered the model request but no shape ` +
+      'reached the page, which is what an unregistered element type looks like'
+   );
+}
+
+function describeGraph(graph: { nodes: number; edges: number }): string {
+   return `${graph.nodes} node(s) and ${graph.edges} edge(s)`;
 }

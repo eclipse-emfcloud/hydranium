@@ -24,7 +24,7 @@ import {
 } from '../../language-server/ast.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
-import { removeChildren } from './containment.js';
+import { removeChildren } from '@hydranium/core';
 
 /** What one delete operation resolved to, after the cascade was expanded. */
 interface DeleteSet {

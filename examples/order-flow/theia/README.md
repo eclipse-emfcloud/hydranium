@@ -82,8 +82,9 @@ authorities over one sentence:
   flattens a catalogue by joining keys with `/` — the separator the codes use.
 - `server/src/nls/order-flow.de.json` — what the **server** renders: its
   diagnostics, this example's validation codes, Langium's unresolved-reference
-  sentence. Flat keys, handed straight to `OrderFlowMessageRenderer`, the one
-  binding server-side rendering asks of an adopter.
+  sentence and chevrotain's unexpected-character one. Flat keys, handed straight
+  to `OrderFlowMessageRenderer`, the one binding server-side rendering asks of
+  an adopter.
 
 Adopter-owned codes (`order-flow/*`) live under their own namespace in whichever
 file renders them — `hydranium/` is reserved for the framework.

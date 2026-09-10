@@ -55,6 +55,10 @@ import { type NameProvider } from '../naming/name-provider.js';
  * - After a removal, surviving siblings need their `$containerIndex`
  *   renumbered, or a key derived afterwards addresses the wrong node.
  *
+ * {@link appendChild} and {@link removeChildren} discharge both, and ship
+ * beside this provider because the constraint is this provider's rather than
+ * any caller's.
+ *
  * Adopters that need insert / delete stability for unnamed types should
  * give those types a name in the grammar, or bind a key provider whose
  * fallback is content-derived rather than positional.

@@ -15,7 +15,7 @@ import { canAddTransition } from '../../language-server/process-transition-rules
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
 import { PROCESS_TRANSITION_EDGE_TYPE } from '../order-flow-process-diagram-types.js';
-import { appendChild } from './containment.js';
+import { appendChild } from '@hydranium/core';
 
 /**
  * Creates a `transition <source> -> <target>` between two flow nodes.

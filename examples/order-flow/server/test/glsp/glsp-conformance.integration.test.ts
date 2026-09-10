@@ -26,7 +26,8 @@
  *   its five flow nodes, so its `expectResponse` proves persisted bounds reach
  *   the wire.
  * - `returns.process` has no `.layout` file beside it, so its `expectResponse`
- *   proves every node is left to client layout.
+ *   proves nothing was read from one — no preferred size anywhere, and every
+ *   position on the factory's own fallback ladder rather than scattered.
  *
  * Neither assertion is meaningful without the other: a factory that ignored the
  * block entirely would pass the second fixture, and one that invented bounds for
@@ -92,6 +93,7 @@ import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterAll } from 'vitest';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
+import { UNPOSITIONED_ROW_HEIGHT } from '../../src/glsp/order-flow-process-gmodel-factory.js';
 import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
 import { makeScratchWorkspaceHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
 
@@ -217,11 +219,21 @@ const returnsFixture: GlspFixture<Action, Driver> = {
       if (nodes.length !== RETURNS_NODE_COUNT) {
          return false;
       }
-      // Every node carries the same builder default, i.e. nothing was overlaid.
-      // A factory that invented bounds per node — or one that leaked the sibling
-      // document's layout — produces distinct positions here.
-      const positions = new Set(nodes.map(node => `${node.position?.x ?? 'none'},${node.position?.y ?? 'none'}`));
-      return positions.size === 1;
+      // **Nothing was overlaid — asserted by what a leak WOULD carry, not by the
+      // nodes agreeing with each other.** Every node here is unpositioned, so
+      // the factory stacks them one per row, which means "all positions equal"
+      // distinguishes nothing: it is false for a clean walk and for a leak
+      // alike, and it holds only where unpositioned nodes coincide.
+      //
+      // Two independent signals, either of which a leak breaks. A persisted SIZE
+      // is the only thing that sets a preferred size, so its absence everywhere
+      // says no entry was read; and the positions have to sit exactly on the
+      // fallback ladder — one column, evenly pitched, in document order — which
+      // the sibling document's scattered coordinates do not.
+      const noPersistedSize = nodes.every(node => node.layoutOptions?.prefWidth === undefined);
+      const ladder = nodes.map(node => `${node.position?.x},${node.position?.y}`);
+      const expectedLadder = nodes.map((_node, row) => `0,${row * UNPOSITIONED_ROW_HEIGHT}`);
+      return noPersistedSize && ladder.join('|') === expectedLadder.join('|');
    },
    createOperation: {
       action: () => CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE),

@@ -128,3 +128,12 @@ export function requireCheckbox(id: string): HTMLInputElement {
    }
    return element;
 }
+
+/** The language switch, whose `<option>` list is built from script. */
+export function requireSelect(id: string): HTMLSelectElement {
+   const element = requireElement(id);
+   if (!(element instanceof HTMLSelectElement)) {
+      throw new Error(`#${id} is not a select`);
+   }
+   return element;
+}

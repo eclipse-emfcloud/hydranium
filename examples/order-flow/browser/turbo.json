@@ -9,6 +9,9 @@
     // bundle, and the browser host serves the previous workspace while every
     // other host serves the new one — a stale green that looks like a build.
     //
+    // The brand asset the build copies to `out/hydranium-mark.svg` is outside
+    // the package for the same reason and needs the same entry.
+    //
     // Line comments rather than a "//inputs" sibling: turbo validates this file
     // against a schema and rejects unknown keys, so the convention the
     // package.json files use fails here.
@@ -22,7 +25,8 @@
         "tsconfig.page.json",
         "esbuild.mjs",
         "index.html",
-        "$TURBO_ROOT$/examples/order-flow/workspace/**"
+        "$TURBO_ROOT$/examples/order-flow/workspace/**",
+        "$TURBO_ROOT$/docs/assets/hydranium-logo.svg"
       ],
       "outputs": ["out/**", "src/generated/**"]
     }

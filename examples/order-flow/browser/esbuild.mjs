@@ -15,7 +15,7 @@
 // resolve at runtime for no gain in a single-entry bundle.
 
 import { build, context } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,12 +42,31 @@ const PAGE_OUTPUT = 'out/order-flow-page.js';
 // console is SILENT.
 const MONACO_WORKER_OUTPUT = 'out/monaco-editor-worker.js';
 
-// The document is static, so its script reference cannot be derived — but it CAN
-// be checked, which turns the same silent mismatch into a build failure.
+// The brand mark, COPIED from the repository's asset instead of committed
+// beside the page, so the two cannot drift: an icon nobody looks at while
+// editing a logo is exactly the reference that goes stale unnoticed. Nothing
+// bundles it, so it is a copy rather than an entry point.
+//
+// ONE file for two uses — the tab icon and the title bar. Named for the mark
+// rather than for either surface, because `favicon.svg` in a title bar reads as
+// a mistake and a second copy is the drift this arrangement exists to prevent.
+const BRAND_MARK_SOURCE = resolve(packageRoot, '../../../docs/assets/hydranium-logo.svg');
+const BRAND_MARK_OUTPUT = 'out/hydranium-mark.svg';
+
+// The document is static, so its references cannot be derived — but they CAN be
+// checked, which turns the same silent mismatch into a build failure.
 const indexHtml = readFileSync(resolve(packageRoot, 'index.html'), 'utf8');
 if (!indexHtml.includes(`./${PAGE_OUTPUT}`)) {
    throw new Error(`index.html does not load ./${PAGE_OUTPUT} — the page bundle was renamed without updating the document`);
 }
+if (!indexHtml.includes(`./${BRAND_MARK_OUTPUT}`)) {
+   throw new Error(`index.html does not reference ./${BRAND_MARK_OUTPUT} — the brand mark was renamed without updating the document`);
+}
+
+// Before the bundles rather than after: `out/` is created by whichever runs
+// first, and in `--watch` the builds never "finish" for a copy to follow them.
+mkdirSync(resolve(packageRoot, 'out'), { recursive: true });
+copyFileSync(BRAND_MARK_SOURCE, resolve(packageRoot, BRAND_MARK_OUTPUT));
 
 const common = {
    bundle: true,

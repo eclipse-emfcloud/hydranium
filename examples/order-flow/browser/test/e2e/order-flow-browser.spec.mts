@@ -59,8 +59,15 @@ const MOUNT = '#order-flow-process-diagram';
  */
 const GRAPH = `${MOUNT} svg.sprotty-graph`;
 
-/** The page's own completion report, once it is neither placeholder nor pending. */
-const RENDERED_REPORT = /^rendered \d+ node\(s\) and \d+ edge\(s\)$/;
+/**
+ * The page's own completion report, once it is neither placeholder nor pending.
+ *
+ * A count of the GRAPH the head sent, not of what is currently drawn, so it is
+ * stable under anything that moves the canvas — which is what makes it usable as
+ * a readiness gate. A DOM-derived report would vary with the viewport, and a
+ * gate keyed on one would be a gate on the window size.
+ */
+const RENDERED_REPORT = /^\d+ node\(s\) and \d+ edge\(s\)$/;
 
 /**
  * `orders/fulfillment.layout` as seeded: four entries, in file order, and no
@@ -131,6 +138,32 @@ const HIGHLIGHTED_LINE = 'process Fulfillment for Order {';
 const SYNTAX_ERROR_TEXT = 'nonsense';
 
 /**
+ * The tool palette's collapse toggle.
+ *
+ * A SIBLING of the palette and not a child of it, which is the whole reason it
+ * needs naming here: `@eclipse-glsp/client` inserts it into the diagram's base
+ * div, so hiding the palette on a read-only canvas leaves it standing unless
+ * something puts the two together. See `OrderFlowProcessToolPalette`.
+ */
+const PALETTE_TOGGLE = `${MOUNT} .minimize-palette-button`;
+
+/** GLSP's status band, the surface the server's read-only reason lands on. */
+const STATUS_BAND = `${MOUNT} .sprotty-status`;
+
+/**
+ * A character no `.process` token can start with, typed to make the document
+ * fail LEXING rather than parsing.
+ *
+ * Distinct from {@link SYNTAX_ERROR_TEXT}, which is a well-formed identifier in
+ * the wrong place and so a PARSING error. Both are structural and both take the
+ * canvas read-only, but only this one exercises the lexer's own diagnostic — the
+ * one Langium words from chevrotain rather than from its own message provider.
+ *
+ * One character, so recovery is a single `Backspace`.
+ */
+const LEXING_ERROR_TEXT = '§';
+
+/**
  * The line in `orders/fulfillment.process` that the completion assertions ask
  * on, spelled exactly as the fixture has it.
  *
@@ -170,7 +203,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#data-head')).toHaveText(/^root DomainModel, 1 diagnostic\(s\)$/);
 
       // The GLSP head, on the third channel.
-      await expect(page.locator('#glsp-head')).toHaveText(`rendered ${EXPECTED_NODES.length} node(s) and ${EXPECTED_EDGE_COUNT} edge(s)`);
+      await expect(page.locator('#glsp-head')).toHaveText(`${EXPECTED_NODES.length} node(s) and ${EXPECTED_EDGE_COUNT} edge(s)`);
 
       // The layout secondary, read back through the data head. Asserted here as
       // the pre-edit baseline the editing test below measures against — an edit
@@ -457,6 +490,51 @@ test.describe('order-flow in a web worker', () => {
       expect(entry.y).toBeGreaterThan(0);
    });
 
+   /**
+    * A document that stops parsing takes the canvas read-only, and the canvas
+    * says so.
+    *
+    * **Three assertions rather than one, because the three surfaces have three
+    * different owners and any of them can regress alone.** The palette is
+    * withdrawn by `@eclipse-glsp/client` on the edit mode; the toggle is
+    * withdrawn by this example's `OrderFlowProcessToolPalette`, because upstream
+    * leaves it standing; and the band is written by the framework's
+    * `onParseErrorChanged`. A test that only checked the palette would pass
+    * against a canvas with a dangling control and no stated reason, which is the
+    * state this whole slice exists to remove.
+    *
+    * **The recovery half is not symmetry, it is the load-bearing half.** A
+    * read-only indicator that never clears is worse than none: it makes an
+    * editable diagram look permanently locked, and the palette coming back is
+    * the thing that would then contradict it.
+    */
+   test('a document that stops parsing takes the diagram read-only, with the reason on the canvas', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator(`${MOUNT} .tool-button`).first()).toBeVisible();
+      await expect(page.locator(PALETTE_TOGGLE)).toBeVisible();
+      // The band is EMPTY rather than absent to begin with: the extension is
+      // mounted by GLSP's own diagram startup, so "no status" is a blank one.
+      await expect(page.locator(STATUS_BAND)).toHaveText('');
+
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(LEXING_ERROR_TEXT);
+
+      // The band FIRST, because it is the only one of the three that carries the
+      // server's own account: reaching it means the `StatusAction` travelled the
+      // GLSP channel, which the two visibility assertions cannot distinguish from
+      // a purely client-side reaction to a stale edit mode.
+      await expect(page.locator(STATUS_BAND)).toHaveText('Read-only: this document has a syntax error. Fix it to edit the diagram again.');
+      await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
+      await expect(page.locator(PALETTE_TOGGLE)).toBeHidden();
+
+      await page.keyboard.press('Backspace');
+
+      await expect(page.locator(STATUS_BAND)).toHaveText('');
+      await expect(page.locator(`${MOUNT} .tool-palette`)).toBeVisible();
+      await expect(page.locator(PALETTE_TOGGLE)).toBeVisible();
+   });
+
    test('highlighting comes from the server, not from a client grammar', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(HIGHLIGHTED_LINE);
@@ -729,6 +807,70 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#problem-list .problem-row .badge').first()).toHaveText(/^\d+:\d+$/);
    });
 
+   /**
+    * **The point is that ONE switch moves both halves**, so this asserts a
+    * chrome label the page owns AND a diagnostic the server rendered, in the same
+    * language, from a single `?locale=`. Either alone is satisfied by a page that
+    * localized one half: chrome-only passes while every message stays English,
+    * and diagnostic-only passes while every label does.
+    *
+    * The diagnostic is the discriminating half of the pair, because it can only
+    * be German if the locale reached `initialize` — the page cannot render it.
+    */
+   test('one locale switch reaches the page chrome AND the server messages', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      await expect(page.locator('#document-panel h2')).toHaveText('Arbeitsbereich');
+      await expect(page.locator('#log-panel h2')).toHaveText('Serverprotokoll');
+      await expect(page.locator('#save-workspace span')).toHaveText('Arbeitsbereich speichern');
+      // A `title`, so the attribute family is covered too — tooltip and
+      // accessible-name prose is exactly what gets left untranslated.
+      await expect(page.locator('#reset-layout')).toHaveAttribute('title', 'Ursprüngliche Bereichsgrößen wiederherstellen');
+      await expect(page.locator('#log-filter')).toHaveAttribute('placeholder', 'Filter');
+      await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+
+      // The server half, from the same parameter.
+      await expect(page.locator('#problem-list .problem-row')).toContainText('Referenz auf');
+
+      // `Order Flow` is a product noun and stays put; asserted so a later sweep
+      // that "finishes the job" by translating it fails here instead of shipping.
+      await expect(page.locator('.titlebar h1')).toContainText('Order Flow');
+   });
+
+   /**
+    * **This test does not discriminate on its own, and that is recorded rather
+    * than papered over.** Measured: it stays green with the chrome overlay
+    * disabled entirely, because "an unknown code leaves English" is also
+    * satisfied by "nothing is ever translated". What separates the two is the
+    * test above, which shows a KNOWN code changing the same labels — so the pair
+    * carries the property and neither half does alone. Read them together.
+    */
+   test('an unknown locale falls back to the document rather than blanking it', async ({ page }) => {
+      // The fallback every catalogue in this repo has, and the reason the English
+      // lives in the markup: a code with no catalogue must leave the page
+      // readable, not empty. `zz` reaches neither the page's overlay nor the
+      // server's.
+      await page.goto('/?locale=zz');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('#document-panel h2')).toHaveText('Workspace');
+      await expect(page.locator('#problem-list .problem-row')).toContainText('Could not resolve reference');
+   });
+
+   test('the language switch is the URL, so the choice is addressable', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('#page-locale')).toHaveValue('de');
+
+      // Back to the default, which DELETES the parameter rather than emptying it
+      // — a `?locale=` left behind would have the address bar claim a language
+      // the page is not using.
+      await page.locator('#page-locale').selectOption('');
+      await expect(page).toHaveURL(/\/$/);
+      await expect(page.locator('#document-panel h2')).toHaveText('Workspace');
+      await expect(page.locator('#page-locale')).toHaveValue('');
+   });
+
    test('the log panel carries all three heads on one channel', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
@@ -971,6 +1113,148 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Aufgabe', 'Verzweigung', 'Übergang', 'Effekt']);
    });
 
+   /**
+    * MONACO's own menu in the declared locale — the one surface on this page
+    * whose language is not the framework's to set.
+    *
+    * Everything else here is translated by a catalogue somebody in this repo
+    * wrote. This is `monaco-editor-core`'s shipped German, reached by putting
+    * `globalThis._VSCODE_NLS_MESSAGES` in place before Monaco's modules are
+    * evaluated — which is the whole reason `order-flow-page.ts` exists as a
+    * boot module separate from `workbench.ts`.
+    *
+    * **The right-click goes at the EDITOR's box, not the `.view-lines` one.**
+    * Monaco renders past its viewport, so `.view-lines` reports a box taller
+    * than the pane and a point inside it can be off-screen — measured, the
+    * synthetic click then lands nowhere, no menu opens, and the failure reads as
+    * a missing context-menu contribution rather than as bad coordinates.
+    */
+   test("renders Monaco's own context menu in the declared locale", async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(HIGHLIGHTED_LINE);
+
+      await rightClickInEditor(page, PROCESS_EDITOR);
+
+      // The menu is Monaco's own overlay, appended to the body rather than into
+      // the editor, so it is addressed from the document root.
+      await expect(page.locator('.context-view .action-label').filter({ hasText: 'Ausschneiden' })).toHaveCount(1);
+      await expect(page.locator('.context-view .action-label').filter({ hasText: 'Befehlspalette' })).toHaveCount(1);
+   });
+
+   test("labels Monaco's menu in English with no locale — the control on the row above", async ({ page }) => {
+      // Without this the row above passes against a page that always loaded the
+      // German bundle, which is the one thing the boot module could get wrong in
+      // a way no other assertion sees.
+      await page.goto('/');
+      await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(HIGHLIGHTED_LINE);
+
+      await rightClickInEditor(page, PROCESS_EDITOR);
+
+      await expect(page.locator('.context-view .action-label').filter({ hasText: 'Cut' })).toHaveCount(1);
+      await expect(page.locator('.context-view .action-label').filter({ hasText: 'Ausschneiden' })).toHaveCount(0);
+   });
+
+   /**
+    * A LEXER error in the declared locale — the message no layer of this stack
+    * words itself.
+    *
+    * The unresolved-reference case above is Langium's sentence; this one is
+    * CHEVROTAIN's, two dependencies down, copied through `processLexingErrors`
+    * untouched and arriving with a `data.code` that names a kind rather than a
+    * message. It is also the first message a user of a new language meets. So it
+    * is the furthest the identity mechanism reaches, and the case an adopter
+    * could not translate at all before the framework claimed it.
+    *
+    * Matched on the German plus the offending character, so a reworded German
+    * clause does not break it while a rendering that lost the parameter — the
+    * failure a code with no params would produce — still does.
+    */
+   test('renders a lexer error in the declared locale', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator('#status')).toHaveText(
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(LEXING_ERROR_TEXT);
+
+      const problems = page.locator('.problem-row');
+      await expect(problems.filter({ hasText: 'Unerwartetes Zeichen' }).filter({ hasText: LEXING_ERROR_TEXT })).toHaveCount(1);
+      await expect(problems.filter({ hasText: 'unexpected character' })).toHaveCount(0);
+   });
+
+   test('renders the lexer error in English with no locale — the control on the row above', async ({ page }) => {
+      // Without this the row above passes against a page that always got German
+      // — and, more specifically here, against an identity attached to the wrong
+      // message, since chevrotain's own sentence is what the pass must reproduce
+      // for an adopter shipping no catalogue.
+      await page.goto('/');
+      await expect(page.locator('#status')).toHaveText(
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(LEXING_ERROR_TEXT);
+
+      const problems = page.locator('.problem-row');
+      await expect(problems.filter({ hasText: `unexpected character: ->${LEXING_ERROR_TEXT}<-` })).toHaveCount(1);
+   });
+
+   /**
+    * The server states which language it is rendering in, in its own log.
+    *
+    * **The one thing on the page that can distinguish an undeclared locale from
+    * an untranslated code**, which otherwise look identical: the framework ships
+    * no catalogue, so both produce the English. Asserted from the LOG panel
+    * rather than from the page's own status line on purpose — the page already
+    * knows what it asked for, so a page-authored line would be a claim about
+    * the query parameter, whereas this one crosses the channel and comes back
+    * from the server that will do the rendering.
+    *
+    * Both directions in one test, because the pair is the assertion: the same
+    * page with the parameter removed has to say the OTHER thing, or a server
+    * that ignored the locale entirely would satisfy the first half.
+    */
+   test('the log says which language the server renders in', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      const lines = page.locator('#log div');
+      await expect(lines.filter({ hasText: "rendering messages in locale 'de'" })).not.toHaveCount(0);
+      await expect(lines.filter({ hasText: 'no locale declared' })).toHaveCount(0);
+
+      await page.goto('/');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      const englishLines = page.locator('#log div');
+      await expect(englishLines.filter({ hasText: 'no locale declared' })).not.toHaveCount(0);
+      await expect(englishLines.filter({ hasText: 'rendering messages in locale' })).toHaveCount(0);
+   });
+
+   /**
+    * The read-only band in the declared locale.
+    *
+    * A third seam shape after the diagnostic and the palette noun, and the one
+    * that reaches furthest: this sentence is the framework's OWN, raised by
+    * `@hydranium/glsp-server` on a GLSP action, and it arrives translated by an
+    * adopter catalogue that says nothing about diagrams. Matched on the invariant
+    * opening word rather than the full sentence, so a reworded recovery clause
+    * does not break a test about locales.
+    */
+   test('renders the diagram read-only band in the declared locale', async ({ page }) => {
+      await page.goto('/?locale=de');
+      await expect(page.locator(`${MOUNT} .tool-button`).first()).toBeVisible();
+
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(LEXING_ERROR_TEXT);
+
+      await expect(page.locator(STATUS_BAND)).toContainText('Schreibgeschützt');
+      await expect(page.locator(STATUS_BAND)).not.toContainText('Read-only');
+   });
+
    test('labels the palette in English with no locale — the control on the row above', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
@@ -1068,6 +1352,25 @@ async function paintedColours(page: Page): Promise<PaintedColours> {
 /** The rows of Monaco's suggest widget. */
 function suggestions(page: Page): Locator {
    return page.locator('.suggest-widget .monaco-list-row');
+}
+
+/**
+ * Open Monaco's context menu over the middle of an editor.
+ *
+ * **The point comes from the EDITOR's box, never from `.view-lines`.** Monaco
+ * renders past its viewport, so the line container reports a box taller than the
+ * pane it sits in — measured, a point ten pixels into that box was off-screen,
+ * the synthetic right-click reached nothing, and the only symptom was a
+ * `.context-view` that stayed empty.
+ *
+ * `page.mouse` rather than `locator.click`, because there is no element to name:
+ * the target is a coordinate inside a virtualised surface, and a locator that
+ * resolves to an over-rendered line is exactly the failure above.
+ */
+async function rightClickInEditor(page: Page, editorSelector: string): Promise<void> {
+   const box = await boundingBoxOf(page.locator(editorSelector));
+   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
+   await expect(page.locator('.context-view .action-label').first()).toBeVisible();
 }
 
 /**

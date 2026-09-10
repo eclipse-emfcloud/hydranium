@@ -123,6 +123,17 @@ const EFFECT_COMPARTMENT_LAYOUT_OPTIONS = {
 } as const;
 
 /**
+ * Row pitch for the nodes no `.layout` entry positions; see
+ * {@link OrderFlowProcessGModelFactory.placeUnpositioned}.
+ *
+ * Clears the tallest shape the notation produces — a gateway, whose stated
+ * floor is the largest of the three — so two stacked rows cannot touch. A
+ * content-fit node can still grow past it, which is why the value has slack
+ * rather than being the floor exactly.
+ */
+export const UNPOSITIONED_ROW_HEIGHT = 80;
+
+/**
  * Translates a `.process` root into a GLSP {@link GGraph}. Nodes are emitted
  * before the connections that join them, so every edge endpoint id already
  * exists:
@@ -175,14 +186,58 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
     */
    protected layout = new Map<FlowNode, DiagramNode>();
 
+   /**
+    * Where each flow node with NO `.layout` entry is drawn, keyed the same way
+    * and rebuilt in the same walk.
+    */
+   protected fallbackPositions = new Map<FlowNode, { readonly x: number; readonly y: number }>();
+
    createModel(): void {
       const root = this.modelState.sourceRoot;
       const graph = GGraph.builder().id(this.modelState.sourceUri).build();
       if (root) {
          this.layout = this.collectLayout();
+         this.fallbackPositions = this.placeUnpositioned(root);
          this.buildGraph(root, graph);
       }
       this.modelState.updateRoot(graph);
+   }
+
+   /**
+    * Stack the nodes the `.layout` file does not position, one per row.
+    *
+    * **Without this every one of them is drawn at the graph origin, and any two
+    * are therefore superimposed.** Nothing places an unpositioned node — the
+    * diagram's `needsClientLayout` buys MICRO-layout, which sizes a node's label
+    * and effect lines inside it, and there is no auto-layout module bound to
+    * place the nodes themselves. So the second unpositioned node disappears
+    * underneath the first, and the wider of the two hides the other completely.
+    * Measured: renaming a task so its `.layout` entry no longer resolves puts it
+    * at exactly `Cancel`'s coordinates, and the diagram then shows four shapes
+    * for a five-node model — which reads as the head having dropped an element,
+    * and sends a reader looking for a defect in the wrong place entirely.
+    *
+    * **The first one still lands at the origin**, so a fixture with a single
+    * unpositioned node is unchanged. That is deliberate rather than incidental:
+    * `Cancel` is the workspace's only such node, and the append-on-drag test
+    * reads `0,0` as the signature of a half-completed write.
+    *
+    * A COLUMN rather than a diagonal cascade, and rows rather than a packing:
+    * these nodes have no authored place, so the honest rendering is a list off to
+    * one side, not an arrangement that implies someone chose it. One pass over
+    * the nodes in document order, so the result is stable across rebuilds and
+    * costs nothing on top of the walk that follows.
+    */
+   protected placeUnpositioned(root: ProcessModel): Map<FlowNode, { readonly x: number; readonly y: number }> {
+      const positions = new Map<FlowNode, { readonly x: number; readonly y: number }>();
+      let row = 0;
+      for (const node of root.nodes) {
+         if (this.layout.get(node) === undefined) {
+            positions.set(node, { x: 0, y: row * UNPOSITIONED_ROW_HEIGHT });
+            row++;
+         }
+      }
+      return positions;
    }
 
    /**
@@ -209,10 +264,16 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
     * Apply persisted bounds, if any, as an **overlay** on client layout.
     *
     * Deliberately partial in both directions: a flow node with no `layout`
-    * entry is left for the client to place, and an entry with a position but no
-    * `size` contributes only the position. That is why the diagram
+    * entry falls back to {@link placeUnpositioned}, and an entry with a position
+    * but no `size` contributes only the position. That is why the diagram
     * configuration keeps `needsClientLayout` — the client still measures, and
     * these values only override what has actually been persisted.
+    *
+    * **`needsClientLayout` does NOT place a node**, and reading it as though it
+    * did is how the fallback came to be missing: it drives the MICRO-layout that
+    * sizes a node's label and effect lines within it. Nothing in this diagram's
+    * modules positions a node the `.layout` file has not, which is why the
+    * fallback is computed here rather than left to the client.
     *
     * **A persisted size is carried as `prefWidth` / `prefHeight`**, which is
     * GLSP's own vocabulary for it. `size` alone does not survive: every node
@@ -274,8 +335,9 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
       floors: { readonly minWidth: number; readonly minHeight: number }
    ): void {
       const bounds = this.layout.get(node);
-      if (bounds) {
-         builder.position(bounds.x, bounds.y);
+      const placement = bounds ?? this.fallbackPositions.get(node);
+      if (placement) {
+         builder.position(placement.x, placement.y);
       }
       if (bounds?.width !== undefined && bounds.height !== undefined) {
          builder.size(bounds.width, bounds.height);

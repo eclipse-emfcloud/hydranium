@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './containment.js';
 export * from './element-key-provider.js';
 export * from './name-based-key-provider.js';
 export * from './positional-key-provider.js';

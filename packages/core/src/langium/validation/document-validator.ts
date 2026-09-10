@@ -23,6 +23,7 @@ import {
    type AstReflection,
    DefaultDocumentValidator,
    type DiagnosticInfo,
+   DocumentValidator,
    type LangiumDocument,
    type LangiumCoreServices,
    type ValidateSingleNodeOptions,
@@ -30,7 +31,10 @@ import {
    type ValidationSeverity
 } from '@hydranium/langium';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
-import type { Diagnostic } from 'vscode-languageserver-types';
+// A VALUE import, for `Diagnostic.getMessageString`: `message` is
+// `string | MarkupContent` in LSP 3.17+, so upstream's own reader is what
+// narrows it rather than a hand-rolled union check here.
+import { Diagnostic } from 'vscode-languageserver-types';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { isSyntheticNode } from '../workspace/synthetic.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
@@ -77,6 +81,51 @@ export const UNRESOLVED_REFERENCE = defineMessage(
    'hydranium/core/unresolved-reference',
    "Could not resolve reference to {referenceType} named '{refText}'."
 );
+
+/**
+ * A character no token of the grammar can start with.
+ *
+ * **The English is byte-identical to CHEVROTAIN's
+ * `defaultLexerErrorProvider.buildUnexpectedCharactersMessage`, and must stay
+ * so** — one layer further out than {@link UNRESOLVED_REFERENCE}, whose sentence
+ * is Langium's. Langium words neither: `processLexingErrors` copies
+ * `lexerDiagnostic.message` through untouched, so the text an adopter sees today
+ * is produced two dependencies down and is the only thing this identity may
+ * claim to be. {@link HydraniumDocumentValidator.identifyLexingError} attaches
+ * it only when the two match exactly, which is also what keeps a custom lexer's
+ * own diagnostics — Langium admits any of them through `lexerReport` — from
+ * being mislabelled as this one.
+ *
+ * It exists because a lexing error is the FIRST message a user of a new language
+ * sees and the one an adopter cannot reach: every other diagnostic worth
+ * translating either carries an identity already or is raised by adopter code,
+ * while this one arrives with a Langium `data.code` naming a KIND and no
+ * parameters at all — so a catalogue had nothing to key on and nothing to
+ * interpolate.
+ *
+ * `skipped` rather than `length`, matching what the sentence says the number
+ * means: chevrotain reports how many characters the lexer discarded to recover,
+ * which for a single stray character is one and for a run of them is the run.
+ */
+export const LEXING_ERROR = defineMessage(
+   'hydranium/core/lexing-error',
+   'unexpected character: ->{character}<- at offset: {offset}, skipped {skipped} characters.'
+);
+
+/**
+ * Langium's own `data.code` values for a diagnostic that came out of the lexer.
+ *
+ * All four severities, not just the error one: `lexerReport` admits warnings and
+ * below, and a token builder that downgrades a stray character still produces
+ * the same sentence. Gating on the error code alone would leave the identity off
+ * a message that is word-for-word the one it names.
+ */
+const LEXING_CODES: ReadonlySet<unknown> = new Set([
+   DocumentValidator.LexingError,
+   DocumentValidator.LexingWarning,
+   DocumentValidator.LexingInfo,
+   DocumentValidator.LexingHint
+]);
 
 export interface DocumentValidatorOptions extends LogNameOptions {
    /**
@@ -156,14 +205,83 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
       }
       const level = this.logLevel.value;
       if (level === 'off') {
-         return super.validateDocument(document, options, cancelToken);
+         return this.validateAndIdentify(document, options, cancelToken);
       }
       // `level` is narrowed to `LogLevel` past the early-return.
       return this.tracer
          .withUri(document.uri.toString())
-         .time('validateDocument', () => super.validateDocument(document, options, cancelToken), level, {
+         .time('validateDocument', () => this.validateAndIdentify(document, options, cancelToken), level, {
             logAfterMs: this.logAfterMs.value
          });
+   }
+
+   /**
+    * Langium's validation pass, plus the framework identity on the lexing
+    * diagnostics it produced.
+    *
+    * **Here rather than in an override of `processLexingErrors`, and the reason
+    * is that the seam cannot see what the identity needs.** Langium hands that
+    * method a `ParseResult`, which carries the AST and the error lists but not
+    * the source text — and the offending CHARACTER is the parameter a
+    * translation exists to interpolate. The document does carry it, and this is
+    * the innermost point that still holds one. Reconstructing the character by
+    * matching it out of the finished sentence was the alternative, and it
+    * inverts the direction the rest of this file works in: every other identity
+    * here is derived from structured fields and CHECKED against the prose.
+    *
+    * Inside the timing span rather than around it, so the line accounts for the
+    * whole pass.
+    */
+   protected async validateAndIdentify(
+      document: LangiumDocument,
+      options?: ValidationOptions,
+      cancelToken?: CancellationToken
+   ): Promise<Diagnostic[]> {
+      const diagnostics = await super.validateDocument(document, options, cancelToken);
+      // Mapped in place over the array Langium built, rather than filtered and
+      // re-concatenated: the publish order is the diagnostic order and a
+      // reordering would move a squiggle's entry in the problems list.
+      for (let index = 0; index < diagnostics.length; index++) {
+         diagnostics[index] = this.identifyLexingError(document, diagnostics[index]);
+      }
+      return diagnostics;
+   }
+
+   /**
+    * Add the {@link LEXING_ERROR} identity to one diagnostic, or return it
+    * untouched when it is not the sentence that identity renders.
+    *
+    * The parameters come from the diagnostic's own RANGE, not from
+    * `parseResult.lexerErrors`. Both hold the same numbers, and the range is the
+    * one that needs no assumption about upstream: correlating the two lists
+    * would depend on Langium appending one diagnostic per lexer error in order,
+    * which is true today and is an internal of the method being wrapped.
+    *
+    * **The format-and-compare is the whole discriminator, and it validates the
+    * reconstruction as well as the identity.** A range that did not round-trip
+    * to the offset chevrotain reported would produce a different sentence and be
+    * declined, so a wrong parameter set can never be attached to a right-looking
+    * message.
+    */
+   protected identifyLexingError(document: LangiumDocument, diagnostic: Diagnostic): Diagnostic {
+      const data = diagnostic.data as { code?: unknown } | undefined;
+      if (!LEXING_CODES.has(data?.code)) {
+         return diagnostic;
+      }
+      const text = document.textDocument;
+      const offset = text.offsetAt(diagnostic.range.start);
+      const params = {
+         character: text.getText().charAt(offset),
+         offset,
+         skipped: text.offsetAt(diagnostic.range.end) - offset
+      };
+      if (Diagnostic.getMessageString(diagnostic) !== LEXING_ERROR.format(params)) {
+         return diagnostic;
+      }
+      // Merged OVER Langium's data, so `data.code` survives for the readers that
+      // switch on it — `stopAfterLexingErrors` is one, and the GLSP head's
+      // read-only decision is another.
+      return { ...diagnostic, code: LEXING_ERROR.code, data: { ...data, ...messageData(LEXING_ERROR, params) } };
    }
 
    /**

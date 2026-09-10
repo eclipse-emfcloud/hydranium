@@ -25,12 +25,15 @@ const port = Number(process.env.PORT ?? 3002);
 
 // `.css` earns its entry: a stylesheet served as `application/octet-stream` is
 // DROPPED by the browser in standards mode with only a console warning, so the
-// diagram renders unstyled and the page looks like a model defect.
+// diagram renders unstyled and the page looks like a model defect. `.svg` earns
+// its own for the same reason one layer over: an icon served as a byte stream is
+// refused, and the tab falls back to the default globe with nothing said.
 const CONTENT_TYPES = {
    '.css': 'text/css; charset=utf-8',
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
-   '.map': 'application/json; charset=utf-8'
+   '.map': 'application/json; charset=utf-8',
+   '.svg': 'image/svg+xml'
 };
 
 createServer((request, response) => {

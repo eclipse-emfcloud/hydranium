@@ -15,6 +15,7 @@ import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydrani
 import * as protocolMessages from '@hydranium/protocol/lib/messages';
 import { DATA_SERVER_CONNECT_FAILED } from '@hydranium/protocol/lib/messages';
 import * as coreMessages from '@hydranium/core/lib/messages';
+import * as glspServerMessages from '@hydranium/glsp-server/lib/messages';
 import * as orderFlowMessages from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import * as orderFlowServerMessages from '@hydranium/example-order-flow-server/lib/messages';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -70,7 +71,7 @@ const serverTranslations = readCatalogue(SERVER_CATALOGUE);
  * barrel's other exports, and a hand-rolled union over `Object.values` does not
  * narrow.
  */
-const BARRELS = [protocolMessages, coreMessages, orderFlowMessages, orderFlowServerMessages];
+const BARRELS = [protocolMessages, coreMessages, glspServerMessages, orderFlowMessages, orderFlowServerMessages];
 
 /**
  * The one exemption, and it has to be exactly this narrow.
