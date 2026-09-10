@@ -39,3 +39,4 @@ export * from './data/order-flow-properties-model';
 export * from './diagram/order-flow-process-diagram-module';
 export * from './diagram/order-flow-process-diagram-types';
 export * from './properties/properties-form';
+export * from './properties/properties-messages';

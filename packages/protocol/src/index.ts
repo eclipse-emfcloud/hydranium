@@ -24,6 +24,10 @@ export * from './errors';
 export * from './host-diagnostics';
 export * from './logger';
 export * from './latency-collector';
+// The primitives only. The `./messages` subpath additionally enumerates this
+// package's own declarations, which the root barrel already re-exports through
+// the modules that raise them.
+export * from './messages/primitives';
 export * from './patch-merge';
 export * from './noop-logger';
 export * from './observable-value';

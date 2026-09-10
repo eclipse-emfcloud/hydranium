@@ -90,6 +90,40 @@ describe('MemoryDiagnosticsContribution', () => {
       expect(registry.registered.every(entry => entry.command.category === 'Test')).toBe(true);
    });
 
+   it('renders the English command labels an untranslated run shows', () => {
+      const { contribution } = makeContribution({}, { dumpHostState: vi.fn(), writeHostHeapSnapshot: vi.fn() });
+      const registry = makeRegistry();
+      contribution.registerCommands(registry as never);
+      // Exact strings: the palette entries are matched verbatim by the e2e
+      // specs, so a localization key that changes the default breaks them.
+      expect(registry.registered.map(entry => entry.command.label)).toEqual([
+         'Dump Server State',
+         'Dump Pod Memory',
+         'Dump Frontend State',
+         'Write Heap Snapshot (Server)',
+         'Start Profiling (Server)',
+         'Stop Profiling (Server)',
+         'Record Performance Profile (Server, 10s)',
+         'Dump RPC/LSP Latency (Server)',
+         'Dump Backend State',
+         'Write Heap Snapshot (Backend)'
+      ]);
+   });
+
+   it('the record-profile label takes its window length from the substitution path', () => {
+      const { contribution } = makeContribution({});
+      // A default with the window inlined as a template literal renders the
+      // same 10s here, so only a changed duration separates a substituted
+      // placeholder from a baked-in number.
+      Object.assign(contribution, { recordDurationMs: 25_000 });
+      const registry = makeRegistry();
+      contribution.registerCommands(registry as never);
+
+      expect(registry.registered.find(entry => entry.command.id === 'test.recordProfile')!.command.label).toBe(
+         'Record Performance Profile (Server, 25s)'
+      );
+   });
+
    it('adds the backend (host) commands only when the host diagnostics service is bound', () => {
       const { contribution } = makeContribution({}, { dumpHostState: vi.fn(), writeHostHeapSnapshot: vi.fn() });
       const registry = makeRegistry();
@@ -132,7 +166,37 @@ describe('MemoryDiagnosticsContribution', () => {
 
       expect(dumpServerState).toHaveBeenCalledOnce();
       expect(channels.channels.get('Test Memory')?.lines.join('\n')).toContain('Server state snapshot');
-      expect(messages.info).toHaveBeenCalled();
+      // Exact toast text: the e2e spec matches the "Captured server state"
+      // prefix and the figure that follows it, so the summary sentence and its
+      // subject have to survive being threaded through a localization key.
+      expect(messages.info).toHaveBeenCalledWith('Captured server state — heap 1.0 MB used', { timeout: 5000 });
+   });
+
+   it('the no-detail summary names the output channel', async () => {
+      const dumpServerState = vi.fn(async () => 'Server state snapshot:\n  no figures here');
+      const { contribution, messages } = makeContribution({ dumpServerState });
+      const registry = makeRegistry();
+      contribution.registerCommands(registry as never);
+
+      await registry.registered.find(entry => entry.command.id === 'test.dumpServerState')!.handler.execute();
+
+      expect(messages.info).toHaveBeenCalledWith('Captured server state (see the Test Memory output channel)', { timeout: 5000 });
+   });
+
+   it('the heap-snapshot channel line and toast are one authored sentence', async () => {
+      const writeHeapSnapshot = vi.fn(async () => '/tmp/server.heapsnapshot');
+      const { contribution, channels, messages } = makeContribution({ writeHeapSnapshot });
+      const registry = makeRegistry();
+      contribution.registerCommands(registry as never);
+
+      await registry.registered.find(entry => entry.command.id === 'test.writeHeapSnapshot')!.handler.execute();
+
+      const written = 'Heap snapshot (server) written to /tmp/server.heapsnapshot';
+      expect(channels.channels.get('Test Memory')?.lines).toEqual([written]);
+      expect(messages.info.mock.calls.map(call => call[0])).toEqual([
+         'Writing server heap snapshot — this briefly pauses that process...',
+         written
+      ]);
    });
 
    it('startProfiling begins a capture and toasts (no pause wording)', async () => {

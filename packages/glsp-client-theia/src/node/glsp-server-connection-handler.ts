@@ -21,6 +21,16 @@ import type * as net from 'net';
 export interface GlspServerConnectionHandlerOptions {
    readonly languageContributionId: string;
    readonly portCommand: string;
+   /**
+    * Product name for the connect-failure dialog this handler raises.
+    *
+    * It reaches the adopter's UI verbatim, so the framework default leaks a
+    * framework noun into a product that is not ours. Not a translation concern —
+    * routing it through a catalogue would ask an adopter to "translate" English
+    * into their own product name, and would make their branding
+    * locale-dependent.
+    */
+   readonly serverName?: string;
    readonly findPortTimeout?: number;
    readonly findPortAttempts?: number;
    readonly connectTimeoutMs?: number;
@@ -55,7 +65,7 @@ export class GlspServerConnectionHandler extends AbstractSocketForwardingConnect
          path: GLSPContribution.servicePath + '/' + options.languageContributionId,
          portCommand: options.portCommand,
          logComponent: 'GLSP',
-         serverName: 'Graphical Server',
+         serverName: options.serverName ?? 'Graphical Server',
          findPortTimeout: options.findPortTimeout,
          findPortAttempts: options.findPortAttempts,
          connectTimeoutMs: options.connectTimeoutMs,

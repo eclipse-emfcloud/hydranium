@@ -19,14 +19,23 @@
  */
 
 import type { PropertyField, SetFieldOutcome } from '../data/order-flow-properties-model';
-import type { TransferDiagnostic } from '@hydranium/protocol';
+import { describeError, resolve, type ResolvedMessage, type TransferDiagnostic } from '@hydranium/protocol';
+import { PROPERTIES_WRITE_FAILED } from './properties-messages';
 
 /** What the form needs from whoever owns the model. */
 export interface PropertiesFormHandlers {
    /** Write one field, returning what the model made of it. */
    readonly setField: (name: string, value: string) => Promise<SetFieldOutcome>;
-   /** Surface a failure — the same sink the port reports through. */
-   readonly reportError: (error: unknown, context: string) => void;
+   /**
+    * Surface a failure — the same sink the port reports through, so a failure
+    * the form raises and one the transport raises reach the user by one path.
+    *
+    * `reported` is a complete sentence plus the identity needed to render it in
+    * another language. The form resolves its own messages here rather than
+    * handing over a fragment, because this tier knows neither the host's locale
+    * nor whether a process hop lies between it and the surface that renders.
+    */
+   readonly reportError: (error: unknown, reported: ResolvedMessage) => void;
 }
 
 /** How each write outcome reads to a user. `applied` is silent on purpose. */
@@ -61,14 +70,33 @@ export class PropertiesForm {
       root: HTMLElement,
       protected readonly handlers: PropertiesFormHandlers
    ) {
-      this.heading = document.createElement('h1');
-      this.fieldsHost = document.createElement('div');
-      this.status = document.createElement('div');
+      this.heading = this.createElement('h1');
+      this.fieldsHost = this.createElement('div');
+      this.status = this.createElement('div');
       this.status.className = 'status';
-      this.diagnosticsHost = document.createElement('ul');
+      this.diagnosticsHost = this.createElement('ul');
       this.diagnosticsHost.className = 'diagnostics';
       root.append(this.heading, this.fieldsHost, this.status, this.diagnosticsHost);
       this.heading.textContent = 'No Order Flow document selected';
+   }
+
+   /**
+    * Element creation, behind a seam so this class's decision logic can be
+    * driven without a DOM.
+    *
+    * Every vitest project in this repository runs `environment: 'node'`, and
+    * that is deliberate: a DOM shim would test a simulation of the rendering
+    * that the browser e2e already proves for real, while costing a dependency
+    * and a second environment. So the way to unit-test anything here is to
+    * override this and return a stub — the same shape the framework's own
+    * widget tests use for their overlay.
+    *
+    * Overriding is safe from the constructor: prototype methods resolve to the
+    * subclass before its own field initializers run, so a stub must not depend
+    * on subclass state.
+    */
+   protected createElement<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K] {
+      return document.createElement(tag);
    }
 
    /** The document this form is showing, for the heading. */
@@ -145,7 +173,7 @@ export class PropertiesForm {
    setDiagnostics(diagnostics: readonly TransferDiagnostic[]): void {
       this.diagnosticsHost.replaceChildren(
          ...diagnostics.map(diagnostic => {
-            const item = document.createElement('li');
+            const item = this.createElement('li');
             item.textContent = `${diagnostic.severity}: ${diagnostic.message}`;
             return item;
          })
@@ -191,12 +219,12 @@ export class PropertiesForm {
       this.inputs = new Map();
       this.fieldsHost.replaceChildren(
          ...fields.map(field => {
-            const wrapper = document.createElement('div');
+            const wrapper = this.createElement('div');
             wrapper.className = 'field';
-            const label = document.createElement('label');
+            const label = this.createElement('label');
             label.textContent = field.name;
             label.htmlFor = `field-${field.name}`;
-            const input = document.createElement('input');
+            const input = this.createElement('input');
             input.id = `field-${field.name}`;
             input.type = 'text';
             input.value = field.value;
@@ -213,7 +241,7 @@ export class PropertiesForm {
          })
       );
       if (fields.length === 0) {
-         const empty = document.createElement('div');
+         const empty = this.createElement('div');
          empty.textContent = 'This document root has no editable text properties.';
          this.fieldsHost.replaceChildren(empty);
       }
@@ -224,8 +252,8 @@ export class PropertiesForm {
          const outcome = await this.handlers.setField(name, value);
          this.report(OUTCOME_MESSAGES[outcome.status], OUTCOME_KINDS[outcome.status]);
       } catch (error: unknown) {
-         this.handlers.reportError(error, `writing '${name}'`);
-         this.report(error instanceof Error ? error.message : String(error), 'error');
+         this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, detail: describeError(error) }));
+         this.report(describeError(error), 'error');
       }
    }
 }

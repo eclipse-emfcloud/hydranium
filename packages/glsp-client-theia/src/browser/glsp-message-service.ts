@@ -24,6 +24,14 @@ import { type interfaces, injectable } from '@theia/core/shared/inversify';
  * Matching an English literal fails silently — no error, no log line, just the
  * duplicate progress popup back — so this needs keeping in step with
  * `RequestModelActionHandler` on every GLSP bump.
+ *
+ * **Exported to be imported, and it must NOT be externalized.** An adopter
+ * subclassing the message service needs the same literal to match on, and a
+ * second copy of it is a second thing to keep in step across that bump. It is
+ * also the one user-visible string in the framework that is deliberately excluded
+ * from the message catalogue: it exists to equal an upstream English literal that
+ * lives in no catalogue, so giving it a code and a translation would break the
+ * match it exists for.
  */
 export const MODEL_LOADING_PROGRESS_TITLE = 'Model loading in progress';
 

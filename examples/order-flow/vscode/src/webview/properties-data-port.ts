@@ -22,7 +22,7 @@
  * wire-up.
  */
 
-import { createPostMessageTransport, type PostMessageChannel } from '@hydranium/protocol';
+import { createPostMessageTransport, type PostMessageChannel, type ResolvedMessage } from '@hydranium/protocol';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 
@@ -47,7 +47,7 @@ export class WebviewDataPort {
 
    constructor(
       protected readonly channel: PostMessageChannel,
-      protected readonly report: (error: unknown, context: string) => void
+      protected readonly report: (error: unknown, reported: ResolvedMessage) => void
    ) {}
 
    /**
@@ -66,8 +66,8 @@ export class WebviewDataPort {
       return connection;
    }
 
-   reportError(error: unknown, context: string): void {
-      this.report(error, context);
+   reportError(error: unknown, reported: ResolvedMessage): void {
+      this.report(error, reported);
    }
 
    /**

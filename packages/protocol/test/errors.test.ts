@@ -9,7 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { ResponseError } from 'vscode-jsonrpc';
-import { CONFLICT_ERROR_CODE, ConflictError, isConflictError } from '../src/errors';
+import { CONFLICT_ERROR_CODE, ConflictError, STALE_BASED_UPDATE, isConflictError } from '../src/errors';
+import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
 
 describe('ConflictError', () => {
    it('exposes uri / expected / actual via getters backed by the data payload', () => {
@@ -21,7 +22,17 @@ describe('ConflictError', () => {
 
    it('carries the typed data payload on the JSON-RPC error envelope', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
-      expect(error.data).toEqual({ uri: 'file:///A.fake', expected: 3, actual: 5 });
+      // `toMatchObject`, not `toEqual`: `data` also carries the message identity,
+      // and asserting the payload EXACTLY would make every future envelope field
+      // a test change. The identity's own assertion is the next case.
+      expect(error.data).toMatchObject({ uri: 'file:///A.fake', expected: 3, actual: 5 });
+   });
+
+   it('carries the message identity beside the typed payload, so a translating host can render it', () => {
+      const error = new ConflictError('file:///A.fake', 3, 5);
+      expect(hasMessageIdentity(error.data)).toBe(true);
+      expect(resolvedFromResponseError(error)?.code).toBe(STALE_BASED_UPDATE.code);
+      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///A.fake', expected: 3, actual: 5 });
    });
 
    it('sets the application-specific JSON-RPC code', () => {

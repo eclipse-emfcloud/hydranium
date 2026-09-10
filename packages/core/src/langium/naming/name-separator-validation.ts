@@ -8,6 +8,13 @@
  ********************************************************************************/
 
 import { type AstNode, type ValidationAcceptor, type ValidationChecks } from '@hydranium/langium';
+import { defineMessage } from '@hydranium/protocol';
+import { acceptMessage } from '../../messages/carriers.js';
+
+export const SEPARATOR_IN_NAME = defineMessage(
+   'hydranium/core/separator-in-name',
+   "Name '{name}' contains the configured name separator '{separator}', which is reserved for qualified-name composition — use a different character."
+);
 import { type ServerLanguageServices } from '../language-module.js';
 import { type ValidationCheckContribution, type ValidationCheckRegistry } from '../validation/validation-contribution.js';
 import type { NameProvider } from './name-provider.js';
@@ -38,11 +45,11 @@ export function nameSeparatorCheck(nameProvider: NameProvider): (node: AstNode, 
       }
       const separator = nameProvider.nameSeparator;
       if (ownName.includes(separator)) {
-         accept(
-            'error',
-            `Name '${ownName}' contains the configured name separator '${separator}', which is reserved for qualified-name composition — use a different character.`,
-            { node }
-         );
+         // `{ node }` rather than `{ node, property: 'name' }`: moving the
+         // squiggle onto the name property is a behaviour change to the one
+         // diagnostic every adopter receives by default, so it is decided on its
+         // own merits rather than carried in by a mechanical migration.
+         acceptMessage(accept, 'error', SEPARATOR_IN_NAME, { node }, { name: ownName, separator });
       }
    };
 }

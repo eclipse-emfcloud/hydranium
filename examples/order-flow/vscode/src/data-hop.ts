@@ -32,7 +32,7 @@ import type { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
 // no hint that a stylesheet is involved. Measured, not guessed: the throw comes
 // from `@eclipse-glsp/client/css/autocomplete-palette.css`.
 import { createExtensionSideChannel, type MessengerLike } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
-import { relayToPostMessageChannel, type MessageRelay, type RelayTransport } from '@hydranium/protocol';
+import { relayToPostMessageChannel, type MessageRelay, type RelayTransport, type ResolvedMessage } from '@hydranium/protocol';
 import * as net from 'node:net';
 import type { Disposable } from 'vscode-jsonrpc';
 // `/node` because the extension host is Node and holds the socket. The webview
@@ -100,7 +100,12 @@ export interface DataHeadConnectionOptions {
    readonly findPort: () => Promise<number>;
    /** Observe the webview going away, so the relay releases with it. */
    readonly onWebviewDisposed?: (listener: () => void) => Disposable;
-   readonly reportError?: (error: unknown, context: string) => void;
+   /**
+    * Surface a relay failure. `reported` is a complete sentence plus the
+    * identity needed to render it in another language — the extension host holds
+    * the locale, so it renders and the relay does not.
+    */
+   readonly reportError?: (error: unknown, reported: ResolvedMessage) => void;
 }
 
 /**

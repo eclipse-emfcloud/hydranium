@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 import { type ChannelConnectionHandle, openChannelConnection, whenWorkspaceOpen } from '@hydranium/data-client-theia/lib/browser';
-import { DATA_SERVER_PATH, type DataPort } from '@hydranium/protocol';
-import { Emitter, type Event, MessageService } from '@theia/core';
+import { DATA_SERVER_PATH, renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { Emitter, MessageService, nls, type Event } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { RemoteConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
 import { inject, injectable } from '@theia/core/shared/inversify';
@@ -93,10 +93,20 @@ export class OrderFlowTheiaDataPort implements DataPort {
     *
     * Swallowing it is the failure mode the port exists to prevent: a dead
     * connection and an empty document are indistinguishable in the panel.
+    *
+    * **This host renders, and it is the only tier that can.** `reported` is
+    * already a complete sentence with the failure detail interpolated, so there
+    * is nothing here to compose — wrapping it in a sentence of this shell's own
+    * would nest one owner's clause inside another's and leave no translator in
+    * control of the whole. Theia's loaded catalogue is handed over as the
+    * translation map; a code it does not carry falls back to the English, which
+    * is what makes adopting the mechanism free of a catalogue.
+    *
+    * `error` itself is deliberately unused: whatever a user needs from it is in
+    * `reported`, and a stack in a toast is noise.
     */
-   reportError(error: unknown, context: string): void {
-      const message = error instanceof Error ? error.message : String(error);
-      this.messageService.error(`Order Flow properties — ${context}: ${message}`);
+   reportError(error: unknown, reported: ResolvedMessage): void {
+      this.messageService.error(renderFrameworkMessage(reported, nls.localization?.translations));
    }
 
    dispose(): void {

@@ -9,7 +9,8 @@
 
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
-import { DataEvents, DataSession, type TransferElement } from '@hydranium/protocol';
+import { PROPERTIES_CLOSE_FAILED, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
+import { DataEvents, DataSession, describeError, resolve, type TransferElement } from '@hydranium/protocol';
 import { BaseWidget } from '@theia/core/lib/browser/widgets/widget';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
@@ -75,7 +76,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       this.node.appendChild(host);
       this.form = new PropertiesForm(host, {
          setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, context) => this.port.reportError(error, context)
+         reportError: (error, reported) => this.port.reportError(error, reported)
       });
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));
@@ -113,7 +114,9 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       this.openUri = uri;
       if (!uri) {
          this.form.setTitle(undefined);
-         void this.model.close().catch(error => this.port.reportError(error, 'closing the previous document'));
+         void this.model
+            .close()
+            .catch((error: unknown) => this.port.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeError(error) })));
          return;
       }
       this.form.setTitle(uri.substring(uri.lastIndexOf('/') + 1));
@@ -133,8 +136,8 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
          })
          .catch((error: unknown) => {
             this.form.setLoading(false);
-            this.port.reportError(error, `opening ${uri}`);
-            this.form.report(error instanceof Error ? error.message : String(error), 'error');
+            this.port.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
+            this.form.report(describeError(error), 'error');
          });
    }
 

@@ -54,6 +54,15 @@ look Theia-only.
 - `src/properties/properties-form.ts` — `PropertiesForm`, the drawing half:
   plain DOM over the model's `fields`, mounted unchanged by the Theia widget
   and the VS Code webview alike. It is the only file here that touches the DOM.
+- `src/properties/properties-messages.ts` — the panel's own user-facing
+  messages, declared with the framework's `defineMessage`. This is the adopter
+  half of message externalization: a stable code beside an English default,
+  resolved where the failure is raised and rendered by whoever knows the reading
+  user's locale. Two rules make it copyable — the `hydranium/` code namespace is
+  reserved for the framework, so an adopter prefixes with its own name
+  (`order-flow/<area>/<name>`); and the messages are declared once for the panel
+  rather than once per host, because the Theia widget and the VS Code webview
+  present the same surface and a failure has to read identically in both.
 - `src/data/order-flow-messenger-channel.ts` — the VS Code adapter, presenting
   a `vscode-messenger` `Messenger` as a `PostMessageChannel` so the data head
   rides the same hop the diagram already uses. Hand-rolled here because the

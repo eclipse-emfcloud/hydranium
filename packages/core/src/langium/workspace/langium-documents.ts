@@ -8,8 +8,19 @@
  ********************************************************************************/
 
 import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type LangiumDocuments, type URI } from '@hydranium/langium';
+import { defineMessage } from '@hydranium/protocol';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from './document-uri-policy.js';
+
+/**
+ * The document a caller asked to load is not there.
+ *
+ * User-facing, and the Node host's spelling of it: `loadUri` returns `undefined`
+ * exactly when the URI policy's `realpath` reports the path absent. A host whose
+ * provider has no `realpath` never reaches this — the miss surfaces from the
+ * provider instead, so the same condition has one declaration per host.
+ */
+export const NO_LOADABLE_CONTENT = defineMessage('hydranium/core/no-loadable-content', 'No loadable content for {uri}');
 
 /**
  * The registry surface the framework adds on top of Langium's
@@ -111,6 +122,6 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
       }
       // The seam reports no loadable content, so there is nothing to read and
       // no error from a read to carry.
-      throw new Error(`No loadable content for ${uri.toString()}`);
+      throw new Error(NO_LOADABLE_CONTENT.format({ uri: uri.toString() }));
    }
 }

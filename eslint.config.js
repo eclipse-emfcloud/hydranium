@@ -154,6 +154,14 @@ const RESTRICT_NEUTRAL_PATTERNS = [
    }
 ];
 
+// Selector fragments for the user-facing-text bans further down. A literal is
+// only "stringy" if it holds three consecutive letters, which is what keeps the
+// rule off numeric option values; the other two exclude the localize call's own
+// arguments and the literals nested inside a template literal.
+const RESTRICT_STRINGY_LITERAL = 'Literal[value=/[A-Za-z]{3}/]';
+const RESTRICT_NOT_IN_LOCALIZE = ":not(CallExpression[callee.property.name='localize'] *)";
+const RESTRICT_NOT_NESTED = ':not(TemplateLiteral *)';
+
 // Merge the neutral patterns into an existing langium restriction (the
 // no-restricted-imports rule replaces per-scope, so the patterns ride along).
 /** @param {{ paths?: unknown[], patterns?: unknown[] }} restriction */
@@ -639,6 +647,62 @@ module.exports = tseslint.config(
                selector: 'TSAsExpression[typeAnnotation.type="TSTypeReference"][typeAnnotation.typeName.name="GlspLogger"]',
                message:
                   'Build GLSP logger fixtures with makeNoopGlspLogger / makeCapturingGlspLogger from @hydranium/glsp-server/testing instead of casting an object literal (see docs/contributing/conventions.md “Test support”).'
+            }
+         ]
+      }
+   },
+
+   // Bare user-facing text in a Theia frontend sink. The framework externalizes
+   // every user-facing string, so a literal reaching a toast or a command label
+   // is a string no adopter can translate.
+   //
+   // Each qualifier below fixes a MEASURED defect, not a hypothetical one:
+   //
+   //  - `NOT_IN_LOCALIZE` — without it the rule fires on the very code it tells
+   //    you to write, because a descendant combinator reaches into
+   //    `nls.localize`'s own arguments. These packages run `eslint --max-warnings
+   //    0`, so that is a gate failure with no satisfying edit, and every migrated
+   //    site would need an `eslint-disable` — a rule silenced rather than obeyed.
+   //  - `STRINGY` — without it the rule fires on numbers. Most reports against
+   //    the real sources were `{ timeout: 5000 }` values, and at two sites the
+   //    number was the ONLY report, so the rule could never be brought green
+   //    there by localizing anything.
+   //  - `NOT_NESTED` — without it a template literal and the literals inside its
+   //    `${}` are reported separately, so one site yields several warnings.
+   //
+   // Two limits, stated rather than discovered later. The `messageService`
+   // selector keys on a `MemberExpression` receiver, so any other receiver shape
+   // escapes it — a destructured `const { messageService }`, a local or a
+   // parameter all produce zero reports. And the command selector is not scoped
+   // to `registerCommand`, so it matches ANY object literal with a `label` or
+   // `category` property and will need an exclusion if an unrelated one appears.
+   //
+   // Framework-authored `Diagnostic.message` is deliberately NOT covered: it has
+   // one call site, `acceptMessage` is the only sanctioned route, and no
+   // expressible selector separates it from any other `accept` call.
+   //
+   // Scoped to the FRONTEND tiers, and the `src/node/` exclusion is a
+   // consequence of the mechanism rather than an exemption for convenience:
+   // Theia's `nls` is a process global whose localization is assigned only in the
+   // browser preload, so a Theia backend holds one locale for every connected
+   // frontend and in practice holds none at all. A backend-origin dialog
+   // therefore cannot be localized by us, and the framework's single one stays
+   // English by policy — like the CLI.
+   {
+      files: ['packages/client-theia/src/**/*.ts', 'packages/data-client-theia/src/**/*.ts', 'packages/glsp-client-theia/src/**/*.ts'],
+      ignores: ['packages/*/src/node/**/*.ts'],
+      rules: {
+         'no-restricted-syntax': [
+            'warn',
+            {
+               selector: `CallExpression[callee.object.property.name='messageService'] :matches(${RESTRICT_STRINGY_LITERAL}, TemplateLiteral)${RESTRICT_NOT_IN_LOCALIZE}${RESTRICT_NOT_NESTED}`,
+               message:
+                  'User-facing text must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).'
+            },
+            {
+               selector: `Property[key.name=/^(label|category)$/] > :matches(${RESTRICT_STRINGY_LITERAL}, TemplateLiteral)${RESTRICT_NOT_IN_LOCALIZE}`,
+               message:
+                  'Command labels must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).'
             }
          ]
       }

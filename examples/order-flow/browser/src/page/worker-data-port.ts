@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { DataPort } from '@hydranium/protocol';
+import { renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 import {
    BrowserMessageReader,
    BrowserMessageWriter,
@@ -50,11 +50,16 @@ export class WorkerDataPort implements DataPort {
       return Promise.resolve(connection);
    }
 
-   reportError(error: unknown, context: string): void {
+   reportError(error: unknown, reported: ResolvedMessage): void {
       // The page has one status line and no notification surface, so failures
       // go to the console rather than being swallowed — an unreported data-head
       // error presents as an empty model, which reads as a valid document.
-      console.error(`[data head] ${context}:`, error);
+      //
+      // No translation map: this host ships no catalogue, and omitting the
+      // argument is how an adopter without i18n opts out and takes the English.
+      // The raw error goes alongside rather than into the sentence, because
+      // `reported` already carries the detail and only the throw carries a stack.
+      console.error(`[data head] ${renderFrameworkMessage(reported)}`, error);
    }
 
    dispose(): void {

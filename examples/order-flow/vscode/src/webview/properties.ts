@@ -44,7 +44,8 @@ import {
    type WebviewMessengerLike
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { DataEvents, DataSession, type DataPort } from '@hydranium/protocol';
+import { PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
+import { DataEvents, DataSession, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 import { HOST_EXTENSION, type MessageParticipant } from 'vscode-messenger-common';
 import { Messenger, type VsCodeApi } from 'vscode-messenger-webview';
 
@@ -94,11 +95,11 @@ function main(): void {
    // other reason to keep the reference.
    const vscodeApi = acquireVsCodeApi();
    const messenger = new Messenger(vscodeApi);
-   const reportError = (error: unknown, context: string): void => {
-      messenger.sendNotification(ORDER_FLOW_PANEL_REPORT_ERROR, HOST_EXTENSION, {
-         context,
-         message: error instanceof Error ? error.message : String(error)
-      });
+   // Forwarded rather than rendered: a webview knows no locale and has no
+   // notification surface, so the host is the only tier that can do either. A
+   // `ResolvedMessage` is structured-clone safe, so the hop costs nothing.
+   const reportError = (error: unknown, reported: ResolvedMessage): void => {
+      messenger.sendNotification(ORDER_FLOW_PANEL_REPORT_ERROR, HOST_EXTENSION, { reported });
    };
 
    const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), reportError);
@@ -119,7 +120,11 @@ function main(): void {
 
    messenger.onNotification(ORDER_FLOW_PANEL_SET_DOCUMENT, document_ => {
       form.setTitle(document_.label);
-      if (!document_.uri) {
+      // Bound to a local, so the failure path below can name it: narrowing a
+      // property does not survive into a callback, and the message's `{uri}`
+      // parameter takes no `undefined`.
+      const uri = document_.uri;
+      if (!uri) {
          return;
       }
       // Remember it for a reload, BEFORE the load rather than after: a reload
@@ -128,7 +133,7 @@ function main(): void {
       form.setLoading(true);
       form.report('Loading…');
       model
-         .open(document_.uri)
+         .open(uri)
          .then(() => {
             form.setLoading(false);
             // Render again explicitly. The model fires its change synchronously
@@ -141,8 +146,8 @@ function main(): void {
          })
          .catch((error: unknown) => {
             form.setLoading(false);
-            reportError(error, `opening ${document_.uri}`);
-            form.report(error instanceof Error ? error.message : String(error), 'error');
+            reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
+            form.report(describeError(error), 'error');
          });
    });
 

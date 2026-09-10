@@ -31,7 +31,7 @@ import {
    type SourceModelStorage,
    TEMPORARY_CLIENT_ID
 } from '@eclipse-glsp/server';
-import { Debouncer, DisposableCollection } from '@hydranium/protocol';
+import { Debouncer, defineMessage, DisposableCollection } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
@@ -41,6 +41,34 @@ import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-gls
 import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-glsp-submission-handler.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { DEFAULT_SAVE_CONFLICT_POLICY, SaveConflictPolicy } from './save-conflict-policy.js';
+
+/**
+ * A save action arrived with nowhere to write to.
+ *
+ * The one framework-authored GLSP string that reaches a user verbatim: a save
+ * action carries no request id, so it falls through to the error handler and
+ * `message` becomes the toast text. Declared for enumeration only — GLSP's
+ * action protocol has no slot for an identity on any of its notification
+ * actions, so this code cannot travel and the English is what a client receives.
+ * `MessageAction.details` is not a substitute: it is prose populated from
+ * `cause?.toString?.()`, so a code there would sit inside human text.
+ */
+export const SAVE_TARGET_UNKNOWN = defineMessage(
+   'hydranium/glsp-server/save-target-unknown',
+   'Could not determine where to save this model'
+);
+
+/**
+ * A model request arrived without the source URI it is required to carry.
+ *
+ * Declared for enumeration only, like its save-path sibling: GLSP's action
+ * protocol has no slot for an identity, so the English is what a client
+ * receives.
+ */
+export const SOURCE_URI_MISSING = defineMessage(
+   'hydranium/glsp-server/source-uri-missing',
+   'Could not open this model: the request did not say which document to load'
+);
 
 /** Window (ms) over which back-to-back external rebuilds collapse into one resubmit. */
 const EXTERNAL_SUBMIT_DEBOUNCE_MS = 250;
@@ -584,11 +612,22 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     *
     * Returns it VERBATIM, in whatever form the client sent;
     * {@link toSourceModelUri} is what normalises it.
+    *
+    * A model request DOES carry a request id, so a throw here takes the
+    * client-request path rather than the toast path — and on that path `detail`
+    * comes from `cause?.toString?.()`. A single-argument throw therefore reaches
+    * neither the client nor the log: both print `undefined`. So the two readers
+    * are addressed separately, as on the save path: `message` names what failed
+    * in the user's terms, `cause` names the action and the option key that was
+    * missing.
     */
    protected getSourceUri(action: RequestModelAction): string {
       const sourceUri = action.options?.[SOURCE_URI_ARG];
       if (typeof sourceUri !== 'string') {
-         throw new GLSPServerError(`Invalid RequestModelAction! Missing argument with key '${SOURCE_URI_ARG}'`);
+         throw new GLSPServerError(
+            SOURCE_URI_MISSING.format(),
+            `no '${SOURCE_URI_ARG}' option on the ${action.kind} action (received ${typeof sourceUri})`
+         );
       }
       return sourceUri;
    }
@@ -611,7 +650,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const uri = action.fileUri ?? this.state.get<string>(SOURCE_URI_ARG);
       if (!uri) {
          throw new GLSPServerError(
-            'Could not determine where to save this model',
+            SAVE_TARGET_UNKNOWN.format(),
             `no fileUri on the save action and no ${SOURCE_URI_ARG} in the model state (clientId=${this.state.clientId})`
          );
       }

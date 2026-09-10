@@ -21,9 +21,11 @@
  * **Compiled by BOTH tsconfigs**, which is why it is here rather than under
  * `src/webview/`: the extension host builds it to CommonJS in `out/` while
  * esbuild pulls the same source into the webview bundle. It must therefore stay
- * DOM-free and `vscode`-free — only `vscode-messenger-common`, which is neutral.
+ * DOM-free and `vscode`-free — `vscode-messenger-common` is neutral, and the
+ * `@hydranium/protocol` import is type-only and so erases entirely.
  */
 
+import type { ResolvedMessage } from '@hydranium/protocol';
 import type { NotificationType } from 'vscode-messenger-common';
 
 /** Which document the panel should present, if any. */
@@ -34,11 +36,20 @@ export interface OrderFlowPanelDocument {
    readonly label?: string;
 }
 
-/** A webview-side failure, flattened for the clone boundary. */
+/** A webview-side failure, on its way to the only tier that can render it. */
 export interface OrderFlowPanelError {
-   /** What was being attempted, in `DataPort.reportError`'s sense. */
-   readonly context: string;
-   readonly message: string;
+   /**
+    * The failure exactly as `DataPort.reportError` hands it over: a complete
+    * sentence plus the identity needed to render it in another language.
+    *
+    * Nothing needs flattening, which is the point — a `ResolvedMessage` is
+    * structured-clone safe, so it crosses the hop unchanged. It travels
+    * unrendered because the WEBVIEW is the wrong side to render on: a sandbox
+    * knows no locale and holds no catalogue, while the host has both, so a
+    * pre-rendered string would fix the language at the one end that cannot
+    * choose it.
+    */
+   readonly reported: ResolvedMessage;
 }
 
 /**

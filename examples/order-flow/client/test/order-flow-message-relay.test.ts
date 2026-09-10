@@ -33,9 +33,11 @@ import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
    DataSession,
+   RELAY_TRANSPORT_OPEN_FAILED,
    type DataPort,
    type MessageRelay,
    type RelayTransport,
+   type ResolvedMessage,
    createPostMessageTransport,
    relayToPostMessageChannel
 } from '@hydranium/protocol';
@@ -75,7 +77,7 @@ class RelayedWebviewPort implements DataPort {
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose: Event<void> = this.disposeEmitter.event;
    protected readonly toDispose: Array<{ dispose(): void }> = [];
-   readonly errors: Array<{ error: unknown; context: string }> = [];
+   readonly errors: Array<{ error: unknown; message: ResolvedMessage }> = [];
    relay?: MessageRelay;
 
    constructor(
@@ -95,7 +97,7 @@ class RelayedWebviewPort implements DataPort {
             await this.gate();
             return openSocketTransport(this.serverPort);
          },
-         { reportError: (error, context) => this.errors.push({ error, context }) }
+         { reportError: (error, message) => this.errors.push({ error, message }) }
       );
       this.toDispose.push(this.relay);
 
@@ -107,8 +109,8 @@ class RelayedWebviewPort implements DataPort {
       return connection;
    }
 
-   reportError(error: unknown, context: string): void {
-      this.errors.push({ error, context });
+   reportError(error: unknown, message: ResolvedMessage): void {
+      this.errors.push({ error, message });
    }
 
    dispose(): void {
@@ -321,7 +323,9 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       await failingPort.connect();
 
       await expect(failingPort.relay!.wired).resolves.toBe(false);
-      expect(failingPort.errors.map(entry => entry.context)).toContain('opening the transport to relay');
+      // Keyed on the CODE: that is what an adopter's catalogue and its tests
+      // pin, while the English default is a fallback and may be reworded.
+      expect(failingPort.errors.map(entry => entry.message.code)).toContain(RELAY_TRANSPORT_OPEN_FAILED.code);
    });
 });
 

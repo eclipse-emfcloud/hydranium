@@ -8,7 +8,28 @@
  ********************************************************************************/
 
 import { Emitter, type Disposable, type Event, type Message, type MessageReader, type MessageWriter } from 'vscode-jsonrpc';
+import { defineMessage, describeError, resolve, type ResolvedMessage } from '../messages/primitives';
 import type { PostMessageChannel } from './post-message-transport';
+
+export const RELAY_TRANSPORT_OPEN_FAILED = defineMessage(
+   'hydranium/protocol/relay-transport-open-failed',
+   'Could not open the transport to relay: {detail}'
+);
+
+export const RELAY_TRANSPORT_READ_FAILED = defineMessage(
+   'hydranium/protocol/relay-transport-read-failed',
+   'Could not read from the relayed transport: {detail}'
+);
+
+export const RELAY_TRANSPORT_WRITE_FAILED = defineMessage(
+   'hydranium/protocol/relay-transport-write-failed',
+   'Could not write to the relayed transport: {detail}'
+);
+
+export const RELAY_REPLAY_FAILED = defineMessage(
+   'hydranium/protocol/relay-replay-failed',
+   'Could not replay a buffered message to the relayed transport: {detail}'
+);
 
 /**
  * The framed side of a relay: the reader/writer pair over whatever transport the
@@ -30,13 +51,14 @@ export interface RelayTransport {
 export interface MessageRelayOptions {
    /**
     * Surface a failure the way the host does. Same contract as
-    * `DataPort.reportError`: `context` names what was being attempted.
+    * `DataPort.reportError`: `reported` is a complete sentence plus the identity
+    * needed to render it in another language.
     *
     * A relay has no other way to report — it sits between two transports and
     * owns neither, so a swallowed error here presents as a form that never
     * populates.
     */
-   readonly reportError?: (error: unknown, context: string) => void;
+   readonly reportError?: (error: unknown, reported: ResolvedMessage) => void;
 }
 
 /** A live relay. Dispose to tear both directions down. */
@@ -143,7 +165,7 @@ export function relayToPostMessageChannel(
          bufferSubscription?.dispose();
          bufferSubscription = undefined;
          buffered.length = 0;
-         options.reportError?.(error, 'opening the transport to relay');
+         options.reportError?.(error, resolve(RELAY_TRANSPORT_OPEN_FAILED, { detail: describeError(error) }));
          closeFramedSide();
          return false;
       }
@@ -166,12 +188,12 @@ export function relayToPostMessageChannel(
          opened.reader.listen(message => channel.post(message)),
          opened.reader.onClose(() => closeFramedSide()),
          opened.reader.onError(error => {
-            options.reportError?.(error, 'reading from the relayed transport');
+            options.reportError?.(error, resolve(RELAY_TRANSPORT_READ_FAILED, { detail: describeError(error) }));
             closeFramedSide();
          }),
          channel.onMessage(message => {
             void opened.writer.write(message).catch((error: unknown) => {
-               options.reportError?.(error, 'writing to the relayed transport');
+               options.reportError?.(error, resolve(RELAY_TRANSPORT_WRITE_FAILED, { detail: describeError(error) }));
             });
          })
       );
@@ -183,7 +205,7 @@ export function relayToPostMessageChannel(
 
       for (const message of buffered) {
          void opened.writer.write(message).catch((error: unknown) => {
-            options.reportError?.(error, 'replaying a buffered message to the relayed transport');
+            options.reportError?.(error, resolve(RELAY_REPLAY_FAILED, { detail: describeError(error) }));
          });
       }
       buffered.length = 0;

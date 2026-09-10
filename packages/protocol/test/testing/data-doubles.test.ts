@@ -19,8 +19,12 @@ import { describe, expect, it } from 'vitest';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import type { DataClientProtocol } from '../../src/data/data-server-protocol';
 import type { ProjectsChangedEvent, TransferDocumentUpdatedEvent } from '../../src/data/events';
+import { defineMessage, describeError, resolve } from '../../src/messages/primitives';
 import type { TransferElement } from '../../src/transfer-element';
 import { makeCapturingDataClient, makeFakeDataPort } from '../../src/testing/data-doubles';
+
+/** A stand-in declaration; the double is indifferent to which message arrives. */
+const PROBE_FAILED = defineMessage('test/probe-failed', 'The probe failed: {detail}');
 
 /** A neutral transfer root; nothing here parses or serialises it. */
 interface ProbeElement extends TransferElement {
@@ -67,13 +71,21 @@ describe('makeFakeDataPort', () => {
       port.dispose();
    });
 
-   it('records every reportError with its context', () => {
+   it('records every reportError with the resolved message beside the error', () => {
       const port = makeFakeDataPort({ connect: () => connection('one') });
       const failure = new Error('boom');
+      const reported = resolve(PROBE_FAILED, { detail: describeError(failure) });
 
-      port.reportError(failure, 'while connecting');
+      port.reportError(failure, reported);
 
-      expect(port.reported).toEqual([{ error: failure, context: 'while connecting' }]);
+      // Both halves, and the code and params within the message: a double that
+      // recorded only the error, or dropped `params`, would leave a consumer's
+      // failure-path assertion unable to say WHICH failure it saw.
+      expect(port.reported).toHaveLength(1);
+      expect(port.reported[0].error).toBe(failure);
+      expect(port.reported[0].message.code).toBe('test/probe-failed');
+      expect(port.reported[0].message.params).toEqual({ detail: 'boom' });
+      expect(port.reported[0].message.text).toBe('The probe failed: boom');
       port.dispose();
    });
 

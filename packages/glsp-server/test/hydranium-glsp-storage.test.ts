@@ -35,7 +35,7 @@ import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { ReconcilingConflictResolver } from '@hydranium/protocol';
-import { HydraniumGlspStorage } from '../src/storage/hydranium-glsp-storage.js';
+import { HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
 import { type SaveConflictPolicy, SaveConflictPolicy as SaveConflictPolicyToken } from '../src/storage/save-conflict-policy.js';
 
 interface TestRoot extends AstNode {
@@ -338,11 +338,13 @@ describe('HydraniumGlspStorage', () => {
          expect(() => storage.callGetSourceUri(action)).toThrow(GLSPServerError);
       });
 
-      // Asserting the throw's TYPE passes whatever the text says, and the text
-      // is the whole payload a reader gets. Naming the missing argument is this
-      // method's half of that; carrying it through upstream's projection is
-      // `HydraniumGlspServer`'s.
-      it('names the missing argument in the message', () => {
+      // Asserting the throw's TYPE passes whatever the text says, so the payload
+      // is what matters — and it goes to two readers over two fields. A model
+      // request carries a request id, so upstream takes `detail` from
+      // `cause?.toString?.()`: a single-argument throw reaches neither the client
+      // nor the log, both printing `undefined`. Hence the cause is asserted, not
+      // just the message.
+      it('addresses the user in the message and names the missing argument in the cause', () => {
          const { storage } = createStorage('client-1');
          const action = { kind: RequestModelAction.KIND, options: {} } as unknown as RequestModelAction;
          let thrown: unknown;
@@ -354,7 +356,11 @@ describe('HydraniumGlspStorage', () => {
          if (!(thrown instanceof GLSPServerError)) {
             throw new Error('expected getSourceUri to throw a GLSPServerError');
          }
-         expect(thrown.message).toContain(SOURCE_URI_ARG);
+         expect(thrown.message).toBe(SOURCE_URI_MISSING.text);
+         // The developer half, which is what upstream projects into `detail`.
+         expect(thrown.cause).toBeDefined();
+         expect(String(thrown.cause)).toContain(SOURCE_URI_ARG);
+         expect(String(thrown.cause)).toContain(RequestModelAction.KIND);
       });
    });
 

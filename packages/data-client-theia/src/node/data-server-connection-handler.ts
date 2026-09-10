@@ -30,6 +30,16 @@ export interface DataServerConnectionHandlerOptions {
     *  Defaults to the framework `DATA_SERVER_PORT_COMMAND`; override to match
     *  an adopter's established id. */
    readonly portCommand?: string;
+   /**
+    * Product name for the connect-failure dialog this handler raises.
+    *
+    * It reaches the adopter's UI verbatim, so the framework default leaks a
+    * framework noun into a product that is not ours. Not a translation concern —
+    * routing it through a catalogue would ask an adopter to "translate" English
+    * into their own product name, and would make their branding
+    * locale-dependent.
+    */
+   readonly serverName?: string;
    readonly findPortTimeout?: number;
    readonly findPortAttempts?: number;
    readonly connectTimeoutMs?: number;
@@ -62,7 +72,7 @@ export class DataServerConnectionHandler extends AbstractSocketForwardingConnect
          path: options.servicePath ?? DATA_SERVER_PATH,
          portCommand: options.portCommand ?? DATA_SERVER_PORT_COMMAND,
          logComponent: 'DataServer',
-         serverName: 'Model Server',
+         serverName: options.serverName ?? 'Model Server',
          findPortTimeout: options.findPortTimeout,
          findPortAttempts: options.findPortAttempts,
          connectTimeoutMs: options.connectTimeoutMs,
