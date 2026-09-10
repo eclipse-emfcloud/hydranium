@@ -38,6 +38,12 @@ examples/*/theia-app/plugins
 *.tmp.mjs
 *.tmp.ts
 
+# Node diagnostic reports, written by --report-on-fatalerror into whichever
+# directory the dying process was in. They appear only on a crash, so format
+# noise here would land on top of the failure being investigated.
+report.*.json
+**/report.*.json
+
 # Lockfile (npm-managed formatting)
 package-lock.json
 

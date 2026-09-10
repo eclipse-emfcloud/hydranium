@@ -39,7 +39,7 @@ jobs:
     # add a fallback, it silently takes precedence and the trusted-publisher
     # path is never exercised.
     env:
-      NODE_OPTIONS: --max_old_space_size=4096
+      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
 
