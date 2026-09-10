@@ -1,46 +1,26 @@
 ---
 name: Bug report
-about: Something in the framework behaves differently from what it documents
+about: Something is broken, crashes, or does not behave the way you expected
 title: ''
 labels: bug
 assignees: ''
 ---
 
-**Do not use this for security vulnerabilities.** See [`SECURITY.md`](../../SECURITY.md).
+<!-- Not for security vulnerabilities: report those via SECURITY.md. Public
+     vulnerability reports here will be deleted. -->
+<!-- Partial reports are welcome — fill in what you have. -->
 
-## What happened
+### Bug Description
 
-<!-- What you saw, including the exact error text if there was one. -->
+### Expected Behavior
 
-## What you expected
+### Steps to Reproduce
 
-<!-- And, where it applies, which doc or doc comment led you to expect it. -->
+1.
+2.
+3.
 
-## Reproduction
+### Additional Information
 
-<!--
-Steps, or a minimal grammar plus the smallest model file that shows it.
-A failing test against `examples/order-flow` or a fresh `hydranium-cli init`
-scaffold is the fastest thing for us to act on.
--->
-
-## Versions
-
-- Node:
-- npm:
-- `@hydranium/*`:
-- Langium:
-
-## Which head
-
-<!-- LSP, data server, GLSP, the CLI, or a Theia client package. -->
-
-## Anything already ruled out
-
-<!--
-Optional, and genuinely useful. Two failure modes account for a lot of reports
-and are described in `docs/adopting/troubleshooting.md`: two physical copies of `langium`
-or of `vscode-jsonrpc` in the install (identity checks silently answer `false`),
-and a `moduleResolution` that cannot read an `exports` map. If you have checked
-either, say so — it saves a round trip.
--->
+- Operating System:
+- Hydranium Version:
