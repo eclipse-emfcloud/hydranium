@@ -184,16 +184,77 @@ jobs:
             exit 1
           fi
 
+      # `node_modules`, not `~/.npm`: the npm cache already hits — 146 MB
+      # restored in 5s — and npm still reports `added 1678 packages in 3m`
+      # afterwards. So the cost is not fetching anything, it is materialising
+      # 63,218 files, which is why it is a Windows problem: `npm ci` runs
+      # 182–521s there (median ~211 over 17 samples) against Ubuntu's steady
+      # 35–40s.
+      #
+      # BEFORE `Setup Node`, so that its outcome can decide whether the npm
+      # cache is worth restoring at all. `actions/cache` carries its own Node
+      # and needs none set up, and the key is computed from file hashes.
+      #
+      # `restore` and `save` as separate steps rather than `actions/cache`,
+      # which saves from a post-step that runs however the job ended. A job that
+      # died midway through installing would publish a half-materialised tree
+      # under a key every later run then hits, and nothing downstream would
+      # report it as a cache problem. Saving explicitly, immediately after the
+      # install and link have both succeeded, is what makes that impossible.
+      #
+      # The key carries the OS and the arch because `node_modules` holds
+      # compiled binaries and actions/cache does NOT namespace by runner: one
+      # shared key hands Windows a Linux tree. `.nvmrc` joins them because a
+      # Node major re-ABIs every native module, and `patches/**` because
+      # `patch-package` runs from `postinstall` and MUTATES the installed tree,
+      # so a restored tree carries whichever patches were current when it was
+      # saved.
+      #
+      # No `restore-keys`. A prefix match would restore a tree resolved from a
+      # different lockfile, which is worse than installing rather than a
+      # cheaper version of it.
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ !inputs.skip_node_modules_cache }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # `examples/*/*/node_modules`, two deep: every example is
+          # `examples/<example>/<package>`, and a `*` does not cross a
+          # separator, so the one-deep spelling matches nothing at all and
+          # would say so by silently caching less.
+          #
+          # `.vite` is excluded deliberately. It is Vitest's dep-optimizer
+          # prebundle, it is regenerated on demand, and it is the one directory
+          # here whose corruption does not present as a cache problem — a bad
+          # `deps_ssr` fails every suite in its package with a missing-module
+          # error naming a dependency. Vite invalidates it correctly on its own
+          # hashes, so this is not a staleness claim; it is that the payload is
+          # pure churn and the failure it could import is expensive to read.
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
+
       # Read from `.nvmrc` rather than stated here, so one edit moves both
       # workflows and a local `nvm use` together. A version literal repeated in
       # three places is three chances to satisfy `engines.node` by coincidence:
       # a major-only spec is a semver RANGE, and it clears the floor only for as
       # long as the newest release in that major happens to be above it.
+      #
+      # `cache` is empty on a node_modules HIT, because `~/.npm` is read only
+      # by the `npm ci` that a hit skips — restoring 146 MB nothing then opens
+      # cost 21s per Windows run. On a MISS it is `npm`, which is when the
+      # install actually happens and the cache is what keeps it off the
+      # network. Empty is how setup-node spells "no cache"; the alternative,
+      # dropping the input outright, trades a slower install on exactly the
+      # runs that change dependencies for a saving only hits can collect.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
 
       # A dispatch's inputs reach no API response and no log, so a run cannot
       # otherwise be told apart from one that took the defaults — and a knob
@@ -269,55 +330,6 @@ jobs:
               process.exit(1);
             }
           "
-
-      # `node_modules`, not `~/.npm`, which setup-node already caches above and
-      # which already hits: 146 MB restored in 5s, after which npm still reports
-      # `added 1678 packages in 3m`. So the cost is not fetching anything, it is
-      # materialising 63,218 files — and that is why it is a Windows problem,
-      # where `npm ci` runs 182–521s (median ~211 over 17 samples) against
-      # Ubuntu's steady 35–40s.
-      #
-      # `restore` and `save` as separate steps rather than `actions/cache`,
-      # which saves from a post-step that runs however the job ended. A job that
-      # died midway through installing would publish a half-materialised tree
-      # under a key every later run then hits, and nothing downstream would
-      # report it as a cache problem. Saving explicitly, immediately after the
-      # install and link have both succeeded, is what makes that impossible.
-      #
-      # The key carries the OS and the arch because `node_modules` holds
-      # compiled binaries and actions/cache does NOT namespace by runner: one
-      # shared key hands Windows a Linux tree. `.nvmrc` joins them because a
-      # Node major re-ABIs every native module, and `patches/**` because
-      # `patch-package` runs from `postinstall` and MUTATES the installed tree,
-      # so a restored tree carries whichever patches were current when it was
-      # saved.
-      #
-      # No `restore-keys`. A prefix match would restore a tree resolved from a
-      # different lockfile, which is worse than installing rather than a
-      # cheaper version of it.
-      - name: Restore node_modules
-        id: node-modules-cache
-        if: ${{ !inputs.skip_node_modules_cache }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          # `examples/*/*/node_modules`, two deep: every example is
-          # `examples/<example>/<package>`, and a `*` does not cross a
-          # separator, so the one-deep spelling matches nothing at all and
-          # would say so by silently caching less.
-          #
-          # `.vite` is excluded deliberately. It is Vitest's dep-optimizer
-          # prebundle, it is regenerated on demand, and it is the one directory
-          # here whose corruption does not present as a cache problem — a bad
-          # `deps_ssr` fails every suite in its package with a missing-module
-          # error naming a dependency. Vite invalidates it correctly on its own
-          # hashes, so this is not a staleness claim; it is that the payload is
-          # pure churn and the failure it could import is expensive to read.
-          path: |
-            node_modules
-            packages/*/node_modules
-            examples/*/*/node_modules
-            !**/node_modules/.vite
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
 
       # A hit is not the same as a usable tree, and the gap is platform-shaped:
       # npm links workspaces with junctions on Windows and symlinks elsewhere,
