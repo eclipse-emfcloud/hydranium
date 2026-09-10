@@ -58,7 +58,41 @@
 
 'use strict';
 
-const TRACE_DIR = process.env.HYDRANIUM_EXIT_TRACE_DIR;
+/**
+ * Where records go, by two routes, because the first one alone was defeated in
+ * the field by the very layer the recorder has to reach.
+ *
+ * `HYDRANIUM_EXIT_TRACE_DIR` is the explicit switch. It does NOT survive on its
+ * own: turbo 2 defaults to a STRICT environment mode, which passes `NODE_OPTIONS`
+ * through to a task but drops an undeclared variable — so the preload loaded
+ * inside every task and then went inert on this guard, and the first red run
+ * recorded only the two processes OUTSIDE turbo. `turbo.json` now declares the
+ * variable, and that declaration is asserted by the self-test.
+ *
+ * The FALLBACK is what makes the recorder independent of that declaration
+ * holding: an `exit-trace` directory beside this script's own package root,
+ * located from `__dirname` rather than from the environment, and used only when
+ * it ALREADY EXISTS. The gate step creates it; nothing else does, so a developer
+ * tree and an adopter's install stay inert exactly as before. Existence rather
+ * than creation is the whole of that property — a recorder that made the
+ * directory would arm itself everywhere.
+ */
+function resolveTraceDir() {
+   const fromEnvironment = process.env.HYDRANIUM_EXIT_TRACE_DIR;
+   if (fromEnvironment) {
+      return fromEnvironment;
+   }
+   try {
+      const { existsSync } = require('node:fs');
+      const { join } = require('node:path');
+      const beside = join(__dirname, '..', 'exit-trace');
+      return existsSync(beside) ? beside : undefined;
+   } catch {
+      return undefined;
+   }
+}
+
+const TRACE_DIR = resolveTraceDir();
 
 /**
  * Everything the recorder learns before it is allowed to write, which is at

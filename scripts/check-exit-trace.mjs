@@ -28,7 +28,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -164,6 +164,120 @@ for (const testCase of CASES) {
    }
 }
 
+// The FALLBACK route, exercised against a COPY of the preload so the repo's own
+// `exit-trace` directory is neither created nor polluted by the test. Both
+// halves matter and the negative one matters more: a fallback that armed itself
+// wherever the preload happened to sit would record on every developer machine.
+{
+   const scratch = mkdtempSync(join(tmpdir(), 'hydranium-fallback-'));
+   try {
+      mkdirSync(join(scratch, 'scripts'), { recursive: true });
+      const copiedPreload = join(scratch, 'scripts/trace-exits.cjs');
+      copyFileSync(PRELOAD, copiedPreload);
+      const environment = { ...process.env, NODE_OPTIONS: '' };
+      delete environment.HYDRANIUM_EXIT_TRACE_DIR;
+
+      const die = () => {
+         try {
+            execFileSync(process.execPath, ['--require', copiedPreload, '-e', 'process.exit(5)'], {
+               env: environment,
+               stdio: ['ignore', 'pipe', 'pipe']
+            });
+         } catch {
+            // The rigged exit; the assertion is on what it left behind.
+         }
+      };
+
+      die();
+      if (existsSync(join(scratch, 'exit-trace'))) {
+         failures.push('the fallback CREATED its directory, so the recorder arms itself wherever the preload sits');
+      }
+
+      mkdirSync(join(scratch, 'exit-trace'));
+      die();
+      if (readdirSync(join(scratch, 'exit-trace')).length !== 1) {
+         failures.push('with no environment variable and an existing exit-trace/, the fallback recorded nothing');
+      }
+   } catch (error) {
+      failures.push(`could not exercise the fallback route: ${String(error.message ?? error).slice(0, 200)}`);
+   } finally {
+      rmSync(scratch, { recursive: true, force: true });
+   }
+}
+
+// DELIVERY, which is a separate property from recording and is the one that
+// actually failed in the field. Every case above reaches the preload by an
+// explicit `--require` and an explicit environment, so all four passed on a run
+// where the recorder was inert for every process that mattered: turbo 2's strict
+// environment mode had dropped `HYDRANIUM_EXIT_TRACE_DIR`, and nothing here ran
+// under turbo. These two cases are the ones that would have caught it.
+const TURBO = join(REPO_ROOT, 'node_modules/.bin/turbo');
+
+// That turbo can PARSE the real file. Nothing else here does: the probe below
+// builds a scratch config from one value, and `JSON.parse` accepts keys turbo's
+// schema rejects — a `"//key"` comment among them, which takes down every task
+// in the repository rather than only this feature. `--dry` validates without
+// executing.
+try {
+   execFileSync(TURBO, ['run', 'build', '--dry=json'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+} catch (error) {
+   const detail = String(error.stderr || error.stdout || error.message || error);
+   failures.push(`turbo cannot parse turbo.json: ${detail.replace(/\s+/g, ' ').slice(0, 300)}`);
+}
+
+// turbo.json is JSONC. Only WHOLE-line comments are stripped: a blanket `//`
+// strip would cut the `$schema` URL in half, and the truncated value would still
+// parse.
+const REPO_TURBO_CONFIG = JSON.parse(readFileSync(join(REPO_ROOT, 'turbo.json'), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+
+// The declaration, read from the real config rather than a copy of it, because
+// deleting the line is the cheap way for this to regress.
+if (!(REPO_TURBO_CONFIG.globalPassThroughEnv ?? []).includes('HYDRANIUM_EXIT_TRACE_DIR')) {
+   failures.push('turbo.json no longer declares HYDRANIUM_EXIT_TRACE_DIR in globalPassThroughEnv, so turbo drops it');
+}
+
+// And that turbo HONOURS the declaration, run against a scratch workspace
+// carrying this repo's own `globalPassThroughEnv`. Asserting the config alone
+// would not have caught turbo changing what strict mode means.
+{
+   const scratch = mkdtempSync(join(tmpdir(), 'hydranium-turbo-env-'));
+   try {
+      mkdirSync(join(scratch, 'pkgs/probe'), { recursive: true });
+      writeFileSync(
+         join(scratch, 'package.json'),
+         JSON.stringify({ name: 'probe-root', private: true, version: '0.0.0', packageManager: 'npm@0.0.0', workspaces: ['pkgs/*'] })
+      );
+      writeFileSync(
+         join(scratch, 'turbo.json'),
+         JSON.stringify({
+            globalPassThroughEnv: REPO_TURBO_CONFIG.globalPassThroughEnv,
+            tasks: { probe: { cache: false } }
+         })
+      );
+      writeFileSync(
+         join(scratch, 'pkgs/probe/package.json'),
+         JSON.stringify({
+            name: 'probe',
+            version: '0.0.0',
+            scripts: { probe: 'node -e "process.stdout.write(String(process.env.HYDRANIUM_EXIT_TRACE_DIR))"' }
+         })
+      );
+      const stdout = execFileSync(TURBO, ['run', 'probe', '--ui=stream'], {
+         cwd: scratch,
+         encoding: 'utf8',
+         env: { ...process.env, HYDRANIUM_EXIT_TRACE_DIR: 'DELIVERED' },
+         stdio: ['ignore', 'pipe', 'pipe']
+      });
+      if (!stdout.includes('DELIVERED')) {
+         failures.push('a turbo task did not receive HYDRANIUM_EXIT_TRACE_DIR, so the recorder is inert inside turbo');
+      }
+   } catch (error) {
+      failures.push(`could not ask turbo what a task receives: ${String(error.message ?? error).slice(0, 200)}`);
+   } finally {
+      rmSync(scratch, { recursive: true, force: true });
+   }
+}
+
 if (failures.length > 0) {
    console.error('scripts/trace-exits.cjs no longer records what it claims:\n');
    for (const failure of failures) {
@@ -174,4 +288,4 @@ if (failures.length > 0) {
    process.exit(1);
 }
 
-console.log(`✓ the exit recorder discriminates all ${CASES.length} rigged outcomes`);
+console.log(`✓ the exit recorder discriminates all ${CASES.length} rigged outcomes, and reaches a turbo task by both routes`);
