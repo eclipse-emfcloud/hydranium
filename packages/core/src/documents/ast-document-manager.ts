@@ -167,6 +167,51 @@ export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic> = TransferS
 export type AstDocumentManagerOptions = LogNameOptions;
 
 /**
+ * The document slot the model server and the integrity service talk to:
+ * open/close/update/save plus the AST-typed event streams, with the LSP
+ * plumbing hidden.
+ *
+ * Generic over `<TAst extends AstNode, TDiagnostic>` so each consumer projects
+ * its own AST root type and diagnostic shape into the emitted
+ * {@link AstDocument} envelopes.
+ *
+ * **URI contract.** Every URI-accepting member takes a URI in *any* spelling
+ * (canonical, symlinked, `..`/case-divergent) and canonicalizes internally
+ * through the {@link DocumentUriPolicy}, so a caller never has to canonicalize
+ * first and an implementation may not require it.
+ */
+export interface AstDocumentManager<TAst extends AstNode, TDiagnostic = unknown> {
+   open(args: OpenModelArgs): Promise<Disposable>;
+   close(args: CloseModelArgs): Promise<void>;
+   isOpen(uri: string): boolean;
+
+   /** Apply `text` as `clientId`'s edit. Resolves to the resulting text-document version. */
+   update(uri: string, text: string, clientId: string): Promise<number>;
+   save(uri: string, clientId: string): Promise<void>;
+
+   onUpdate(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
+   onSave(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void | Promise<void>): Disposable;
+   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
+
+   getDocument(uri: string): LangiumDocument | undefined;
+
+   /** Client id that authored the document's current version, or `undefined` for a framework-internal build. */
+   getAuthor(document: LangiumDocument): string | undefined;
+
+   /**
+    * Whether `uri` is one of the URIs the most recent build request named, as
+    * opposed to a document that build swept in as a dependent. Deletions are
+    * excluded: they never reach this layer, since a deleted document is
+    * removed before the build set is computed.
+    *
+    * The answer refers to the latest request, which may still be building, and
+    * it is retained between builds — so outside a build it describes whichever
+    * one ran last.
+    */
+   isTriggeringEdit(uri: string): boolean;
+}
+
+/**
  * Higher-level facade over {@link HydraniumTextDocuments} that speaks the
  * model-server protocol (open/close/update/save with the transfer-model event
  * shapes). Hides the LSP plumbing from the model server and the integrity
@@ -186,7 +231,7 @@ export type AstDocumentManagerOptions = LogNameOptions;
  * resolution (the egress `applyEditToLanguageClient`) stay on
  * {@link HydraniumTextDocuments}, their owner.
  */
-export class AstDocumentManager<TAst extends AstNode = AstNode, TDiagnostic = unknown> {
+export class DefaultAstDocumentManager<TAst extends AstNode, TDiagnostic = unknown> implements AstDocumentManager<TAst, TDiagnostic> {
    protected lastUpdate?: UpdateInfo;
 
    protected readonly textDocuments: HydraniumTextDocuments<TextDocument>;
@@ -334,7 +379,7 @@ export class AstDocumentManager<TAst extends AstNode = AstNode, TDiagnostic = un
     * concrete value (the `onUpdate` event's `sourceClientId`, the data-server's
     * `resolveSourceClientId`).
     */
-   getAuthor(document: LangiumDocument<AstNode>): string | undefined {
+   getAuthor(document: LangiumDocument): string | undefined {
       return this.textDocuments.getAuthor(document.textDocument.uri, document.textDocument.version);
    }
 
@@ -414,8 +459,7 @@ export class AstDocumentManager<TAst extends AstNode = AstNode, TDiagnostic = un
       return !!this.textDocuments.get(uri);
    }
 
-   /** True if the URI was in the directly-changed set of the most recent build (not just affected). */
-   isDirectChange(uri: string): boolean {
+   isTriggeringEdit(uri: string): boolean {
       const canonical = this.uriPolicy.canonicalUri(uri);
       return this.lastUpdate?.changed.some(changed => this.uriPolicy.canonicalUri(changed) === canonical) ?? false;
    }
@@ -437,11 +481,7 @@ export class AstDocumentManager<TAst extends AstNode = AstNode, TDiagnostic = un
       version = 0,
       text?: string
    ): Promise<TextDocumentItem> {
-      return { uri, languageId, version, text: text ?? (await this.readFile(uri)) };
-   }
-
-   async readFile(uri: string): Promise<string> {
-      return this.fileSystemProvider.readFile(UriUtils.toUri(uri));
+      return { uri, languageId, version, text: text ?? (await this.fileSystemProvider.readFile(UriUtils.toUri(uri))) };
    }
 
    /**

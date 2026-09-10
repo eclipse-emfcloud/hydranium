@@ -15,7 +15,7 @@ import { makeFakeReflection, makeNoopSharedServices, makeTestServices } from '..
 import { makeStubDocumentBuilder } from '../../../src/testing/stub-document-builder.js';
 import {
    type EncodeContext,
-   TransferEncoder,
+   DefaultTransferEncoder,
    type TransferEnvelopeSource,
    type TransferMode
 } from '../../../src/langium/transfer/transfer-encoder.js';
@@ -23,13 +23,13 @@ import type { TransferLspDiagnostic } from '../../../src/langium/validation/docu
 import { defineMessage, messageData, renderFrameworkMessage, TransferDiagnostic } from '@hydranium/protocol';
 import type { TransferDocument, TransferElement, TransferTypeFor } from '@hydranium/protocol';
 
-function buildEncoder(reflection: AstReflection): TransferEncoder {
+function buildEncoder(reflection: AstReflection): DefaultTransferEncoder {
    const services = makeNoopSharedServices({
       AstReflection: reflection,
       // toTransferDocument's internal root cache subscribes to build phases
       workspace: { DocumentBuilder: makeStubDocumentBuilder() }
    });
-   return new TransferEncoder(services);
+   return new DefaultTransferEncoder(services);
 }
 
 /** Build a Langium `Reference`-shaped value carrying just the `$refText`. */
@@ -404,7 +404,7 @@ describe('TransferEncoder.toTransferDocument (internal root cache)', () => {
          readonly label: string;
       }
       let label = 'short';
-      class LabellingEncoder extends TransferEncoder {
+      class LabellingEncoder extends DefaultTransferEncoder {
          protected override createEncodeContext(mode: TransferMode, uri?: string): LabelledContext {
             return { mode, uri, label };
          }
@@ -450,7 +450,7 @@ describe('TransferEncoder.astDocumentToTransferDocument', () => {
                severity: DiagnosticSeverity.Error
             }
          ]
-      } as unknown as Parameters<TransferEncoder['astDocumentToTransferDocument']>[0];
+      } as unknown as Parameters<DefaultTransferEncoder['astDocumentToTransferDocument']>[0];
 
       const result = encoder.astDocumentToTransferDocument(astDocument);
       expect(result.uri).toBe('file:///c.a');
@@ -468,7 +468,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
     * EVERY envelope the encoder emits, or the paths it misses ship the raw
     * root.
     */
-   class TaggingEncoder extends TransferEncoder {
+   class TaggingEncoder extends DefaultTransferEncoder {
       protected override assembleTransferDocument<TAst extends AstNode>(
          source: TransferEnvelopeSource<TransferDiagnostic>,
          root: TransferTypeFor<TAst, Record<string, TransferElement>>
@@ -518,7 +518,7 @@ describe('TransferEncoder extension hooks', () => {
     * Exercises every walk hook: context widening, per-key filtering, value
     * substitution, and node post-decoration reading the widened context.
     */
-   class HookedEncoder extends TransferEncoder {
+   class HookedEncoder extends DefaultTransferEncoder {
       protected override createEncodeContext(mode: TransferMode, uri?: string): HookedContext {
          return { mode, uri, stamp: uri ? `@${uri}` : '@detached' };
       }

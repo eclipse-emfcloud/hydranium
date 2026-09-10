@@ -856,31 +856,61 @@ import/binding site. Three prefixes, plus bare descriptive names.
   `TransferEncoder`, `AstDocumentManager`, `BuildPipelineIntegration`,
   `ValidationContributionCollector`, `SelfSaveRegistry`, `CstResidencyService`.
 
-### Service shape — an interface only for the swap case
+### Service shape — an interface for every DI slot
 
-This taxonomy IS the answer to "should every framework DI service ship a
-three-piece `ServiceXxx` / `DefaultServiceXxx` / `ServiceXxxOptions` set?"
-— **no.** A service carries a bare-named framework interface **only when its
-slot is a genuine swap point** — a narrow contract an adopter replaces
-wholesale, or whose framework default is a no-op / thin / throwing stub the
-adopter is expected to supply. Those are exactly the `Default*` cases
-(`NameProvider`/`DefaultNameProvider`, `IntegrityService`/`DefaultIntegrityService`,
-`ReferenceBuilder`/`DefaultReferenceBuilder`, the cross-head infra
-`Logger`/`Tracer`/`Clock`/`FileSystemProvider`, …). `Serializer` is the same
-shape with an unexported default: its throwing stub is module-private, so the
-adopter has a slot to bind but no default class to subclass.
-Everything else has NO interface on purpose:
+**A service bound on a DI slot carries a bare-named framework interface plus a
+`Default*` implementation.** The slot's declared type is the interface; the
+class only ever appears at the binding, at a `base:` entry, and in an
+`instanceof` check.
+
+The reason is assignability, and it is not a style preference. A DI binding is
+an assignment across a package boundary, and a class type drags its
+`protected` members into that check — where TypeScript compares them by
+DECLARATION, not by shape. So an adopter subclassing a framework class that
+resolved from a *second physical copy* of the package cannot satisfy the slot at
+all, and pre-publish every adopter consuming the framework through a local link
+has exactly that second copy. An interface is structural and immune.
+
+Two consequences worth stating, because both look like defects otherwise:
+
+- **An empty interface is legitimate** when a slot's whole surface is
+  `protected` and nothing calls it — the slot exists to force construction.
+  Carry an `eslint-disable` for `no-empty-object-type` with the reason.
+- **A generic slot keeps its type parameters**, but only where they are
+  honest. A shared service spanning every registered grammar must not type a
+  document lookup by the consumer's root type; the parameters belong on the
+  per-URI members, where the consumer's own subscription is the assertion.
+
+An interface-typed slot is what makes `WithServiceOverrides` usable, which is
+how an adopter composes a tree whose declarations REPLACE the framework's
+instead of intersecting with them. Langium composes by intersection, and an
+intersection accumulates: two declarations of one slot survive as an overload
+set, and which one a call resolves to depends on the order the intersection was
+written in, silently and with no diagnostic where a reorder changes it. There is
+no override operator, so the framework's declaration has to be removed before
+the adopter's is added, one level deep per service namespace so a narrowed slot
+replaces its framework twin while its siblings survive:
+
+```ts
+import type { WithServiceOverrides } from '@hydranium/core';
+
+/** The slots this adopter adds, in the namespace they belong to. */
+interface AcmeAddedSharedServices {
+   readonly workspace: { readonly AcmeCatalogue: { readonly size: number } };
+}
+
+export type AcmeSharedServices = WithServiceOverrides<ServerSharedServices, AcmeAddedSharedServices>;
+```
+
+A class-typed slot cannot be replaced this way for the reason above, so the
+framework's declaration survives the removal and the adopter is back to
+intersecting.
+
+Everything NOT on a slot keeps its existing shape:
 
 - a **`Hydranium*`** class specialises an upstream type — the upstream
   surface is the contract; a parallel framework interface would just
   duplicate it;
-- a **bare framework-original service** (above) has exactly one real
-  implementation that adopters build *on* via `super` — an interface would
-  restate the whole class surface for zero adopter benefit, and Langium DI
-  is structural, so a subclass already satisfies the slot type with no
-  nominal interface (`OrderFlowScopeComputation extends
-  HydraniumScopeComputation`, `AcmeModelService extends ModelService`,
-  `OrderFlowProjectManager extends AbstractProjectManager`);
 - **`ProjectManager`** and **`Serializer`** are the three-level cases —
   interface + `AbstractProjectManager` (abstract members) + concrete
   `SingleProjectManager`; interface + `AbstractSerializer` (abstract members)
@@ -1223,7 +1253,7 @@ package know its host".
 
 - **Server-side** — `core`, `data-server`, `glsp-server`. Declare with
   `defineMessage`, attach the identity to what you already send, and let the
-  bound `ServerMessageRenderer` render it. The locale arrives at LSP
+  bound `MessageRenderer` render it. The locale arrives at LSP
   `initialize` (or through the headless init seams' options parameter) and lands
   on `ServerLocale`; every real host reaches it, and a process that reaches
   neither is English, correctly. Placeholders are named (`{name}`), because our
@@ -1415,7 +1445,7 @@ internal codes share the field.
   unchanged. Langium's codes survive alongside a framework identity when one is
   attached, so the field stays usable either way.
 - **A renderer must not throw**, and the contract lives on
-  `ServerMessageRenderer`'s public methods rather than at each call site. The
+  `MessageRenderer`'s public methods rather than at each call site. The
   framework's `interpolate` cannot throw, but an adopter's catalogue lookup can,
   and an error escaping the diagnostics pass would strand the document at
   `Validated` with Langium's publisher never invoked — no diagnostics for that

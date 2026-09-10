@@ -34,7 +34,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AstNode } from '@hydranium/langium';
 import type { TransferDiagnostic } from '@hydranium/protocol';
-import { ModelService, type ModelServiceOptions } from '../../src/langium/model-service/model-service.js';
+import { DefaultModelService, type ModelService, type ModelServiceOptions } from '../../src/langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { makeStubModelService, makeTestServices, type StubLanguageDescriptor } from '../../src/testing/index.js';
 
@@ -87,12 +87,12 @@ describe('makeStubModelService — the serialize seam, against the real ModelSer
    it('is the real ModelService with one hook replaced, not a look-alike', () => {
       const stub = makeStubModelService<FakeRoot, TransferDiagnostic, FakeRoot>(bundleWith(), () => 'stub-text');
 
-      expect(stub).toBeInstanceOf(ModelService);
+      expect(stub).toBeInstanceOf(DefaultModelService);
    });
 
    it('answers from the callback where the real default path cannot run at all', () => {
       const services = bundleWith();
-      const real = new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
+      const real = new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
       const stub = makeStubModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, (_uri, root) => `stub:${root.name}`);
 
       // The claim being verified: on a stub tree the framework path FAILS. If
@@ -104,7 +104,7 @@ describe('makeStubModelService — the serialize seam, against the real ModelSer
 
    it('replaces the framework serializer rather than supplementing it', () => {
       const services = bundleWith(WITH_SERIALIZER);
-      const real = new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
+      const real = new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
       const stub = makeStubModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, (_uri, root) => `stub:${root.name}`);
 
       // Anchor on the real side: the bound serializer IS reachable through the
@@ -139,29 +139,29 @@ describe('makeStubModelService — option forwarding, against the real ModelServ
       ];
 
       for (const options of cases) {
-         const real = new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, options);
+         const real = new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, options);
          const stub = makeStubModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, () => 'stub-text', options);
          expect(optionsOf(stub)).toEqual(optionsOf(real));
       }
 
       // Two services that both derived nothing would agree above, so pin the
       // documented defaults and one non-default on the real side.
-      expect(optionsOf(new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services))).toEqual({
+      expect(optionsOf(new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services))).toEqual({
          serializeBuilds: true,
          slowUpdateWarnMs: undefined
       });
-      expect(optionsOf(new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, { serializeBuilds: false }))).toEqual({
+      expect(optionsOf(new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, { serializeBuilds: false }))).toEqual({
          serializeBuilds: false,
          slowUpdateWarnMs: undefined
       });
-      expect(optionsOf(new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, { slowUpdateWarnMs: 0 })).slowUpdateWarnMs).toBe(
-         0
-      );
+      expect(
+         optionsOf(new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, { slowUpdateWarnMs: 0 })).slowUpdateWarnMs
+      ).toBe(0);
    });
 
    it('resolves ready on a tree that binds no WorkspaceManager, like the real service', async () => {
       const services = bundleWith();
-      const real = new ModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
+      const real = new DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services);
       const stub = makeStubModelService<FakeRoot, TransferDiagnostic, FakeRoot>(services, () => 'stub-text');
 
       // A hang, not a rejection, is the failure this guards: both sides must

@@ -26,7 +26,7 @@ import {
 // restating it.
 import { CancellationToken, Diagnostic } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
-import type { ServerMessageRenderer } from '../../messages/renderer.js';
+import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
@@ -158,7 +158,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly phaseDetailMs: ObservableValue<number>;
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly clock: Clock;
-   protected readonly messageRenderer: ServerMessageRenderer;
+   protected readonly messageRenderer: MessageRenderer;
    /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
    protected readonly languageRegistry: ExtendedServiceRegistry;
    protected languageFileExtensions: string[] = [];

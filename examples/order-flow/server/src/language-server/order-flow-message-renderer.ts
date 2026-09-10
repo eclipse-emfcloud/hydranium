@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ServerMessageRenderer } from '@hydranium/core/messages';
+import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import germanCatalogue from '../nls/order-flow.de.json' with { type: 'json' };
 
 /**
@@ -44,7 +44,7 @@ const CATALOGUES: Record<string, Record<string, string>> = {
  * owns, not a framework default — a language whose regional variants differ in
  * substance would key on the full tag instead.
  */
-export class OrderFlowMessageRenderer extends ServerMessageRenderer {
+export class OrderFlowMessageRenderer extends DefaultMessageRenderer {
    protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
       return locale ? CATALOGUES[locale.split('-')[0].toLowerCase()] : undefined;
    }

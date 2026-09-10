@@ -20,7 +20,7 @@ import {
 } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import { CancellationToken, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
-import { ServerMessageRenderer } from '../../../src/messages/renderer.js';
+import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
@@ -146,7 +146,7 @@ function makeStubServices(
    // Overridable for the render pass, whose default answer is a pass-through —
    // so a test that needs the REPLACING branch has to install a renderer that
    // changes the text.
-   messageRenderer?: (services: ServerSharedServicesMinimal) => ServerMessageRenderer
+   messageRenderer?: (services: ServerSharedServicesMinimal) => MessageRenderer
 ): ServerSharedServicesMinimal {
    // The builder defaults Tracer (a DefaultTracer over `logger`) and an empty
    // ServiceRegistry; only the LangiumDocuments stub is test-specific. Every
@@ -955,7 +955,7 @@ describe('HydraniumDocumentBuilder', () => {
          // The control on the three rows above: they assert the pass leaves
          // things alone, and a pass that rendered NOTHING would satisfy all of
          // them. This is the same comparison from the other side.
-         const shouting = new (class extends ServerMessageRenderer {
+         const shouting = new (class extends DefaultMessageRenderer {
             override renderDiagnostic(diagnostic: Diagnostic): string {
                return Diagnostic.getMessageString(diagnostic).toUpperCase();
             }

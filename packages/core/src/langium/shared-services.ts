@@ -10,7 +10,7 @@
 import type { Clock, Logger, Project, Tracer } from '@hydranium/protocol';
 import type { LangiumSharedCoreServices } from '@hydranium/langium';
 import type { ServerLocale } from '../locale/server-locale.js';
-import type { ServerMessageRenderer } from '../messages/renderer.js';
+import type { MessageRenderer } from '../messages/renderer.js';
 import type { SelfSaveRegistry } from '../documents/self-save-registry.js';
 import type { WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import type { HydraniumDocumentRegistry } from './workspace/langium-documents.js';
@@ -31,7 +31,7 @@ import type { AdditionalDocumentContribution } from './workspace/additional-docu
  * {@link Clock}, {@link Logger} and {@link Tracer} top-level slots (injectable
  * time source, emission-only logger, and the measure-and-emit tracer composed
  * from the other two), the {@link AdditionalDocumentContribution} group, the
- * {@link ServerMessageRenderer} and the {@link ServerLocale} it renders in,
+ * {@link MessageRenderer} and the {@link ServerLocale} it renders in,
  * an {@link ExtendedServiceRegistry}, and on `workspace` a writable file-system
  * provider plus {@link HydraniumWorkspaceManager}, {@link ProjectManager},
  * {@link SelfSaveRegistry}, {@link BuildPipelineIntegration},
@@ -66,7 +66,7 @@ export interface ServerSharedServicesMinimal<TProject extends Project = Project>
     * shared tier with no workspace dependency, because all three heads'
     * messages pass through it.
     */
-   MessageRenderer: ServerMessageRenderer;
+   MessageRenderer: MessageRenderer;
    /** The locale an init handed the server, for whoever renders in it. */
    ServerLocale: ServerLocale;
    /**

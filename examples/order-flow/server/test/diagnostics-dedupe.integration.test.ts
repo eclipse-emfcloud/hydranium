@@ -58,7 +58,7 @@
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ModelService } from '@hydranium/core';
+import { DefaultModelService } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { type DeepPartial, URI, type Module } from '@hydranium/langium';
@@ -76,7 +76,7 @@ import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 function withSerializeBuilds(serializeBuilds: boolean): Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>> {
    return {
       model: {
-         ModelService: (services: OrderFlowSharedServices) => new ModelService(services, { serializeBuilds })
+         ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { serializeBuilds })
       }
    };
 }

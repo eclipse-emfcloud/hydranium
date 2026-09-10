@@ -25,8 +25,28 @@ import type { ServerSharedServicesMinimal } from '../langium/shared-services.js'
 import type { ServerLocale } from '../locale/server-locale.js';
 import { resolvedFromDiagnostic } from './carriers.js';
 
-/** Construction options for {@link ServerMessageRenderer}. */
-export type ServerMessageRendererOptions = LogNameOptions;
+/** Construction options for {@link DefaultMessageRenderer}. */
+export type MessageRendererOptions = LogNameOptions;
+
+/**
+ * The render contract the `MessageRenderer` slot holds, implemented by
+ * {@link DefaultMessageRenderer}.
+ *
+ * An interface rather than the class, so the slot is compared STRUCTURALLY. A
+ * class-typed slot carries its `protected` members into every assignability
+ * check and TypeScript compares those nominally — which makes the slot
+ * unsatisfiable by a subclass declared against a second physical copy of this
+ * package, the state a pre-publish `yalc` / `file:` install produces. It also
+ * lets an adopter REPLACE this declaration rather than intersect with it, so
+ * slot resolution does not depend on the order a services type is written in.
+ *
+ * Every method carries a no-throw contract; see the implementation.
+ */
+export interface MessageRenderer {
+   renderDiagnostic(diagnostic: Diagnostic): string;
+   renderError(error: ResponseError<unknown>): string;
+   renderMessage<S extends string>(message: MessageDefinition<S>, ...params: ParamsArg<S>): string;
+}
 
 /**
  * Renders every user-facing message the server sends, in the locale the server
@@ -41,7 +61,7 @@ export type ServerMessageRendererOptions = LogNameOptions;
  * single `render(text)` would force an adopter to match English prose, which
  * breaks on the first Langium reword.
  */
-export class ServerMessageRenderer {
+export class DefaultMessageRenderer implements MessageRenderer {
    protected readonly tracer: Tracer;
    protected readonly serverLocale: ServerLocale;
    /**
@@ -58,7 +78,7 @@ export class ServerMessageRenderer {
     */
    protected readonly catalogues = new SimpleCache<string | undefined, Record<string, string> | undefined>();
 
-   constructor(services: ServerSharedServicesMinimal, options: ServerMessageRendererOptions = {}) {
+   constructor(services: ServerSharedServicesMinimal, options: MessageRendererOptions = {}) {
       this.serverLocale = services.ServerLocale;
       this.tracer = services.Tracer.for(options.logName ?? 'MessageRenderer').trace('instantiated');
    }

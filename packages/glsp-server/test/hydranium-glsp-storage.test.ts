@@ -30,7 +30,7 @@ import { Container } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
-import { ServerMessageRenderer } from '@hydranium/core/messages';
+import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
@@ -374,7 +374,7 @@ describe('HydraniumGlspStorage', () => {
    describe('server-side rendering of a GLSP message', () => {
       const GLSP_CATALOGUE = { [SOURCE_URI_MISSING.code]: 'AA: kein Dokument' };
 
-      class GlspCatalogueRenderer extends ServerMessageRenderer {
+      class GlspCatalogueRenderer extends DefaultMessageRenderer {
          protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
             return locale === 'xx-AA' ? GLSP_CATALOGUE : undefined;
          }

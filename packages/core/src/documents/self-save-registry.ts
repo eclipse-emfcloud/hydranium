@@ -22,10 +22,32 @@ export interface SelfSaveRegistryOptions {
 /**
  * Tracks `mtime` of files written by the server itself so the echo
  * `didChangeWatchedFiles` event from the OS file watcher can be suppressed,
- * avoiding redundant rebuilds after each save. Entries are matched by mtime
- * (not by a time window) and expire after a TTL.
+ * avoiding redundant rebuilds after each save.
  */
-export class SelfSaveRegistry {
+export interface SelfSaveRegistry {
+   /**
+    * Record a self-write, and drop any registration already past its TTL.
+    *
+    * Keyed by `fsPath` rather than URI string, because the two sides of a
+    * suppression see different URI forms for one file.
+    */
+   register(fsPath: string, mtimeMs: number): void;
+
+   /**
+    * Whether `fsPath` carries a live registration at exactly `mtimeMs`.
+    *
+    * A registration expires after the TTL, so a write recorded longer ago than
+    * that answers `false` — the caller's decision holds only while the echo it
+    * suppresses could still be in flight. A query never mutates the registry.
+    */
+   isRegistered(fsPath: string, mtimeMs: number): boolean;
+}
+
+/**
+ * Compares entries by mtime rather than by a time window, so the echo of a
+ * save whose content is unchanged is still recognised.
+ */
+export class DefaultSelfSaveRegistry implements SelfSaveRegistry {
    protected readonly entries = new Map<string, { mtimeMs: number; registeredAt: number }>();
    /**
     * Read time through the shared {@link Clock} rather than `Date.now()`: the
@@ -59,23 +81,40 @@ export class SelfSaveRegistry {
       return isCaseInsensitiveFileSystem() ? fsPath.toLowerCase() : fsPath;
    }
 
-   /** Record a self-write. Key by `fsPath` (not URI string) to avoid URI-form mismatches. */
    register(fsPath: string, mtimeMs: number): void {
+      this.evictExpired();
       this.entries.set(this.key(fsPath), { mtimeMs, registeredAt: this.clock.now() });
    }
 
-   /** True if `mtimeMs` matches a recent self-write. Evicts stale entries. Not consumed on match. */
-   matches(fsPath: string, mtimeMs: number): boolean {
-      const key = this.key(fsPath);
-      const entry = this.entries.get(key);
-      if (!entry) {
-         return false;
-      }
-      if (this.clock.now() - entry.registeredAt > this.ttlMs) {
-         this.entries.delete(key);
+   isRegistered(fsPath: string, mtimeMs: number): boolean {
+      const entry = this.entries.get(this.key(fsPath));
+      if (!entry || this.isExpired(entry.registeredAt)) {
          return false;
       }
       // Accept mtime equality (some filesystems have 1-second precision).
       return entry.mtimeMs === mtimeMs;
+   }
+
+   /**
+    * Drop every expired registration.
+    *
+    * On the WRITE path, so the query stays free of side effects. Evicting from
+    * the query instead reaches only the keys something happens to ask about,
+    * and a path written once and never queried again is then retained for the
+    * life of the process. Bounded by the paths self-written inside one TTL
+    * window, so the sweep is over a handful of entries and sits behind a file
+    * write either way.
+    */
+   protected evictExpired(): void {
+      for (const [key, entry] of this.entries) {
+         if (this.isExpired(entry.registeredAt)) {
+            this.entries.delete(key);
+         }
+      }
+   }
+
+   /** Strictly greater, so an entry aged exactly to the TTL is still eligible. */
+   protected isExpired(registeredAt: number): boolean {
+      return this.clock.now() - registeredAt > this.ttlMs;
    }
 }

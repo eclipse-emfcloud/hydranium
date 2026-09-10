@@ -194,7 +194,8 @@ describe('CstResidencyService.rehydrate — identity-preserving CST graft', () =
          expect(document.parseResult.value.$cstNode).toBeUndefined();
          expect(references.every(reference => reference.$refNode === undefined)).toBe(true);
 
-         expect(fixture.harness.shared.workspace.CstResidencyService.rehydrate(document)).toBe(true);
+         fixture.harness.shared.workspace.CstResidencyService.rehydrate(document);
+         expect(document.parseResult.value.$cstNode).toBeDefined();
 
          // Identity preserved: streamAst yields the SAME node objects in the same order.
          const nodesAfter = [...AstUtils.streamAst(document.parseResult.value)];
@@ -236,7 +237,7 @@ describe('CstResidencyService.rehydrate — identity-preserving CST graft', () =
 
       shedBoth(fixture);
 
-      expect(fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.processDocument)).toBe(true);
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.processDocument);
 
       for (let i = 0; i < crossGrammar.length; i++) {
          expect(crossGrammar[i].$refNode).toBeDefined();
@@ -251,9 +252,12 @@ describe('CstResidencyService.rehydrate — identity-preserving CST graft', () =
       shedBoth(fixture);
 
       const residency = fixture.harness.shared.workspace.CstResidencyService;
-      expect(residency.rehydrate(document)).toBe(true);
+      residency.rehydrate(document);
       const rootCst = document.parseResult.value.$cstNode;
-      expect(residency.rehydrate(document)).toBe(true);
+      // Pinned, because `toBe(rootCst)` below is satisfied by two `undefined`s:
+      // a rehydrate that did nothing would pass the idempotence assertion.
+      expect(rootCst).toBeDefined();
+      residency.rehydrate(document);
       expect(document.parseResult.value.$cstNode).toBe(rootCst); // unchanged — early-return on resident CST
    });
 

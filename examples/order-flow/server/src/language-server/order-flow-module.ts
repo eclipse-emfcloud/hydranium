@@ -303,7 +303,7 @@ export interface OrderFlowOptions {
     * exists for the case an adopter hits as soon as they want to exercise a
     * framework option whose default they are happy with in production:
     * framework services are constructed by the framework's own module
-    * (`ModelService: services => new ModelService(services)`, no options), so
+    * (`ModelService: services => new DefaultModelService(services)`, no options), so
     * the only way to boot one with non-default options is to rebind the slot —
     * and a factory that hard-codes its composition gives a test nowhere to do
     * that. Partial over the whole shared tree, so a framework ADDITION

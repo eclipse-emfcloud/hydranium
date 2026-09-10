@@ -23,7 +23,7 @@ import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hy
 import { type Disposable } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
-import { ModelService } from '../../../src/langium/model-service/model-service.js';
+import { DefaultModelService, type ModelService } from '../../../src/langium/model-service/model-service.js';
 import { type ServerSharedServices } from '../../../src/langium/module.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import {
@@ -50,7 +50,7 @@ const URI_A = 'file:///A.fake';
  * synthetic latency deterministically — no real sleep, no flaky wall-clock —
  * without standing up a real Langium build pipeline.
  */
-class DelayedModelService<TAst extends AstNode> extends ModelService<TAst> {
+class DelayedModelService<TAst extends AstNode> extends DefaultModelService<TAst> {
    protected delayMs = 0;
 
    /**
@@ -134,7 +134,7 @@ describe('ModelService readiness gate', () => {
             resolve();
          };
       });
-      const service = new ModelService<FakeRoot>(makeGatedServices(Promise.resolve(), workspaceInitialized));
+      const service = new DefaultModelService<FakeRoot>(makeGatedServices(Promise.resolve(), workspaceInitialized));
 
       let readyResolved = false;
       void service.ready.then(() => {
@@ -160,7 +160,7 @@ describe('ModelService readiness gate', () => {
     * that surfaces this in practice.
     */
    it('resolves rather than rejecting when the initial build fails', async () => {
-      const service = new ModelService<FakeRoot>(
+      const service = new DefaultModelService<FakeRoot>(
          makeGatedServices(Promise.resolve(), Promise.reject(new Error('Connection is disposed.')))
       );
       await expect(service.ready).resolves.toBeUndefined();
@@ -358,7 +358,7 @@ describe('ModelService symlink / canonical-URI divergence', () => {
          documentUriPolicy: linkAware,
          seedDocuments: [{ uri: REAL_URI, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 7 } }]
       });
-      const service = new ModelService<FakeRoot>(bundle.services);
+      const service = new DefaultModelService<FakeRoot>(bundle.services);
       const doc = await service.waitForDocumentState(LINK_URI, DocumentState.Validated);
       expect(doc.version).toBe(7);
    });
@@ -368,7 +368,7 @@ describe('ModelService symlink / canonical-URI divergence', () => {
          documentUriPolicy: linkAware,
          seedDocuments: [{ uri: REAL_URI, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
-      const service = new ModelService<FakeRoot>(bundle.services);
+      const service = new DefaultModelService<FakeRoot>(bundle.services);
       await service.ensureDocumentState(LINK_URI, DocumentState.Validated);
       // hasDocument(canonical=REAL) is true → warm branch, no cold rebuild.
       expect(bundle.documentBuilder.updateCalls).toEqual([]);
@@ -508,7 +508,7 @@ describe('ModelService update supersession', () => {
          logger,
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 1 } }]
       });
-      const service = new ModelService<FakeRoot>(bundle.services);
+      const service = new DefaultModelService<FakeRoot>(bundle.services);
       // Current text-doc version = 1, matching `args.baseVersion: 1` so the
       // conflict gate stays inert; `AstDocumentManager.update` then bumps
       // to v2, making `appliedVersion = 2`.
@@ -623,7 +623,7 @@ describe('ModelService rebuild and save', () => {
  *    irrelevant on this path.
  *  - **pending staging** (closed in the language client) → `stagePendingContent`
  *    for the eventual first `didOpen`, gated by **provenance**: stage only a
- *    genuine client edit (`hasKnownAuthor && isDirectChange`). An internal build
+ *    genuine client edit (`hasKnownAuthor && isTriggeringEdit`). An internal build
  *    (no author — `getAuthor` → `undefined` — from startup, a cascade relink, or
  *    a didClose-reload) is NOT staged: its text equals disk or is a transient
  *    teardown flush, and staging it would pre-stage every file on boot / resurrect
@@ -659,7 +659,7 @@ describe('ModelService LSP-client sync', () => {
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
       const documents = bundle.astDocumentManager as unknown as {
-         isDirectChange: () => boolean;
+         isTriggeringEdit: () => boolean;
          getAuthor: () => string | undefined;
       };
       // `syncToLanguageClient` routes on the text store's open-state predicate:
@@ -669,7 +669,7 @@ describe('ModelService LSP-client sync', () => {
       if (verdict.open) {
          bundle.textDocuments.seedOpenInLanguageClient(URI_A);
       }
-      documents.isDirectChange = () => verdict.direct;
+      documents.isTriggeringEdit = () => verdict.direct;
       documents.getAuthor = () => ('author' in verdict ? verdict.author : 'form-client');
       return bundle;
    }
@@ -818,7 +818,7 @@ describe('ModelService LSP-client sync', () => {
  * the chain empty (the test harness binds no `updateRewrite` slot, so
  * `rewriteModel` degrades to identity), isolating the serialize-gating contract.
  */
-class RecordingModelService extends ModelService<FakeRoot, TransferDiagnostic, FakeRoot> {
+class RecordingModelService extends DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot> {
    constructor(
       services: ServerSharedServices,
       readonly order: string[]
@@ -960,7 +960,7 @@ describe('ModelService update stopwatch allocation', () => {
  * rather than defaulting silently.
  */
 describe('ModelService update open() arguments', () => {
-   class OpenCapturingService extends ModelService<FakeRoot> {
+   class OpenCapturingService extends DefaultModelService<FakeRoot> {
       readonly openArgs: OpenModelArgs[] = [];
       override async open(args: OpenModelArgs): Promise<Disposable> {
          this.openArgs.push(args);

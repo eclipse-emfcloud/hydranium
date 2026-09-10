@@ -200,7 +200,74 @@ export interface ModelServiceOptions extends LogNameOptions {
  *   args. Constrained to {@link TransferElement}. Defaults to the
  *   structural base.
  */
-export class ModelService<
+/**
+ * The seam every non-LSP head talks to: the data server, the GLSP head and an
+ * adopter's own services reach documents through this slot rather than through
+ * the workspace stores.
+ *
+ * **Two families, and the distinction matters more than the names suggest.**
+ * `waitFor*` is a pure wait — it never triggers a build, so a caller waiting on
+ * a document no build has touched waits until something else builds it.
+ * `ensureDocumentState` and the phase shorthands over it *dispatch*: warm
+ * documents are awaited, cold ones are built.
+ *
+ * **Diagnostics are typed `never` below `Validated`.** Validation is the last
+ * phase, so at any earlier landmark the array either is not yet computed or
+ * still holds the previous build's, and reading it would take stale results
+ * for fresh ones. A caller that needs diagnostics asks for {@link validated}.
+ *
+ * What the `never` buys, exactly: reading a field off an element is a compile
+ * error, and nothing can be appended. It does NOT stop a caller assigning an
+ * element to a typed variable, because `never` is assignable to everything — so
+ * this is a guard against reaching for diagnostics by accident, not a seal
+ * against doing it deliberately.
+ *
+ * The waits resolve at or ABOVE their target, so an already-validated document
+ * does carry usable diagnostics and the `never` over-forbids there. That
+ * direction is the safe one: the alternative permits stale reads silently. A
+ * member taking a phase as a PARAMETER cannot judge statically and so returns
+ * `TDiagnostic`, leaving the choice to the caller.
+ */
+export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagnostic, TTransfer extends TransferElement = TransferElement> {
+   /**
+    * Resolves once the workspace has been initialised and its first build has
+    * completed — the gate every read should wait behind, since a document
+    * queried before it may be unbuilt and reach no phase.
+    *
+    * A property rather than a method, matching `ProjectManager.ready` and
+    * Langium's `WorkspaceManager.ready`. An implementation needing a stricter
+    * gate supplies a Promise that awaits its own concern as well.
+    */
+   readonly ready: Promise<void>;
+
+   // Pure waits — never trigger a build.
+   waitForDocumentState(uri: string, state: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   waitForDocumentSettled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
+   waitForBuilderState(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
+
+   // Wait if warm, build if cold.
+   ensureDocumentState(uri: string, state?: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   rebuild(uri: string, state?: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   parsed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
+   linked(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
+   settled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
+   indexed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
+   validated(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+
+   update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+
+   open(args: OpenModelArgs): Promise<Disposable>;
+   close(args: CloseModelArgs): Promise<void>;
+   isOpen(uri: string): boolean;
+   getDocument(uri: string): LangiumDocument | undefined;
+
+   onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
+   onModelSaved(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void): Disposable;
+   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
+}
+
+export class DefaultModelService<
    TAst extends AstNode,
    TDiagnostic = TransferDiagnostic,
    /**
@@ -213,7 +280,7 @@ export class ModelService<
     * integrity service) that pass AST roots remain compatible.
     */
    TTransfer extends TransferElement = TransferElement
-> {
+> implements ModelService<TAst, TDiagnostic, TTransfer> {
    protected readonly tracer: Tracer;
    /**
     * The single document-identity seam (`services.workspace.DocumentUriPolicy`),
@@ -347,8 +414,12 @@ export class ModelService<
     * {@link waitForDocumentState} for the common "wait until content is stable"
     * case (e.g. settling a save). Pure wait — does not trigger a build.
     */
-   async waitForDocumentSettled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
-      return this.waitForDocumentStateCanonical(this.uriPolicy.canonicalUri(uri), IntegrityService.SettledState, cancelToken);
+   async waitForDocumentSettled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
+      return (await this.waitForDocumentStateCanonical(
+         this.uriPolicy.canonicalUri(uri),
+         IntegrityService.SettledState,
+         cancelToken
+      )) as AstDocument<TAst, never>;
    }
 
    /**
@@ -863,17 +934,17 @@ export class ModelService<
     *
     * The signal is "a known client other than the language client authored this
     * version **and** the URI was in the last build's changed set
-    * (`isDirectChange`)". A framework-internal rebuild reports no author
+    * (`isTriggeringEdit`)". A framework-internal rebuild reports no author
     * (`getAuthor` → `undefined`), so it fails `hasKnownAuthor` without comparing
     * against a sentinel. This is NOT redundant with content/registration — it
     * distinguishes "client edited" from "framework rebuilt", which neither the
-    * shadow nor `isDirectChange` alone can.
+    * shadow nor `isTriggeringEdit` alone can.
     */
    protected isNonLanguageClientEdit(document: LangiumDocument): boolean {
       const documents = this.services.workspace.AstDocumentManager;
       const author = documents.getAuthor(document);
       const hasKnownAuthor = !!author && author !== LANGUAGE_CLIENT_ID;
-      return hasKnownAuthor && documents.isDirectChange(document.textDocument.uri);
+      return hasKnownAuthor && documents.isTriggeringEdit(document.textDocument.uri);
    }
 
    /**

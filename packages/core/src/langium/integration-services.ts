@@ -104,7 +104,7 @@ export interface IntegrationServicesOptions<
        *
        * Both differences are the point, and neither is served by
        * {@link extra}. Most framework shared services are constructed with
-       * no options (`ModelService: services => new ModelService(services)`),
+       * no options (`ModelService: services => new DefaultModelService(services)`),
        * so rebinding the slot is the only way to boot one configured
        * differently; a caller that needs that is usually a test, and the slot
        * it needs is as often a framework ADDITION (`Clock`, `Tracer`,

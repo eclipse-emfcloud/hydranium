@@ -36,7 +36,7 @@ describe('flattenCatalogue', () => {
    });
 
    it('keeps an already-flat catalogue as it is', () => {
-      // The shape handed straight to a `ServerMessageRenderer`. Both forms reach
+      // The shape handed straight to a `DefaultMessageRenderer`. Both forms reach
       // the audit, so neither may need a different call.
       expect(flattenCatalogue({ 'hydranium/one/thing-missing': 'Kein Ding.' })).toEqual({
          'hydranium/one/thing-missing': 'Kein Ding.'

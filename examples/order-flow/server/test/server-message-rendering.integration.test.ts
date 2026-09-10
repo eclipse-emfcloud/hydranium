@@ -58,7 +58,7 @@ import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { MODEL_UPDATE_EDIT, resolvedFromDiagnostic, ServerMessageRenderer, UNRESOLVED_REFERENCE } from '@hydranium/core/messages';
+import { MODEL_UPDATE_EDIT, resolvedFromDiagnostic, DefaultMessageRenderer, UNRESOLVED_REFERENCE } from '@hydranium/core/messages';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import {
    type LspHarness,
@@ -114,7 +114,7 @@ const ENGLISH_SELF_TRANSITION = SELF_TRANSITION.format({ step: 'Pay' });
  * unchanged, so inferring "no identity" from an unchanged text would mark the
  * no-catalogue cases as foreign.
  */
-class TestRenderer extends ServerMessageRenderer {
+class TestRenderer extends DefaultMessageRenderer {
    protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
       return locale === TEST_LOCALE ? TEST_CATALOGUE : undefined;
    }
@@ -126,7 +126,7 @@ class TestRenderer extends ServerMessageRenderer {
 }
 
 /** An adopter catalogue with a bad key — the failure the no-throw contract exists for. */
-class ThrowingRenderer extends ServerMessageRenderer {
+class ThrowingRenderer extends DefaultMessageRenderer {
    protected override translationsFor(): Record<string, string> | undefined {
       throw new Error('catalogue lookup exploded');
    }
@@ -143,7 +143,7 @@ function rendererModule(choice: RendererChoice) {
             ? new ThrowingRenderer(services)
             : choice === 'test'
               ? new TestRenderer(services)
-              : new ServerMessageRenderer(services)
+              : new DefaultMessageRenderer(services)
    };
 }
 

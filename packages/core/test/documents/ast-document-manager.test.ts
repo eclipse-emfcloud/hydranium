@@ -12,7 +12,7 @@ import { type CanonicalUri } from '@hydranium/protocol';
 import { type AstNode, DocumentState } from '@hydranium/langium';
 import { URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { AstDocumentManager } from '../../src/documents/ast-document-manager.js';
+import { DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
@@ -38,7 +38,7 @@ const URI_B = 'file:///B.fake';
  * them as plain slots.
  */
 function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy } = {}): {
-   manager: AstDocumentManager<FakeRoot>;
+   manager: DefaultAstDocumentManager<FakeRoot>;
    textDocuments: HydraniumTextDocuments;
    builder: ReturnType<typeof makeTestServices<FakeRoot>>['documentBuilder'];
    documents: ReturnType<typeof makeTestServices<FakeRoot>>['documents'];
@@ -54,7 +54,7 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy } = {}
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
    } as ServerSharedServices;
-   const manager = new AstDocumentManager<FakeRoot>(services);
+   const manager = new DefaultAstDocumentManager<FakeRoot>(services);
    return { manager, textDocuments, builder: bundle.documentBuilder, documents: bundle.documents, fileSystem: bundle.fileSystem };
 }
 
@@ -553,7 +553,7 @@ describe('AstDocumentManager save', () => {
    });
 });
 
-describe('AstDocumentManager isOpen / isDirectChange', () => {
+describe('AstDocumentManager isOpen / isTriggeringEdit', () => {
    it('isOpen reflects open state for a URI', async () => {
       // Kills the `return false` / `return true` ConditionalExpression mutants
       // on isOpen.
@@ -563,34 +563,34 @@ describe('AstDocumentManager isOpen / isDirectChange', () => {
       expect(manager.isOpen(URI_B)).toBe(true);
    });
 
-   it('isDirectChange is true only for URIs in the latest changed set', () => {
-      // Kills the isDirectChange mutants: OptionalChaining (`lastUpdate?.`),
+   it('isTriggeringEdit is true only for URIs in the latest changed set', () => {
+      // Kills the isTriggeringEdit mutants: OptionalChaining (`lastUpdate?.`),
       // `?? false`→`&& false`, `.some`→`.every`, the predicate equality, and
       // the per-element booleans.
       const { manager, builder } = makeManagerHarness();
       // No build yet → no lastUpdate → false (exercises the `?? false` default).
-      expect(manager.isDirectChange(URI_A)).toBe(false);
+      expect(manager.isTriggeringEdit(URI_A)).toBe(false);
 
       // Two changed URIs where only ONE equals the target. `.some` → true,
       // but a `.every` mutant → false (URI_B fails the predicate). A
       // single-element changed set cannot kill `.every`, because a one-element
       // array that matches satisfies BOTH `.some` and `.every`.
       builder.fireOnUpdate([URI.parse(URI_A), URI.parse(URI_B)], []);
-      expect(manager.isDirectChange(URI_A)).toBe(true);
+      expect(manager.isTriggeringEdit(URI_A)).toBe(true);
 
       // A URI not in the changed set → false (kills `=> true` per-element booleans
       // and confirms the predicate equality is real).
       builder.fireOnUpdate([URI.parse(URI_A)], []);
-      expect(manager.isDirectChange('file:///C.fake')).toBe(false);
+      expect(manager.isTriggeringEdit('file:///C.fake')).toBe(false);
    });
 
-   it('isDirectChange canonicalizes the URI so a non-canonical query still matches', () => {
+   it('isTriggeringEdit canonicalizes the URI so a non-canonical query still matches', () => {
       const { manager, builder } = makeManagerHarness();
       // The builder reports canonical (percent-encoded) URIs; a caller querying with
       // the non-canonical spelling must still match (same normalization the
       // HydraniumTextDocuments applies to its document store).
       builder.fireOnUpdate([URI.parse('file:///My Folder/x.fake')], []);
-      expect(manager.isDirectChange('file:///My Folder/x.fake')).toBe(true);
-      expect(manager.isDirectChange('file:///My%20Folder/x.fake')).toBe(true);
+      expect(manager.isTriggeringEdit('file:///My Folder/x.fake')).toBe(true);
+      expect(manager.isTriggeringEdit('file:///My%20Folder/x.fake')).toBe(true);
    });
 });

@@ -30,7 +30,7 @@
 import { describe, expect, it } from 'vitest';
 import { URI } from '@hydranium/langium';
 import { makeFakeClock } from '@hydranium/protocol/testing';
-import { SelfSaveRegistry } from '../../src/documents/self-save-registry.js';
+import { DefaultSelfSaveRegistry } from '../../src/documents/self-save-registry.js';
 import { makeStubSelfSaveRegistry, makeStubWritableFileSystem } from '../../src/testing/index.js';
 
 const URI_A = URI.parse('file:///ws/a.fake');
@@ -92,16 +92,16 @@ describe('makeStubWritableFileSystem — the self-save notification, against the
       // Replay the recorded pair into the real registry: this is what the
       // suppression the stub stands in for actually consults.
       const clock = makeFakeClock({ now: call.mtimeMs });
-      const real = new SelfSaveRegistry({ Clock: clock });
+      const real = new DefaultSelfSaveRegistry({ Clock: clock });
       real.register(call.fsPath, call.mtimeMs);
 
-      expect(real.matches(call.fsPath, call.mtimeMs)).toBe(true);
+      expect(real.isRegistered(call.fsPath, call.mtimeMs)).toBe(true);
       // The near misses are what make the line above mean something: the real
       // registry keys by fsPath and matches by exact mtime, so a stub recording
       // the URI string or a rounded mtime would register an entry that never
       // suppresses anything.
-      expect(real.matches(URI_A.toString(), call.mtimeMs)).toBe(false);
-      expect(real.matches(call.fsPath, call.mtimeMs + 1)).toBe(false);
+      expect(real.isRegistered(URI_A.toString(), call.mtimeMs)).toBe(false);
+      expect(real.isRegistered(call.fsPath, call.mtimeMs + 1)).toBe(false);
    });
 
    it('notifies the registry once per write, and stops after the registry is reset', async () => {

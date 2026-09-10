@@ -18,13 +18,13 @@ import {
    type TransferDiagnostic,
    type TransferElement
 } from '@hydranium/protocol';
-import { ServerLocale } from '../locale/server-locale.js';
-import { ServerMessageRenderer } from '../messages/renderer.js';
+import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.js';
+import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 import type { Harness } from '@hydranium/protocol/testing';
 import { type AstNode, type AstNodeDescription, type WorkspaceLock } from '@hydranium/langium';
 import type { ModelService, ModelServiceOptions } from '../langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../langium/module.js';
-import { TransferEncoder } from '../langium/transfer/transfer-encoder.js';
+import { DefaultTransferEncoder, type TransferEncoder } from '../langium/transfer/transfer-encoder.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import type { FakeDocumentOptions } from './fake-document.js';
@@ -92,7 +92,7 @@ export interface TestSharedServices<
       WorkspaceLock: WorkspaceLock;
    };
    readonly model: {
-      TransferEncoder: TransferEncoder<unknown, TDiagnostic>;
+      TransferEncoder: TransferEncoder<TDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
    };
    /**
@@ -103,7 +103,7 @@ export interface TestSharedServices<
     * `Validated` phase, where an omitted slot is a `TypeError`.
     */
    readonly ServerLocale: ServerLocale;
-   readonly MessageRenderer: ServerMessageRenderer;
+   readonly MessageRenderer: MessageRenderer;
 }
 
 /** Optional configuration for {@link makeTestServices}. */
@@ -128,7 +128,7 @@ export interface MakeTestServicesOptions<
     * passes every sentence through unchanged. Supply one to install a catalogue
     * or to drive the throwing path.
     */
-   messageRenderer?: (services: ServerSharedServices<TProject>) => ServerMessageRenderer;
+   messageRenderer?: (services: ServerSharedServices<TProject>) => MessageRenderer;
    /** Locale handed to the bundle's {@link ServerLocale}. Default: none, i.e. the framework's English. */
    locale?: string;
    /**
@@ -206,7 +206,7 @@ export interface MakeTestServicesOptions<
     * Override the {@link TransferEncoder} factory. Default: framework
     * {@link TransferEncoder} with no overrides.
     */
-   transferEncoder?: (services: ServerSharedServices<TProject>) => TransferEncoder<unknown, TDiagnostic>;
+   transferEncoder?: (services: ServerSharedServices<TProject>) => TransferEncoder<TDiagnostic>;
 }
 
 /**
@@ -248,7 +248,7 @@ export interface TestServicesBundle<
     */
    readonly indexManager: StubIndexManager | undefined;
    readonly modelService: ModelService<TAst, TDiagnostic, TTransfer>;
-   readonly transferEncoder: TransferEncoder<unknown, TDiagnostic>;
+   readonly transferEncoder: TransferEncoder<TDiagnostic>;
    readonly logger: Logger;
    /** The clock bound on the `Clock` slot — a `makeFakeClock()` if one was passed. */
    readonly clock: Clock;
@@ -259,7 +259,7 @@ export interface TestServicesBundle<
     */
    readonly serverLocale: ServerLocale;
    /** The renderer bound on `MessageRenderer` — the framework's own unless one was supplied. */
-   readonly messageRenderer: ServerMessageRenderer;
+   readonly messageRenderer: MessageRenderer;
 }
 
 /**
@@ -340,31 +340,31 @@ export function makeTestServices<
       },
       model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject>['model'],
       ServerLocale: {} as ServerLocale,
-      MessageRenderer: {} as ServerMessageRenderer
+      MessageRenderer: {} as DefaultMessageRenderer
    };
    const sharedServices = services as unknown as ServerSharedServices<TProject>;
 
    // Patched in after the literal, like `model` below: both read the tree they
    // belong to, and the renderer reads the locale service.
-   const mutableMessages = services as { ServerLocale: ServerLocale; MessageRenderer: ServerMessageRenderer };
-   const serverLocale = new ServerLocale(sharedServices);
+   const mutableMessages = services as { ServerLocale: ServerLocale; MessageRenderer: MessageRenderer };
+   const serverLocale = new DefaultServerLocale(sharedServices);
    if (options.locale) {
       serverLocale.accept(options.locale);
    }
    mutableMessages.ServerLocale = serverLocale;
-   const messageRenderer = options.messageRenderer?.(sharedServices) ?? new ServerMessageRenderer(sharedServices);
+   const messageRenderer = options.messageRenderer?.(sharedServices) ?? new DefaultMessageRenderer(sharedServices);
    mutableMessages.MessageRenderer = messageRenderer;
 
    const serialize = options.serialize ?? ((_uri: string, root: TTransfer) => JSON.stringify(root));
    const transferEncoder = options.transferEncoder
       ? options.transferEncoder(sharedServices)
-      : new TransferEncoder<unknown, TDiagnostic>(sharedServices);
+      : new DefaultTransferEncoder<unknown, TDiagnostic>(sharedServices);
    const modelService = options.modelService
       ? options.modelService(sharedServices)
       : makeStubModelService<TAst, TDiagnostic, TTransfer>(sharedServices, serialize, options.modelServiceOptions);
 
    const mutableModel = services.model as {
-      TransferEncoder: TransferEncoder<unknown, TDiagnostic>;
+      TransferEncoder: TransferEncoder<TDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
    };
    mutableModel.TransferEncoder = transferEncoder;

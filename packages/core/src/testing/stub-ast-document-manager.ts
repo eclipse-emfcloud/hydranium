@@ -27,9 +27,8 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  * underlying stub text-document manager, `onUpdate` is driven explicitly
  * through {@link StubAstDocumentManager.emitUpdate} because the stub tree runs
  * no build phases to emit from, and the remaining read helpers
- * (`isDirectChange`, `getAuthor`, `readFile`) throw if invoked — tests that
- * need them should wire a richer stub or use the real
- * {@link AstDocumentManager}.
+ * (`isTriggeringEdit`, `getAuthor`) throw if invoked — tests that need them
+ * should wire a richer stub or use the real {@link AstDocumentManager}.
  *
  * Open state is tracked per URI as the set of holding client ids, so a
  * document stays open until its last client closes. The stub forwards
@@ -57,8 +56,7 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic = unkn
    | 'onClientClosed'
    | 'getAuthor'
    | 'getDocument'
-   | 'isDirectChange'
-   | 'readFile'
+   | 'isTriggeringEdit'
 > {
    readonly openClients: Map<string, Set<string>>;
 
@@ -214,11 +212,8 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic = u
       getDocument(uri: string): LangiumDocument | undefined {
          return documents?.getDocument(UriUtils.toUri(uri));
       },
-      isDirectChange(): boolean {
-         return notSupported('isDirectChange');
-      },
-      async readFile(uri: string): Promise<string> {
-         return notSupported(`readFile(${uri})`);
+      isTriggeringEdit(): boolean {
+         return notSupported('isTriggeringEdit');
       }
    };
 }

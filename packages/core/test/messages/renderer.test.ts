@@ -17,7 +17,7 @@ import { defineMessage, messageData, messageError } from '@hydranium/protocol';
 import { ResponseError } from 'vscode-jsonrpc';
 import type { Diagnostic } from 'vscode-languageserver-protocol';
 import { describe, expect, it } from 'vitest';
-import { ServerMessageRenderer } from '../../src/messages/index.js';
+import { DefaultMessageRenderer, type MessageRenderer } from '../../src/messages/index.js';
 import { makeCapturingLogger, makeNoopSharedServices } from '../../src/testing/index.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 
@@ -30,21 +30,21 @@ const CATALOGUES: Record<string, Record<string, string>> = {
 };
 
 /** The one override an adopter with i18n needs. */
-class CatalogueRenderer extends ServerMessageRenderer {
+class CatalogueRenderer extends DefaultMessageRenderer {
    protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
       return locale === undefined ? undefined : CATALOGUES[locale];
    }
 }
 
 /** An adopter catalogue with a bad key — the failure the no-throw contract exists for. */
-class ThrowingRenderer extends ServerMessageRenderer {
+class ThrowingRenderer extends DefaultMessageRenderer {
    protected override translationsFor(): Record<string, string> | undefined {
       throw new Error('missing catalogue key');
    }
 }
 
 /** A tree with `renderer` on the `MessageRenderer` slot, plus a capturing logger. */
-function makeTree(renderer?: (services: ServerSharedServicesMinimal) => ServerMessageRenderer) {
+function makeTree(renderer?: (services: ServerSharedServicesMinimal) => MessageRenderer) {
    const capture = makeCapturingLogger();
    const services = makeNoopSharedServices({ Logger: capture.logger, MessageRenderer: renderer });
    return {
@@ -73,7 +73,7 @@ function foreignDiagnostic(message: string, langiumCode?: string): Diagnostic {
    };
 }
 
-describe('ServerMessageRenderer', () => {
+describe('DefaultMessageRenderer', () => {
    it('passes an identity-bearing message through when no catalogue is installed', () => {
       // The framework ships English only and selects no locale, so this is the
       // shipped behaviour rather than a degenerate case.
@@ -143,7 +143,7 @@ describe('ServerMessageRenderer', () => {
       let lookups = 0;
       const tree = makeTree(
          services =>
-            new (class extends ServerMessageRenderer {
+            new (class extends DefaultMessageRenderer {
                protected override translationsFor(): Record<string, string> | undefined {
                   lookups++;
                   return undefined;

@@ -12,15 +12,15 @@ import { type LangiumSharedCoreServices } from '@hydranium/langium';
 import { type LangiumServices, type LangiumSharedServices } from '@hydranium/langium/lsp';
 import type { ServerSharedServicesMinimal } from './shared-services.js';
 import { collectProducibleTypes } from './language-types.js';
-import { AstDocumentManager } from '../documents/ast-document-manager.js';
+import { DefaultAstDocumentManager } from '../documents/ast-document-manager.js';
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
-import { BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
+import { DefaultBuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
 import { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
-import { ModelService } from './model-service/model-service.js';
+import { DefaultModelService } from './model-service/model-service.js';
 import { HydraniumScopeComputation } from './scope/hydranium-scope-computation.js';
 import { HydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
 import { processEnv } from '../util/environment.js';
-import { TransferEncoder } from './transfer/transfer-encoder.js';
+import { DefaultTransferEncoder } from './transfer/transfer-encoder.js';
 import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 
 /**
@@ -206,17 +206,17 @@ const STRICT_SHARED_SLOTS: readonly StrictSlot[] = [
    {
       side: 'shared',
       path: 'workspace.AstDocumentManager',
-      base: AstDocumentManager,
+      base: DefaultAstDocumentManager,
       get: s => nested(s, 'workspace', 'AstDocumentManager')
    },
    {
       side: 'shared',
       path: 'workspace.BuildPipelineIntegration',
-      base: BuildPipelineIntegration,
+      base: DefaultBuildPipelineIntegration,
       get: s => nested(s, 'workspace', 'BuildPipelineIntegration')
    },
-   { side: 'shared', path: 'model.TransferEncoder', base: TransferEncoder, get: s => nested(s, 'model', 'TransferEncoder') },
-   { side: 'shared', path: 'model.ModelService', base: ModelService, get: s => nested(s, 'model', 'ModelService') }
+   { side: 'shared', path: 'model.TransferEncoder', base: DefaultTransferEncoder, get: s => nested(s, 'model', 'TransferEncoder') },
+   { side: 'shared', path: 'model.ModelService', base: DefaultModelService, get: s => nested(s, 'model', 'ModelService') }
 ];
 
 const STRICT_LANGUAGE_SLOTS: readonly StrictSlot[] = [
