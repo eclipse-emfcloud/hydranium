@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { inject, type Module } from '@hydranium/langium';
+import { type DeepPartial, inject, type Module } from '@hydranium/langium';
 import {
    createDefaultModule,
    createDefaultSharedModule,
@@ -98,6 +98,31 @@ export interface IntegrationServicesOptions<
        * it is silently inert.
        */
       extra?: ReadonlyArray<Module<TShared, PartialLangiumSharedServices>>;
+      /**
+       * Shared modules composed LAST — after `adopter` — and partial over
+       * `TShared` rather than over Langium's shared services.
+       *
+       * Both differences are the point, and neither is served by
+       * {@link extra}. Most framework shared services are constructed with
+       * no options (`ModelService: services => new ModelService(services)`),
+       * so rebinding the slot is the only way to boot one configured
+       * differently; a caller that needs that is usually a test, and the slot
+       * it needs is as often a framework ADDITION (`Clock`, `Tracer`,
+       * `ProjectManager`) as a Langium one. `extra` can express neither: it
+       * is typed `DeepPartial<LangiumSharedServices>`, and it loses to
+       * `adopter` on every slot the adopter binds.
+       *
+       * Kept separate rather than widening `extra` because `extra` is the
+       * protocol-head tier, and a head must NOT outrank the adopter. Widening
+       * it also does not typecheck — `Module<I, T>` puts `T` in factory
+       * return position, so a head module declaring Langium slot types stops
+       * being assignable once `T` becomes `DeepPartial<TShared>`.
+       *
+       * Composing last means an override wins over everything, including the
+       * adopter. That is what makes it usable for the slots an adopter binds
+       * itself, and why production code should not reach for it.
+       */
+      overrides?: ReadonlyArray<Module<TShared, DeepPartial<TShared>>>;
    };
 
    /**
@@ -247,7 +272,9 @@ export function createIntegrationServices<
       sharedModules.generated,
       sharedModule,
       ...(sharedModules.extra ?? []),
-      sharedModules.adopter
+      sharedModules.adopter,
+      // Last, so an override outranks the adopter too — see `overrides`.
+      ...((sharedModules.overrides ?? []) as ReadonlyArray<Module<TShared, PartialLangiumSharedServices>>)
    ) as unknown as TShared;
 
    // Each language gets its OWN `createDefaultModule({ shared })` — the

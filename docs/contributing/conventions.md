@@ -1301,6 +1301,23 @@ Written once here so nobody re-audits them:
   not a catalogue entry — routing it through one would ask an adopter to
   "translate" English into their own product name.
 
+### Diagnostics carry the identity everywhere except the squiggle
+
+`acceptMessage` puts the identity on both `Diagnostic.code` and `data.hydranium`,
+and `TransferEncoder.toTransferDiagnostic` lifts it onto `TransferDiagnostic` as
+`code` + `params` — so a form editor or any adopter-owned surface can render a
+diagnostic in the reading user's language, parameterised or not. Reach for
+`TransferDiagnostic.resolved`, which returns `undefined` for a diagnostic with no
+framework identity; `code` alone does not establish one, because Langium's
+internal codes share the field.
+
+The **editor surface is the exception**: Monaco's `IMarkerData` has no slot for
+the params, so Theia's converter can only carry `code` through and a
+parameterised sentence falls back to the server's English on the squiggle, its
+hover and the Problems tree. Resolving it earlier means rebinding
+`ProtocolToMonacoConverter`, which couples an adopter to a host internal. So when
+a diagnostic's main audience is the editor, **prefer a parameterless sentence**.
+
 ### Fragments are not parameters
 
 A prose fragment interpolated into a sentence becomes **one code per value**, not

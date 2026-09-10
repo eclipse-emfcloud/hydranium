@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   hasMessageIdentity,
    type Tracer,
    type TransferDiagnostic,
    type TransferElement,
@@ -387,7 +388,10 @@ export class TransferEncoder<
     * LSP severity enum to the wire string union, discriminates the
     * diagnostic type from Langium's `data.code` (`'lexing-error'` /
     * `'parsing-error'` else `'validation-error'`), passes through
-    * message / element / property / code. Adopters whose validator
+    * message / element / property / code, and lifts the framework message
+    * params out of `data` so a translating surface can render a
+    * parameterised diagnostic rather than a template with its placeholders
+    * left standing. Adopters whose validator
     * doesn't decorate diagnostics with `element` still get a valid
     * `TransferDiagnostic` — the field falls back to `''`.
     *
@@ -396,6 +400,12 @@ export class TransferEncoder<
     */
    toTransferDiagnostic(diagnostic: TransferLspDiagnostic): TDiagnostic {
       const langiumCode = (diagnostic.data as { code?: string } | undefined)?.code;
+      // The same `data` the Langium code comes out of also carries the framework
+      // message identity, under its own key so the two conventions co-exist.
+      // Taking the params from there rather than from `code` is what lets a
+      // translating surface render a PARAMETERISED diagnostic: `code` survives on
+      // its own and yields a template with its placeholders left standing.
+      const identity = hasMessageIdentity(diagnostic.data) ? diagnostic.data.hydranium : undefined;
       const result: TransferDiagnostic = {
          type: langiumCode === 'lexing-error' ? 'lexing-error' : langiumCode === 'parsing-error' ? 'parsing-error' : 'validation-error',
          element: diagnostic.element ?? '',
@@ -408,7 +418,8 @@ export class TransferEncoder<
                : diagnostic.severity === DiagnosticSeverity.Warning
                  ? 'warning'
                  : 'info',
-         code: typeof diagnostic.code === 'number' || typeof diagnostic.code === 'string' ? diagnostic.code : langiumCode
+         code: typeof diagnostic.code === 'number' || typeof diagnostic.code === 'string' ? diagnostic.code : langiumCode,
+         params: identity?.params
       };
       return result as TDiagnostic;
    }

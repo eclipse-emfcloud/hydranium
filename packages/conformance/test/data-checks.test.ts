@@ -25,9 +25,9 @@ const connect = (): DataConformanceDriver<TransferElement> => {
 };
 
 describe('buildDataChecks', () => {
-   it('plans three server-level checks plus four grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(7);
-      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(11);
+   it('plans three server-level checks plus five grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(8);
+      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(13);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -42,7 +42,7 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(7);
+      expect(checks).toHaveLength(8);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
@@ -68,8 +68,8 @@ describe('buildDataChecks', () => {
          check => typeof check.body === 'function'
       );
       // getProjects shape, getProjects non-empty and waitForReady separately,
-      // plus valid-envelope and invalid-diagnostics.
-      expect(runnable).toHaveLength(5);
+      // plus valid-envelope, invalid-diagnostics and the diagnostic-params check.
+      expect(runnable).toHaveLength(6);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

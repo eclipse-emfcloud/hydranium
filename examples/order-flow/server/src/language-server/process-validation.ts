@@ -8,9 +8,34 @@
  ********************************************************************************/
 
 import type { ValidationCheckContribution, ValidationCheckRegistry } from '@hydranium/core';
+// The carriers ship from the `./messages` subpath rather than the root barrel,
+// which is where the framework keeps its own declarations too.
+import { acceptMessage } from '@hydranium/core/messages';
 import type { ValidationAcceptor } from '@hydranium/langium';
+import { defineMessage } from '@hydranium/protocol';
 import type { OrderFlowAstType, Transition } from './ast.js';
 import { findTransition, isSelfTransition } from './process-transition-rules.js';
+
+/**
+ * This example's own diagnostics, declared the way the framework declares its
+ * own: a stable code beside an English default, with named placeholders our
+ * `interpolate` fills.
+ *
+ * Declaring them rather than passing prose to `accept` is what lets a surface
+ * translate them. `acceptMessage` puts the identity on `Diagnostic.code` and in
+ * `data.hydranium`, the transfer encoder lifts it onto `TransferDiagnostic` as
+ * `code` + `params`, and the Theia properties panel renders the result through
+ * its loaded catalogue — so an adopter's diagnostic reaches a reader in their own
+ * language by the same path a framework one does.
+ *
+ * `order-flow/` rather than `hydranium/`, which is reserved for the framework.
+ */
+export const SELF_TRANSITION = defineMessage('order-flow/process/self-transition', "'{step}' cannot transition to itself.");
+
+export const DUPLICATE_TRANSITION = defineMessage(
+   'order-flow/process/duplicate-transition',
+   "A transition from '{source}' to '{target}' is already declared."
+);
 
 /**
  * Validation for the `.process` grammar's transitions.
@@ -50,7 +75,7 @@ export class OrderFlowProcessValidationContribution implements ValidationCheckCo
          return;
       }
       if (isSelfTransition(source, target)) {
-         accept('error', `'${source.name}' cannot transition to itself.`, { node: transition, property: 'target' });
+         acceptMessage(accept, 'error', SELF_TRANSITION, { node: transition, property: 'target' }, { step: source.name });
          return;
       }
       // Reported on the LATER of the pair: `findTransition` returns the first
@@ -58,9 +83,7 @@ export class OrderFlowProcessValidationContribution implements ValidationCheckCo
       // duplicate. Reporting both would blame the original for the copy.
       const existing = findTransition(transition.$container, source, target);
       if (existing && existing !== transition) {
-         accept('error', `A transition from '${source.name}' to '${target.name}' is already declared.`, {
-            node: transition
-         });
+         acceptMessage(accept, 'error', DUPLICATE_TRANSITION, { node: transition }, { source: source.name, target: target.name });
       }
    }
 }

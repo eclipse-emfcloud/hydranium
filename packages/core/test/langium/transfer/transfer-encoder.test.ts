@@ -20,7 +20,8 @@ import {
    type TransferMode
 } from '../../../src/langium/transfer/transfer-encoder.js';
 import type { TransferLspDiagnostic } from '../../../src/langium/validation/document-validator.js';
-import type { TransferDiagnostic, TransferDocument, TransferElement, TransferTypeFor } from '@hydranium/protocol';
+import { defineMessage, messageData, renderFrameworkMessage, TransferDiagnostic } from '@hydranium/protocol';
+import type { TransferDocument, TransferElement, TransferTypeFor } from '@hydranium/protocol';
 
 function buildEncoder(reflection: AstReflection): TransferEncoder {
    const services = makeNoopSharedServices({
@@ -285,6 +286,48 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
          diag({ code: 'E123', data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic)
       );
       expect(result.code).toBe('E123');
+   });
+
+   it('lifts the message params out of data, so a parameterised diagnostic can be translated', () => {
+      const encoder = buildEncoder(makeFakeReflection({}));
+      const message = defineMessage('test/one/two', "Name '{name}' uses '{separator}'.");
+
+      const result = encoder.toTransferDiagnostic(
+         diag({
+            code: message.code,
+            message: message.format({ name: 'A.B', separator: '.' }),
+            data: messageData(message, { name: 'A.B', separator: '.' })
+         } as unknown as TransferLspDiagnostic)
+      );
+
+      // The point of the field: a foreign template renders complete rather than
+      // with its placeholders standing, which is what `code` alone produces.
+      expect(
+         renderFrameworkMessage(TransferDiagnostic.resolved(result)!, { 'test/one/two': "Der Name '{name}' nutzt '{separator}'." })
+      ).toBe("Der Name 'A.B' nutzt '.'.");
+   });
+
+   it('leaves params absent for a diagnostic carrying no framework identity', () => {
+      const encoder = buildEncoder(makeFakeReflection({}));
+
+      // Langium's own `data.code` shape, which is the same field but not an
+      // identity — the discrimination `resolved` exists to make.
+      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic));
+
+      expect(result.params).toBeUndefined();
+      expect(TransferDiagnostic.resolved(result)).toBeUndefined();
+   });
+
+   it('carries an empty params for a parameterless framework message, so its identity still resolves', () => {
+      const encoder = buildEncoder(makeFakeReflection({}));
+      const message = defineMessage('test/one/flat', 'Nothing to substitute.');
+
+      const result = encoder.toTransferDiagnostic(
+         diag({ code: message.code, message: message.text, data: messageData(message) } as unknown as TransferLspDiagnostic)
+      );
+
+      expect(result.params).toEqual({});
+      expect(TransferDiagnostic.resolved(result)?.code).toBe('test/one/flat');
    });
 });
 
