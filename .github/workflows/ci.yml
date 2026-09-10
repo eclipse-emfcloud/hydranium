@@ -83,6 +83,11 @@ jobs:
       # the trigger and the heap and system memory at that moment, which is
       # the evidence the silent Windows death currently leaves none of. Also
       # in `release.yml`, because the step above compares the two.
+      #
+      # `--trace-exit` belongs with it and is deliberately NOT here: it fires
+      # on a SUCCESSFUL `process.exit(0)` too, and tsc calls one, so job-wide
+      # it puts a WARNING and a stack trace on every green typecheck. It is
+      # set on the failure-path re-run below instead.
       NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
@@ -432,8 +437,74 @@ jobs:
       # here let nine of them drift out of CI while the workflow still looked
       # like it was gating: an unmatched lint glob or a missing SPDX header
       # reddens locally and passed here.
+      # Teed so the re-run step below can read which task turbo reported as
+      # failed. `pipefail` is on for this shell, so the gate's own status
+      # still decides the step.
       - name: Full gate
-        run: npm run check
+        run: npm run check 2>&1 | tee gate.log
+
+      # Ask the dead task again, on its own, with its streams kept APART.
+      #
+      # Every occurrence so far has produced an exit code and no output, and
+      # the two possibilities behind that need different fixes: a tool that
+      # genuinely says nothing, or output going somewhere it is not read.
+      # Under turbo both streams are merged into one pipe with sixty-five
+      # other tasks; here the task has the machine to itself and writes to
+      # files, so whichever it is becomes visible.
+      #
+      # It answers the transience question in the same breath. A re-run that
+      # passes says contention; one that fails identically says the state is
+      # reproducible and can be chased.
+      #
+      # Both diagnostics are set HERE rather than on the gate, because both
+      # are noisy when nothing is wrong: `--trace-exit` traces a successful
+      # exit as readily as a failing one, and `DEBUG` adds thirty lines per
+      # lint task across nineteen packages. This step only exists on a red
+      # run, so neither costs a green one anything.
+      #
+      # Between them they cover both shapes seen so far: `--trace-exit` names
+      # the caller when a tool exits explicitly, which tsc does, and `DEBUG`
+      # traces eslint, which sets `process.exitCode` and returns instead.
+      - name: Re-run the failed task with its streams apart
+        if: failure()
+        continue-on-error: true
+        env:
+          DEBUG: 'eslint:*'
+        run: |
+          # APPENDED to the job's value in the shell, not declared as a second
+          # `NODE_OPTIONS:` key. A second key would be a second value for the
+          # drift check above to compare against release.yml, and it would
+          # fail — correctly, since it cannot tell a deliberate extra flag
+          # from the environments diverging. Appending also means the base
+          # flags are stated once.
+          export NODE_OPTIONS="$NODE_OPTIONS --trace-exit"
+
+          # Turbo colours its output, so the marker has to survive escape
+          # codes being stripped before it can be matched.
+          task=$(sed -e 's/\x1b\[[0-9;]*m//g' gate.log |
+            awk '/^Failed:/ { print $2; exit }')
+          if [ -z "$task" ]; then
+            echo "No 'Failed:' line in the gate log; nothing to re-run." >&2
+            exit 0
+          fi
+          package="${task%%#*}"
+          script="${task##*#}"
+          echo "re-running $script in $package"
+
+          code=0
+          npm run "$script" -w "$package" > rerun-stdout.log 2> rerun-stderr.log || code=$?
+
+          {
+            echo "### Re-run of \`$task\`"
+            echo "- exit code: \`$code\` (0 means it passed the second time, so the first was transient)"
+            echo "- stdout: \`$(wc -c < rerun-stdout.log)\` bytes"
+            echo "- stderr: \`$(wc -c < rerun-stderr.log)\` bytes"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          echo '--- stdout (first 60 lines)'
+          head -60 rerun-stdout.log
+          echo '--- stderr (first 60 lines)'
+          head -60 rerun-stderr.log
 
       # A turbo task that dies writing nothing leaves no failure to read. These
       # are the records that outlive it. `continue-on-error` because this runs
@@ -476,7 +547,14 @@ jobs:
           # Node writes its report into the dying process's working directory,
           # which under turbo is the task's own package, so every depth needs
           # naming — two for an example, because `*` does not cross a separator.
+          # `gate.log` and the two re-run captures are at the root. Uploading
+          # them matters more than it looks: GitHub REPLACES a job's log on
+          # re-attempt, so an artefact is the only copy of the first failure
+          # that survives someone hitting re-run.
           path: |
+            gate.log
+            rerun-stdout.log
+            rerun-stderr.log
             report.*.json
             packages/*/report.*.json
             examples/*/*/report.*.json
