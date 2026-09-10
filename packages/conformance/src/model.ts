@@ -83,6 +83,46 @@ export interface EditSpec {
 }
 
 /**
+ * A reference-picker query for an element that does not exist yet, plus the
+ * candidate the adopter expects it to offer.
+ *
+ * **The URI a create-element flow holds is a FOLDER**, because the file is not
+ * written until the dialog is confirmed. A folder URI names no file and so
+ * carries no extension, which is the one shape a head cannot route to a grammar
+ * by URI alone — it has to resolve the language some other way. That makes this
+ * the create dialog's load-bearing precondition and the reason the query is
+ * worth a conformance check of its own: a head that gets it wrong answers no
+ * candidates or throws, and the dialog never opens.
+ */
+export interface ReferenceQuerySpec {
+   /** AST type of the element being created — the synthetic source's own type. */
+   readonly type: string;
+   /** The reference property on the source (or on `syntheticPath`'s leaf) whose candidates the picker fills. */
+   readonly property: string;
+   /**
+    * Steps from the synthetic source down to the node holding `property`, when
+    * the reference is not on the source itself. Each step is
+    * `[containerProperty, type]` — the kit builds the `SyntheticStep`s, so the
+    * fixture names no protocol type.
+    */
+   readonly path?: ReadonlyArray<readonly [containerProperty: string, type: string]>;
+   /**
+    * Folder the create flow asks at. {@link Deferred} because a fixture may name
+    * a workspace the driver's `connect` only just created. Defaults to the parent
+    * of `valid.uri`, which is the folder a sibling of the valid model would go
+    * into — the common case, so most fixtures supply only `type` + `property`.
+    */
+   readonly folderUri?: Deferred<string>;
+   /**
+    * A candidate label the query MUST offer. Without it an empty result passes,
+    * and empty is exactly what the defect this check exists for produces — so
+    * the expectation is what makes the check discriminating rather than a
+    * smoke test.
+    */
+   readonly expectCandidate: string;
+}
+
+/**
  * The per-language fixture. `valid` and `invalid` are defined once and reused
  * across heads; the two extras are per-head opt-ins.
  *
@@ -98,6 +138,9 @@ export interface EditSpec {
  *   uses `invalid.text` and never calls `edit.expect`, so an LSP-only adopter
  *   has nothing to supply here.
  * - `completionPosition` — read by the **LSP slice only**.
+ * - `referenceQuery` — read by the **data slice only**, and only when the
+ *   driver supplies `references` (the reference surface is opt-in on the head
+ *   too, so both halves have to be present for the check to run).
  *
  * Both extras are optional and their checks report *skipped* when absent,
  * rather than silently not running. Making either mandatory would defeat the
@@ -119,4 +162,9 @@ export interface LanguageFixture {
    readonly edit?: EditSpec;
    /** Optional: a position at which the LSP completion check requests completion. */
    readonly completionPosition?: { readonly line: number; readonly character: number };
+   /**
+    * Optional: the create-dialog reference query. Read by the **data slice
+    * only**, and only when the driver exposes the opt-in reference surface.
+    */
+   readonly referenceQuery?: ReferenceQuerySpec;
 }

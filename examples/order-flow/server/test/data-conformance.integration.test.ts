@@ -67,6 +67,7 @@
 import type { LanguageFixture } from '@hydranium/conformance';
 import { runDataConformance } from '@hydranium/conformance/vitest';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
+import { REFERENCE_SERVER_PROTOCOL_METHODS, type ReferenceServerProtocol } from '@hydranium/protocol/data';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { afterAll } from 'vitest';
@@ -158,7 +159,19 @@ const processFixture: LanguageFixture = {
    edit: {
       to: 'process Shipping for Order {\n   task Dispatch reads Order.id\n   task Confirm writes Order.status = SHIPPED\n   task Archive\n   transition Dispatch -> Confirm\n}\n',
       expect: root => (root as ProcessModel).nodes?.some(node => node.name === 'Archive') ?? false
-   }
+   },
+   /**
+    * The create-element query, and `.process` is the grammar that has one:
+    * `ProcessModel` opens `process <name> for <subject=[Entity]>`, so a New
+    * Process dialog cannot offer anything until it knows which entities are in
+    * scope — and it has to ask before the file exists.
+    *
+    * `folderUri` is left to the kit's default, which derives the folder holding
+    * `valid.uri`: `orders/`, whose project requires `commerce-core`. `Order` is
+    * a project-tier entity there, so a head that resolves the folder's project
+    * offers it and one that cannot answers nothing.
+    */
+   referenceQuery: { type: 'ProcessModel', property: 'subject', expectCandidate: 'Order' }
 };
 
 /**
@@ -201,9 +214,23 @@ runDataConformance<OrderFlowTransfer>({
       workspace?.dispose();
       const { harness: services, workspace: fresh } = await makeScratchWorkspaceHarness();
       workspace = fresh;
-      return makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
-         server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared)
+      const harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
+         // `additionalMethods` is how the OPT-IN reference fragment reaches the
+         // wire: it is deliberately not in `DATA_SERVER_PROTOCOL_METHODS`, so a
+         // head that wants a create-element dialog registers it alongside. The
+         // example does it here rather than in `main.ts` because this is the
+         // suite that proves the surface answers.
+         server: channel =>
+            new DataServer<OrderFlowTransfer>(channel, services.shared, { additionalMethods: REFERENCE_SERVER_PROTOCOL_METHODS })
       });
+      return {
+         ...harness,
+         // The proxy forwards any called name over the connection, so the
+         // reference methods are reachable through it once the server registers
+         // them — the cast states that, and keeps the kit exercising the WIRE
+         // rather than calling the server object in-process.
+         references: harness.proxy as unknown as ReferenceServerProtocol<OrderFlowTransfer>
+      };
    },
    languages: [domainFixture, processFixture, layoutFixture],
    // `OrderFlowProjectManager` turns every `.domain` project header in the

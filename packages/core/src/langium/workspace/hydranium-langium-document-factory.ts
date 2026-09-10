@@ -15,6 +15,7 @@ import {
    type ParseResult,
    type URI
 } from '@hydranium/langium';
+import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type Serializer } from '../serialization/serializer.js';
 
 /** Structural view of the per-language serializer slot on the resolved services. */
@@ -49,6 +50,39 @@ interface WithSerializer {
  * node identity is preserved.
  */
 export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFactory {
+   /**
+    * Narrows the inherited Langium `ServiceRegistry` field to the framework's
+    * {@link ExtendedServiceRegistry}, so the by-id lookup below needs no
+    * per-callsite cast. The framework's shared module binds that class.
+    */
+   declare protected readonly serviceRegistry: ExtendedServiceRegistry;
+
+   /**
+    * Parse `text` for `uri` under the grammar `languageId` names, instead of
+    * the one `uri` routes to.
+    *
+    * For a URI that routes to no grammar at all: a directory, or any other URI
+    * that names no file and so carries no extension. Langium's ladder ends at
+    * the extension, so it reports `no services for the extension ''` from
+    * inside the parse — naming neither the URI nor the caller that could have
+    * said which grammar it meant.
+    *
+    * The caller supplies the language because nothing else can. A URI with no
+    * extension carries no routing signal, and choosing on its behalf would be a
+    * guess the moment a second grammar is registered — which is why this takes
+    * the id rather than falling back to a sole registered language.
+    *
+    * @throws when `languageId` names no registered grammar.
+    */
+   fromStringInLanguage<T extends AstNode = AstNode>(text: string, uri: URI, languageId: string): LangiumDocument<T> {
+      const services = this.serviceRegistry.getServicesById(languageId);
+      if (!services) {
+         throw new Error(`No grammar is registered for the language id '${languageId}' (parsing ${uri.toString()}).`);
+      }
+      const parseResult: ParseResult<T> = services.parser.LangiumParser.parse<T>(text);
+      return this.createLangiumDocument<T>(parseResult, uri, undefined, text);
+   }
+
    override fromModel<T extends AstNode = AstNode>(model: T, uri: URI): LangiumDocument<T> {
       // Make the code-built AST as structurally complete as a parsed one — the
       // parser links containers, `fromModel` does not. In place (identity kept).

@@ -15,7 +15,8 @@ import type { LanguageFixture } from '../src/model.js';
 const fixture: LanguageFixture = {
    valid: { uri: 'file:///a.x', languageId: 'x', text: 'valid' },
    invalid: { uri: 'file:///b.x', languageId: 'x', text: 'invalid' },
-   edit: { to: 'edited', expect: () => true }
+   edit: { to: 'edited', expect: () => true },
+   referenceQuery: { type: 'Source', property: 'target', folderUri: 'file:///folder', expectCandidate: 'Target' }
 };
 
 // Never invoked — these tests inspect the planned check list (titles, count,
@@ -25,9 +26,9 @@ const connect = (): DataConformanceDriver<TransferElement> => {
 };
 
 describe('buildDataChecks', () => {
-   it('plans three server-level checks plus five grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(8);
-      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(13);
+   it('plans three server-level checks plus six grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(9);
+      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(15);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -42,13 +43,28 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(8);
+      expect(checks).toHaveLength(9);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
          expect.stringContaining('subscribe + update delivers an onDocumentUpdated event')
       ]);
       expect(skipped.every(check => (check.skipReason ?? '').includes('`edit`'))).toBe(true);
+   });
+
+   it('plans the reference query but skips it, with a named reason, without a referenceQuery', () => {
+      // Same contract as `edit`: a language with no create-element dialog opts
+      // out, and the check reports skipped rather than being absent — so an
+      // opt-out stays distinguishable from lost coverage.
+      const { referenceQuery: _query, ...withoutQuery } = fixture;
+      const checks = buildDataChecks({ connect, languages: [withoutQuery], expectsProjects: true });
+
+      expect(checks).toHaveLength(9);
+      const skipped = checks.filter(check => check.body === undefined);
+      expect(skipped.map(check => check.title)).toEqual([
+         expect.stringContaining('findReferenceCandidates answers for a synthetic source')
+      ]);
+      expect(skipped[0].skipReason).toContain('`referenceQuery`');
    });
 
    it('skips the project-emptiness check, with a named reason, when the options do not expect projects', () => {
@@ -68,8 +84,9 @@ describe('buildDataChecks', () => {
          check => typeof check.body === 'function'
       );
       // getProjects shape, getProjects non-empty and waitForReady separately,
-      // plus valid-envelope, invalid-diagnostics and the diagnostic-params check.
-      expect(runnable).toHaveLength(6);
+      // plus valid-envelope, invalid-diagnostics, the diagnostic-params check
+      // and the folder-URI reference query — none of which needs an edit.
+      expect(runnable).toHaveLength(7);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

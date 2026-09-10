@@ -24,6 +24,17 @@ export default class ServerLogRenameReporter {
    }
 
    onEnd(): void {
-      renameServerLogs(this.dir);
+      const unattributed = renameServerLogs(this.dir);
+      if (unattributed.length > 0) {
+         // Loud, because the alternative is a capture run that reads as
+         // complete: these logs exist and have content, but are named by an
+         // opaque workspace token and carry no test boundaries, so nothing
+         // about them says which spec they belong to.
+         console.warn(
+            `[server-log] ${unattributed.length} captured log(s) belong to no test: ${unattributed.join(', ')}.\n` +
+               '[server-log] Those specs never marked a boundary — apply the `serverLog` fixture, ' +
+               'or call `markServerLog`/`attachServerLog` from the suite, or their logs cannot be read per test.'
+         );
+      }
    }
 }
