@@ -61,8 +61,7 @@ import { join } from 'node:path';
 import { ModelService } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
-import { URI, type Module } from '@hydranium/langium';
-import type { PartialLangiumSharedServices } from '@hydranium/langium/lsp';
+import { type DeepPartial, URI, type Module } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
@@ -74,12 +73,12 @@ import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
  * constructs its own services with no options, so rebinding the slot is the only
  * route to a non-default one.
  */
-function withSerializeBuilds(serializeBuilds: boolean): Module<OrderFlowSharedServices, PartialLangiumSharedServices> {
+function withSerializeBuilds(serializeBuilds: boolean): Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>> {
    return {
       model: {
          ModelService: (services: OrderFlowSharedServices) => new ModelService(services, { serializeBuilds })
       }
-   } as unknown as Module<OrderFlowSharedServices, PartialLangiumSharedServices>;
+   };
 }
 
 let workspace: ScratchWorkspace | undefined;

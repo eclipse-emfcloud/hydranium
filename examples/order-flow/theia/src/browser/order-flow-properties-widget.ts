@@ -76,7 +76,8 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       this.node.appendChild(host);
       this.form = new PropertiesForm(host, {
          setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, reported) => this.port.reportError(error, reported)
+         reportError: (error, reported) => this.port.reportError(error, reported),
+         renderDiagnostic: diagnostic => this.port.renderDiagnostic(diagnostic)
       });
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));

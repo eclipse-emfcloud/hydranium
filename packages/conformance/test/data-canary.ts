@@ -72,12 +72,24 @@ export const EDITED_TEXT = 'element Two';
  * OBSERVABLY, and a real parser here would be a second implementation to keep
  * correct for no added discrimination.
  */
-function diagnosticsFor(text: string): TransferDiagnostic[] {
-   return text === INVALID_TEXT ? [canaryDiagnostic('the canary grammar wants a name')] : [];
+function diagnosticsFor(text: string, defects: CanaryDefects = {}): TransferDiagnostic[] {
+   return text === INVALID_TEXT ? [canaryDiagnostic('the canary grammar wants a name', defects)] : [];
 }
 
-function canaryDiagnostic(message: string): TransferDiagnostic {
-   return { type: 'validation-error', element: '', message, severity: 'error' };
+/**
+ * Carries a framework message identity, because the half-identity check has
+ * nothing to discriminate against a diagnostic that has none — it passes
+ * vacuously on an empty `code`, which would read as coverage.
+ */
+function canaryDiagnostic(message: string, defects: CanaryDefects = {}): TransferDiagnostic {
+   return {
+      type: 'validation-error',
+      element: '',
+      message,
+      severity: 'error',
+      code: 'hydranium/canary/wants-a-name',
+      params: defects.diagnosticParamsDropped ? undefined : {}
+   };
 }
 
 /**
@@ -102,6 +114,12 @@ export interface CanaryDefects {
    readonly diagnosticsOnValid?: boolean;
    /** An invalid model is reported clean. */
    readonly cleanInvalid?: boolean;
+   /**
+    * A diagnostic keeps its framework message code but drops the params — the
+    * half-carried identity a rebound `toTransferDiagnostic` produces, which
+    * renders a translated template with its placeholders left standing.
+    */
+   readonly diagnosticParamsDropped?: boolean;
    /** `updateModelDocument` acknowledges an edit without storing it. */
    readonly ignoreEdits?: boolean;
    /** `watchModelDocument` registers nothing, so no event is ever delivered. */
@@ -217,10 +235,10 @@ export class CanaryDataServer {
          return { uri, version: 0, diagnostics: [] };
       }
       const diagnostics = this.defects.diagnosticsOnValid
-         ? [canaryDiagnostic('the canary reports every model as broken')]
+         ? [canaryDiagnostic('the canary reports every model as broken', this.defects)]
          : this.defects.cleanInvalid
            ? []
-           : diagnosticsFor(stored.text);
+           : diagnosticsFor(stored.text, this.defects);
       return {
          uri,
          version: this.defects.fractionalVersion ? stored.version + 0.5 : stored.version,

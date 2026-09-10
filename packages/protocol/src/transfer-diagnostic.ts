@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type MessageParams, type ResolvedMessage } from './messages/primitives';
+
 /**
  * Generic, transport-friendly diagnostic shape used by the model-server protocol.
  *
@@ -56,6 +58,21 @@ export interface TransferDiagnostic {
     * is not usable as a rule identity on its own.
     */
    code?: number | string;
+   /**
+    * Substitutions for the placeholders in the message this {@link code} names,
+    * present only for a diagnostic raised from a framework message declaration.
+    *
+    * Without them a translated template renders with its `{name}` tokens left
+    * standing, because substitution leaves an unmatched token in place rather
+    * than raising — so a surface that translates from {@link code} alone is
+    * correct for a parameterless sentence and visibly wrong for a parameterised
+    * one. This is the field that makes the second case work; the LSP carrier has
+    * always moved the params, and no carrier below it did.
+    *
+    * Prefer {@link TransferDiagnostic.resolved} over reading this: it decides
+    * whether an identity is present at all, which a lone `params` cannot.
+    */
+   params?: MessageParams;
 }
 
 export namespace TransferDiagnostic {
@@ -72,6 +89,29 @@ export namespace TransferDiagnostic {
 
    export function isParseError(diagnostic: TransferDiagnostic): boolean {
       return diagnostic.type === 'parsing-error';
+   }
+
+   /**
+    * The diagnostic as a renderable message, for a surface that translates.
+    * `undefined` when it carries no framework identity — a syntactic error, an
+    * adopter's own check, a linker failure — which is the case a caller must
+    * distinguish rather than render.
+    *
+    * Hand the result to `renderFrameworkMessage` with whatever catalogue the
+    * host has loaded. The `text` is the server's English, so a code the
+    * catalogue does not carry still yields a complete sentence.
+    *
+    * `code` alone does not establish an identity: it also holds Langium's
+    * internal code and an adopter's own, and either would be looked up against a
+    * catalogue that cannot have it. Requiring `params` is what discriminates,
+    * and it is why a parameterless framework message still populates the field
+    * with an empty object rather than omitting it.
+    */
+   export function resolved(diagnostic: TransferDiagnostic): ResolvedMessage | undefined {
+      if (typeof diagnostic.code !== 'string' || diagnostic.params === undefined) {
+         return undefined;
+      }
+      return { code: diagnostic.code, params: diagnostic.params, text: diagnostic.message };
    }
 
    export function getPath(diagnostic: TransferDiagnostic): string {

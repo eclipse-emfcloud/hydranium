@@ -237,6 +237,37 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
          }
       });
 
+      checks.push({
+         title: `a diagnostic carrying a framework message code also carries its params ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(invalid);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+               const document = await driver.proxy.getModelDocument({ uri: model.uri, includeDiagnostics: true });
+
+               // Conditional rather than fixture-driven, and deliberately so: what
+               // an `invalid` fixture provokes is the adopter's choice, and a
+               // syntactic error legitimately carries no identity at all. The
+               // invariant is that the identity travels WHOLE or not — a `code`
+               // without `params` is the half-state that renders a translated
+               // template with its placeholders left standing, and it is
+               // reachable only by overriding `toTransferDiagnostic`.
+               const halfIdentities = document.diagnostics.filter(
+                  diagnostic =>
+                     typeof diagnostic.code === 'string' && diagnostic.code.startsWith('hydranium/') && diagnostic.params === undefined
+               );
+               assert.deepStrictEqual(
+                  halfIdentities.map(diagnostic => diagnostic.code),
+                  [],
+                  'diagnostics carry a framework message code with no params, so a translating surface cannot render them'
+               );
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
       // Opt-in: both remaining checks need a second, observably different model
       // text, which only `edit` supplies.
       const editSkipReason = 'fixture supplies no `edit` (data-slice only; omit it if this language is not driven through the data head)';

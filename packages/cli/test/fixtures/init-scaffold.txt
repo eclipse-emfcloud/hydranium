@@ -306,6 +306,25 @@ export type BookstoreServices = LangiumServices &
       shared: BookstoreSharedServices;
    };
 
+/** What a host or a test may vary about this composition. */
+export interface BookstoreOptions {
+   /**
+    * Shared modules layered in after the framework's own bindings.
+    *
+    * The framework constructs most shared services with no options —
+    * `DocumentBuilder: services => new HydraniumDocumentBuilder(services)` — so
+    * rebinding the slot is the only way to boot one configured differently, and
+    * a factory that hard-codes its composition leaves a test nowhere to do it.
+    * That is what this is for: pass a module binding `workspace.DocumentBuilder`
+    * to exercise a builder option, or to substitute a subclass.
+    *
+    * Composed LAST, after `BookstoreSharedModule`, so it wins over every other
+    * tier including this file's own bindings — which is what makes it usable for
+    * a slot the adopter overrides. Production code should not reach for it.
+    */
+   readonly extraSharedModules?: ReadonlyArray<Module<BookstoreSharedServices, DeepPartial<BookstoreSharedServices>>>;
+}
+
 const BookstoreSharedModule: Module<BookstoreSharedServices, PartialLangiumSharedServices> = {};
 
 const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
@@ -315,7 +334,10 @@ const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices 
 };
 
 /** Compose the Langium DI tree for Bookstore — returns the shared + language services. */
-export function createBookstoreServices(context: Partial<ServerModuleContext> = EmptyFileSystem): {
+export function createBookstoreServices(
+   context: Partial<ServerModuleContext> = EmptyFileSystem,
+   options: BookstoreOptions = {}
+): {
    shared: BookstoreSharedServices;
    Bookstore: BookstoreServices;
 } {
@@ -325,7 +347,8 @@ export function createBookstoreServices(context: Partial<ServerModuleContext> = 
       sharedModules: {
          generated: BookstoreGeneratedSharedModule,
          adopter: BookstoreSharedModule,
-         extra: [createLspServerSharedModule(fullContext)]
+         extra: [createLspServerSharedModule(fullContext)],
+         overrides: options.extraSharedModules
       },
       languageModules: {
          generated: BookstoreGeneratedModule,

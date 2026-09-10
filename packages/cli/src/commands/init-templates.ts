@@ -708,13 +708,35 @@ export type __NAME__Services = LangiumServices &
    LspServerAddedServices & {
       shared: __NAME__SharedServices;
    };
+
+/** What a host or a test may vary about this composition. */
+export interface __NAME__Options {
+   /**
+    * Shared modules layered in after the framework's own bindings.
+    *
+    * The framework constructs most shared services with no options —
+    * \`DocumentBuilder: services => new HydraniumDocumentBuilder(services)\` — so
+    * rebinding the slot is the only way to boot one configured differently, and
+    * a factory that hard-codes its composition leaves a test nowhere to do it.
+    * That is what this is for: pass a module binding \`workspace.DocumentBuilder\`
+    * to exercise a builder option, or to substitute a subclass.
+    *
+    * Composed LAST, after \`__NAME__SharedModule\`, so it wins over every other
+    * tier including this file's own bindings — which is what makes it usable for
+    * a slot the adopter overrides. Production code should not reach for it.
+    */
+   readonly extraSharedModules?: ReadonlyArray<Module<__NAME__SharedServices, DeepPartial<__NAME__SharedServices>>>;
+}
 ${configurationRoot}
 ${sharedModule}
 
 ${languageModules}
 
 /** Compose the Langium DI tree for __NAME__ — returns the shared + language services. */
-export function create__NAME__Services(context: Partial<ServerModuleContext> = EmptyFileSystem): {
+export function create__NAME__Services(
+   context: Partial<ServerModuleContext> = EmptyFileSystem,
+   options: __NAME__Options = {}
+): {
    shared: __NAME__SharedServices;
 ${returnType}
 } {
@@ -724,7 +746,8 @@ ${returnType}
       sharedModules: {
          generated: __NAME__GeneratedSharedModule,
          adopter: __NAME__SharedModule,
-         extra: [createLspServerSharedModule(fullContext)]
+         extra: [createLspServerSharedModule(fullContext)],
+         overrides: options.extraSharedModules
       },
       languageModules: {
          generated: ${primary.grammar}GeneratedModule,

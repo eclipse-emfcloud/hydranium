@@ -31,6 +31,7 @@ const PROJECT_NON_EMPTY = 'getProjects answers at least one project';
 const READY = 'waitForReady resolves';
 const VALID_ENVELOPE = 'getModelDocument(valid) returns a coherent envelope';
 const INVALID_DIAGNOSTICS = 'getModelDocument(invalid) reports at least one diagnostic';
+const DIAGNOSTIC_PARAMS = 'a diagnostic carrying a framework message code also carries its params';
 const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 
@@ -87,14 +88,23 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({})).toEqual([]);
    });
 
-   it('plans exactly the seven checks the must-fail cases below name', () => {
+   it('plans exactly the eight checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(7);
-      const covered = [PROJECT_SHAPE, PROJECT_NON_EMPTY, READY, VALID_ENVELOPE, INVALID_DIAGNOSTICS, EDIT_REFLECTED, SUBSCRIPTION];
-      expect(matching(titles, covered)).toHaveLength(7);
+      expect(titles).toHaveLength(8);
+      const covered = [
+         PROJECT_SHAPE,
+         PROJECT_NON_EMPTY,
+         READY,
+         VALID_ENVELOPE,
+         INVALID_DIAGNOSTICS,
+         DIAGNOSTIC_PARAMS,
+         EDIT_REFLECTED,
+         SUBSCRIPTION
+      ];
+      expect(matching(titles, covered)).toHaveLength(8);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -109,6 +119,11 @@ describe('the /data battery discriminates', () => {
       { label: 'a non-integer envelope version', defects: { fractionalVersion: true }, expected: [VALID_ENVELOPE] },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       { label: 'an invalid model reported clean', defects: { cleanInvalid: true }, expected: [INVALID_DIAGNOSTICS] },
+      {
+         label: 'a diagnostic keeping its code but dropping its params',
+         defects: { diagnosticParamsDropped: true },
+         expected: [DIAGNOSTIC_PARAMS]
+      },
       { label: 'an edit acknowledged but not stored', defects: { ignoreEdits: true }, expected: [EDIT_REFLECTED] },
       { label: 'a subscription that registers nothing', defects: { silentSubscriptions: true }, expected: [SUBSCRIPTION] },
       { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] }

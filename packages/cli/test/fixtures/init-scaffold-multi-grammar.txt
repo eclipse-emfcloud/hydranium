@@ -409,6 +409,25 @@ export type OrderFlowServices = LangiumServices &
       shared: OrderFlowSharedServices;
    };
 
+/** What a host or a test may vary about this composition. */
+export interface OrderFlowOptions {
+   /**
+    * Shared modules layered in after the framework's own bindings.
+    *
+    * The framework constructs most shared services with no options —
+    * `DocumentBuilder: services => new HydraniumDocumentBuilder(services)` — so
+    * rebinding the slot is the only way to boot one configured differently, and
+    * a factory that hard-codes its composition leaves a test nowhere to do it.
+    * That is what this is for: pass a module binding `workspace.DocumentBuilder`
+    * to exercise a builder option, or to substitute a subclass.
+    *
+    * Composed LAST, after `OrderFlowSharedModule`, so it wins over every other
+    * tier including this file's own bindings — which is what makes it usable for
+    * a slot the adopter overrides. Production code should not reach for it.
+    */
+   readonly extraSharedModules?: ReadonlyArray<Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>>>;
+}
+
 /** LSP settings section every language reads its configuration from. */
 export const ORDER_FLOW_CONFIGURATION_ROOT = 'order-flow';
 
@@ -442,7 +461,10 @@ const LayoutLanguageModule: Module<OrderFlowServices, PartialLangiumServices & D
 };
 
 /** Compose the Langium DI tree for OrderFlow — returns the shared + language services. */
-export function createOrderFlowServices(context: Partial<ServerModuleContext> = EmptyFileSystem): {
+export function createOrderFlowServices(
+   context: Partial<ServerModuleContext> = EmptyFileSystem,
+   options: OrderFlowOptions = {}
+): {
    shared: OrderFlowSharedServices;
    Domain: OrderFlowServices;
    Process: OrderFlowServices;
@@ -454,7 +476,8 @@ export function createOrderFlowServices(context: Partial<ServerModuleContext> = 
       sharedModules: {
          generated: OrderFlowGeneratedSharedModule,
          adopter: OrderFlowSharedModule,
-         extra: [createLspServerSharedModule(fullContext)]
+         extra: [createLspServerSharedModule(fullContext)],
+         overrides: options.extraSharedModules
       },
       languageModules: {
          generated: DomainGeneratedModule,

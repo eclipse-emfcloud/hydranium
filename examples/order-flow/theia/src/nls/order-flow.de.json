@@ -1,0 +1,34 @@
+{
+  "_comment": "German catalogue for the Order Flow example. DELIBERATELY PARTIAL — see order-flow-localization-backend-module.ts. Nested keys are flattened on '/', so these are the hydranium/<package>/<name> codes the framework publishes.",
+  "hydranium": {
+    "client-theia": {
+      "command-dump-server-state": "Serverzustand ausgeben",
+      "command-dump-pod-memory": "Pod-Speicher ausgeben",
+      "command-dump-frontend-state": "Frontend-Zustand ausgeben",
+      "command-write-heap-snapshot-server": "Heap-Abbild schreiben (Server)",
+      "command-write-heap-snapshot-backend": "Heap-Abbild schreiben (Backend)",
+      "command-start-profiling-server": "Profilierung starten (Server)",
+      "command-stop-profiling-server": "Profilierung beenden (Server)",
+      "command-record-profile": "Leistungsprofil aufzeichnen (Server, {0}s)",
+      "command-dump-latency": "RPC/LSP-Latenz ausgeben (Server)",
+      "command-dump-backend-state": "Backend-Zustand ausgeben",
+      "captured-server-state-detail": "Serverzustand erfasst —{0}",
+      "error-dump-server-state": "Serverzustand konnte nicht ausgegeben werden: {0}"
+    },
+    "core": {
+      "separator-in-name": "Der Name '{name}' enthält das Namenstrennzeichen '{separator}', das für zusammengesetzte qualifizierte Namen reserviert ist — bitte ein anderes Zeichen verwenden."
+    },
+    "protocol": {
+      "data-server-connect-failed": "Verbindung zum Datenserver fehlgeschlagen: {detail}",
+      "data-server-not-ready": "Der Datenserver ist nicht bereit geworden: {detail}"
+    }
+  },
+  "order-flow": {
+    "process": {
+      "self-transition": "'{step}' kann nicht zu sich selbst übergehen."
+    },
+    "properties": {
+      "open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}"
+    }
+  }
+}

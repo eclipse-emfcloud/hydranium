@@ -292,16 +292,18 @@ const ProcessLanguageModule = (
  */
 export interface OrderFlowOptions {
    /**
-    * Shared-tier modules layered after the framework's shared defaults and the
-    * LSP head's, and before this example's own overrides. It exists for the
-    * case an adopter hits as soon as they want to exercise a framework option
-    * whose default they are happy with in production: framework services are
-    * constructed by the framework's own module (`ModelService: services => new
-    * ModelService(services)`, no options), so the only way to boot one with
-    * non-default options is to rebind the slot — and a factory that hard-codes
-    * its composition gives a test nowhere to do that.
+    * Shared-tier modules composed LAST, after this example's own overrides. It
+    * exists for the case an adopter hits as soon as they want to exercise a
+    * framework option whose default they are happy with in production:
+    * framework services are constructed by the framework's own module
+    * (`ModelService: services => new ModelService(services)`, no options), so
+    * the only way to boot one with non-default options is to rebind the slot —
+    * and a factory that hard-codes its composition gives a test nowhere to do
+    * that. Partial over the whole shared tree, so a framework ADDITION
+    * (`Clock`, `Tracer`, `ModelService`) is reachable and not just a Langium
+    * slot.
     */
-   readonly extraSharedModules?: ReadonlyArray<Module<OrderFlowSharedServices, PartialLangiumSharedServices>>;
+   readonly extraSharedModules?: ReadonlyArray<Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>>>;
 
    /**
     * Colour keywords from the server as well as names. Left off for the VS Code
@@ -334,7 +336,8 @@ export function createOrderFlowServices(
       sharedModules: {
          generated: OrderFlowGeneratedSharedModule,
          adopter: OrderFlowSharedModule,
-         extra: [createLspServerSharedModule(fullContext), ...(options.extraSharedModules ?? [])]
+         extra: [createLspServerSharedModule(fullContext)],
+         overrides: options.extraSharedModules
       },
       languageModules: {
          generated: DomainGeneratedModule,

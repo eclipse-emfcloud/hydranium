@@ -36,6 +36,17 @@ export interface PropertiesFormHandlers {
     * nor whether a process hop lies between it and the surface that renders.
     */
    readonly reportError: (error: unknown, reported: ResolvedMessage) => void;
+   /**
+    * Turn one document diagnostic into the sentence to show, for a host that
+    * translates. Omitting it shows the server's English, which is what a host
+    * with no catalogue wants and is why this is optional rather than required.
+    *
+    * It exists because translating a diagnostic is the one render this tier
+    * cannot do itself: the framework attaches an identity and holds no locale,
+    * so only the host knows what the reading user reads — the same split
+    * {@link reportError} is on.
+    */
+   readonly renderDiagnostic?: (diagnostic: TransferDiagnostic) => string;
 }
 
 /** How each write outcome reads to a user. `applied` is silent on purpose. */
@@ -169,12 +180,16 @@ export class PropertiesForm {
     * form of a reference is its text, so the server accepts the write and reports
     * a diagnostic. Without this the write would look like it silently did
     * nothing wrong.
+    *
+    * The sentence comes from {@link PropertiesFormHandlers.renderDiagnostic}
+    * where the host supplies one, so a host that translates shows the reading
+    * user's language here and not only in its toasts.
     */
    setDiagnostics(diagnostics: readonly TransferDiagnostic[]): void {
       this.diagnosticsHost.replaceChildren(
          ...diagnostics.map(diagnostic => {
             const item = this.createElement('li');
-            item.textContent = `${diagnostic.severity}: ${diagnostic.message}`;
+            item.textContent = `${diagnostic.severity}: ${this.handlers.renderDiagnostic?.(diagnostic) ?? diagnostic.message}`;
             return item;
          })
       );
