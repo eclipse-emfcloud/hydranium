@@ -34,8 +34,13 @@ export class SocketChannelForwarder implements Disposable {
       const reader = new SocketMessageReader(socket);
       const writer = new SocketMessageWriter(socket);
       const connection = createMessageConnection(reader, writer);
+      // Nothing here destroys the socket, and adding it back would be dead
+      // code in both directions. `SocketMessageWriter.dispose()` destroys it
+      // itself, which covers the dispose path; and `connection.onClose` fires
+      // only from the reader's or writer's own close, which for a socket means
+      // the socket has already gone — so a destroy handler there is downstream
+      // of the effect it would be trying to cause.
       this.toDispose.pushAll([
-         connection.onClose(() => socket.destroy()),
          reader.listen(message => this.writeToChannel(message)),
          channel.onMessage(provider => void writer.write(this.decodeChannelMessage(provider))),
          channel.onClose(() => connection.dispose()),
