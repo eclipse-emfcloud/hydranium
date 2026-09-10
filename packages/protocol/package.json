@@ -88,7 +88,7 @@
     "vscode-jsonrpc": "9.0.1"
   },
   "peerDependencies": {
-    "vscode-jsonrpc": "^8.0.0 || ^9.0.0"
+    "vscode-jsonrpc": "9.0.1"
   },
   "engines": {
     "node": ">=22.13"
@@ -96,5 +96,6 @@
   "publishConfig": {
     "access": "public"
   },
+  "//peerDependencies": "`vscode-jsonrpc` is EXACT rather than a range, because it is one link of an atomic chain with no independently movable link: `vscode-languageserver-protocol` depends on it at exactly 9.0.1, so any other value an adopter supplies is a SECOND physical copy rather than an upgrade. This wire stack breaks on copy identity rather than on structure — `ParameterStructures.auto` is a singleton compared by `===` in connection.js, so a request type built by one copy and sent over a connection owned by the other throws `Unknown parameter structure auto`. A caret or union range was rejected because npm then resolves a `vscode-jsonrpc@8.2.0` tree SILENTLY, with no diagnostic at all, and the failure surfaces only later at server init. Exact does not fail the install either — npm downgrades an unsatisfiable peer to a warning — but it is a NAMED ERESOLVE warning printing the required version beside the found one, and a hard error for anyone installing with `--strict-peer-deps`. It does NOT prevent a NESTED copy — `@eclipse-glsp/*` carries its own exact `vscode-jsonrpc@8.2.0` dependency and root `overrides` do not ship — so a consumer of the GLSP head must pin the chain in its own manifest.",
   "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
 }

@@ -49,6 +49,15 @@ dependency is `uuid`. You must already have a composed hydranium shared services
 tree, a grammar, and a GModel factory of your own — there is no framework GModel
 factory.
 
+**This head needs one line in your own root manifest, and the install works
+without it right up until the server starts.** `@eclipse-glsp/*` depends on
+`vscode-jsonrpc@8.2.0` exactly, while the Langium chain under hydranium pins the
+transport at `9.0.1` — the version this package declares as its peer. Two
+physical copies in one process throw `Unknown parameter structure auto` during
+GLSP server init, and no peer declaration can prevent a nested copy. Add an
+`overrides` block collapsing the chain and reinstall from scratch;
+[Requirements](../../docs/adopting/requirements.md) gives the exact block.
+
 ## Exports
 
 | subpath     | holds                                                                                                                                                                   | platform        |
