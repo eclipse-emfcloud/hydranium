@@ -5,7 +5,6 @@
   // without this the gate's exit recorder loads inside every task and goes
   // inert. Not globalEnv, which would hash the value and bust the cache. A
   // line comment, because turbo rejects an unknown `"//key"` outright.
-  "globalPassThroughEnv": ["HYDRANIUM_EXIT_TRACE_DIR"],
   "globalDependencies": [
     "tsconfig.base.json",
     "tsconfig.json",

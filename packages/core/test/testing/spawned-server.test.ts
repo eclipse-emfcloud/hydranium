@@ -24,21 +24,22 @@
  * run a JSON-RPC peer inside the test worker. A drift between the two copies
  * turns a positive assertion red, so it cannot produce a false green.
  *
- * Every process this suite starts is accounted for. An orphan holding a pipe or
- * a port makes the NEXT run's verdict meaningless, so the fake records its own
- * pid and the teardown kills exactly those pids — never a pattern, which could
- * match inside the test runner's own tree.
+ * Every process this suite starts is accounted for, because an orphan holding a
+ * pipe or a port makes the NEXT run's verdict meaningless. Each case disposes
+ * its own server and `disposeSpawnedServers` catches any it did not — both
+ * through the `ChildProcess` handle the harness holds, never through a pid the
+ * fake recorded. The fake still records one, but only so a test can ASK whether
+ * a child is gone; acting on a recorded pid is what reddened the Windows leg for
+ * weeks.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+   disposeSpawnedServers,
    SPAWNED_SERVER_BOOT_TIMEOUT_MS,
    startSpawnedServer,
    type SpawnedServer,
@@ -90,44 +91,17 @@ const TIMER_BOUND_TEST_MS = SHORT_BOOT_MS * 3;
 /** Grace before `SIGKILL` in the teardown tests, applied twice by the harness. */
 const SHORT_KILL_MS = 250;
 
-/**
- * How long the decoy case waits before calling a process unharmed. Orders of
- * magnitude above the kill it is ruling out, which its paired case shows
- * landing immediately, and paid only twice.
- */
-const DECOY_SETTLE_MS = 300;
-
-/**
- * One spawned fake, and whether its exit has been OBSERVED.
- *
- * That flag is the whole safety of the teardown below. A pid identifies a
- * process only while that process is alive: once it exits the OS is free to
- * reissue the number, and Windows does so within SECONDS. So a recorded pid
- * whose child has already been reaped names nothing, and signalling one reaches
- * whatever holds it now — under a concurrent build, another task's compiler,
- * test runner or npm, killed with no handler run and no output.
- *
- * This is not hypothetical and it is not cheap. It reddened the Windows leg for
- * weeks: this suite's own teardown was killing unrelated processes across the
- * build, and the victims looked like a Node bug because a Windows `SIGKILL` is
- * `TerminateProcess(handle, 1)` — exit 1, no signal, nothing on any stream.
- */
-interface Spawn {
-   readonly label: string;
-   readonly pidFile: string;
-   /** Set once the harness has AWAITED the child's exit, after which the pid is meaningless. */
-   reaped: boolean;
-}
-
 let tempRoot: string;
-const openServers: { server: SpawnedServer; spawn: Spawn }[] = [];
-const spawns: Spawn[] = [];
+const openServers: SpawnedServer[] = [];
 
 /**
  * `true` while `pid` names a live process; the reaped child throws `ESRCH`.
  *
- * Answers "is SOMETHING there", never "is it OURS" — so a caller must already
- * have a reason to believe the pid is still its own. See {@link Spawn.reaped}.
+ * Answers "is SOMETHING there", never "is it OURS", so it may only be READ
+ * against a pid whose owner is known — which after a `dispose()` that has just
+ * resolved it is, for as long as it takes to ask. Never act on the answer: a
+ * teardown that signalled a recorded pid is what reddened the Windows leg for
+ * weeks, the OS having reissued the number to another task's process.
  */
 function isAlive(pid: number): boolean {
    try {
@@ -138,81 +112,39 @@ function isAlive(pid: number): boolean {
    }
 }
 
-/**
- * Kill any fake whose exit was never observed, and NOTHING else.
- *
- * An orphan holding a pipe or a port makes the next run's verdict meaningless,
- * which is why the net exists; a pid we have already reaped is someone else's
- * process, which is why `reaped` is checked before the pid is read at all.
- * Exact pids only — a `pkill` on the module path would also match this worker's
- * own argv, and an orphan reparented to init still carries it.
- *
- * Extracted from the teardown hook so it can be tested: an `afterAll` body
- * cannot be driven with a pid that is deliberately not ours.
- */
-function killUnreapedFakes(entries: readonly Spawn[]): void {
-   for (const entry of entries) {
-      if (entry.reaped) {
-         continue;
-      }
-      try {
-         const pid = Number(readFileSync(entry.pidFile, 'utf8'));
-         if (Number.isInteger(pid) && pid > 0 && isAlive(pid)) {
-            process.kill(pid, 'SIGKILL');
-         }
-      } catch {
-         // The mode never got far enough to record a pid.
-      }
-   }
-}
-
 /** The pid the fake recorded, so a dead child is still identifiable. */
 function recordedPid(label: string): number {
    return Number(readFileSync(path.join(tempRoot, `${label}.pid`), 'utf8'));
 }
 
-/** Register a spawn of `label` for teardown, and return its record. */
-function register(label: string): Spawn {
-   const spawn: Spawn = { label, pidFile: path.join(tempRoot, `${label}.pid`), reaped: false };
-   spawns.push(spawn);
-   return spawn;
-}
-
 /** Spawn the fake in `mode`, registering it for teardown. */
 async function boot(label: string, mode: string, options: Partial<SpawnedServerOptions> = {}): Promise<SpawnedServer> {
-   const spawn = register(label);
    const server = await startSpawnedServer({
       serverModule: FIXTURE_MODULE,
-      env: { FAKE_LSP_MODE: mode, FAKE_LSP_PID_FILE: spawn.pidFile },
+      env: { FAKE_LSP_MODE: mode, FAKE_LSP_PID_FILE: path.join(tempRoot, `${label}.pid`) },
       ...options
    });
-   openServers.push({ server, spawn });
+   openServers.push(server);
    return server;
 }
 
 /** Spawn the fake in a mode whose boot must FAIL, and return the rejection. */
 async function bootFailure(label: string, mode: string, options: Partial<SpawnedServerOptions> = {}): Promise<Error> {
-   const spawn = register(label);
    let server: SpawnedServer;
    try {
       server = await startSpawnedServer({
          serverModule: FIXTURE_MODULE,
          bootTimeoutMs: SHORT_BOOT_MS,
-         env: { FAKE_LSP_MODE: mode, FAKE_LSP_PID_FILE: spawn.pidFile },
+         env: { FAKE_LSP_MODE: mode, FAKE_LSP_PID_FILE: path.join(tempRoot, `${label}.pid`) },
          ...options
       });
    } catch (error: unknown) {
       if (!(error instanceof Error)) {
          throw error;
       }
-      // `startSpawnedServer` force-terminates and AWAITS the exit before it
-      // rejects, so a boot failure leaves no live child and no usable pid.
-      spawn.reaped = true;
       return error;
    }
-   // Registered before throwing, so the teardown still reaps a child this
-   // case did not expect to exist.
-   openServers.push({ server, spawn });
+   openServers.push(server);
    throw new Error(`boot unexpectedly succeeded in mode "${mode}"`);
 }
 
@@ -223,19 +155,15 @@ describe('startSpawnedServer', () => {
 
    afterEach(async () => {
       while (openServers.length > 0) {
-         const entry = openServers.pop();
-         if (!entry) {
-            continue;
-         }
-         await entry.server.dispose();
-         // `dispose` awaits the child's close, so from here its pid belongs to
-         // the OS again and must never be signalled.
-         entry.spawn.reaped = true;
+         await openServers.pop()?.dispose();
       }
    });
 
-   afterAll(() => {
-      killUnreapedFakes(spawns);
+   afterAll(async () => {
+      // The net for a case that left one behind. It reaches the child through
+      // the handle the harness still holds, so it can terminate nothing this
+      // suite did not spawn.
+      await disposeSpawnedServers();
       rmSync(tempRoot, { recursive: true, force: true });
    });
 
@@ -384,46 +312,22 @@ describe('startSpawnedServer', () => {
    });
 
    /**
-    * The teardown's own discipline, driven against a DECOY rather than a fake.
-    *
-    * Pid reuse cannot be provoked on demand, but it does not need to be: what
-    * reuse produces is a recorded pid held by a process that is not ours, and a
-    * decoy supplies exactly that with no waiting and on every platform. The two
-    * cases are a pair and neither means anything alone — the first alone is
-    * satisfied by a teardown that kills nothing at all, and the second alone by
-    * one that kills everything it is handed.
+    * That the net reaches a server nobody disposed. It cannot reach anything
+    * ELSE by construction — it holds `SpawnedServer` objects and kills through
+    * the `ChildProcess` handle libuv owns, so there is no pid in the path to
+    * aim at a stranger, and nothing here can assert the absence of a capability
+    * the code does not have.
     */
-   describe('killing leftover fakes', () => {
-      let decoy: ChildProcess;
-      let decoyPidFile: string;
+   it('terminates a server the suite never disposed', async () => {
+      const server = await boot('undisposed', 'default');
+      // Off the per-test list, so only the all-suite net can reach it.
+      openServers.pop();
+      const pid = recordedPid('undisposed');
+      expect(isAlive(pid)).toBe(true);
 
-      beforeEach(async () => {
-         decoy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-         await once(decoy, 'spawn');
-         decoyPidFile = path.join(tempRoot, 'decoy.pid');
-         writeFileSync(decoyPidFile, String(decoy.pid));
-      });
+      await disposeSpawnedServers();
 
-      afterEach(() => {
-         decoy.kill('SIGKILL');
-      });
-
-      it('spares a process holding the pid of a fake whose exit was already observed', async () => {
-         killUnreapedFakes([{ label: 'decoy', pidFile: decoyPidFile, reaped: true }]);
-
-         // An absence needs a wait longer than the act would have taken, and
-         // the case below measures that: a kill it does issue lands in under a
-         // millisecond.
-         await delay(DECOY_SETTLE_MS);
-         expect(decoy.exitCode).toBeNull();
-         expect(decoy.signalCode).toBeNull();
-      });
-
-      it('kills a fake whose exit was never observed', async () => {
-         killUnreapedFakes([{ label: 'decoy', pidFile: decoyPidFile, reaped: false }]);
-
-         await once(decoy, 'exit');
-         expect(decoy.exitCode === null && decoy.signalCode === null).toBe(false);
-      });
+      expect(isAlive(pid)).toBe(false);
+      expect(await server.dispose()).toBe(0);
    });
 });
