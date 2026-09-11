@@ -211,7 +211,18 @@ for (const testCase of CASES) {
 // where the recorder was inert for every process that mattered: turbo 2's strict
 // environment mode had dropped `HYDRANIUM_EXIT_TRACE_DIR`, and nothing here ran
 // under turbo. These two cases are the ones that would have caught it.
-const TURBO = join(REPO_ROOT, 'node_modules/.bin/turbo');
+// turbo's OWN JS entry, run under this process's node, rather than the
+// `node_modules/.bin` shim. On Windows that shim is a POSIX shell script with no
+// extension — the executable ones are `turbo.cmd` and `turbo.ps1` — so
+// `spawnSync` on it fails with ENOENT there while working on Linux, which is
+// exactly the asymmetry that let this ship.
+const TURBO_ENTRY = join(REPO_ROOT, 'node_modules/turbo/bin/turbo');
+const runTurbo = (args, options) => execFileSync(process.execPath, [TURBO_ENTRY, ...args], options);
+
+if (!existsSync(TURBO_ENTRY)) {
+   console.error(`turbo's entry is not at ${TURBO_ENTRY}; the checks below would report a spawn error instead of a verdict.`);
+   process.exit(1);
+}
 
 // That turbo can PARSE the real file. Nothing else here does: the probe below
 // builds a scratch config from one value, and `JSON.parse` accepts keys turbo's
@@ -219,7 +230,7 @@ const TURBO = join(REPO_ROOT, 'node_modules/.bin/turbo');
 // in the repository rather than only this feature. `--dry` validates without
 // executing.
 try {
-   execFileSync(TURBO, ['run', 'build', '--dry=json'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+   runTurbo(['run', 'build', '--dry=json'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 } catch (error) {
    const detail = String(error.stderr || error.stdout || error.message || error);
    failures.push(`turbo cannot parse turbo.json: ${detail.replace(/\s+/g, ' ').slice(0, 300)}`);
@@ -262,7 +273,7 @@ if (!(REPO_TURBO_CONFIG.globalPassThroughEnv ?? []).includes('HYDRANIUM_EXIT_TRA
             scripts: { probe: 'node -e "process.stdout.write(String(process.env.HYDRANIUM_EXIT_TRACE_DIR))"' }
          })
       );
-      const stdout = execFileSync(TURBO, ['run', 'probe', '--ui=stream'], {
+      const stdout = runTurbo(['run', 'probe', '--ui=stream'], {
          cwd: scratch,
          encoding: 'utf8',
          env: { ...process.env, HYDRANIUM_EXIT_TRACE_DIR: 'DELIVERED' },
