@@ -136,7 +136,9 @@ jobs:
     # add a fallback, it silently takes precedence and the trusted-publisher
     # path is never exercised.
     env:
-      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
+      # Compared against the other workflows by ci.yml; see the note there on
+      # why the heap flag is gone and this one is not.
+      NODE_OPTIONS: --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
 

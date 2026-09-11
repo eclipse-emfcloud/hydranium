@@ -146,7 +146,11 @@ jobs:
         theia: ${{ fromJSON(needs.plan.outputs.versions) }}
 
     env:
-      NODE_OPTIONS: --max_old_space_size=4096
+      # Compared against the other workflows by ci.yml; see the note there on
+      # why the heap flag is gone and this one is not. This leg is scheduled and
+      # runs against a foreign Theia floor, so a fatal-error report is worth more
+      # here than anywhere, not less.
+      NODE_OPTIONS: --report-on-fatalerror
       FORCE_COLOR: 1
 
     steps:
