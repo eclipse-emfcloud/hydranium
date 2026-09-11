@@ -84,10 +84,9 @@ jobs:
       # the evidence the silent Windows death currently leaves none of. Also
       # in `release.yml`, because the step above compares the two.
       #
-      # `--trace-exit` belongs with it and is deliberately NOT here: it fires
-      # on a SUCCESSFUL `process.exit(0)` too, and tsc calls one, so job-wide
-      # it puts a WARNING and a stack trace on every green typecheck. It is
-      # set on the failure-path re-run below instead.
+      # `--trace-exit` must not be added anywhere: it writes to stderr on a
+      # SUCCESSFUL exit too, breaking any test that asserts a spawned child's
+      # stderr is empty. `trace-exits.cjs` records the same call stack to a file.
       NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
@@ -580,15 +579,9 @@ jobs:
       # passes says contention; one that fails identically says the state is
       # reproducible and can be chased.
       #
-      # Both diagnostics are set HERE rather than on the gate, because both
-      # are noisy when nothing is wrong: `--trace-exit` traces a successful
-      # exit as readily as a failing one, and `DEBUG` adds thirty lines per
-      # lint task across nineteen packages. This step only exists on a red
-      # run, so neither costs a green one anything.
-      #
-      # Between them they cover both shapes seen so far: `--trace-exit` names
-      # the caller when a tool exits explicitly, which tsc does, and `DEBUG`
-      # traces eslint, which sets `process.exitCode` and returns instead.
+      # `DEBUG` is set here, not on the gate: thirty lines per lint task across
+      # nineteen packages, and only a red run pays it. It traces eslint, which
+      # sets `process.exitCode` rather than exiting.
       - name: Re-run the failed task with its streams apart
         id: rerun
         if: steps.gate.outputs.status != '0'
@@ -596,14 +589,6 @@ jobs:
         env:
           DEBUG: 'eslint:*'
         run: |
-          # APPENDED to the job's value in the shell, not declared as a second
-          # `NODE_OPTIONS:` key. A second key would be a second value for the
-          # drift check above to compare against release.yml, and it would
-          # fail — correctly, since it cannot tell a deliberate extra flag
-          # from the environments diverging. Appending also means the base
-          # flags are stated once.
-          export NODE_OPTIONS="$NODE_OPTIONS --trace-exit"
-
           # Turbo colours its output, so the marker has to survive escape
           # codes being stripped before it can be matched.
           task=$(sed -e 's/\x1b\[[0-9;]*m//g' gate.log |
