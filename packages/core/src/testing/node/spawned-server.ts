@@ -203,6 +203,37 @@ export interface SpawnedServer extends Harness {
    dispose(): Promise<number | null>;
 }
 
+/**
+ * Every server started and not yet disposed, so {@link disposeSpawnedServers}
+ * can reach one a test forgot.
+ *
+ * Holds the server — and through it the `ChildProcess` — rather than a pid. A
+ * pid identifies a process only while that process is alive: once it exits the
+ * OS may reissue the number, and Windows does so within seconds. A teardown
+ * that signalled a recorded pid would therefore reach whatever holds it now,
+ * which on a concurrent build is another task's compiler or test runner.
+ */
+const liveServers = new Set<SpawnedServer>();
+
+/**
+ * Terminate every server this module started that has not been disposed, and
+ * forget them.
+ *
+ * Safe to call when none are outstanding, and safe to call twice. Nothing here
+ * can reach a process this module did not spawn, because every kill goes
+ * through the `ChildProcess` handle libuv holds and libuv will not signal a
+ * child it has already reaped.
+ *
+ * A suite that disposes each server as it finishes needs this only as a net; a
+ * suite that does not needs it, because an orphan holding a port or a pipe
+ * makes the NEXT run's verdict meaningless.
+ */
+export async function disposeSpawnedServers(): Promise<void> {
+   const outstanding = [...liveServers];
+   liveServers.clear();
+   await Promise.all(outstanding.map(server => server.dispose()));
+}
+
 /** The captured streams, quoted into a boot-failure message. */
 function bootDiagnosis(stdoutPrefix: string, stderr: string): string {
    return (
@@ -390,7 +421,7 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
       return exitCode;
    }
 
-   return {
+   const server: SpawnedServer = {
       connection,
       pid: child.pid,
       initializeResult,
@@ -440,8 +471,11 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
          });
       },
       dispose(): Promise<number | null> {
+         liveServers.delete(server);
          disposal ??= terminate();
          return disposal;
       }
    };
+   liveServers.add(server);
+   return server;
 }

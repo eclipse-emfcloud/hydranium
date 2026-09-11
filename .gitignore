@@ -53,16 +53,10 @@ coverage
 unit-test-results
 **/*test-results
 
-# CI failure diagnostics: the teed gate output, the captured re-run streams,
-# and the node report a fatal error drops into whichever directory the dying
+# The node report a fatal error drops into whichever directory the dying
 # process was in. Written only on a runner, and only when something failed.
-gate.log
-rerun-stdout.log
-rerun-stderr.log
 report.*.json
 **/report.*.json
-exit-trace/
-process-audit.ndjson
 
 # Stryker mutation-audit artefacts (item 6 Element E one-off; the config
 # packages/core/stryker.conf.json is checked in, its outputs are not).
