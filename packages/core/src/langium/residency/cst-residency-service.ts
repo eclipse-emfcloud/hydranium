@@ -24,9 +24,13 @@ import { type ServerSharedServicesMinimal } from '../shared-services.js';
 /**
  * Default priority of the CST-residency pass. Deliberately very high so it runs
  * *last* among `Validated` build-phase passes (the registry iterates priority
- * ascending): every other reaction to the build — an adopter's own derived-state
- * pass included — settles while the CST is still guaranteed resident, before the
- * residency policy arms the shed.
+ * ascending).
+ *
+ * The ordering is defensive, not load-bearing: the pass only arms or cancels an
+ * idle timer, so every pass at `Validated` reads a resident CST whichever order
+ * they run in, and lowering it changes nothing observable while that holds. It
+ * becomes load-bearing the moment the shed stops being deferred — a pass that
+ * frees the CST synchronously has to run after every reader of it.
  */
 export const CST_RESIDENCY_PASS_PRIORITY = 1_000_000;
 
@@ -227,7 +231,27 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * `NameProvider.getNameNode` chokepoint, the comment provider, and
  * `HydraniumLangiumDocuments.getOrCreateDocument`.
  */
-export class CstResidencyService {
+/**
+ * Keeps a document's CST available to the readers that need one, shedding it
+ * for documents that have gone idle and re-grafting on demand.
+ */
+export interface CstResidencyService {
+   /**
+    * Ensure `document` has a CST, re-parsing its retained text if it was shed.
+    * A resident document is left exactly as it is, so this is safe to call on
+    * a hot path and safe to call twice.
+    */
+   rehydrate(document: LangiumDocument): void;
+
+   /**
+    * Node-level convenience over {@link rehydrate}, cheap enough for an
+    * unconditional call: a node whose `$cstNode` is already set returns
+    * without resolving its document.
+    */
+   rehydrateNode(node: AstNode): void;
+}
+
+export class DefaultCstResidencyService implements CstResidencyService {
    protected readonly strategy: CstResidencyStrategy;
    /** Bytes-per-node for the optional reclaim estimate in traces; `0` disables it. */
    protected readonly estimatedBytesPerShedNode: number;
@@ -277,8 +301,8 @@ export class CstResidencyService {
     * until navigation latency on shed files is actually observed to hurt. This
     * method is where that hook goes.
     */
-   rehydrate(document: LangiumDocument): boolean {
-      return rehydrateCst(document, this.services.workspace.LangiumDocumentFactory);
+   rehydrate(document: LangiumDocument): void {
+      rehydrateCst(document, this.services.workspace.LangiumDocumentFactory);
    }
 
    /**
@@ -287,11 +311,11 @@ export class CstResidencyService {
     * `true` without even resolving the document, so hot read paths
     * (`getNameNode`, comment lookup) call this unconditionally.
     */
-   rehydrateNode(node: AstNode): boolean {
+   rehydrateNode(node: AstNode): void {
       if (node.$cstNode !== undefined) {
-         return true;
+         return;
       }
-      return this.rehydrate(AstUtils.getDocument(node));
+      this.rehydrate(AstUtils.getDocument(node));
    }
 
    /**
@@ -353,8 +377,8 @@ export class CstResidencyService {
       this.shedTotal += this.shed(document);
    }
 
-   /** Cancel and drop every idle timer — for clean shutdown and deterministic tests. */
-   dispose(): void {
+   /** Cancel every armed shed, so a document that has gone idle keeps its CST. */
+   cancelPendingShed(): void {
       for (const timer of this.idleTimers.values()) {
          timer.dispose();
       }

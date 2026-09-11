@@ -9,8 +9,8 @@
 
 import { type Clock, DefaultTracer, type Logger, NoopLogger, SystemClock, type Tracer } from '@hydranium/protocol';
 import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { ServerLocale } from '../locale/server-locale.js';
-import { ServerMessageRenderer } from '../messages/renderer.js';
+import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.js';
+import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 
 /**
  * Overrides for {@link makeNoopSharedServices}. The three observability slots
@@ -35,14 +35,14 @@ export interface NoopSharedServicesOverrides {
    ServerLocale?: (services: ServerSharedServicesMinimal) => ServerLocale;
    /**
     * Factory for the `MessageRenderer` slot. Default: the real
-    * {@link ServerMessageRenderer}, whose no-catalogue behaviour is a
+    * {@link DefaultMessageRenderer}, whose no-catalogue behaviour is a
     * pass-through — so the default is the framework's own behaviour, not a stub.
     *
     * A factory rather than an instance, because a renderer reads the tree it is
     * bound into. Both slots are resolved lazily, so an override is honoured
     * however late the caller reads them.
     */
-   MessageRenderer?: (services: ServerSharedServicesMinimal) => ServerMessageRenderer;
+   MessageRenderer?: (services: ServerSharedServicesMinimal) => MessageRenderer;
    /** Per-slot `workspace` overrides. Slots left out resolve to `undefined`. */
    workspace?: Record<string, unknown>;
    /** Any other minimal slot (`ServiceRegistry`, `AstReflection`, `additionalDocuments`, …). */
@@ -103,8 +103,8 @@ export function makeNoopSharedServices<T extends ServerSharedServicesMinimal = S
    // both services emit an `instantiated` trace, so building them eagerly puts
    // two lines into the capture of every test that passes a capturing logger
    // and asserts on emptiness.
-   defineLazySlot(services, 'ServerLocale', () => serverLocale?.(services) ?? new ServerLocale(services));
-   defineLazySlot(services, 'MessageRenderer', () => messageRenderer?.(services) ?? new ServerMessageRenderer(services));
+   defineLazySlot(services, 'ServerLocale', () => serverLocale?.(services) ?? new DefaultServerLocale(services));
+   defineLazySlot(services, 'MessageRenderer', () => messageRenderer?.(services) ?? new DefaultMessageRenderer(services));
    return services;
 }
 

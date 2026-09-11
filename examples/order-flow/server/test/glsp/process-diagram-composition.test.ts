@@ -29,7 +29,7 @@ import {
    ToolPaletteItemProvider
 } from '@eclipse-glsp/server';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { ServerMessageRenderer } from '@hydranium/core/messages';
+import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { HydraniumGlspAppModule, HydraniumGlspComputedBoundsActionHandler } from '@hydranium/glsp-server';
 import { SOURCE_URI_MISSING } from '@hydranium/glsp-server/messages';
 import { PALETTE_GATEWAY, PALETTE_TASK, PALETTE_TRANSITION } from '../../src/glsp/order-flow-tool-palette-item-provider.js';
@@ -125,7 +125,7 @@ describe('order-flow .process diagram composition', () => {
       const RENDERED = 'AA: kein Dokument';
 
       /** Installs a catalogue holding the framework's GLSP code, on the one adopter slot. */
-      class GlspCodeRenderer extends ServerMessageRenderer {
+      class GlspCodeRenderer extends DefaultMessageRenderer {
          protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
             return locale === TEST_LOCALE ? { [SOURCE_URI_MISSING.code]: RENDERED } : undefined;
          }

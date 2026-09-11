@@ -93,8 +93,8 @@ class CapturingHandler extends HydraniumDocumentUpdateHandler {
 interface ServicesStubOptions {
    getAuthor?: (uri: string) => string | undefined;
    isOpenInAnyClient?: (uri: string) => boolean;
-   /** Drives `SelfSaveRegistry.matches`. Defaults to `() => false` (no self-save match). */
-   selfSaveMatches?: (fsPath: string, mtimeMs: number) => boolean;
+   /** Drives `SelfSaveRegistry.isRegistered`. Defaults to `() => false` (no self-save match). */
+   selfSaveRegistered?: (fsPath: string, mtimeMs: number) => boolean;
    /** Optional bookkeeping side-channels. When provided, the stub appends to these arrays. */
    markNextReasonCalls?: Array<string | undefined>;
    loggedErrors?: string[];
@@ -104,7 +104,7 @@ interface ServicesStubOptions {
     * Drives the `FileSystemProvider.mtimeMs` seam the handler reads through.
     * Defaults to {@link STUB_MTIME_MS}. Return `undefined` to model a failed
     * stat. Kept off the real filesystem deliberately: an injected constant
-    * makes the value the handler forwards to `SelfSaveRegistry.matches`
+    * makes the value the handler forwards to `SelfSaveRegistry.isRegistered`
     * independently observable, whereas a real stat on both sides of the
     * assertion would pass even if the handler bypassed this seam entirely.
     */
@@ -114,7 +114,7 @@ interface ServicesStubOptions {
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
    const getAuthor = opts.getAuthor ?? (() => LANGUAGE_CLIENT_ID);
    const isOpenInAnyClient = opts.isOpenInAnyClient ?? (() => false);
-   const selfSaveMatches = opts.selfSaveMatches ?? (() => false);
+   const selfSaveRegistered = opts.selfSaveRegistered ?? (() => false);
    const markNextReasonCalls = opts.markNextReasonCalls;
    const loggedErrors = opts.loggedErrors;
    // `DefaultDocumentUpdateHandler` constructor subscribes to
@@ -141,7 +141,7 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          },
          WorkspaceLock: { write: (cb: (token: unknown) => unknown) => cb(undefined) },
          TextDocuments: { getAuthor, isOpenInAnyClient },
-         SelfSaveRegistry: { matches: selfSaveMatches },
+         SelfSaveRegistry: { isRegistered: selfSaveRegistered },
          // The handler reads the file mtime through the FileSystemProvider
          // seam, so these tests need no filesystem at all; the Node provider's
          // own stat behaviour is covered by its own tests.
@@ -483,7 +483,7 @@ describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', ()
       const matchCalls: Array<{ fsPath: string; mtimeMs: number }> = [];
       const handler = new CapturingHandler(
          makeServicesStub({
-            selfSaveMatches: (fsPath, mtimeMs) => {
+            selfSaveRegistered: (fsPath, mtimeMs) => {
                matchCalls.push({ fsPath, mtimeMs });
                return true;
             }
@@ -509,7 +509,7 @@ describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', ()
       // surviving change would be scheduled on the timer rather than dispatched
       // on the trailing edge of super.didChangeWatchedFiles' fireDocumentUpdate.
       const clock = makeFakeClock();
-      const handler = new CapturingHandler(makeServicesStub({ selfSaveMatches: () => false, clock }), { debounceMs: 50 });
+      const handler = new CapturingHandler(makeServicesStub({ selfSaveRegistered: () => false, clock }), { debounceMs: 50 });
       handler.didChangeWatchedFiles({
          changes: [{ uri: WATCHED_URI, type: FileChangeType.Changed }]
       });
@@ -524,7 +524,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
    // No filesystem here: the handler reads the mtime through the
    // `FileSystemProvider.mtimeMs` seam, so an injected constant pins the
    // `uri → fsPath` + mtime pair the handler forwards to
-   // `SelfSaveRegistry.matches`. Statting a real temp file on BOTH sides of
+   // `SelfSaveRegistry.isRegistered`. Statting a real temp file on BOTH sides of
    // that assertion would compare fs against itself and still pass if the
    // handler bypassed the seam.
 
@@ -532,7 +532,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
       const matchCalls: Array<{ fsPath: string; mtimeMs: number }> = [];
       const handler = new CapturingHandler(
          makeServicesStub({
-            selfSaveMatches: (fsPath, mtimeMs) => {
+            selfSaveRegistered: (fsPath, mtimeMs) => {
                matchCalls.push({ fsPath, mtimeMs });
                return true;
             }
@@ -548,7 +548,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
    });
 
    it('passes a change through when the self-save registry does not match', async () => {
-      const handler = new CapturingHandler(makeServicesStub({ selfSaveMatches: () => false }));
+      const handler = new CapturingHandler(makeServicesStub({ selfSaveRegistered: () => false }));
       const params: DidChangeWatchedFilesParams = {
          changes: [{ uri: WATCHED_URI, type: FileChangeType.Changed }]
       };
@@ -562,7 +562,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
       const mtimeCalls: string[] = [];
       const handler = new CapturingHandler(
          makeServicesStub({
-            selfSaveMatches: () => {
+            selfSaveRegistered: () => {
                matchesCalled = true;
                return true;
             },
@@ -589,7 +589,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
       let matchesCalled = false;
       const handler = new CapturingHandler(
          makeServicesStub({
-            selfSaveMatches: () => {
+            selfSaveRegistered: () => {
                matchesCalled = true;
                return true;
             },

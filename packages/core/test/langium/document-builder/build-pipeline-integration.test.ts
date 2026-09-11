@@ -12,7 +12,7 @@ import { Disposable } from '@hydranium/protocol';
 import { DocumentState, URI, type LangiumDocument } from '@hydranium/langium';
 import { CancellationToken } from 'vscode-languageserver';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
-import { BuildPipelineIntegration } from '../../../src/langium/document-builder/build-pipeline-integration.js';
+import { DefaultBuildPipelineIntegration } from '../../../src/langium/document-builder/build-pipeline-integration.js';
 import { DefaultBuildPhasePassService } from '../../../src/langium/build-phase-pass/build-phase-pass-service.js';
 import { makeNoopSharedServices, makeStubServiceRegistry, type NoopLanguageServicesOverrides } from '../../../src/testing/index.js';
 
@@ -104,7 +104,7 @@ function setup(): {
          getServices: () => languageServices
       }
    });
-   new BuildPipelineIntegration(services);
+   new DefaultBuildPipelineIntegration(services);
    return {
       builder,
       integrityCalls,
@@ -228,7 +228,7 @@ function setupMultiLanguage(): { builder: FakeDocumentBuilder; integrityCallsA: 
          { languageId: 'b', fileExtensions: ['.b'], services: languageSlots(integrityCallsB) }
       ])
    });
-   new BuildPipelineIntegration(services);
+   new DefaultBuildPipelineIntegration(services);
    return { builder, integrityCallsA, integrityCallsB };
 }
 
@@ -282,7 +282,7 @@ describe('BuildPipelineIntegration — foundational pass ordering', () => {
          workspace: { DocumentBuilder: builder, BuildPhasePassService: passes },
          ServiceRegistry: { hasServices: () => true, getServices: () => languageServices }
       });
-      new BuildPipelineIntegration(services);
+      new DefaultBuildPipelineIntegration(services);
 
       await builder.fireBuild(DocumentState.Linked, [doc('a')]);
       expect(order).toEqual(['integrity', 'adopter']);

@@ -47,7 +47,7 @@ import {
    type StubLanguageDescriptor,
    type TestServicesBundle
 } from '@hydranium/core/testing';
-import { ServerMessageRenderer } from '@hydranium/core/messages';
+import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { ProfileCapture } from '@hydranium/core/node';
 import { DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
 import { DataServer, NO_ACTIVE_PROFILE, NO_ACTIVE_PROFILE_CODE } from '../src/data-server.js';
@@ -1160,7 +1160,7 @@ describe('DataServer', () => {
           * Renders `NO_ACTIVE_PROFILE` and nothing else, so an assertion says
           * which message was rendered rather than that something was.
           */
-         class ProfileCatalogueRenderer extends ServerMessageRenderer {
+         class ProfileCatalogueRenderer extends DefaultMessageRenderer {
             protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
                return locale === 'xx-AA' ? { [NO_ACTIVE_PROFILE.code]: 'AA: kein Profil' } : undefined;
             }
@@ -1243,7 +1243,7 @@ describe('DataServer', () => {
             // also what a renderer with no catalogue produces, so it cannot
             // distinguish "not consulted" from "consulted and passed through".
             const consulted: string[] = [];
-            class RecordingRenderer extends ServerMessageRenderer {
+            class RecordingRenderer extends DefaultMessageRenderer {
                override renderError(error: ResponseError<unknown>): string {
                   consulted.push(error.message);
                   return super.renderError(error);
@@ -1280,7 +1280,7 @@ describe('DataServer', () => {
             // so an empty `consulted` above means the guard discriminated rather
             // than that the hook was never wired.
             const consulted: string[] = [];
-            class RecordingRenderer extends ServerMessageRenderer {
+            class RecordingRenderer extends DefaultMessageRenderer {
                override renderError(error: ResponseError<unknown>): string {
                   consulted.push(error.message);
                   return super.renderError(error);

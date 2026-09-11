@@ -9,7 +9,7 @@
 
 import type { TransferDiagnostic, TransferElement } from '@hydranium/protocol';
 import type { AstNode } from '@hydranium/langium';
-import { ModelService, type ModelServiceOptions } from '../langium/model-service/model-service.js';
+import { DefaultModelService, type ModelService, type ModelServiceOptions } from '../langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../langium/module.js';
 
 /**
@@ -23,7 +23,7 @@ class StubModelServiceImpl<
    TAst extends AstNode,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
    TTransfer extends TransferElement = TransferElement
-> extends ModelService<TAst, TDiagnostic, TTransfer> {
+> extends DefaultModelService<TAst, TDiagnostic, TTransfer> {
    constructor(
       services: ServerSharedServices,
       protected readonly serializeFn: (uri: string, root: TTransfer) => string,

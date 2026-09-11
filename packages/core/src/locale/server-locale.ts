@@ -15,6 +15,21 @@ import type { ServerSharedServicesMinimal } from '../langium/shared-services.js'
 export type ServerLocaleOptions = LogNameOptions;
 
 /**
+ * The locale contract the `ServerLocale` slot holds, implemented by
+ * {@link DefaultServerLocale}.
+ *
+ * An interface rather than the class, so the slot is compared STRUCTURALLY —
+ * a class-typed slot carries its `protected` members into every assignability
+ * check, compared nominally, which makes it unsatisfiable across two physical
+ * copies of this package and unreplaceable by an adopter's own declaration.
+ */
+export interface ServerLocale {
+   /** The locale, or `undefined` when no init supplied one — the framework's English. */
+   readonly value: string | undefined;
+   accept(locale: string): void;
+}
+
+/**
  * The locale the server was handed at init, for whoever needs to render in the
  * reading user's language. Held apart from the message renderer that reads it,
  * so replacing the renderer cannot drop locale handling.
@@ -23,7 +38,7 @@ export type ServerLocaleOptions = LogNameOptions;
  * read the current value wraps this itself — nothing does today, and both real
  * hosts respawn the server on a display-language switch.
  */
-export class ServerLocale {
+export class DefaultServerLocale implements ServerLocale {
    protected readonly tracer: Tracer;
    protected current: string | undefined;
 

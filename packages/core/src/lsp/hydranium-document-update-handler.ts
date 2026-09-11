@@ -257,7 +257,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             }
             const uri = UriUtils.toUri(change.uri);
             const mtimeMs = await this.fileSystemProvider.mtimeMs?.(uri);
-            if (mtimeMs !== undefined && this.selfSaveRegistry.matches(uri.fsPath, mtimeMs)) {
+            if (mtimeMs !== undefined && this.selfSaveRegistry.isRegistered(uri.fsPath, mtimeMs)) {
                return undefined;
             }
             return change;

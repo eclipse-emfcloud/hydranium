@@ -13,7 +13,7 @@ import { Disposable, type Tracer } from '@hydranium/protocol';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import {
    CST_REHYDRATION_RESET_STATE,
-   CstResidencyService,
+   DefaultCstResidencyService,
    type CstResidencyOptions,
    isCstShed
 } from '../../../src/langium/residency/cst-residency-service.js';
@@ -26,7 +26,7 @@ interface CapturedPass {
 
 /** Build a service over stub shared services; returns the captured pass, the fake clock, and mutable test knobs. */
 function makeService(options: CstResidencyOptions): {
-   service: CstResidencyService;
+   service: DefaultCstResidencyService;
    pass: CapturedPass;
    open: Set<string>;
    clock: FakeClock;
@@ -60,7 +60,7 @@ function makeService(options: CstResidencyOptions): {
          }
       }
    });
-   const service = new CstResidencyService(services, options);
+   const service = new DefaultCstResidencyService(services, options);
    if (!captured) {
       throw new Error('CstResidencyService did not register a build-phase pass');
    }
@@ -158,11 +158,11 @@ describe('CstResidencyService', () => {
       expect(cstNodeCount(doc)).toBe(2);
    });
 
-   it('dispose cancels pending shed timers', () => {
+   it('cancelPendingShed cancels armed shed timers', () => {
       const { service, pass, clock, addDoc } = makeService({ strategy: { kind: 'shed-closed-when-idle', idleMs: 1000 } });
       const doc = addDoc('file:///a.a');
       pass.run([doc]);
-      service.dispose();
+      service.cancelPendingShed();
       clock.advance(1_000_000);
       expect(cstNodeCount(doc)).toBe(2);
    });
@@ -193,12 +193,12 @@ describe('CstResidencyService', () => {
 });
 
 describe('CstResidencyService.rehydrateNode', () => {
-   it('is a no-op true for a resident node — the document factory is never touched', () => {
+   it('is a no-op for a resident node — the document factory is never touched', () => {
       // The harness's noop services carry NO LangiumDocumentFactory: the fast
       // path must return before resolving it, or this test throws.
       const { service, addDoc } = makeService({ strategy: { kind: 'always-keep' } });
       const doc = addDoc('file:///resident.a');
-      expect(service.rehydrateNode(doc.parseResult.value)).toBe(true);
+      expect(() => service.rehydrateNode(doc.parseResult.value)).not.toThrow();
    });
 });
 

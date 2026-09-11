@@ -445,7 +445,7 @@ export class DataServer<
    /** Per-method RPC latency collector, when the head opted in via {@link DataServerOptions.latency}. */
    protected readonly latency?: LatencyCollector;
    /** Encoder pulled from DI. Adopters rebind `services.model.TransferEncoder` to a typed-overlay subclass. */
-   protected readonly encoder: TransferEncoder<unknown, TDiagnostic>;
+   protected readonly encoder: TransferEncoder<TDiagnostic>;
    /**
     * In-process workspace facade — the lifecycle delegate `get` / `update` / `save` go through.
     * The facade's AstDocument diagnostic shape is intentionally typed `unknown` here: adopters
@@ -473,7 +473,7 @@ export class DataServer<
                'Did you compose `createServerSharedModule(ctx)` into your shared module?'
          );
       }
-      this.encoder = encoder as TransferEncoder<unknown, TDiagnostic>;
+      this.encoder = encoder as TransferEncoder<TDiagnostic>;
       this.modelService = modelService as ModelService<AstNode, unknown, TTransfer>;
       const excluded = new Set<string>(this.options.excludedMethods);
       const registeredMethods = [
@@ -981,7 +981,7 @@ export class DataServer<
             diagnostics: [] as TDiagnostic[]
          };
       }
-      return this.encoder.toTransferDocument<AstNode>(document) as unknown as TransferDocument<TTransfer, TDiagnostic>;
+      return this.encoder.toTransferDocument(document) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 
    /**

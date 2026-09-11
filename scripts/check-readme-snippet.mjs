@@ -99,6 +99,8 @@ const SNIPPET_TARGETS = [
    // discovery requires one, and it will start earning its keep the moment a
    // compilable fence is added.
    { readme: 'docs/concepts/scope-and-visibility.md', host: 'examples/order-flow/server' },
+   // Same: its one fence contrasts a working intersection order against a
+   // broken one, so half of it must not compile by construction.
    {
       readme: 'docs/concepts/contributions.md',
       host: 'examples/order-flow/server',

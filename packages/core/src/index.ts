@@ -36,5 +36,9 @@ export * from './langium/service-registry.js';
 export * from './langium/language-types.js';
 export * from './launcher/index.js';
 export * from './locale/index.js';
+// The renderer only. The `./messages` subpath additionally enumerates this
+// package's own declarations, which the root barrel already re-exports through
+// the modules that raise them.
+export * from './messages/renderer.js';
 export * from './documents/index.js';
 export * from './util/index.js';

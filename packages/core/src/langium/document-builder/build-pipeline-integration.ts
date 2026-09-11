@@ -66,6 +66,19 @@ export interface BuildPipelineIntegrationOptions {
 }
 
 /**
+ * The build-pipeline slot. Empty because nothing calls this service — it wires
+ * itself in its constructor and every seam it offers is `protected`.
+ *
+ * Typing the slot by the class instead would stop an adopter's subclass
+ * satisfying it, since a class carries its `protected` members into the check
+ * and they compare by declaration rather than by shape. The cost of the empty
+ * shape is that any non-null value satisfies it, so a mis-bound slot compiles
+ * and the framework's phase listeners are then never attached.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the slot has no public member to name
+export interface BuildPipelineIntegration {}
+
+/**
  * Wires the framework's build-time features (integrity rules, AST
  * enrichment) into Langium's document-build pipeline. The single shared
  * place that subscribes to the document builder's phase notifications and,
@@ -90,7 +103,7 @@ export interface BuildPipelineIntegrationOptions {
  * Eagerly constructed (via `DEFAULT_EAGER_SERVICES`) so the listeners are
  * attached before the first build cycle.
  */
-export class BuildPipelineIntegration {
+export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration {
    constructor(
       protected readonly services: ServerSharedServices,
       options: BuildPipelineIntegrationOptions = {}

@@ -77,7 +77,7 @@ describe('createLspServerSharedModule', () => {
       // / Clock survives construction and first throws at a watched-file event,
       // arbitrarily far from the composition that caused it. Each slot the
       // constructor reads is therefore DEREFERENCED here, not merely fetched.
-      expect(shared.workspace.SelfSaveRegistry.matches('/nothing.x', 0)).toBe(false);
+      expect(shared.workspace.SelfSaveRegistry.isRegistered('/nothing.x', 0)).toBe(false);
       expect(typeof shared.workspace.FileSystemProvider.readFile).toBe('function');
       expect(typeof shared.workspace.TextDocuments.get).toBe('function');
       expect(typeof shared.Clock.now()).toBe('number');

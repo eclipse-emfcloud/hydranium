@@ -7,23 +7,23 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock, type Logger, type Project, type Tracer, type TransferDiagnostic, NoopLogger, SystemClock } from '@hydranium/protocol';
-import { ServerLocale } from '../locale/server-locale.js';
-import { ServerMessageRenderer } from '../messages/renderer.js';
+import { type Clock, type Logger, type Project, type Tracer, NoopLogger, SystemClock } from '@hydranium/protocol';
+import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.js';
+import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 import { ServerTracer } from './diagnostics/server-tracer.js';
 import { HydraniumLangiumProfiler } from './diagnostics/hydranium-langium-profiler.js';
 import { type AstNode, type Module } from '@hydranium/langium';
 import { type DefaultSharedModuleContext, type LangiumSharedServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
-import { ModelService } from './model-service/model-service.js';
+import { DefaultModelService, type ModelService } from './model-service/model-service.js';
 import { type ProjectManager } from './project/project-manager.js';
 import { SingleProjectManager } from './project/single-project-manager.js';
-import { TransferEncoder } from './transfer/transfer-encoder.js';
+import { DefaultTransferEncoder, type TransferEncoder } from './transfer/transfer-encoder.js';
 import { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
-import { BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
+import { DefaultBuildPipelineIntegration, type BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
 import { type BuildPhasePassContribution } from './build-phase-pass/build-phase-pass.js';
 import { type BuildPhasePassService, DefaultBuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
-import { CstResidencyService } from './residency/index.js';
+import { DefaultCstResidencyService, type CstResidencyService } from './residency/index.js';
 import { HydraniumIndexManager } from './workspace/index-manager.js';
 import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
@@ -32,8 +32,8 @@ import { type HydraniumDocumentRegistry, HydraniumLangiumDocuments } from './wor
 import { type AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/document-uri-policy.js';
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
-import { AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
-import { SelfSaveRegistry } from '../documents/self-save-registry.js';
+import { DefaultAstDocumentManager, type AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
+import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { DefaultEmptyFileSystemProvider } from './workspace/file-system-provider.js';
 import { type ServerLanguageServices } from './language-module.js';
 import { ExtendedServiceRegistry } from './service-registry.js';
@@ -105,7 +105,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     * returns every sentence unchanged. Adopters subclass and override
     * `translationsFor`.
     */
-   MessageRenderer: ServerMessageRenderer;
+   MessageRenderer: MessageRenderer;
    /**
     * The locale an init handed the server, for whoever renders in it. Held
     * apart from the renderer so replacing the renderer cannot drop locale
@@ -255,14 +255,22 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     * heads read both slots from shared services rather than constructor
     * arguments.
     *
-    * Slot types use the upper bounds (`unknown` for encoder map / facade
-    * generics, {@link TransferDiagnostic} for the encoder's wire-diagnostic
-    * shape) so adopter subclasses with narrower typed overlays satisfy
-    * the slot via output-position covariance — `TDiagnostic` appears
-    * only in encoder return positions.
+    * `TransferEncoder` is the INTERFACE, not `DefaultTransferEncoder` — an
+    * adopter can therefore REPLACE this declaration (see
+    * {@link WithServiceOverrides}) rather than intersect with it, which is what
+    * keeps slot resolution independent of the order a services type is written
+    * in. `ModelService` is still a class and does not yet have that property.
+    *
+    * A class in a slot costs two things, both measured. Its `protected` members
+    * join every assignability check and are compared NOMINALLY, so a subclass
+    * declared against a second physical copy of this package cannot satisfy it.
+    * And where the class is generic over a map reached through `keyof`, that
+    * parameter is measured INVARIANT — instantiations then relate only when
+    * their arguments are mutually assignable, which no adopter map is with the
+    * framework's. Neither survives on an interface.
     */
    model: {
-      TransferEncoder: TransferEncoder<unknown, TransferDiagnostic>;
+      TransferEncoder: TransferEncoder;
       ModelService: ModelService<AstNode, unknown>;
    };
    /**
@@ -305,6 +313,45 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
 export type ServerSharedServices<TProject extends Project = Project> = Omit<LangiumSharedServices, 'workspace' | 'ServiceRegistry'> & {
    workspace: Omit<LangiumSharedServices['workspace'], 'TextDocuments' | 'DocumentBuilder'>;
 } & ServerAddedSharedServices<TProject>;
+
+/**
+ * The service-tree namespaces — the keys whose value groups further slots
+ * rather than being a slot itself.
+ *
+ * Consumed by {@link WithServiceOverrides} to know where to merge one level
+ * deeper. **Add a namespace to {@link ServerAddedSharedServices} and you must
+ * add it here**, and the failure of forgetting is silent in the direction that
+ * matters: an unlisted namespace is treated as a leaf, so an adopter overriding
+ * one slot inside it replaces the WHOLE namespace and loses the sibling slots
+ * with no diagnostic. The reverse mistake — listing a leaf — fails loudly.
+ */
+type ServiceNamespace = 'lsp' | 'workspace' | 'model';
+
+/**
+ * Compose an adopter's service tree so its declarations REPLACE the framework's
+ * rather than intersecting with them.
+ *
+ * Langium composes services by intersection, which accumulates: two
+ * declarations of one slot survive as an overload set, and which one a call
+ * resolves to depends on the order the intersection was written in — silently,
+ * with no diagnostic at the point a reorder changes it. There is no override
+ * operator for intersections, so the framework's declaration has to be removed
+ * before the adopter's is added. This does that, one level deep for each
+ * {@link ServiceNamespace}, so a narrowed slot replaces its framework twin
+ * while its siblings survive.
+ *
+ * Only slots typed as INTERFACES can be replaced this way. A class-typed slot
+ * drags its `protected` members into the assignability check — compared
+ * nominally — so an adopter subclass does not satisfy it and the framework's
+ * declaration cannot be dropped.
+ */
+export type WithServiceOverrides<TBase, TOverrides> = Omit<TBase, keyof TOverrides> & {
+   [K in keyof TOverrides]: K extends ServiceNamespace
+      ? K extends keyof TBase
+         ? Omit<TBase[K], keyof TOverrides[K]> & TOverrides[K]
+         : TOverrides[K]
+      : TOverrides[K];
+};
 
 /**
  * Construction context for {@link createServerSharedModule}.
@@ -354,8 +401,8 @@ export function createServerSharedModule(
       ServiceRegistry: services => new ExtendedServiceRegistry<ServerLanguageServices>(services),
       Logger: () => new NoopLogger(),
       Tracer: services => new ServerTracer(services.Logger, services.Clock),
-      ServerLocale: services => new ServerLocale(services),
-      MessageRenderer: services => new ServerMessageRenderer(services),
+      ServerLocale: services => new DefaultServerLocale(services),
+      MessageRenderer: services => new DefaultMessageRenderer(services),
       // Bind Langium's per-grammar-rule / per-`$type` parse/link/validate
       // profiler (the data the framework's own `Tracer`/`ProfileSession` passes
       // cannot produce), routed through our `Logger` and debug-gated. At the
@@ -430,7 +477,7 @@ export function createServerSharedModule(
          // scope tracker — `@hydranium/core/node` does.
          WorkspaceLock: () => new HydraniumWorkspaceLock(),
          ProjectManager: services => new SingleProjectManager(services),
-         SelfSaveRegistry: services => new SelfSaveRegistry(services),
+         SelfSaveRegistry: services => new DefaultSelfSaveRegistry(services),
          DocumentUriPolicy: () => new DefaultDocumentUriPolicy(),
          // Writable filesystem with two paths:
          // - Adopter passed `context.fileSystemProvider` and it returned a
@@ -454,20 +501,20 @@ export function createServerSharedModule(
             }
             return new DefaultEmptyFileSystemProvider(services);
          },
-         AstDocumentManager: services => new AstDocumentManager(services),
+         AstDocumentManager: services => new DefaultAstDocumentManager(services),
          // Eagerly constructed, so its build-phase listeners attach before the
          // first build.
-         BuildPipelineIntegration: services => new BuildPipelineIntegration(services),
+         BuildPipelineIntegration: services => new DefaultBuildPipelineIntegration(services),
          BuildPhasePassService: services => new DefaultBuildPhasePassService(services),
          // Eagerly constructed, so its `Validated` pass registers before the
          // first build.
-         CstResidencyService: services => new CstResidencyService(services)
+         CstResidencyService: services => new DefaultCstResidencyService(services)
       },
       model: {
          // Generic walker — adopters with a typed `$type → wire shape` overlay
          // rebind this slot with a subclass.
-         TransferEncoder: services => new TransferEncoder(services),
-         ModelService: services => new ModelService(services)
+         TransferEncoder: services => new DefaultTransferEncoder(services),
+         ModelService: services => new DefaultModelService(services)
       },
       // Empty default so `services.buildPhasePasses` always resolves (Langium
       // throws on access to an unbound slot). The framework's own integrity /

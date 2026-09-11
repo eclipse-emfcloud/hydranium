@@ -81,6 +81,37 @@ export interface TransferEnvelopeSource<TDiagnostic> {
 }
 
 /**
+ * The AST→transfer contract a DI slot holds, implemented by
+ * {@link DefaultTransferEncoder}.
+ *
+ * **This is an interface and not the class, and that is load-bearing.** A class
+ * in a slot drags its `protected` members into every assignability check, which
+ * TypeScript compares NOMINALLY — so the slot type could not be satisfied by a
+ * subclass declared against a second physical copy of this package, and an
+ * adopter narrowing the slot had to intersect with the framework's declaration
+ * rather than replace it, leaving method resolution dependent on declaration
+ * order. An interface has no protected members and is compared structurally, so
+ * neither applies.
+ *
+ * **The transfer returns are the structural base ({@link TransferElement}), not
+ * the per-grammar overlay.** The overlay cannot parameterise this contract:
+ * `TransferTypeFor` reaches `keyof TTransferMap`, which makes that parameter
+ * measured-INVARIANT, and invariant parameters relate only when their arguments
+ * are mutually assignable — so a map-parameterised contract admits no adopter
+ * instantiation at all. Heads read this contract and do not know adopter maps;
+ * an adopter recovers the precise type by declaring its own slot, which it can
+ * now do by replacement.
+ */
+export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = TransferDiagnostic> {
+   toTransfer<T extends AstNode>(ast: T, mode?: TransferMode): TransferElement;
+   toTransferDocument(langiumDocument: LangiumDocument): TransferDocument<TransferElement, TDiagnostic>;
+   astDocumentToTransferDocument<TAst extends AstNode>(
+      document: AstDocument<TAst, TDiagnostic | TransferLspDiagnostic>
+   ): TransferDocument<TransferElement, TDiagnostic>;
+   toTransferDiagnostic(diagnostic: TransferLspDiagnostic): TDiagnostic;
+}
+
+/**
  * One-directional structural mapper from a Langium AST into the wire
  * transfer-model shape ({@link TransferElement}-based JSON).
  *
@@ -124,7 +155,7 @@ export interface TransferEnvelopeSource<TDiagnostic> {
  * - {@link toTransferDiagnostic} — project a {@link TransferLspDiagnostic}
  *   (the framework validator's output) to {@link TDiagnostic}.
  */
-export class TransferEncoder<
+export class DefaultTransferEncoder<
    // The map is intentionally unconstrained — adopters supply typed
    // overlays whose specific-key shapes don't structurally satisfy a
    // `Record<string, TransferElement>` index signature. `TransferTypeFor`

@@ -41,7 +41,7 @@ import { makeFakeClock } from '@hydranium/protocol/testing';
 import { LANGUAGE_CLIENT_ID } from '../../../src/documents/client-ids.js';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
-import { CstResidencyService } from '../../../src/langium/residency/cst-residency-service.js';
+import { DefaultCstResidencyService } from '../../../src/langium/residency/cst-residency-service.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumDocumentUpdateHandler } from '../../../src/lsp/hydranium-document-update-handler.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
@@ -80,7 +80,7 @@ function makeComposition(): Composition {
          DocumentBuilder: { update: () => Promise.resolve(), resetToState: noop, markNextReason: noop },
          WorkspaceLock: { write: (callback: (token: unknown) => unknown) => callback(undefined) },
          WorkspaceManager: { ready: Promise.resolve(), workspaceInitialized: Promise.resolve() },
-         SelfSaveRegistry: { matches: () => false },
+         SelfSaveRegistry: { isRegistered: () => false },
          FileSystemProvider: { mtimeMs: async () => undefined },
          DocumentUriPolicy: new DefaultDocumentUriPolicy(),
          BuildPhasePassService: {
@@ -107,7 +107,7 @@ function makeComposition(): Composition {
    // per-client close event reaches the handler, which gates on last-client.
    docs.onDidClose(event => handler.didCloseDocument(event));
 
-   new CstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: IDLE_MS } });
+   new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: IDLE_MS } });
    if (!capturedPass) {
       throw new Error('CstResidencyService did not register a build-phase pass');
    }

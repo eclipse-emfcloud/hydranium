@@ -32,7 +32,7 @@ import { collectMessages } from '../messages/primitives';
  * Nesting is a HOST convention, not the framework's: Theia flattens a nested
  * catalogue by joining keys with `/`, which is the separator a code already
  * uses, so an adopter on that host writes the file nested and one handed
- * straight to a `ServerMessageRenderer` writes it flat. Both end up here.
+ * straight to a `DefaultMessageRenderer` writes it flat. Both end up here.
  *
  * `_`-prefixed keys are dropped by PREFIX rather than by matching one literal
  * name, so a second note added to a file cannot silently become a catalogue
