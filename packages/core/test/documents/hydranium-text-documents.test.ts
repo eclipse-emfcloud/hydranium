@@ -8,7 +8,13 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type ApplyWorkspaceEditParams, type ApplyWorkspaceEditResult, CancellationToken, Range } from 'vscode-languageserver';
+import {
+   type ApplyWorkspaceEditParams,
+   type ApplyWorkspaceEditResult,
+   CancellationToken,
+   Range,
+   type TextEdit
+} from 'vscode-languageserver';
 import { TextDocument as TextDocumentImpl } from 'vscode-languageserver-textdocument';
 import type { TextDocument, TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
@@ -751,6 +757,99 @@ describe('HydraniumTextDocuments open / close client gating', () => {
    });
 });
 
+describe('HydraniumTextDocuments staged-content baseline', () => {
+   it('still delivers staged content to the language client that opened the file from disk', async () => {
+      // `IntegrityService.syncCorrections` stages for a CLOSED file and sends no edit
+      // of its own, so the open's own sync is the only delivery. Monaco opened from
+      // disk, so it holds the stale text and the correction is an edit it needs.
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      docs.stagePendingContent(URI, 'corrected\n');
+      openInLanguageClient(docs, 'original\n');
+      expect(docs.get(URI)?.getText()).toBe('corrected\n');
+      await docs.applyEditToLanguageClient(URI, 'corrected\n');
+      expect(recorded).toHaveLength(1);
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      const heldByClient = TextDocumentImpl.create(URI, 'plaintext', 0, 'original\n');
+      expect(TextDocumentImpl.applyEdits(heldByClient, edits)).toBe('corrected\n');
+   });
+});
+
+describe('HydraniumTextDocuments first-open baseline vs an outstanding push', () => {
+   it('keeps the pushed baseline when the client opens the file from disk afterwards', async () => {
+      // An `applyEdit` to a file the client has closed: the client opens it from disk
+      // and applies the edit after, so the push's baseline is what it ends up holding.
+      // Re-baselining to the disk text at that open keys the next diff to a buffer
+      // nobody has.
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      await docs.applyEditToLanguageClient(URI, 'a\nb\nc\n');
+      openInLanguageClient(docs, 'a\n');
+      await docs.applyEditToLanguageClient(URI, 'a\nb\nc\nd\n');
+      expect(recorded).toHaveLength(2);
+      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      const heldByClient = TextDocumentImpl.create(URI, 'plaintext', 0, 'a\nb\nc\n');
+      expect(TextDocumentImpl.applyEdits(heldByClient, edits)).toBe('a\nb\nc\nd\n');
+   });
+});
+
+describe('HydraniumTextDocuments language-client attach baseline', () => {
+   it('sends no edit when the language client attaches holding the text the sync would push', async () => {
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      // The diagram-initiated open: a non-language client has the document, then
+      // Monaco opens the same file from disk and attaches to it.
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'shared\n' } }, 'glsp-client');
+      openInLanguageClient(docs, 'shared\n');
+      const result = await docs.applyEditToLanguageClient(URI, 'shared\n');
+      expect(recorded).toHaveLength(0);
+      expect(result).toBeUndefined();
+   });
+
+   it('keeps a shadow established by an earlier push when the language client attaches', async () => {
+      // The staged-integrity flow: `workspace/applyEdit` targets a file Monaco does not
+      // have open, so the client opens it from DISK and applies the edit afterwards. The
+      // push's own baseline is what Monaco ends up holding — an attach must not drag the
+      // shadow back to the pre-edit disk text, or the next diff splices the buffer.
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'disk\n' } }, 'glsp-client');
+      await docs.applyEditToLanguageClient(URI, 'a\nintegrity\n');
+      openInLanguageClient(docs, 'disk\n');
+      await docs.applyEditToLanguageClient(URI, 'a\nintegrity2\n');
+      // The second push must be reconstructable from the text the client actually holds
+      // after the first one, which is the only baseline its ranges can address.
+      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      const held = TextDocumentImpl.create(URI, 'plaintext', 0, 'a\nintegrity\n');
+      expect(TextDocumentImpl.applyEdits(held, edits)).toBe('a\nintegrity2\n');
+   });
+
+   it('does not match the opened text against a client buffer that has since moved', async () => {
+      // The opened snapshot must not outlive the client's own edits: once Monaco has
+      // typed, text equal to what it opened with is an edit it still needs.
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: false }) } });
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'x\n' } }, 'glsp-client');
+      openInLanguageClient(docs, 'x\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'y\n' }] }, LANGUAGE_CLIENT_ID);
+      // A rejected push clears the baseline; the client is left holding 'y\n'.
+      await docs.applyEditToLanguageClient(URI, 'z\n');
+      await docs.applyEditToLanguageClient(URI, 'x\n');
+      expect(recorded).toHaveLength(2);
+      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
+      expect(edits[0].newText).toBe('x\n');
+   });
+
+   it('still sends a full replace when the language client attaches holding different text', async () => {
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'server\n' } }, 'glsp-client');
+      // Monaco attaches with the stale disk text, which the opened baseline must
+      // NOT be trusted to diff against — only to compare for equality.
+      openInLanguageClient(docs, 'disk\n');
+      await docs.applyEditToLanguageClient(URI, 'server\n');
+      expect(recorded).toHaveLength(1);
+      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string; range: Range }> }).edits;
+      expect(edits).toHaveLength(1);
+      expect(edits[0].newText).toBe('server\n');
+      expect(edits[0].range.end.line).toBeGreaterThan(1);
+   });
+});
+
 describe('HydraniumTextDocuments applyEditToLanguageClient invalidation', () => {
    it('preserves the shadow when applyEdit reports applied=true', async () => {
       // Kills the `result.applied === false` mutations (`=== true`, `!== false`,
@@ -1472,6 +1571,31 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       // A settled-text push reaches BOTH tabs, each addressed at its own spelling.
       await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
       expect(recorded.map(targetUriOf).sort()).toEqual([LINK, REAL].sort());
+   });
+
+   it("keys a push to the second tab against that tab's own buffer, not the synced text", async () => {
+      const { docs, recorded } = makeConnectedStore();
+      // Tab one, opened under the symlink path. A form-editor write then adds a line, so
+      // the SYNCED text runs ahead of the file on disk, and tab one is pushed up to it.
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      docs.applyContentChange(LINK, 'a\nb\nc\n', 'form-client');
+      await docs.applyEditToLanguageClient(LINK, 'a\nb\nc\n');
+      // Tab two opens the same file under the real path, so its buffer is the DISK text.
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      await docs.applyEditToLanguageClient(REAL, 'a\nb\nc\nd\n');
+      const toReal = recorded.filter(rec => targetUriOf(rec) === REAL);
+      expect(toReal).toHaveLength(1);
+      const edits = (toReal[0].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      // Applying them to what tab two holds must produce the pushed text. Keyed to the
+      // synced 'a\nb\nc\n' instead, the ranges address a line tab two does not have.
+      const heldByTabTwo = TextDocumentImpl.create(REAL, 'plaintext', 0, 'a\nb\n');
+      expect(TextDocumentImpl.applyEdits(heldByTabTwo, edits)).toBe('a\nb\nc\nd\n');
    });
 
    it('treats a file opened under both its symlink and real path as one document', () => {
