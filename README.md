@@ -246,10 +246,15 @@ pair.right.listen();
 // 3. Client side: typed proxy over the same wire. One `createRpcProxy`
 //    call exposes the server surface outbound and binds `localClient`
 //    inbound for push notifications (`onDocumentUpdated` /
-//    `onDocumentSaved` / `onProjectsChanged`).
+//    `onDocumentSaved` / `onDocumentDeleted` / `onDocumentsBuilt` /
+//    `onProjectsChanged`).
 const localClient: DataClientProtocol<DomainModel> = {
    onDocumentUpdated: event => console.log('updated:', event.document.uri),
    onDocumentSaved: () => {},
+   onDocumentDeleted: event => console.log('deleted:', event.uri),
+   // Documents rebuilt that this client never watched — re-read anything
+   // derived from them.
+   onDocumentsBuilt: event => console.log('built:', event.uris.join(', ')),
    onProjectsChanged: () => {}
 };
 const proxy = createRpcProxy<DataServerProtocol<DomainModel>, DataClientProtocol<DomainModel>>(pair.right, {

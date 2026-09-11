@@ -698,19 +698,29 @@ export class DefaultModelService<
       // created from the payload rather than read from the filesystem — `update`
       // is an upsert. For an already-open document `open` refreshes content (the
       // text is ignored on that branch), so existing-document behaviour is
-      // unchanged. `version` is intentionally NOT forwarded to `open`: a cold
-      // create stays at its initial version, so a based-on-`version` update of a
-      // not-yet-existing document still trips the conflict gate below.
+      // unchanged. `version` is intentionally NOT forwarded to `open`, so a cold
+      // create stays at its initial version rather than adopting a number the
+      // caller chose.
+      //
+      // The gate's version is read BEFORE that open, and must be: for a document
+      // no client holds open, the open assigns the shared version from the
+      // INCOMING text, so a version read afterwards has already absorbed the
+      // caller's own write. Gating on it rejected every modifying write to a
+      // closed document, having compared the caller's `baseVersion` against a
+      // number the caller itself produced — and a serialised round-trip that is
+      // not byte-identical to the stored text was enough to trigger it. Reading
+      // first keeps both cases the gate exists for: an unknown URI answers 0, so
+      // a based-on-version update of a not-yet-existing document still trips it,
+      // and a genuine conflict still trips it, another writer having advanced the
+      // sequence past the version the caller read.
+      const currentVersion = this.services.workspace.TextDocuments.version(uri);
       const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
       await run('open', () => this.open({ uri, clientId: args.clientId, text }));
-      if (args.baseVersion !== undefined) {
-         const current = this.services.workspace.TextDocuments.version(uri);
-         if (current !== args.baseVersion) {
-            // Distinct from the post-build "superseded" debug line below: this is a
-            // based-on-stale rejection (the write never applies), not two writes racing.
-            this.tracer.debug(`Conflict on ${uri}: based-on v${args.baseVersion} stale, server at v${current}`);
-            throw new ConflictError(uri, args.baseVersion, current);
-         }
+      if (args.baseVersion !== undefined && currentVersion !== args.baseVersion) {
+         // Distinct from the post-build "superseded" debug line below: this is a
+         // based-on-stale rejection (the write never applies), not two writes racing.
+         this.tracer.debug(`Conflict on ${uri}: based-on v${args.baseVersion} stale, server at v${currentVersion}`);
+         throw new ConflictError(uri, args.baseVersion, currentVersion);
       }
       const appliedVersion = await run('apply', () => this.services.workspace.AstDocumentManager.update(uri, text, args.clientId));
       // Dispatch through the public `rebuild` (which re-canonicalizes the already-

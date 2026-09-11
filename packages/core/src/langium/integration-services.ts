@@ -159,6 +159,23 @@ export interface IntegrationServicesOptions<
        * still win over heads.
        */
       extra?: ReadonlyArray<Module<TLanguage, PartialLangiumServices>>;
+      /**
+       * Modules composed LAST, after `adopter`, and partial over `TLanguage`
+       * rather than over Langium's per-language services. The language-tier
+       * twin of {@link IntegrationServicesOptions.sharedModules}'s
+       * `overrides`, and both differences carry the same weight they do
+       * there.
+       *
+       * A per-language framework service is constructed by the framework's
+       * own module with no options
+       * (`IntegrityService: services => new DefaultIntegrityService(services)`),
+       * so booting one configured differently means rebinding the slot.
+       * {@link extra} serves neither half of that: it composes BEFORE
+       * `adopter` and so loses every slot the adopter binds, and it is typed
+       * `PartialLangiumServices`, which cannot express a framework ADDITION
+       * like `IntegrityService` or `AstExtensionService` at all.
+       */
+      overrides?: ReadonlyArray<Module<TLanguage, DeepPartial<TLanguage>>>;
    };
 
    /**
@@ -222,6 +239,8 @@ export interface AdditionalLanguageModules<
    adopter?: (shared: TShared) => Module<TLanguage, PartialLangiumServices>;
    /** Protocol-head modules for this language. Defaults to the primary language's. */
    extra?: ReadonlyArray<Module<TLanguage, PartialLangiumServices>>;
+   /** Last-composed overrides for this language. Defaults to the primary language's. */
+   overrides?: ReadonlyArray<Module<TLanguage, DeepPartial<TLanguage>>>;
 }
 
 /**
@@ -283,19 +302,34 @@ export function createIntegrationServices<
    const composeLanguage = (
       generated: Module<TLanguage, PartialLangiumServices>,
       adopter: (shared: TShared) => Module<TLanguage, PartialLangiumServices>,
-      extra: ReadonlyArray<Module<TLanguage, PartialLangiumServices>>
+      extra: ReadonlyArray<Module<TLanguage, PartialLangiumServices>>,
+      overrides: ReadonlyArray<Module<TLanguage, DeepPartial<TLanguage>>>
    ): TLanguage => {
       const defaultLanguageModule = createDefaultModule({ shared }) as unknown as Module<TLanguage, PartialLangiumServices>;
       const serverLanguageModule = createServerLanguageModule(context) as unknown as Module<TLanguage, PartialLangiumServices>;
-      return inject(defaultLanguageModule, generated, serverLanguageModule, ...extra, adopter(shared)) as unknown as TLanguage;
+      return inject(
+         defaultLanguageModule,
+         generated,
+         serverLanguageModule,
+         ...extra,
+         adopter(shared),
+         // Last, so an override outranks the adopter too — see `overrides`.
+         ...(overrides as ReadonlyArray<Module<TLanguage, PartialLangiumServices>>)
+      ) as unknown as TLanguage;
    };
 
    const primaryExtra = (languageModules.extra ?? []) as ReadonlyArray<Module<TLanguage, PartialLangiumServices>>;
-   const language = composeLanguage(languageModules.generated, languageModules.adopter, primaryExtra);
+   const primaryOverrides = languageModules.overrides ?? [];
+   const language = composeLanguage(languageModules.generated, languageModules.adopter, primaryExtra, primaryOverrides);
    const languages = [
       language,
       ...additionalLanguages.map(additional =>
-         composeLanguage(additional.generated, additional.adopter ?? languageModules.adopter, additional.extra ?? primaryExtra)
+         composeLanguage(
+            additional.generated,
+            additional.adopter ?? languageModules.adopter,
+            additional.extra ?? primaryExtra,
+            additional.overrides ?? primaryOverrides
+         )
       )
    ];
 

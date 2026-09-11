@@ -59,17 +59,19 @@ export async function reconcileSourceModelWrite<TModel extends object>(
             await hooks.persist(outcome.merged);
             return;
          case 'no-op':
-            hooks.logger.debug(`updateSourceModel no-op (v${err.expected} → v${err.actual}); already in sync`);
+            hooks.logger.debug(`updateSourceModel no-op (v${err.expectedVersion} → v${err.actualVersion}); already in sync`);
             return;
          case 'conflict':
             hooks.logger.warn(
-               `updateSourceModel conflict (v${err.expected} → v${err.actual}); dropping the diagram edit — ` +
+               `updateSourceModel conflict (v${err.expectedVersion} → v${err.actualVersion}); dropping the diagram edit — ` +
                   'a foreign writer changed the same field'
             );
             hooks.onConflictDropped();
             return;
          case 'unavailable':
-            hooks.logger.warn(`updateSourceModel refetch unavailable (v${err.expected} → v${err.actual}); forcing without version`);
+            hooks.logger.warn(
+               `updateSourceModel refetch unavailable (v${err.expectedVersion} → v${err.actualVersion}); forcing without version`
+            );
             await hooks.persist(model);
             return;
       }

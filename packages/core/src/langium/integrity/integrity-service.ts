@@ -75,6 +75,11 @@ export namespace IntegrityService {
     * at `DocumentState.Validated` and delivered separately via `publishDiagnostics`
     * or the `onModelUpdated` event.
     *
+    * The AST is what this guarantees, not the text. For a closed document whose
+    * repair was STAGED rather than written (`'editor'` sync mode),
+    * `textDocument` still mirrors disk — read the repair off the AST, or from
+    * the staged content the next open consumes.
+    *
     * Invariant: integrity rules only register at Parsed or Linked, so the build
     * is guaranteed post-integrity once it advances past `onBuildPhase(Linked)`
     * into `IndexedReferences`. {@link IntegrityService.register} enforces this at
@@ -317,10 +322,11 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
 
+      const version = document.textDocument.version;
       // Keep the same version so HydraniumTextDocuments doesn't reject subsequent client edits.
       // Use manager.update so the `instanceof FullTextDocument` gate in the bare
       // `TextDocument.update` doesn't trip on adopter-custom text-document types.
-      const textDocument = this.textDocuments.update(document.textDocument, [{ text: newText }], document.textDocument.version);
+      const textDocument = this.textDocuments.update(document.textDocument, [{ text: newText }], version);
 
       await this.syncCorrections(textDocument);
 
@@ -328,6 +334,14 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // Parsed-phase correction: re-parse only. The build pipeline still runs
          // IndexedContent → ComputedScopes → Linked → … on the fresh AST afterwards,
          // so the document reconciles naturally with no extra work here.
+         //
+         // Except for a closed document whose repair did not reach disk — `'editor'`
+         // sync mode stages it instead of writing it — where the re-parse is SKIPPED:
+         // Langium's factory gates the parse on the CST's `fullText`, which still
+         // equals the disk text the same call re-reads and redefines `textDocument`
+         // over. So `document.textDocument` is NOT post-integrity for such a
+         // document — it mirrors disk, and the AST is the only place the repair is
+         // legible, until an open consumes the staging.
          await this.documentBuilder.reparse(document, cancelToken);
       } else {
          // Linked-phase (or later) correction. The rule mutated the AST in place but
@@ -339,6 +353,26 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // build-phase listeners (which would re-enter integrity). The phase logic
          // stays in the builder, its proper home, rather than being duplicated here.
          await this.documentBuilder.reparseAndRelink(document, cancelToken);
+      }
+
+      // Re-version against the REPAIRED text, after either branch. The repair is
+      // a content change the store has not seen: whatever reconciliation ran
+      // during the re-parse saw the text on disk, which in `'editor'` sync mode
+      // is the PRE-repair text. Leave the sequence describing that and the next
+      // open hashes the repair, finds a mismatch and steps the version again, so
+      // every `baseVersion` taken from this build is stale before it is used.
+      // Falls back to the pre-re-parse number for a URI the store never tracked,
+      // where there is no sequence to advance; an OPEN document answers
+      // `undefined` and keeps the store's own version, which is not this
+      // method's to move.
+      //
+      // Deliberately NOT gated on cancellation, unlike the entry to this method:
+      // `syncCorrections` has already written or staged the repair by now, so a
+      // preempted build that skipped this would leave the sequence describing
+      // text that is no longer there.
+      const reconciled = this.textDocuments.reconcileExternalContent(document.textDocument.uri, newText) ?? version;
+      if (document.textDocument.version !== reconciled) {
+         this.textDocuments.update(document.textDocument, [], reconciled);
       }
    }
 

@@ -168,6 +168,20 @@ export interface LanguageFixture {
     */
    readonly referenceQuery?: ReferenceQuerySpec;
    /**
+    * Optional: a second document that REFERENCES {@link valid}, so the data
+    * slice can provoke a CASCADE — a rebuild of this document caused by
+    * editing the one it points at, with its own text never touched.
+    *
+    * Opt-in because a grammar need not have cross-document references at all,
+    * and because only the adopter knows which pair of documents forms one.
+    * Supplying it IS the claim that editing `valid` rebuilds this document; the
+    * check then holds the head to reporting that on `onDocumentsBuilt`, which
+    * is the only channel that can carry it — the document has no subscriber and
+    * its file did not change, so neither the update channel nor a filesystem
+    * watcher can.
+    */
+   readonly dependent?: ConformanceModel;
+   /**
     * Optional: a locale plus the sentence the server must publish in it. Read
     * by the **LSP slice only**.
     */

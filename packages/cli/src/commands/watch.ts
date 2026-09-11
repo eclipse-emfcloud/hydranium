@@ -8,7 +8,12 @@
  ********************************************************************************/
 
 import type { LogThreshold, TransferElement } from '@hydranium/protocol';
-import type { DataClientProtocol, DataServerProtocol, TransferDocumentUpdatedEvent } from '@hydranium/protocol/data';
+import type {
+   DataClientProtocol,
+   DataServerProtocol,
+   TransferDocumentDeletedEvent,
+   TransferDocumentUpdatedEvent
+} from '@hydranium/protocol/data';
 import { logLevelEnv } from '../log-level.js';
 import { spawnDataServer } from '../spawn-data-server.js';
 
@@ -131,6 +136,21 @@ export async function runWatch(options: WatchCommandOptions): Promise<void> {
       },
       onDocumentSaved(): void {
          // Persistence is out of band for the per-URI update view.
+      },
+      onDocumentDeleted(event: TransferDocumentDeletedEvent): void {
+         // In band, unlike the two neighbours: this is the end of the stream
+         // the view exists to show, and a consumer that never hears it waits
+         // forever for an update that cannot come. The line carries no
+         // `document`, so a reader must switch on shape rather than assume one.
+         if (event.uri !== options.uri) {
+            return;
+         }
+         write(`${JSON.stringify(event)}\n`);
+      },
+      onDocumentsBuilt(): void {
+         // Out of band for a per-URI view by construction: this notification
+         // carries only documents nobody watches, and this command watches the
+         // one URI it was given.
       },
       onProjectsChanged(): void {
          // Project lifecycle is out of band for the per-URI update view.

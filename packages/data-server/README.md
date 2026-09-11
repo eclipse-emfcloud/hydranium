@@ -22,7 +22,11 @@ Installed by the server process that already composes
 - **Push notifications instead of polling:** `onDocumentUpdated` when a
   subscribed document reaches the configured build phase
   (`DataServerOptions.subscriptionPhase`, `DocumentState.Validated` by default),
-  `onDocumentSaved` on a separate channel, and `onProjectsChanged` from the
+  `onDocumentSaved` on a separate channel, `onDocumentDeleted` on a third (a
+  deleted document has no built state to carry, and the build-phase path never
+  runs for one), `onDocumentsBuilt` once per build for the documents nobody
+  watches — chiefly those rebuilt as a cascade, which no filesystem watcher can
+  see because their own files did not change — and `onProjectsChanged` from the
   project registry.
 - **Projects as first-class:** `getProjects` and `getProjectForUri`, answered from
   the framework's `ProjectManager`.

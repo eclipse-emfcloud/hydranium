@@ -14,7 +14,9 @@ import {
    type DataClientProtocol,
    type DataServerProtocol,
    type ProjectsChangedEvent,
+   type TransferDocumentDeletedEvent,
    type TransferDocumentSavedEvent,
+   type TransferDocumentsBuiltEvent,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol/data';
 import { type Harness, makeCapturingDataClient } from '@hydranium/protocol/testing';
@@ -87,6 +89,10 @@ export interface DataServerHarness<
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
    /** Captured `onDocumentSaved` events. */
    readonly saves: ReadonlyArray<TransferDocumentSavedEvent<TTransfer, TDiagnostic>>;
+   /** Captured `onDocumentDeleted` events. */
+   readonly deletions: ReadonlyArray<TransferDocumentDeletedEvent>;
+   /** Captured `onDocumentsBuilt` events, one per build that had unwatched documents. */
+   readonly builds: ReadonlyArray<TransferDocumentsBuiltEvent>;
    /** Captured `onProjectsChanged` events. */
    readonly projectsChanges: ReadonlyArray<ProjectsChangedEvent<TProject>>;
    /** Dispose the underlying duplex pair. Idempotent. */
@@ -115,7 +121,7 @@ export function makeDataServerHarness<
    const server = options.server(pair.left);
 
    // The capture half is the shared client double, not a local copy: the same
-   // recording semantics (all three channels, an override replacing rather than
+   // recording semantics (every channel, an override replacing rather than
    // supplementing) then hold for a client-side suite that stands the double up
    // without a server, so an assertion learnt against one reads the same in the
    // other.
@@ -123,6 +129,8 @@ export function makeDataServerHarness<
       client: localClient,
       updates: events,
       saves,
+      deletions,
+      builds,
       projectsChanges
    } = makeCapturingDataClient<TTransfer, TDiagnostic, TProject>(options.client);
 
@@ -141,6 +149,8 @@ export function makeDataServerHarness<
       pair,
       events,
       saves,
+      deletions,
+      builds,
       projectsChanges,
       dispose: () => pair.dispose()
    };

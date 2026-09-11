@@ -9,6 +9,7 @@
 
 import {
    type DocumentBuilder,
+   type DocumentBuildListener,
    type DocumentPhaseListener,
    type DocumentState,
    type DocumentUpdateListener,
@@ -95,6 +96,14 @@ export interface StubDocumentBuilder extends Pick<
    /** Synchronously fire every registered `onUpdate` listener. */
    fireOnUpdate(changed: URI[], deleted: URI[]): void;
    /**
+    * Synchronously fire the BUILD-phase listener(s) for `state` with the whole
+    * batch. The per-build counterpart of {@link firePhase}: a subject that
+    * reports once per build rather than once per document subscribes here, and
+    * a stub that only fired {@link firePhase} would leave it silent while
+    * looking wired.
+    */
+   fireBuildPhase(state: DocumentState, built: LangiumDocument[], cancelToken?: CancellationToken): void;
+   /**
     * Hold the next {@link waitUntil} call. The returned handle releases it;
     * the call's return value resolves on the next tick after `resolve` runs.
     */
@@ -131,6 +140,7 @@ function reraise(result: unknown): void {
  */
 export function makeStubDocumentBuilder(): StubDocumentBuilder {
    const phaseListeners = new Map<DocumentState, DocumentPhaseListener[]>();
+   const buildPhaseListeners = new Map<DocumentState, DocumentBuildListener[]>();
    const onUpdateListeners: DocumentUpdateListener[] = [];
    const gates: Array<{ take(release: () => void): void }> = [];
    const updateCalls: RecordedBuilderCall<[URI[], URI[]]>[] = [];
@@ -194,6 +204,28 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
             reraise(listener(changed, deleted));
          }
       },
+      onBuildPhase(state: DocumentState, listener: DocumentBuildListener) {
+         const list = buildPhaseListeners.get(state) ?? [];
+         list.push(listener);
+         buildPhaseListeners.set(state, list);
+         return Disposable.create(() => {
+            const idx = list.indexOf(listener);
+            if (idx >= 0) {
+               list.splice(idx, 1);
+            }
+         });
+      },
+      fireBuildPhase(state: DocumentState, built: LangiumDocument[], cancelToken?: CancellationToken) {
+         const token =
+            cancelToken ??
+            ({
+               isCancellationRequested: false,
+               onCancellationRequested: () => Disposable.create(() => undefined)
+            } as CancellationToken);
+         for (const listener of buildPhaseListeners.get(state) ?? []) {
+            reraise(listener(built, token));
+         }
+      },
       gateNextWaitUntil(): StubWaitUntilGate {
          let release: (() => void) | undefined;
          const entry = {
@@ -223,9 +255,6 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
       },
       build() {
          return notSupported('build');
-      },
-      onBuildPhase() {
-         return notSupported('onBuildPhase');
       },
       resetToState() {
          return notSupported('resetToState');

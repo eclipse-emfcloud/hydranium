@@ -92,14 +92,19 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
 
    /** The current server snapshot — the baseline every write is authored against. */
    protected snapshot?: TransferDocument<TTransfer>;
-   protected readonly subscription: { dispose(): void };
+   protected readonly subscriptions: { dispose(): void }[];
    protected disposed = false;
 
    constructor(
       protected readonly session: DataSession<TTransfer>,
       events: DataEvents<TTransfer>
    ) {
-      this.subscription = events.onDidUpdateDocument(event => this.handleDocumentUpdated(event));
+      // Two channels, because a deletion is not an update: it carries no
+      // document, so there is no snapshot to adopt — only one to drop.
+      this.subscriptions = [
+         events.onDidUpdateDocument(event => this.handleDocumentUpdated(event)),
+         events.onDidDeleteDocument(event => this.handleDocumentDeleted(event))
+      ];
    }
 
    /** URI of the open document, or `undefined` before {@link open}. */
@@ -255,7 +260,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          return;
       }
       this.disposed = true;
-      this.subscription.dispose();
+      this.subscriptions.forEach(subscription => subscription.dispose());
       this.changeEmitter.dispose();
       this.snapshot = undefined;
    }
@@ -305,14 +310,22 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       }
    }
 
+   /**
+    * Drop the snapshot when the open document's file is removed. Nothing is
+    * adopted in its place: a later write would be authored against a baseline
+    * the server no longer has, and the host renders the empty state instead.
+    */
+   protected handleDocumentDeleted(event: { uri: string }): void {
+      if (this.disposed || event.uri !== this.snapshot?.uri) {
+         return;
+      }
+      this.snapshot = undefined;
+      this.changeEmitter.fire(undefined);
+   }
+
    /** Follow a server push for the open document. */
    protected handleDocumentUpdated(event: { document: TransferDocument<TTransfer>; sourceClientId: string; reason: string }): void {
       if (this.disposed || !this.snapshot || event.document.uri !== this.snapshot.uri) {
-         return;
-      }
-      if (event.reason === 'deleted') {
-         this.snapshot = undefined;
-         this.changeEmitter.fire(undefined);
          return;
       }
       // Own echo: the write path already adopted the authoritative response, so

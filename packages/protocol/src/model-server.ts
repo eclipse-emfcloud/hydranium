@@ -64,8 +64,8 @@ export interface CloseModelArgs extends TransferClientArgs {}
 export interface TransferUpdatedEvent<TDocument> {
    document: TDocument;
    sourceClientId: string;
-   /** See `ModelDocumentUpdateReason` in `./data/events` for the canonical reason set + semantics. */
-   reason: 'changed' | 'deleted' | 'rebuilt' | 'saved';
+   /** See `TransferDocumentUpdateReason` in `./data/events` for the canonical reason set + semantics. */
+   reason: 'changed' | 'rebuilt' | 'saved';
 }
 
 export interface TransferSavedEvent<TDocument> {

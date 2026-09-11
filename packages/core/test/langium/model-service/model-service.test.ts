@@ -276,8 +276,27 @@ describe('ModelService conflict gating', () => {
       expect(isConflictError(captured)).toBe(true);
       const err = captured as ConflictError;
       expect(err.uri).toBe(URI_A);
-      expect(err.expected).toBe(2);
-      expect(err.actual).toBe(3);
+      expect(err.expectedVersion).toBe(2);
+      expect(err.actualVersion).toBe(3);
+   });
+
+   it('throws ConflictError for a based-on write to a URI the store has never seen', async () => {
+      // `update` is an upsert, so a cold URI is CREATED by this call — and a
+      // caller claiming to have based it on v5 has based it on nothing. Every
+      // other case here seeds an open document, so this is the only cover for
+      // the cold branch. It is deliberately insensitive to WHERE the gate reads
+      // its version: a cold URI answers 0 before the upsert's open and 0 after
+      // it, which is why moving that read left this behaviour intact.
+      const { service } = buildConflictBundle(3);
+      const coldArgs = { uri: 'file:///never-seen.fake', clientId: 'editor-1', model: 'name:cold\n', baseVersion: 5 };
+      let captured: unknown;
+      try {
+         await service.update(coldArgs);
+      } catch (error) {
+         captured = error;
+      }
+      expect(isConflictError(captured)).toBe(true);
+      expect((captured as ConflictError).actualVersion).toBe(0);
    });
 
    it('does not gate when args.baseVersion is omitted', async () => {

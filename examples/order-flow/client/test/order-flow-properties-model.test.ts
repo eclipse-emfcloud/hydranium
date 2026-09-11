@@ -118,6 +118,8 @@ class FakeDataPort implements DataPort {
 }
 
 let workspace: ScratchWorkspace | undefined;
+/** The server's own services, for driving a deletion the protocol cannot request. */
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let port: FakeDataPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
@@ -160,6 +162,7 @@ describe('order-flow properties model', () => {
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-props-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });
+      sharedServices = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
 
       port = new FakeDataPort(channel => {
@@ -180,6 +183,7 @@ describe('order-flow properties model', () => {
       events = undefined;
       port?.dispose();
       port = undefined;
+      sharedServices = undefined;
       workspace?.dispose();
       workspace = undefined;
    });
@@ -303,6 +307,27 @@ describe('order-flow properties model', () => {
          message: 'the model never picked up the third-party rename'
       });
       expect(changes).toBeGreaterThan(0);
+   });
+
+   it('clears its fields when the open document is deleted', async () => {
+      const model = followingModel();
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      await model.open(uri);
+      expect(model.fields.length).toBeGreaterThan(0);
+
+      // Driven through the builder, not the protocol: a deletion originates at
+      // the filesystem, and there is no request a client could send to cause
+      // one. This is the client half of what the server suite pins. The URI
+      // object comes from the workspace rather than a `URI.parse` here, because
+      // this package deliberately does not depend on Langium.
+      const documents = sharedServices!.workspace.LangiumDocuments;
+      const open = documents.all.find((document: { uri: { toString(): string } }) => document.uri.toString() === uri);
+      await sharedServices!.workspace.DocumentBuilder.update([], [open!.uri]);
+
+      await waitFor(() => model.fields.length === 0, {
+         message: 'the model kept its fields after the document was deleted'
+      });
+      expect(model.uri).toBeUndefined();
    });
 
    it('merges a write that raced a foreign edit to a different field', async () => {

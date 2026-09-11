@@ -28,6 +28,8 @@ interface WatchHarness {
     * earlier so tests fail loudly on race conditions.
     */
    fire(event: TransferDocumentUpdatedEvent<FakeRoot>): void;
+   /** Deliver an inbound deletion, the notification that ends the stream. */
+   fireDeleted(uri: string): void;
    /**
     * Reproduce the child's death: reject `whenTerminated` with the message the
     * real spawn helper produces, and — because a dead child answers nothing —
@@ -88,6 +90,12 @@ function makeHarness(options: { readonly withChild?: boolean } = {}): WatchHarne
             throw new Error('WatchHarness.fire called before runWatch bound its local client');
          }
          boundClient.onDocumentUpdated(event);
+      },
+      fireDeleted(uri) {
+         if (!boundClient) {
+            throw new Error('WatchHarness.fireDeleted called before runWatch bound its local client');
+         }
+         boundClient.onDocumentDeleted({ uri });
       },
       killChild(signal) {
          if (!rejectTerminated) {
@@ -174,6 +182,35 @@ describe('runWatch', () => {
 
       expect(written).toHaveLength(1);
       expect(JSON.parse(written[0]).document.uri).toBe('file:///workspace/A.fake');
+   });
+
+   it('writes the deletion that ends the stream, and filters it by URI too', async () => {
+      const harness = makeHarness();
+      const written: string[] = [];
+      const controller = new AbortController();
+      const run = runWatch({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/A.fake',
+         clientId: 'watcher',
+         write: line => written.push(line),
+         signal: controller.signal,
+         __handleForTest: harness.handle
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      harness.fireDeleted('file:///workspace/B.fake');
+      harness.fireDeleted('file:///workspace/A.fake');
+
+      controller.abort();
+      await run;
+
+      // One line, and it carries no `document`: a reader switches on shape.
+      // Swallowing this would leave a consumer waiting for an update that can
+      // never come, which is why it is in band where a save is not.
+      expect(written).toHaveLength(1);
+      const line = JSON.parse(written[0]);
+      expect(line).toEqual({ uri: 'file:///workspace/A.fake' });
    });
 
    /**

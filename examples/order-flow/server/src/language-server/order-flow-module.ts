@@ -313,6 +313,17 @@ export interface OrderFlowOptions {
    readonly extraSharedModules?: ReadonlyArray<Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>>>;
 
    /**
+    * Per-language modules composed LAST, after this example's own overrides —
+    * the language-tier twin of {@link extraSharedModules}, applied to every
+    * grammar. Needed for the same reason and for the per-language half of the
+    * tree: `IntegrityService` and its neighbours are constructed by the
+    * framework's own module with no options, so a caller wanting a non-default
+    * one (a `syncMode`, a threshold) must rebind the slot after this file's
+    * bindings rather than before them.
+    */
+   readonly extraLanguageModules?: ReadonlyArray<Module<OrderFlowServices, DeepPartial<OrderFlowServices>>>;
+
+   /**
     * Colour keywords from the server as well as names. Left off for the VS Code
     * and Theia hosts, which ship `.tmLanguage.json` grammars whose keyword
     * scopes are finer than the flat `keyword` a semantic token can carry and
@@ -349,7 +360,8 @@ export function createOrderFlowServices(
       languageModules: {
          generated: DomainGeneratedModule,
          adopter: () => DomainLanguageModule(options),
-         extra: [createLspServerLanguageModule(fullContext)]
+         extra: [createLspServerLanguageModule(fullContext)],
+         overrides: options.extraLanguageModules
       },
       additionalLanguages: [
          {

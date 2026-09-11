@@ -20,7 +20,7 @@ import { defineMessage, type HydraniumMessageData, messageData } from './message
  */
 export const STALE_BASED_UPDATE = defineMessage(
    'hydranium/protocol/stale-based-update',
-   'Stale-based update for {uri}: expected v{expected}, server is at v{actual}'
+   'Stale-based update for {uri}: expected v{expectedVersion}, server is at v{actualVersion}'
 );
 
 /**
@@ -41,9 +41,9 @@ export const CONFLICT_ERROR_CODE = 1001;
 export interface ConflictErrorData extends HydraniumMessageData {
    readonly uri: string;
    /** The based-on version the caller authored against. */
-   readonly expected: number;
+   readonly expectedVersion: number;
    /** The server's current text-document version at the time of the throw. */
-   readonly actual: number;
+   readonly actualVersion: number;
 }
 
 /**
@@ -78,18 +78,19 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * No auto-retry or auto-merge ships by default.
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
-   constructor(uri: string, expected: number, actual: number) {
-      const params = { uri, expected, actual };
+   constructor(uri: string, expectedVersion: number, actualVersion: number) {
+      const params = { uri, expectedVersion, actualVersion };
       // The identity rides alongside the typed payload rather than replacing
-      // it: this class's getters and `isConflictError`'s name check are surface
-      // an adopter may bind, so the payload widens rather than changing shape.
+      // it: `isConflictError`'s name check is surface an adopter may bind, so
+      // adding the identity widens the payload rather than reshaping it.
       super(CONFLICT_ERROR_CODE, STALE_BASED_UPDATE.format(params), { ...params, ...messageData(STALE_BASED_UPDATE, params) });
       this.name = 'ConflictError';
       // ResponseError's constructor calls `Object.setPrototypeOf(this,
       // ResponseError.prototype)` to keep its own prototype chain intact across
       // transpilation targets; that resets us to ResponseError, hiding the
       // ConflictError-specific getters. Restore the prototype here so
-      // `err.uri` / `.expected` / `.actual` resolve through this class.
+      // `err.uri` / `.expectedVersion` / `.actualVersion` resolve through this
+      // class.
       Object.setPrototypeOf(this, ConflictError.prototype);
    }
 
@@ -97,12 +98,21 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
       return this.data!.uri;
    }
 
-   get expected(): number {
-      return this.data!.expected;
+   /**
+    * The based-on version the caller authored against.
+    *
+    * Must not be renamed to `expected`, nor its sibling to `actual`: a test
+    * reporter reads an error carrying both as an assertion failure, and
+    * vitest's formatter then ASSIGNS to them, which throws on an accessor and
+    * replaces the real failure with a `TypeError`.
+    */
+   get expectedVersion(): number {
+      return this.data!.expectedVersion;
    }
 
-   get actual(): number {
-      return this.data!.actual;
+   /** The server's version at the time of the throw. Not `actual` — see {@link expectedVersion}. */
+   get actualVersion(): number {
+      return this.data!.actualVersion;
    }
 }
 

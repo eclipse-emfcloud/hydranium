@@ -73,11 +73,15 @@ Each takes `connect` plus `languages`:
   interfere; the kit disposes the driver afterwards. The data slice wants a server already ready; the
   LSP slice drives the `initialize` handshake itself, so `connect` must **not** pre-initialise; the
   GLSP slice drives `start()`.
-- **`languages`** is an array of `LanguageFixture`: `valid` and `invalid` (both read by every
-  slice), plus two opt-ins — `edit` (data slice only: a replacement text and an `expect(root)`
-  predicate, because only you know what "the edit landed" means for your grammar) and
-  `completionPosition` (LSP slice only). A fixture's `uri` and `text` may be thunks, resolved after
-  `connect`, which is how each check gets pristine input in a workspace `connect` just created.
+- **`languages`** is an array of `LanguageFixture`: `valid` and `invalid` are required and read by
+  every slice; every other field is an opt-in whose checks report **skipped with a named reason**
+  when it is absent, so an opt-out stays distinguishable from lost coverage. Read the current set
+  off the `LanguageFixture` type, which says per field which slice reads it and what supplying it
+  claims — the two that carry the most are `edit` (a replacement text plus an `expect(root)`
+  predicate, because only you know what "the edit landed" means for your grammar) and `dependent`
+  (a document that references `valid`, which is what lets the data slice provoke a cascade). A
+  fixture's `uri` and `text` may be thunks, resolved after `connect`, which is how each check gets
+  pristine input in a workspace `connect` just created.
 
 The GLSP slice is generic over your action type and takes `GlspFixture` per diagram type — the
 fixture builds the native actions and the kit matches responses by `kind`, so no `@eclipse-glsp/*`

@@ -10,24 +10,29 @@
 /**
  * The `@hydranium/conformance/data` slice — protocol conformance for the
  * data-server head. The driver port IS the protocol-native
- * {@link DataServerProtocol} proxy (plus the captured `onDocumentUpdated`
- * events), so no upstream wire-lib dep enters the kit and `DataServerHarness`
- * satisfies the port structurally with no adapter.
+ * {@link DataServerProtocol} proxy (plus the captured client notifications),
+ * so no upstream wire-lib dep enters the kit and `DataServerHarness` satisfies
+ * the port structurally with no adapter.
  */
 
 import assert from 'node:assert/strict';
 import { ReferenceSource, SyntheticStep, TransferDocument, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
-import type { DataServerProtocol, ReferenceServerProtocol, TransferDocumentUpdatedEvent } from '@hydranium/protocol/data';
+import type {
+   DataServerProtocol,
+   ReferenceServerProtocol,
+   TransferDocumentsBuiltEvent,
+   TransferDocumentUpdatedEvent
+} from '@hydranium/protocol/data';
 import { type Harness, waitFor } from '@hydranium/protocol/testing';
 import type { ConformanceCheck } from '../conformance-suite.js';
 import { type LanguageFixture, resolveDeferred, resolveModel } from '../model.js';
 
 /**
  * The data-server driver port — a live, connected, READY data-server exposed
- * through its protocol-native proxy plus the captured client-side update
- * events. The kit names only `@hydranium/protocol` types, so a
+ * through its protocol-native proxy plus the captured client-side
+ * notifications. The kit names only `@hydranium/protocol` types, so a
  * `DataServerHarness` satisfies the port structurally (it has `proxy` +
- * `events` + `dispose`) with NO adapter. `extends Harness` gives the kit the
+ * `events`, `builds` and `dispose`) with NO adapter. `extends Harness` gives the kit the
  * universal `dispose()` teardown.
  *
  * The kit seeds documents purely through the proxy: `updateModelDocument` is
@@ -43,6 +48,8 @@ export interface DataConformanceDriver<
    readonly proxy: DataServerProtocol<TTransfer, TDiagnostic>;
    /** Captured `onDocumentUpdated` events, append order — the subscription check's observation target. */
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
+   /** Captured `onDocumentsBuilt` events, append order — the cascade check's observation target. */
+   readonly builds: ReadonlyArray<TransferDocumentsBuiltEvent>;
    /**
     * The opt-in reference surface, when the head serves it.
     *
@@ -100,7 +107,7 @@ const SEEDER = 'conformance-seeder';
  * unit tests; adopters call `runDataConformance`.
  *
  * `LanguageFixture.edit` is read HERE and nowhere else in the kit, and is
- * optional: its two checks report skipped when it is absent. See
+ * optional: every check that needs one reports skipped when it is absent. See
  * {@link LanguageFixture} for which slice reads which field.
  */
 export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic = TransferDiagnostic>(
@@ -187,7 +194,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
    });
 
    for (const language of options.languages) {
-      const { valid, invalid, edit } = language;
+      const { valid, invalid, edit, dependent } = language;
       const tag = `[${valid.languageId}]`;
 
       checks.push({
@@ -362,6 +369,50 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  }
               }
             : undefined
+      });
+
+      // Opt-in twice over: the cascade needs an edit to provoke it AND a second
+      // document that references the first to be provoked.
+      const cascadeSkipReason =
+         'fixture supplies no `dependent` (a document referencing `valid`), so no cascade can be provoked over the protocol';
+
+      checks.push({
+         title: `editing a document reports its unwatched dependent as built ${tag}`,
+         skipReason: edit && dependent ? undefined : dependent ? editSkipReason : cascadeSkipReason,
+         body:
+            edit && dependent
+               ? async () => {
+                    const driver = await connect();
+                    try {
+                       const model = resolveModel(valid);
+                       const other = resolveModel(dependent);
+                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text });
+                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text });
+                       // Watch ONLY the referenced document. The dependent is left
+                       // unwatched on purpose: that is the state in which no other
+                       // channel can report it, and the state a workspace view is in
+                       // for every document it displays without opening.
+                       await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+                       const before = driver.builds.length;
+
+                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: resolveDeferred(edit.to) });
+
+                       await waitFor(() => driver.builds.slice(before).some(event => event.uris.includes(other.uri)), {
+                          message: `no onDocumentsBuilt event named ${other.uri} after editing the document it references`
+                       });
+                       const reported = driver.builds.slice(before).flatMap(event => [...event.uris]);
+                       // The watched document is excluded: its watcher already heard
+                       // about it on the update channel, and repeating it here would
+                       // be the bandwidth the per-URI gate exists to avoid.
+                       assert.ok(
+                          !reported.includes(model.uri),
+                          `onDocumentsBuilt named the WATCHED ${model.uri}; it is reported on the update channel instead`
+                       );
+                    } finally {
+                       driver.dispose();
+                    }
+                 }
+               : undefined
       });
 
       checks.push({

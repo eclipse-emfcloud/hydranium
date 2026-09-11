@@ -129,6 +129,12 @@ function makeCapturingClient(): {
       onDocumentSaved(_event: TransferDocumentSavedEvent<OrderFlowTransferRoot>): void {
          // Not this suite's subject; the save path is covered server-side.
       },
+      onDocumentDeleted(): void {
+         // Likewise, and covered server-side against a real builder.
+      },
+      onDocumentsBuilt(): void {
+         // Likewise; this suite watches the document it reads.
+      },
       onProjectsChanged(): void {
          // Likewise.
       }
