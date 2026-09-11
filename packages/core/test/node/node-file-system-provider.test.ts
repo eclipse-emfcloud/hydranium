@@ -202,7 +202,16 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
                // first round and must never vanish, so record it as one.
                torn.push('absent');
             }
-            await new Promise(resolve => setImmediate(resolve));
+            // A 1ms yield rather than `setImmediate`. Each sample reads two
+            // megabytes, so a same-tick loop holds the destination open for
+            // very nearly the whole run — and on Windows an open destination is
+            // what makes the replacing rename fail. That starved the write's
+            // retry budget and failed this test for LIVENESS while `torn` was
+            // empty, which is the opposite of what it exists to catch. The gap
+            // only has to exceed a rename; sample density is unaffected at this
+            // file size, and the control for that is breaking `writeFile` to a
+            // non-atomic write and confirming this test still reddens.
+            await new Promise(resolve => setTimeout(resolve, 1));
          }
       };
 

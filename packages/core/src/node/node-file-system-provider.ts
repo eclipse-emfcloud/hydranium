@@ -15,6 +15,7 @@ import { realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
+import { renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { serveVirtualDocument } from '../langium/workspace/virtual-document.js';
@@ -192,47 +193,6 @@ async function replacedFile(path: string): Promise<ReplacedFile | undefined> {
       return stat.isFile() ? { mode: stat.mode & 0o777, links: stat.nlink } : undefined;
    } catch {
       return undefined;
-   }
-}
-
-/**
- * Errno values a rename reports on Windows when another handle holds the
- * destination open. POSIX renames are unaffected by open handles, so this
- * cannot fire there and the retry below costs nothing.
- */
-const RENAME_CONTENTION_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-
-/**
- * `rename` the staged content over `destination`, retrying while Windows
- * reports the destination as held open.
- *
- * The staging file exists so a reader never sees a half-written file, and on
- * Windows the very presence of that reader is what makes the replacing rename
- * fail — so the indivisible write breaks under exactly the contention it was
- * built for, and it breaks intermittently, which is worse than never working.
- * A reader's handle is released in milliseconds, so waiting turns a spurious
- * failure into a slightly later success.
- *
- * BOUNDED, not open-ended: a genuine permission fault raises the same errno and
- * is distinguishable from contention only by never clearing, so an unbounded
- * wait would convert a hard error into a hang. Exhausting the budget rethrows
- * the last failure, leaving the caller's cleanup and error contract unchanged.
- */
-async function renameOverOpenReaders(staging: string, destination: string): Promise<void> {
-   const deadline = Date.now() + 2_000;
-   for (let attempt = 0; ; attempt++) {
-      try {
-         await fsp.rename(staging, destination);
-         return;
-      } catch (err: unknown) {
-         const code = err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
-         if (code === undefined || !RENAME_CONTENTION_CODES.has(code) || Date.now() >= deadline) {
-            throw err;
-         }
-         // Backs off to keep a long contention window from spinning, capped so
-         // a late attempt still lands promptly once the handle is released.
-         await new Promise(resolve => setTimeout(resolve, Math.min(2 ** attempt, 50)));
-      }
    }
 }
 
