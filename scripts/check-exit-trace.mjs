@@ -17,11 +17,11 @@
  * cases below are not optional coverage — they are what makes "no record" mean
  * anything at all.
  *
- * The clean case is deliberately the weakest of the four and is here for a
- * different property: it would also pass against a recorder that does nothing,
- * so on its own it proves nothing. It guards the constraint that the recorder
- * writes to neither stream, which subcommand tests asserting on a spawned
- * process's exact stdout depend on.
+ * The clean case is deliberately the weakest and is here for a different
+ * property: it would also pass against a recorder that does nothing, so on its
+ * own it proves nothing. It guards the constraint that the recorder writes to
+ * neither stream, which subcommand tests asserting on a spawned process's exact
+ * stdout depend on.
  *
  * Each case also asserts the child's EXIT CODE is unchanged, because a preload
  * that altered one would corrupt every gate in the chain behind it.
@@ -94,6 +94,17 @@ const CASES = [
       code: 0,
       expectRecord: false,
       stdout: 'payload'
+   },
+   {
+      // The production shape. `reallyExit` bypasses `process.exit` and every
+      // `exit` handler, which is what the real deaths do — so the marker is the
+      // only thing that survives, and it is what separates "reached JS and was
+      // killed" from "never got there".
+      name: 'a death that runs no exit handler',
+      source: 'process.reallyExit(1);',
+      code: 1,
+      expectRecord: false,
+      expectMarker: true
    }
 ];
 
@@ -121,9 +132,11 @@ function runCase(testCase) {
    }
 
    const files = readdirSync(traceDir);
-   const records = files.map(file => JSON.parse(readFileSync(join(traceDir, file), 'utf8')));
+   const read = prefix => files.filter(file => file.startsWith(prefix)).map(file => JSON.parse(readFileSync(join(traceDir, file), 'utf8')));
+   const records = read('exit-');
+   const markers = read('start-');
    rmSync(traceDir, { recursive: true, force: true });
-   return { code, stdout, stderr, records };
+   return { code, stdout, stderr, records, markers };
 }
 
 const failures = [];
@@ -141,6 +154,14 @@ for (const testCase of CASES) {
    // so any stderr at all is the recorder leaking into a stream a caller reads.
    if (result.stderr !== '' && !testCase.expectRecord) {
       failures.push(`${testCase.name}: the recorder wrote to stderr: ${JSON.stringify(result.stderr.slice(0, 200))}`);
+   }
+
+   // The marker's meaning is "ran no exit handler", so it must survive exactly
+   // the case that runs none and be gone from every other — including the
+   // failures, where the exit record supersedes it.
+   const expectedMarkers = testCase.expectMarker ? 1 : 0;
+   if (result.markers.length !== expectedMarkers) {
+      failures.push(`${testCase.name}: left ${result.markers.length} start marker(s), expected ${expectedMarkers}`);
    }
 
    if (!testCase.expectRecord) {
