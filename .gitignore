@@ -62,6 +62,7 @@ rerun-stderr.log
 report.*.json
 **/report.*.json
 exit-trace/
+process-audit.ndjson
 
 # Stryker mutation-audit artefacts (item 6 Element E one-off; the config
 # packages/core/stryker.conf.json is checked in, its outputs are not).

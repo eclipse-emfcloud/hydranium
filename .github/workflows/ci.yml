@@ -445,6 +445,41 @@ jobs:
       - name: Build
         run: npm run build:all
 
+      # The OS's own view of every process, because the in-process recorder has
+      # run out of things to see: the victim reaches JS and is then terminated
+      # with no exit handler run. 4688 gives the parent and the command line;
+      # 4689 gives the exit status, independently of what npm reported.
+      #
+      # Neither event names the KILLER. If these show the death with no cause,
+      # the next instrument is Sysmon event 10, which logs the process opening a
+      # PROCESS_TERMINATE handle — a heavier install, warranted only then.
+      #
+      # Enabled before the gate so it covers the whole run, and
+      # `continue-on-error` so a runner that refuses the policy change costs
+      # this evidence rather than the job.
+      - name: Audit process lifetimes
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # `--%` stops PowerShell parsing the rest of the line, so the space
+          # inside the quoted subcategory reaches auditpol as one argument
+          # instead of being re-split.
+          auditpol --% /set /subcategory:"Process Creation" /success:enable
+          auditpol --% /set /subcategory:"Process Termination" /success:enable
+
+          # Without the command line a 4688 says `node.exe` and nothing else,
+          # and every process here is node.exe.
+          $auditKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+          if (-not (Test-Path $auditKey)) { New-Item -Path $auditKey -Force | Out-Null }
+          New-ItemProperty -Force -Path $auditKey -Name 'ProcessCreationIncludeCmdLine_Enabled' -Value 1 -PropertyType DWord | Out-Null
+
+          # A gate run spawns thousands of processes, which wraps the default
+          # Security log well before the end and drops the earliest evidence.
+          wevtutil sl Security /ms:268435456
+
+          auditpol --% /get /subcategory:"Process Creation","Process Termination"
+
       # The whole contributor gate, not a subset. Running individual clauses
       # here let nine of them drift out of CI while the workflow still looked
       # like it was gating: an unmatched lint glob or a missing SPDX header
@@ -613,6 +648,47 @@ jobs:
             Format-List TotalVisibleMemorySize, TotalVirtualMemorySize
           Get-CimInstance Win32_PageFileUsage | Format-List Name, AllocatedBaseSize, PeakUsage
 
+      # The audit trail for the processes that died, written as NDJSON beside
+      # the exit records so the two can be joined on pid. Restricted to
+      # `node.exe`: a gate run creates thousands of processes and the rest are
+      # the runner's own.
+      - name: Collect the process-audit trail
+        if: steps.gate.outputs.status != '0' && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $events = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{
+            LogName   = 'Security'
+            Id        = 4688, 4689
+            StartTime = (Get-Date).AddMinutes(-45)
+          }
+          if (-not $events) {
+            Write-Host 'no process-audit events: the policy change did not take, or the log wrapped'
+            exit 0
+          }
+          $kept = 0
+          # An ABSOLUTE path: .NET's working directory is not PowerShell's, so a
+          # relative one here writes somewhere the upload does not look.
+          $writer = [System.IO.StreamWriter]::new((Join-Path $PWD 'process-audit.ndjson'))
+          try {
+            foreach ($event in $events) {
+              $data = @{}
+              foreach ($field in ([xml]$event.ToXml()).Event.EventData.Data) {
+                if ($field.Name) { $data[$field.Name] = $field.'#text' }
+              }
+              # 4688 names the new process, 4689 the ending one.
+              $image = if ($data['NewProcessName']) { $data['NewProcessName'] } else { $data['ProcessName'] }
+              if ($image -notlike '*node.exe') { continue }
+              $data['_id'] = $event.Id
+              $data['_time'] = $event.TimeCreated.ToString('o')
+              $writer.WriteLine(($data | ConvertTo-Json -Compress -Depth 3))
+              $kept++
+            }
+          } finally {
+            $writer.Dispose()
+          }
+          Write-Host "wrote $kept node.exe process-audit rows of $($events.Count) events"
+
       # Separate from the upload below because it needs `include-hidden-files`,
       # which defaults to FALSE: turbo's logs are in a dot directory and would
       # be dropped in silence, leaving an artefact that looks complete.
@@ -639,6 +715,7 @@ jobs:
             rerun-stdout.log
             rerun-stderr.log
             exit-trace/
+            process-audit.ndjson
             report.*.json
             packages/*/report.*.json
             examples/*/*/report.*.json
