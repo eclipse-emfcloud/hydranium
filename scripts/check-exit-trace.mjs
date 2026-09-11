@@ -105,6 +105,59 @@ const CASES = [
       code: 1,
       expectRecord: false,
       expectMarker: true
+   },
+   {
+      // The other side of that death: who asked for it. A kill record is the
+      // finding when one appears, and its ABSENCE is the finding when one does
+      // not — so a hook that had stopped firing would read as "no Node process
+      // killed it", which is the conclusion the investigation turns on.
+      name: 'a kill issued at a child process',
+      source: [
+         "const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);",
+         "child.on('spawn', () => child.kill());",
+         "child.on('exit', () => process.exit(0));"
+      ].join('\n'),
+      code: 0,
+      expectRecord: false,
+      assertKills: kills => {
+         if (kills.length !== 1) {
+            return `wrote ${kills.length} kill record(s), expected 1`;
+         }
+         const [kill] = kills;
+         if (typeof kill.target !== 'number' || kill.target <= 0) {
+            return `target is ${JSON.stringify(kill.target)}, expected the child's pid`;
+         }
+         if (!String(kill.argv).includes('setInterval')) {
+            return `argv does not name the killed child: ${JSON.stringify(kill.argv)}`;
+         }
+         if (!String(kill.stack).includes('[eval]')) {
+            return 'the stack does not reach the call site, so a record could not name the caller';
+         }
+         return undefined;
+      }
+   },
+   {
+      // The bare-pid route, which is the one that can reach a process the caller
+      // no longer owns. Signal 0 kills nothing, so this exercises the hook
+      // without needing a victim — and it pins the target to a pid the case
+      // itself prints, which a hook recording some other number would fail.
+      name: 'a bare-pid signal that kills nothing',
+      source: 'process.stdout.write(String(process.pid)); process.kill(process.pid, 0);',
+      code: 0,
+      expectRecord: false,
+      assertKills: (kills, result) => {
+         if (kills.length !== 1) {
+            return `wrote ${kills.length} kill record(s), expected 1`;
+         }
+         const [kill] = kills;
+         if (kill.target !== Number(result.stdout)) {
+            return `target is ${JSON.stringify(kill.target)}, but the process reported pid ${result.stdout}`;
+         }
+         if (kill.signal !== '0') {
+            return `signal is ${JSON.stringify(kill.signal)}, so a liveness probe cannot be told from a kill`;
+         }
+         return undefined;
+      }
    }
 ];
 
@@ -135,8 +188,16 @@ function runCase(testCase) {
    const read = prefix => files.filter(file => file.startsWith(prefix)).map(file => JSON.parse(readFileSync(join(traceDir, file), 'utf8')));
    const records = read('exit-');
    const markers = read('start-');
+   const kills = files
+      .filter(file => file.startsWith('kills-'))
+      .flatMap(file =>
+         readFileSync(join(traceDir, file), 'utf8')
+            .split('\n')
+            .filter(Boolean)
+            .map(line => JSON.parse(line))
+      );
    rmSync(traceDir, { recursive: true, force: true });
-   return { code, stdout, stderr, records, markers };
+   return { code, stdout, stderr, records, markers, kills };
 }
 
 const failures = [];
@@ -162,6 +223,20 @@ for (const testCase of CASES) {
    const expectedMarkers = testCase.expectMarker ? 1 : 0;
    if (result.markers.length !== expectedMarkers) {
       failures.push(`${testCase.name}: left ${result.markers.length} start marker(s), expected ${expectedMarkers}`);
+   }
+
+   // Every case that kills nothing must record nothing, or a run's kill records
+   // would be dominated by entries no one issued and the absence that matters
+   // could not be read.
+   if (!testCase.assertKills) {
+      if (result.kills.length !== 0) {
+         failures.push(`${testCase.name}: recorded ${result.kills.length} kill(s) for a case that kills nothing`);
+      }
+   } else {
+      const detail = testCase.assertKills(result.kills, result);
+      if (detail) {
+         failures.push(`${testCase.name}: ${detail}`);
+      }
    }
 
    if (!testCase.expectRecord) {

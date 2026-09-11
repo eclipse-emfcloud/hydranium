@@ -44,6 +44,21 @@
  * The last of those is why the self-test below has to exist: a recorder that has
  * silently stopped recording produces the same empty directory as the finding.
  *
+ * ## Why it also records the kills this process ISSUES
+ *
+ * The deaths under investigation are terminations: on Windows every one of them
+ * reports exit status 1 with no signal, because libuv passes a hardcoded 1 to
+ * `TerminateProcess` for every signal it sends. So the open question is not what
+ * kind of death it is but WHO calls it, and a `kills-<pid>.ndjson` naming the
+ * target, the child's own argv and the calling stack answers that for every Node
+ * process in the run at once.
+ *
+ * An ABSENCE is the other half and is the more likely reading: no kill record
+ * for a pid that the audit trail shows terminated means no Node process in the
+ * run asked for it, which leaves turbo, the shell and the OS — none of which
+ * this can see. That is a real narrowing and it is also why the self-test has to
+ * prove the hook still fires, on the same argument as the records above.
+ *
  * ## Constraints this must hold
  *
  * It runs in EVERY Node process of a `npm run check`, including ones whose
@@ -138,6 +153,35 @@ function describe(error) {
    return { name: error.name, message: error.message, stack: error.stack };
 }
 
+/**
+ * Every kill this process asks for, appended as it happens rather than held
+ * until exit: the caller is frequently still alive when the evidence is read,
+ * and a process that is itself killed would take a buffered list with it.
+ *
+ * The stack is TRIMMED because the useful part is the call site, and vitest
+ * alone issues one kill per test file — a full stack per record turns a routine
+ * teardown into megabytes. The child's `spawnargs` are what make a record
+ * readable at all: Windows reuses pids hard enough that a target pid on its own
+ * is ambiguous, and the argv says which process this actually was.
+ */
+function recordKill(target, signal, argv) {
+   safely(() => {
+      const { appendFileSync, mkdirSync } = require('node:fs');
+      const { join } = require('node:path');
+      const stack = (new Error('kill').stack || '').split('\n').slice(1, 9).join('\n');
+      const record = {
+         at: new Date().toISOString(),
+         by: process.pid,
+         target: typeof target === 'number' ? target : null,
+         signal: signal === undefined ? null : String(signal),
+         argv: Array.isArray(argv) ? argv.join(' ').slice(0, 300) : undefined,
+         stack
+      };
+      mkdirSync(TRACE_DIR, { recursive: true });
+      appendFileSync(join(TRACE_DIR, `kills-${process.pid}.ndjson`), `${JSON.stringify(record)}\n`);
+   });
+}
+
 function install() {
    const { appendFileSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
    const { join } = require('node:path');
@@ -168,6 +212,28 @@ function install() {
    // An unhandled rejection has no monitor variant, and a plain listener would
    // suppress the default throw. Under Node's default `--unhandled-rejections=throw`
    // it becomes an uncaught exception, so the monitor above already sees it.
+
+   // BOTH kill routes, because they are different mechanisms and only one of
+   // them is safe against pid reuse. `ChildProcess.kill` goes through the handle
+   // libuv still holds, so it can never reach a process that has already been
+   // reaped; `process.kill` takes a bare pid and can. A record from the second
+   // with a target the caller no longer owns is therefore a finding in itself.
+   //
+   // Wrapped rather than observed: Node emits no event for either. Signal `0`
+   // kills nothing and is a liveness probe, so a reader counting records has to
+   // read the signal field rather than the line.
+   const { ChildProcess } = require('node:child_process');
+   const realChildKill = ChildProcess.prototype.kill;
+   ChildProcess.prototype.kill = function kill(signal) {
+      recordKill(this.pid, signal, this.spawnargs);
+      return realChildKill.apply(this, arguments);
+   };
+
+   const realProcessKill = process.kill;
+   process.kill = function kill(pid, signal) {
+      recordKill(pid, signal, undefined);
+      return realProcessKill.apply(process, arguments);
+   };
 
    const realExit = process.exit;
    process.exit = function exit(...args) {

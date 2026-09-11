@@ -651,9 +651,16 @@ jobs:
           Get-CimInstance Win32_PageFileUsage | Format-List Name, AllocatedBaseSize, PeakUsage
 
       # The audit trail for the processes that died, written as NDJSON beside
-      # the exit records so the two can be joined on pid. Restricted to
-      # `node.exe`: a gate run creates thousands of processes and the rest are
-      # the runner's own.
+      # the exit records so the two can be joined on pid.
+      #
+      # EVERY audited process, not only `node.exe`. The restriction was a guess
+      # at what a gate run costs and it was wrong twice over: a whole run
+      # produces under two thousand events, of which the node ones were about
+      # four hundred, and the rows it dropped are load-bearing. A silent `tsc`
+      # is spawned by `cmd.exe`, so the filter hid the victim's own parent and
+      # left "did the shell die first" unanswerable; and anything that kills by
+      # pid from outside Node — `taskkill.exe` above all — would not have
+      # appeared at all, which is the one thing this trail is now being read for.
       - name: Collect the process-audit trail
         if: steps.gate.outputs.status != '0' && runner.os == 'Windows'
         continue-on-error: true
@@ -668,7 +675,6 @@ jobs:
             Write-Host 'no process-audit events: the policy change did not take, or the log wrapped'
             exit 0
           }
-          $kept = 0
           # An ABSOLUTE path: .NET's working directory is not PowerShell's, so a
           # relative one here writes somewhere the upload does not look.
           $writer = [System.IO.StreamWriter]::new((Join-Path $PWD 'process-audit.ndjson'))
@@ -678,18 +684,14 @@ jobs:
               foreach ($field in ([xml]$event.ToXml()).Event.EventData.Data) {
                 if ($field.Name) { $data[$field.Name] = $field.'#text' }
               }
-              # 4688 names the new process, 4689 the ending one.
-              $image = if ($data['NewProcessName']) { $data['NewProcessName'] } else { $data['ProcessName'] }
-              if ($image -notlike '*node.exe') { continue }
               $data['_id'] = $event.Id
               $data['_time'] = $event.TimeCreated.ToString('o')
               $writer.WriteLine(($data | ConvertTo-Json -Compress -Depth 3))
-              $kept++
             }
           } finally {
             $writer.Dispose()
           }
-          Write-Host "wrote $kept node.exe process-audit rows of $($events.Count) events"
+          Write-Host "wrote $($events.Count) process-audit rows"
 
       # Separate from the upload below because it needs `include-hidden-files`,
       # which defaults to FALSE: turbo's logs are in a dot directory and would
