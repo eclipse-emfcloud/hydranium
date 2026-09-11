@@ -462,11 +462,15 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          # `--%` stops PowerShell parsing the rest of the line, so the space
-          # inside the quoted subcategory reaches auditpol as one argument
-          # instead of being re-split.
-          auditpol --% /set /subcategory:"Process Creation" /success:enable
-          auditpol --% /set /subcategory:"Process Termination" /success:enable
+          # Subcategory GUIDs, not names. They contain no space, so nothing here
+          # depends on how PowerShell re-quotes a native command's arguments —
+          # the name form, with and without the `--%` stop-parsing token, was
+          # rejected as `0x00000057 The parameter is incorrect`. They are also
+          # locale-independent, and the names are localised.
+          $subcategories = @{
+             'Process Creation'    = '{0CCE922B-69AE-11D9-BED3-505054503030}'
+             'Process Termination' = '{0CCE922C-69AE-11D9-BED3-505054503030}'
+          }
 
           # Without the command line a 4688 says `node.exe` and nothing else,
           # and every process here is node.exe.
@@ -478,7 +482,20 @@ jobs:
           # Security log well before the end and drops the earliest evidence.
           wevtutil sl Security /ms:268435456
 
-          auditpol --% /get /subcategory:"Process Creation","Process Termination"
+          # Read BACK rather than trusting the set, and report a miss as a
+          # warning: this step is tolerated, and a tolerated step's red X is
+          # easy to walk past — which is how a run once went green with the
+          # instrumentation doing nothing at all.
+          foreach ($name in $subcategories.Keys) {
+             $guid = $subcategories[$name]
+             auditpol /set /subcategory:$guid /success:enable | Out-Null
+             $state = (auditpol /get /subcategory:$guid /r | ConvertFrom-Csv).'Inclusion Setting'
+             if ($state -match 'Success') {
+                Write-Host "$name auditing is on ($state)"
+             } else {
+                Write-Host "::warning title=Process auditing not enabled::$name reads '$state', so process-audit.ndjson will be empty."
+             }
+          }
 
       # The whole contributor gate, not a subset. Running individual clauses
       # here let nine of them drift out of CI while the workflow still looked
