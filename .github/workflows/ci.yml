@@ -81,13 +81,21 @@ jobs:
     env:
       # `--report-on-fatalerror` makes a V8 fatal error drop a report naming the
       # trigger and the heap and system memory at that moment, which is
-      # otherwise unrecoverable from a dead worker. Also in `release.yml`,
-      # because the step above compares the two.
+      # otherwise unrecoverable from a dead worker. It costs nothing on the
+      # healthy path and writes nothing to either stream, and its report file is
+      # gitignored. In all three workflows, because the step above compares them.
+      #
+      # `--max_old_space_size=4096` was here and is GONE because it was measured
+      # to be exactly the default: a runner reports a 4.05 GiB ceiling with the
+      # flag and 4.05 GiB without it, and a 62 GiB developer machine reports the
+      # same 4.05 GiB unflagged — Node's 64-bit old-space default does not scale
+      # with system RAM above a threshold. Re-add it only against a measurement,
+      # and note it would then be a FLOOR rather than a bump.
       #
       # `--trace-exit` must not be added anywhere: it writes to stderr on a
       # SUCCESSFUL exit too, breaking any test that asserts a spawned child's
       # stderr is empty. It has been added once and it reddened the gate.
-      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
+      NODE_OPTIONS: --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
       # Empty is what turbo reads as unset, so a push and a pull request keep
@@ -109,40 +117,58 @@ jobs:
           # shallow checkout turns it into a silent no-op rather than a red.
           fetch-depth: 0
 
-      # Both workflows run the same `npm run build:all` against the same
-      # toolchain, so anything that differs between them is drift, not a
-      # decision. Compared rather than duplicated so it fires in BOTH
-      # directions: change or drop either key in either file without the other
-      # and this reddens here, on a pull request, where it costs nothing. The
-      # same divergence discovered in release.yml lands after the version PR
-      # has merged and the tags are cut.
+      # All THREE workflows install this repository and run Node against it, so
+      # anything that differs between them is drift, not a decision. Compared
+      # rather than duplicated so it fires in BOTH directions: change or drop a
+      # key in one file without the others and this reddens here, on a pull
+      # request, where it costs nothing. The same divergence discovered in
+      # release.yml lands after the version PR has merged and the tags are cut,
+      # and in theia-compat.yml it waits for a schedule nobody is watching.
+      #
+      # The third file was added once its `NODE_OPTIONS` was aligned. It had
+      # carried the heap flag without `--report-on-fatalerror`, which was drift
+      # rather than a decision — the flag reached the other two a day after
+      # this file was written — and the comparison cannot express "equal except
+      # where we meant it".
       #
       # This and the gate-ordering check below read the workflow FILES, so their
       # verdict cannot vary by runner. Pinned to one leg of the matrix so a
       # future divergence is reported once rather than once per platform.
-      - name: Release workflow carries the same build environment
+      - name: Every workflow carries the same build environment
         if: matrix.os == 'ubuntu-22.04'
         run: |
+          workflows="ci release theia-compat"
           compare() {
             key="$1"
-            # DEDUPED, because this file declares more than one job and each
-            # sets the same keys: without `sort -u` the comparison is two
-            # identical lines against one, which differ as strings and would
-            # report a divergence that does not exist. Distinct values still
-            # survive dedup and still differ, which is the case it must catch.
-            from_ci=$(sed -n "s/^ *$key: *//p" .github/workflows/ci.yml | sort -u)
-            from_release=$(sed -n "s/^ *$key: *//p" .github/workflows/release.yml | sort -u)
-            # Two absent keys compare EQUAL, so renaming or deleting one on both
-            # sides turns this into a check that passes while reading nothing.
-            # That is the only failure mode a comparison cannot report itself.
-            if [ -z "$from_ci" ] && [ -z "$from_release" ]; then
-              echo "$key is set in neither workflow, so comparing it checks nothing." >&2
-              return 1
-            fi
-            if [ "$from_ci" != "$from_release" ]; then
-              echo "$key differs between the two workflows:" >&2
-              echo "  ci.yml:      ${from_ci:-<unset>}" >&2
-              echo "  release.yml: ${from_release:-<unset>}" >&2
+            found=''
+            previous=''
+            previous_file=''
+            for name in $workflows; do
+              file=".github/workflows/$name.yml"
+              # DEDUPED, because a file may declare more than one job and each
+              # sets the same keys: without `sort -u` the comparison is two
+              # identical lines against one, which differ as strings and would
+              # report a divergence that does not exist. Distinct values still
+              # survive dedup and still differ, which is the case it must catch.
+              value=$(sed -n "s/^ *$key: *//p" "$file" | sort -u)
+              if [ -n "$value" ]; then
+                found='yes'
+              fi
+              if [ -n "$previous_file" ] && [ "$value" != "$previous" ]; then
+                echo "$key differs between the workflows:" >&2
+                echo "  $previous_file: ${previous:-<unset>}" >&2
+                echo "  $file: ${value:-<unset>}" >&2
+                return 1
+              fi
+              previous="$value"
+              previous_file="$file"
+            done
+            # Absent everywhere compares EQUAL, so renaming or deleting a key in
+            # every file at once turns this into a check that passes while
+            # reading nothing. That is the only failure mode a comparison cannot
+            # report itself.
+            if [ -z "$found" ]; then
+              echo "$key is set in no workflow, so comparing it checks nothing." >&2
               return 1
             fi
           }
@@ -503,7 +529,7 @@ jobs:
     if: ${{ inputs.skip_e2e != true }}
 
     env:
-      NODE_OPTIONS: --max_old_space_size=4096 --report-on-fatalerror
+      NODE_OPTIONS: --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
 
