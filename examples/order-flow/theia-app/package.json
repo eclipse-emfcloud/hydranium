@@ -55,7 +55,8 @@
     "@theia/playwright": "^1.72.0",
     "concurrently": "^9.0.0",
     "esbuild-plugins-node-modules-polyfill": "^1.6.7",
-    "rimraf": "^5.0.0"
+    "rimraf": "^5.0.0",
+    "yargs": "^17.7.3"
   },
   "engines": {
     "node": ">=22.13"

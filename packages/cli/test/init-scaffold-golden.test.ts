@@ -40,10 +40,6 @@ const SEPARATOR = '='.repeat(78);
  * regenerated from whatever the code currently emits can no longer detect a
  * change in what the code emits. Substituting a token leaves every other byte
  * under the check, and the emitted pins still show their SHAPE.
- *
- * Not the `0.0.0` placeholder, deliberately: the goldens pin the PUBLISHED
- * scaffold, which is the one an adopter will ever see. The pre-publish variant
- * is asserted separately, below.
  */
 const FRAMEWORK_VERSION_TOKEN = '__FRAMEWORK_VERSION__';
 
@@ -123,21 +119,5 @@ describe('init scaffold golden', () => {
          '@hydranium/protocol'
       ]);
       expect(pins.map(([name, pin]) => `${name}@${pin}`)).toEqual(pins.map(([name]) => `${name}@^${version}`));
-   });
-
-   /**
-    * The disclosure the scaffold prints about its own pins, in both states.
-    *
-    * The half the derivation does not fix by itself: a note saying that
-    * publishing will make `npm install` work has to STOP being printed once it
-    * has, or it goes from wrong-about-the-future to simply wrong.
-    */
-   it('keeps the pre-publish yalc note only while the pins are the placeholder', () => {
-      const published = resolveInitComposition('Bookstore');
-      const readmeOf = (composition: InitComposition): string =>
-         planInitFiles(composition).find(file => file.path === 'README.md')?.content ?? '';
-
-      expect(readmeOf({ ...published, frameworkVersion: '0.0.0' })).toContain('Pre-publish note');
-      expect(readmeOf({ ...published, frameworkVersion: '1.2.3' })).not.toContain('Pre-publish note');
    });
 });

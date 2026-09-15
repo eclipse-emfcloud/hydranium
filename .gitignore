@@ -64,10 +64,6 @@ report.*.json
 **/stryker-report/
 **/stryker-setup-*.js
 
-# yalc (local package linking)
-.yalc
-yalc.lock
-
 # Claude Code — the shared skills are checked in (the repo's AI-onboarding
 # surface); the permission allowlist and runtime locks stay local, so a clone
 # inherits no blanket execution grant from this repository.

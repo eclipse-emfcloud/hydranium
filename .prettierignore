@@ -19,9 +19,6 @@
 **/.turbo
 .nx
 
-# yalc (local package linking)
-.yalc
-
 # Generated code — Langium parser/AST + Theia browser-app scaffolding.
 # `generated-hydranium` is `hydranium-cli` output — named for the tool that owns
 # it rather than for one artefact — kept out of `generated` because langium-cli

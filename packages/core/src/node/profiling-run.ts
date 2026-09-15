@@ -97,7 +97,7 @@ export class ProfilingRun {
       // `HYDRANIUM_LOG_FILE` env, which every `@hydranium/core` copy reads when
       // its logger is CONSTRUCTED — so `ProfilingRun.start` must run before the
       // head's services are created (as `measureModelMemory` does). This is the
-      // only mechanism that crosses a yalc'd adopter's separate core copy; a
+      // only mechanism that crosses an adopter's separate core copy; a
       // process-local `setLogFilePath` would only reach this module's own copy.
       this.previousLogFileEnv = process.env[DEFAULT_LOG_FILE_ENV];
       process.env[DEFAULT_LOG_FILE_ENV] = this.serverLogPath;
