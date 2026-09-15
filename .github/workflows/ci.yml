@@ -586,6 +586,13 @@ jobs:
           HYDRANIUM_PLAYWRIGHT_TIER: restart
         run: npm run test:e2e:restart -w @hydranium/example-order-flow-theia-app
 
+      # Separated for the same reason as the restart tier and one more: it runs
+      # its backend behind a proxy that half-kills connections, so anything
+      # sharing the run would see its own socket die. Its own ports keep it clear
+      # of the tiers above, and its config carries its own `outputDir`.
+      - name: Theia e2e (reconnect tier)
+        run: npm run test:e2e:reconnect -w @hydranium/example-order-flow-theia-app
+
       # Each job summarizes what its own workspace holds — the runners are
       # separate, so neither can see the other's reports. This one is therefore
       # the e2e durations, and the gate job's is the unit tiers.

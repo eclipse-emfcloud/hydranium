@@ -134,6 +134,7 @@ const TARGETS = [
    // stopping a slip in the other direction: all of these were neutral purely by
    // content when they were first checked, with no gate to keep them that way.
    { name: '@hydranium/client-theia', entry: 'packages/client-theia/lib/index.js', resolvePackages: [] },
+   { name: '@hydranium/client-theia (./common)', entry: 'packages/client-theia/lib/common/index.js', resolvePackages: [] },
    { name: '@hydranium/client-theia (./browser)', entry: 'packages/client-theia/lib/browser/index.js', resolvePackages: [] },
    { name: '@hydranium/glsp-client-theia', entry: 'packages/glsp-client-theia/lib/index.js', resolvePackages: [] },
    {

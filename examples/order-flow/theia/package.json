@@ -68,6 +68,11 @@
     },
     {
       "backend": "lib/node/order-flow-localization-backend-module"
+    },
+    {
+      "frontendPreload": "lib/browser/order-flow-connection-preload-module",
+      "frontend": "lib/browser/order-flow-connection-frontend-module",
+      "backend": "lib/node/order-flow-connection-backend-module"
     }
   ]
 }

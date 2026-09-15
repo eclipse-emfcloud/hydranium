@@ -11,6 +11,7 @@
 // `@hydranium/core/testing` barrel) so importing the framework's unit-test
 // helpers never pulls in `@playwright/test` — which is an OPTIONAL peer here.
 export * from './e2e-profiling.js';
+export * from './flaky-network-proxy.js';
 export * from './browser-capture-bridge.js';
 export * from './server-log-capture.js';
 export * from './server-log-fixture.js';

@@ -7,10 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// Browser-side cross-head Theia client primitives shared by the protocol heads.
-export * from './channel-logger';
-export * from './log-level-preference';
-export * from './browser-capture';
-export * from './memory-diagnostics-contribution';
-export * from './session-aware-connection-source';
-export * from './connection-diagnostics-contribution';
+// Environment-neutral connection primitives, shared by the browser connection
+// source and the server connection service. Kept out of both tier barrels
+// because each side binds the same buffer for its own half of the socket.
+export * from './framed-socket-write-buffer';
+export * from './connection-resilience-options';
