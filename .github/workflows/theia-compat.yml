@@ -11,6 +11,17 @@ name: Theia Compatibility
 # own Theia floors, so a red there names that graph rather than the peer
 # range under test — and the leg would go amber for reasons no adopter of
 # these three packages is exposed to.
+#
+# THE SCOPE IS NOT PUBLISHED IN LOCKSTEP, so the version a dist-tag names is
+# not necessarily installable across the whole set. A publish can land for
+# most of `@theia/*` and miss a package, and that state is invisible to
+# everyone upstream: Theia's CI builds its monorepo through workspace
+# symlinks and so never installs these tarballs at all, while the publish
+# job's own completeness check asks the registry for `<pkg>@next` and accepts
+# any answer rather than the version it has just published. Nothing reports
+# the gap and nothing closes it on a schedule, so nothing bounds how long it
+# lasts. The version this leg installs is therefore the highest one EVERY
+# pinned package publishes, which is not always the one the tag resolves to.
 on:
   workflow_dispatch:
     inputs:
@@ -225,14 +236,20 @@ jobs:
       # else happens, for two reasons. The override injected below pins every
       # package to one literal version, so that the tree cannot end up
       # straddling two of them when a tag has moved for some packages and not
-      # yet for others; and the assertion after the install has nothing to
-      # compare against until the tag is resolved.
+      # yet for others; and the step that picks the installable version has
+      # nothing to walk down from until the tag is resolved.
+      #
+      # What this produces is a CEILING rather than the target. `@theia/core`
+      # is the package a request is phrased against, so its version is the
+      # upper bound on the answer; the rest of the scope does not always reach
+      # it, and what gets installed is the highest version every pinned
+      # package publishes.
       #
       # `npm view` prints one bare line for an exact version or a tag, and one
       # `name@version 'version'` line PER MATCH for a range. A range target
       # would therefore hand a multi-line blob to every step downstream, so
       # the line count is checked rather than assumed.
-      - name: Resolve the target Theia version
+      - name: Resolve the Theia version ceiling
         id: resolve
         env:
           THEIA_TARGET: ${{ matrix.theia }}
@@ -249,7 +266,7 @@ jobs:
             exit 1
           fi
           echo "$THEIA_TARGET resolves to $resolved"
-          echo "version=$resolved" >> "$GITHUB_OUTPUT"
+          echo "ceiling=$resolved" >> "$GITHUB_OUTPUT"
 
       # A root `overrides` entry per `@theia/*` package, because nothing
       # weaker moves this tree. `npm install @theia/core@<target>` was
@@ -257,16 +274,24 @@ jobs:
       # `@theia/*` where it was, which installs the question rather than
       # answering it.
       #
+      # This step also CHOOSES the version, walking down from the ceiling to
+      # the highest one every pinned package publishes, and emits it as its
+      # own output. Everything downstream reads the version from HERE rather
+      # than from the resolve step, because the ceiling is what was asked for
+      # and this is what can actually be installed.
+      #
       # The script is fed from the environment and heredoc-quoted, so the
       # shell interprets none of it: a `$` inside a regexp or a `\n` in a
       # string is otherwise the shell's before it is node's.
-      - name: Pin every @theia/* to the target
+      - name: Pin every @theia/* to one published version
+        id: pin
         env:
-          THEIA_VERSION: ${{ steps.resolve.outputs.version }}
+          THEIA_CEILING: ${{ steps.resolve.outputs.ceiling }}
         run: |
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
+          const { execFileSync } = require('child_process');
           // A @theia/* package whose first release came LATER than the
           // target cannot be pinned to it: the version does not exist and
           // npm fails the entire install on the 404, so one unpublished
@@ -274,20 +299,57 @@ jobs:
           // it was asked. Data rather than a hardcoded skip, because the
           // exclusion is a property of that package's release history and
           // whoever adds the next one has to be able to find where it goes.
+          //
+          // This table is the PERMANENT half of the problem. The transient
+          // half — a package that merely missed a publish — needs no table,
+          // because what the registry actually holds is read per candidate.
           const MIN_VERSION = {
             '@theia/bundle-plugin': '1.72.0',
           };
-          const target = process.env.THEIA_VERSION;
+          const ceiling = process.env.THEIA_CEILING;
+          // Build metadata is excluded from semver precedence and Theia
+          // stamps a commit SHA into its prereleases, so every comparison
+          // here is made on the stripped form.
+          const strip = (version) => version.split('+')[0];
+          const base = (version) => strip(version).split('-')[0];
+          const prerelease = (version) => {
+            const stripped = strip(version);
+            const at = stripped.indexOf('-');
+            return at < 0 ? undefined : stripped.slice(at + 1);
+          };
           // Prerelease-insensitive, because a floor is a statement about the
           // release LINE: a 1.72.0-next.x is the first thing published on
           // 1.72 and has to clear a 1.72.0 floor, which a string comparison
           // rejects.
           const rank = (version) =>
-            version
-              .split('-')[0]
+            base(version)
               .split('.')
               .slice(0, 3)
               .reduce((acc, part) => acc * 1000 + Number(part), 0);
+          const versionCache = new Map();
+          const versionsOf = (name) => {
+            if (!versionCache.has(name)) {
+              let raw;
+              try {
+                raw = execFileSync('npm', ['view', name, 'versions', '--json'], {
+                  encoding: 'utf8',
+                });
+              } catch (error) {
+                console.error('Cannot read the published versions of ' + name + '.');
+                console.error(String(error.stderr ?? error.message).trim());
+                process.exit(1);
+              }
+              // A package with exactly ONE published version yields a bare
+              // string rather than an array, and a Set built from that string
+              // holds its characters and matches nothing.
+              const parsed = JSON.parse(raw);
+              versionCache.set(
+                name,
+                new Set((Array.isArray(parsed) ? parsed : [parsed]).map(strip))
+              );
+            }
+            return versionCache.get(name);
+          };
           const rootManifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           const dirs = ['.'];
           for (const entry of rootManifest.workspaces) {
@@ -337,12 +399,83 @@ jobs:
             console.error('No @theia/* dependency in the workspace: this leg would test nothing.');
             process.exit(1);
           }
+          // Candidates run DOWN from the ceiling and never leave its release
+          // line. Leaving it would answer a different question than the one
+          // the leg was asked — a `next` leg quietly installing the previous
+          // RELEASE still reports as "Theia next" — so a line with no common
+          // version fails and names whoever held it back. A release target
+          // has exactly one candidate under the same rule, which is why a
+          // package missing there is fatal rather than silently rounded down.
+          const counterOf = (version) => /^next\.(\d+)$/.exec(prerelease(version) ?? '');
+          let candidates;
+          if (prerelease(ceiling) === undefined) {
+            candidates = [strip(ceiling)];
+          } else {
+            const ceilingCounter = counterOf(ceiling);
+            if (!ceilingCounter) {
+              console.error('Cannot order the prerelease ' + ceiling + '; only -next.N is understood.');
+              process.exit(1);
+            }
+            candidates = [...versionsOf('@theia/core')]
+              .filter((version) => base(version) === base(ceiling))
+              .map((version) => ({ version, counter: counterOf(version) }))
+              .filter(
+                (entry) =>
+                  entry.counter && Number(entry.counter[1]) <= Number(ceilingCounter[1])
+              )
+              .sort((left, right) => Number(right.counter[1]) - Number(left.counter[1]))
+              .map((entry) => entry.version);
+          }
+          const exempt = (name, version) => {
+            const floor = MIN_VERSION[name];
+            return Boolean(floor) && rank(version) < rank(floor);
+          };
+          const heldBack = [];
+          let target;
+          for (const candidate of candidates) {
+            const missing = [...names]
+              .sort()
+              .filter((name) => !exempt(name, candidate) && !versionsOf(name).has(candidate));
+            if (missing.length === 0) {
+              target = candidate;
+              break;
+            }
+            heldBack.push(candidate + ' missing from ' + missing.join(', '));
+          }
+          if (!target) {
+            console.error(
+              'No version on the ' +
+                base(ceiling) +
+                ' line is published by every pinned @theia/* package.'
+            );
+            for (const entry of heldBack) {
+              console.error('  ' + entry);
+            }
+            process.exit(1);
+          }
+          // Reported on EVERY run, not only once the gap becomes fatal. A leg
+          // whose summary says `next` while it installs something days behind
+          // that tag is the state this step exists to make visible, and a line
+          // printed only on failure leaves it invisible for precisely as long
+          // as it is survivable.
+          if (heldBack.length === 0) {
+            console.log('Every pinned @theia/* publishes ' + target + ', the resolved ceiling.');
+          } else {
+            console.log(
+              '@theia/core resolves to ' +
+                strip(ceiling) +
+                ', which not every pinned package publishes:'
+            );
+            for (const entry of heldBack) {
+              console.log('  ' + entry);
+            }
+            console.log('Falling back to ' + target + ', the highest version all of them publish.');
+          }
           const overrides = { ...rootManifest.overrides };
           const skipped = [];
           for (const name of [...names].sort()) {
-            const floor = MIN_VERSION[name];
-            if (floor && rank(target) < rank(floor)) {
-              skipped.push(name + ' (nothing published before ' + floor + ')');
+            if (exempt(name, target)) {
+              skipped.push(name + ' (nothing published before ' + MIN_VERSION[name] + ')');
               continue;
             }
             overrides[name] = target;
@@ -365,6 +498,7 @@ jobs:
           for (const entry of skipped) {
             console.log('Left unpinned: ' + entry);
           }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + target + '\n');
           NODE
 
       # THE CENTRAL HAZARD OF THIS WORKFLOW. With the lockfile in place npm
@@ -404,7 +538,7 @@ jobs:
       # reading of what got installed.
       - name: Assert the installed Theia version
         env:
-          THEIA_VERSION: ${{ steps.resolve.outputs.version }}
+          THEIA_VERSION: ${{ steps.pin.outputs.version }}
         run: |
           node <<'NODE'
           const fs = require('fs');
@@ -547,15 +681,21 @@ jobs:
       # tree rather than the request, so the line stays honest when an override
       # did not apply, and `always()` so a red leg still names its version —
       # which is the first thing anyone reading the failure needs.
+      #
+      # Ceiling and target are recorded SEPARATELY, because they diverge
+      # whenever the scope is mid-skew and a summary carrying only one of them
+      # is read as the other. A reader comparing two weeks of these needs to
+      # see that the tag moved and the installable version did not.
       - name: Record what this leg tested
         if: always()
         env:
-          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          TARGET_VERSION: ${{ steps.pin.outputs.version }}
         run: |
           {
             echo "### Theia ${{ matrix.theia }}"
             echo "- requested: \`${{ matrix.theia }}\`"
-            echo "- resolved: \`${{ steps.resolve.outputs.version || 'unresolved' }}\`"
+            echo "- ceiling (@theia/core): \`${{ steps.resolve.outputs.ceiling || 'unresolved' }}\`"
+            echo "- target (all pinned packages): \`${{ steps.pin.outputs.version || 'unresolved' }}\`"
             echo "- node: \`$(node --version)\`, npm: \`$(npm --version)\`"
             # Every DISTINCT installed version, not `@theia/core` alone: the
             # override moves all of them, and one straggler is the failure
@@ -576,7 +716,7 @@ jobs:
               // The target gets a count; anything else gets NAMED. A lone
               // straggler is the thing worth reading, and a bare count makes
               // identifying it a separate trip to the log.
-              const target = process.env.RESOLVED_VERSION;
+              const target = process.env.TARGET_VERSION;
               for (const [version, names] of [...byVersion].sort()) {
                 const detail = version === target ? names.length + " packages" : names.join(", ");
                 console.log("- installed @theia/*: `" + version + "` (" + detail + ")");
