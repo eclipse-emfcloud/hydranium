@@ -20,3 +20,8 @@ export * from './glsp-message-service';
 export * from './glsp-theia-frontend-module';
 export * from './hidden-bounds-updater';
 export * from './hydranium-glsp-diagram-configuration';
+
+// Upstream's root entry is its browser tier and re-exports no `lib/common`, so the
+// type our abstract `diagramLanguage` members are declared with has no bare-specifier
+// path — without this line every adopter implementing one deep-imports it.
+export type { GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
