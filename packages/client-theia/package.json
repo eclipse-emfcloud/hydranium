@@ -36,6 +36,14 @@
       "types": "./lib/browser/index.d.ts",
       "default": "./lib/browser/index.js"
     },
+    "./common": {
+      "types": "./lib/common/index.d.ts",
+      "default": "./lib/common/index.js"
+    },
+    "./lib/common": {
+      "types": "./lib/common/index.d.ts",
+      "default": "./lib/common/index.js"
+    },
     "./node": {
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
@@ -91,5 +99,6 @@
   "publishConfig": {
     "access": "public"
   },
+  "//peerDependencies": "@theia/core stays at 1.70 here, matching the sibling Theia packages, even though the connection-resilience bindings need 1.71: Theia only began binding `SocketWriteBuffer` then, and before that each connection built one privately, so there is no binding to rebind. Rather than split the package's floor for one feature, `bindConnectionResilience` probes for that binding and warns instead of installing when it is absent — a capability check rather than a version parse, so it answers about the container in front of it. Everything else the feature touches exists at 1.70, and the emitted declarations deliberately name no type that 1.70 lacks, so the package still compiles there. Verified by unpacking 1.70, 1.71 and 1.72, not inferred from a changelog.",
   "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
 }

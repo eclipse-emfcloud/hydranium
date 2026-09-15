@@ -16,8 +16,8 @@
   // Playwright's CommonJS path — and `@hydranium/core` is ESM-only. Playwright's
   // `require` hook does not skip it the way it skips `node_modules` (the workspace
   // symlink resolves back into `packages/core`), so it redirects to core's TS
-  // SOURCE and compiles it as CommonJS, which dies on `import.meta`. Marking these
-  // four files `.mts` makes Playwright `import()` them instead, so Node's real ESM
+  // SOURCE and compiles it as CommonJS, which dies on `import.meta`. Marking every
+  // file in this tier `.mts` makes Playwright `import()` them instead, so Node's real ESM
   // loader serves core and `moduleResolution: "NodeNext"` honours its `exports`
   // map — which is also why the imports below can name the published
   // `./testing/playwright` subpath rather than reaching into `lib/`. Adding
@@ -34,5 +34,5 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["test", "playwright.config.mts"]
+  "include": ["test", "playwright.config.mts", "playwright.reconnect.config.mts"]
 }

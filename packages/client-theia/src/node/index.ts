@@ -8,3 +8,4 @@
  ********************************************************************************/
 
 export * from './abstract-socket-forwarding-connection-handler';
+export * from './session-bound-frontend-connection-service';

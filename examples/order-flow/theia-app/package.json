@@ -22,6 +22,7 @@
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart",
     "test:e2e:headed": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --headed",
     "test:e2e:install": "playwright install chromium",
+    "test:e2e:reconnect": "playwright test --config playwright.reconnect.config.mts --tsconfig tsconfig.e2e.json",
     "test:e2e:restart": "playwright test --tsconfig tsconfig.e2e.json --grep @restart --workers=1",
     "test:e2e:ui": "playwright test --tsconfig tsconfig.e2e.json --ui",
     "typecheck:test": "tsc --noEmit -p tsconfig.e2e.json",
@@ -63,14 +64,23 @@
   },
   "//link:plugin": "The link is REPLACED on every build, not preserved when present. `existsSync` follows a symlink, so it answers false for a DANGLING one — and then `symlinkSync` fails EEXIST on the link file that is sitting right there, with a message naming the target rather than the link. That is what a moved or renamed extension directory leaves behind, and the failure blames the wrong path. `plugins/` is generated output in full (`clean` removes it, the ignore rules cover it), so unconditional removal costs nothing a build does not rebuild.",
   "//lint": "Only `test`: this app has no `src` — `theia build` assembles it from `src-gen`, which is generated and ignored. The e2e specs are the whole hand-written surface here, and they were linted by NOTHING until this script existed, which is how a phantom dependency on the example server (resolving through workspace hoisting alone) survived in a spec. The Playwright tier is deliberately outside `check`, so the `src`-block argument that a phantom import 'fails the test run on the spot' does not hold for it.",
+  "//theia.backend.config.frontendConnectionTimeout": "Theia defaults this to 0, which discards a session the moment its socket drops — so every reconnect is refused and the page reloads instead of resuming. That makes the reconnect hardening untestable and, in a deployment, makes a brief network glitch cost the user their session. Any adopter that cares about flaky networks sets it; this app sets a minute so the reconnect suite can exercise the resume path.",
+  "//theia.frontend.config.connectionBufferBytes": "Size of the buffer holding messages while the socket is down, read by `bindConnectionResilience` on both sides. Stated explicitly at Theia's own default rather than omitted, because it is the knob that decides how long an outage can last before changes start being rejected, and an adopter on a poor network is expected to raise it.",
   "theia": {
     "target": "browser",
     "frontend": {
       "config": {
         "applicationName": "Order Flow — Theia Demo",
+        "connectionBufferBytes": 102400,
         "preferences": {
           "security.workspace.trust.enabled": false
         }
+      }
+    },
+    "backend": {
+      "config": {
+        "connectionBufferBytes": 102400,
+        "frontendConnectionTimeout": 60000
       }
     }
   }
