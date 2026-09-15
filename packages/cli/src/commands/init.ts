@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { buildInitTemplates, readFrameworkVersion, UNPUBLISHED_FRAMEWORK_VERSION } from './init-templates.js';
+import { buildInitTemplates, readFrameworkVersion } from './init-templates.js';
 import { createNodeWorkspaceProbe, detectWorkspace, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
 
 /**
@@ -536,13 +536,7 @@ export function runInit(options: InitCommandOptions): void {
    write('\n');
    write('Next steps:\n');
    write(`  cd ${options.targetDir}\n`);
-   // The warning is conditional on the pins this scaffold actually carries — see
-   // `UNPUBLISHED_FRAMEWORK_VERSION`.
-   write(
-      composition.frameworkVersion === UNPUBLISHED_FRAMEWORK_VERSION
-         ? '  npm install              # 404s until @hydranium/* is published — see README\n'
-         : '  npm install\n'
-   );
+   write('  npm install\n');
    write('  npm run build            # langium generate + tsc\n');
    write('  npm test                 # the scaffolded DI-composition test\n');
    // `npx`, not a bare invocation: `@hydranium/cli` is a devDependency of the

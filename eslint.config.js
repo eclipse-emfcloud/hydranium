@@ -232,7 +232,7 @@ const GENERATED_DIRS = ['**/generated/**', '**/generated-hydranium/**'];
 
 module.exports = tseslint.config(
    {
-      ignores: ['**/node_modules', '**/lib', '**/dist', '**/out', '**/*.d.ts', ...GENERATED_DIRS, '**/.yalc']
+      ignores: ['**/node_modules', '**/lib', '**/dist', '**/out', '**/*.d.ts', ...GENERATED_DIRS]
    },
 
    // Baseline applies to every TS file in the workspace.

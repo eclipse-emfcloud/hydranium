@@ -868,8 +868,8 @@ an assignment across a package boundary, and a class type drags its
 `protected` members into that check — where TypeScript compares them by
 DECLARATION, not by shape. So an adopter subclassing a framework class that
 resolved from a *second physical copy* of the package cannot satisfy the slot at
-all, and pre-publish every adopter consuming the framework through a local link
-has exactly that second copy. An interface is structural and immune.
+all, and any duplicated install produces exactly that second copy. An interface
+is structural and immune.
 
 Two consequences worth stating, because both look like defects otherwise:
 

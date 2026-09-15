@@ -83,16 +83,6 @@ export interface InitTemplate {
 }
 
 /**
- * The version every framework package carries before the first release.
- *
- * A scaffold made by a CLI still at this version pins a range the registry
- * cannot serve, so the emitted README keeps its yalc note and `init` keeps its
- * install warning while — and only while — it holds: from a published CLI the
- * derived pins resolve and either note would be false as printed.
- */
-export const UNPUBLISHED_FRAMEWORK_VERSION = '0.0.0';
-
-/**
  * The version `init` pins every `@hydranium/*` dependency at: the scaffolding
  * CLI's own.
  *
@@ -1450,20 +1440,6 @@ function readme(composition: InitComposition): string {
       '',
       '## Getting started',
       '',
-      // Conditional on the pin this scaffold actually carries — see
-      // `UNPUBLISHED_FRAMEWORK_VERSION`.
-      ...(composition.frameworkVersion === UNPUBLISHED_FRAMEWORK_VERSION
-         ? [
-              '> **Pre-publish note.** `@hydranium/*` is not on npm yet, so the `0.0.0`',
-              '> pins below are placeholders and `npm install` will fail with a 404 until',
-              '> the framework is released. Until then, supply the packages from a local',
-              '> framework checkout with [yalc](https://github.com/wclr/yalc) — a plain',
-              '> `file:` path or `npm link` is not enough, because the framework packages',
-              '> depend on each other by version and npm would try to fetch those from the',
-              '> registry too.',
-              ''
-           ]
-         : []),
       '```bash',
       'npm install',
       'npm run langium:generate   # generate the AST from the grammar',

@@ -157,28 +157,24 @@ Expect one transient: immediately after the cut, `next` still points at
 the last nightly and is therefore *behind* `latest`. It corrects itself
 on the first nightly of the new line.
 
-## Two edits that must ride the first publish
+## The edit that must ride the first publish
 
-Neither is automated and neither reddens a gate, so both are silent when
-skipped and visible only on the published artefact.
+It is not automated and reddens no gate, so it is silent when skipped and
+visible only on the published artefact.
 
-**1. Rewrite the README's prerelease blockquote.** `README.md` opens its
+**Rewrite the README's prerelease blockquote.** `README.md` opens its
 getting-started section with a note describing the rolling line. Until
 the first version reaches the registry that note is *ahead* of reality —
 the `npx` lines it governs still answer 404. It is accurate from the
 first publish onward, and wrong before it, so the window is closed by
 publishing rather than by editing.
 
-**2. The scaffold's own note needs no edit at all.** `init-templates.ts`
-emits its pre-publish note only while the CLI package's own version
-equals the `UNPUBLISHED_FRAMEWORK_VERSION` sentinel `'0.0.0'`, and pins
-a scaffolded project at `^<that version>`. The sentinel stays `'0.0.0'`
-permanently — it is a comparison operand, not a value to update.
+## Re-deriving the scaffold provenance targets
 
-What *does* need doing, and at the **version bump** rather than the
-publish: setting the base flips that comparison, so the scaffold stops
-emitting the note and `examples/bookstore/server/README.md` — a derived
-target recorded `identical` — no longer matches. Re-derive it:
+`examples/bookstore/server` is generated from the `init` templates and
+recorded as `identical`, so any change to what `init` emits leaves those
+targets no longer matching. Re-derive them rather than editing the
+derived copy:
 
 ```bash
 npm run build                                  # see the warning below

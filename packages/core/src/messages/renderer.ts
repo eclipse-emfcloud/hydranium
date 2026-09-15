@@ -36,7 +36,7 @@ export type MessageRendererOptions = LogNameOptions;
  * class-typed slot carries its `protected` members into every assignability
  * check and TypeScript compares those nominally — which makes the slot
  * unsatisfiable by a subclass declared against a second physical copy of this
- * package, the state a pre-publish `yalc` / `file:` install produces. It also
+ * package, which any duplicated install produces. It also
  * lets an adopter REPLACE this declaration rather than intersect with it, so
  * slot resolution does not depend on the order a services type is written in.
  *
