@@ -610,6 +610,18 @@ export namespace LogThreshold {
 }
 ```
 
+A typeguard is also preferred over a **structural cast**. An `as` that
+asserts a shape the compiler cannot check is a claim nobody verifies,
+where a guard makes the same claim testable at runtime and narrows for
+every later reader. Note that nothing lints this: `no-explicit-any`
+covers `any`, and the rule whose name suggests otherwise —
+`consistent-type-assertions` — governs assertion *syntax* rather than
+whether a given cast should have been a runtime check. So this is a
+reading habit, not a gate. Convert opportunistically while changing the
+surrounding code; a sweep for its own sake is not worth the churn.
+Narrowing casts that carry no claim about shape (`x as Promise<Res>`)
+are fine and are not what this is about.
+
 ### Rule 2 — Namespace for factories and static utilities, never for typeguards
 
 A declaration-merged namespace IS allowed (and encouraged) for grouping
