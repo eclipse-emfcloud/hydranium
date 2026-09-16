@@ -110,18 +110,30 @@ export class LanguageClientTextShadow {
    }
 
    /**
-    * The text the language client is believed to hold, or `undefined` when
-    * there is no baseline (first sync, or after an {@link invalidate}).
+    * The text the language client is believed to hold: the tracked text, else
+    * the buffer it declared at `didOpen`.
     *
     * Read at the `workspace/applyEdit` egress BEFORE {@link computeEdits},
-    * which overwrites it: a push's minimal edits are keyed to this text, so an
-    * echo of that push carries ranges addressing it and nothing else. Losing
-    * it is what makes an incremental echo unreconstructable, and applying such
-    * an echo to the already-advanced synced text duplicates every inserted
-    * line.
+    * which overwrites the tracked text and drops the opened snapshot. A change
+    * the client sends carries ranges addressing this text and nothing else, so
+    * losing it leaves that change unreconstructable — and applying its ranges
+    * to the already-advanced synced text splices lines they never addressed.
+    *
+    * Deliberately wider than what {@link computeEdits} may diff from: an
+    * opened snapshot is a position-dependent key to a buffer the client may
+    * have moved past, so keying a diff to it splices that buffer.
     */
-   get(uri: string): string | undefined {
-      return this.shadow.get(uri);
+   clientText(uri: string): string | undefined {
+      return this.shadow.get(uri) ?? this.opened.get(uri);
+   }
+
+   /**
+    * Whether a tracked text exists for `uri`, which is what decides whether a
+    * push can be diffed at all. Distinct from {@link clientText}, which also
+    * answers from the opened snapshot and so cannot settle this.
+    */
+   isTracked(uri: string): boolean {
+      return this.shadow.has(uri);
    }
 
    /** Forget the shadow for a URI; next {@link computeEdits} falls back to a full-document replace. */

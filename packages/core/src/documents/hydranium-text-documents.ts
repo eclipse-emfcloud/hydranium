@@ -165,15 +165,15 @@ interface ConnectionWithTextDocumentSync {
  */
 interface PendingPush {
    /**
-    * The text the client held BEFORE this push — the shadow baseline the
-    * push's edits were diffed against, and therefore the text the client's
-    * echo addresses with its ranges.
+    * The text the client held BEFORE this push, and therefore the text its
+    * echo addresses with its ranges. Wider than the baseline the push's edits
+    * were diffed against: a full replace is sent with no diff baseline and
+    * still lands on a buffer the echo is keyed to.
     *
-    * `undefined` when the push was a full replace sent with no baseline (a
-    * first sync, or the recovery push after a rejection). There is then no
-    * knowing what the client held, so the echo is reconstructed against the
-    * synced text instead — which is sound for a full replace, whose
-    * application is position-independent.
+    * `undefined` only when that buffer is unknown — the client never declared
+    * one, or a rejection invalidated what was tracked. The echo is then
+    * reconstructed against the synced text, which is sound only for a
+    * position-independent (full-text) change.
     */
    readonly before: string | undefined;
    /** {@link contentHash} of the text this push moves the client to. */
@@ -182,16 +182,16 @@ interface PendingPush {
 
 /**
  * What an incoming language-client change turns out to be once reconstructed
- * against the pushes still in flight — the return of
+ * against the buffer its ranges address — the return of
  * {@link HydraniumTextDocuments.classifyLanguageClientChange}.
  */
 type LanguageClientChangeOrigin =
    /** The client is reporting a text we pushed it. The synced document is already there. */
    | { readonly kind: 'echo' }
    /**
-    * The client's buffer has moved somewhere we did not push it — it coalesced
-    * a genuine keystroke into the echo, or typed before the push arrived. The
-    * reconstructed text is what it now holds, and is authoritative.
+    * The client's buffer holds a text we did not push it — a keystroke that
+    * raced a push, or an edit to a buffer the store has already been written
+    * past. The reconstructed text is what it now holds, and is authoritative.
     */
    | { readonly kind: 'divergent'; readonly text: string };
 
@@ -471,15 +471,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          }
          record.clientVersions.set(clientId, td.version);
 
-         // A language-client change arriving while one of our own pushes is in
-         // flight is keyed to the buffer the client held BEFORE that push, NOT
-         // to the synced text — the authored write already advanced the latter.
+         // A language-client change is keyed to the buffer that client holds,
+         // which is the synced text only while the two agree — an authored
+         // write advances the synced text without the client knowing, and a
+         // push in flight moves the client without the store knowing.
          // Resolve which it is, and against what, before touching anything.
-         const inFlight =
+         const origin =
             clientId === LANGUAGE_CLIENT_ID
                ? this.classifyLanguageClientChange(this.toLanguageClientUri(td.uri), document, changes)
                : undefined;
-         if (inFlight?.kind === 'echo') {
+         if (origin?.kind === 'echo') {
             // The client is reporting a text we pushed it, so the synced
             // document is ALREADY there and the changes must not be applied a
             // second time. Nothing is minted and no rebuild fires. The
@@ -498,12 +499,12 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          // apply at a tentative +1 and roll the version back on an identical
          // result (an empty-changes update only re-stamps the version).
          //
-         // A divergent in-flight change is applied as its RECONSTRUCTED text
-         // rather than as its own ranges: the ranges address the pre-push
-         // baseline, so applying them here would splice the wrong lines.
+         // A divergent change is applied as its RECONSTRUCTED text rather than
+         // as its own ranges: those ranges address the client's own buffer, so
+         // applying them here would splice the wrong lines.
          const previousText = document.getText();
          const sharedVersion = document.version;
-         document = this.configuration.update(document, inFlight === undefined ? changes : [{ text: inFlight.text }], sharedVersion + 1);
+         document = this.configuration.update(document, origin === undefined ? changes : [{ text: origin.text }], sharedVersion + 1);
          const changed = document.getText() !== previousText;
          if (!changed) {
             document = this.configuration.update(document, [], sharedVersion);
@@ -705,7 +706,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // apply afterwards, so that shadow records what it is about to hold and
             // disk text would key the next diff to a buffer nobody has.
             const clientFacing = this.toLanguageClientUri(td.uri);
-            if (this.__shadow.get(clientFacing) === undefined) {
+            if (!this.__shadow.isTracked(clientFacing)) {
                this.__shadow.set(clientFacing, td.text);
             }
          }
@@ -988,10 +989,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const targets: Iterable<LanguageClientUri> = recorded && recorded.size > 0 ? recorded : [this.toLanguageClientUri(uri)];
       let lastResult: ApplyWorkspaceEditResult | undefined;
       for (const targetUri of targets) {
-         // Read BEFORE computeEdits, which overwrites it. This is the text the
-         // edits below are keyed to, and therefore the only text the client's
-         // echo of them can be reconstructed against.
-         const before = this.__shadow.get(targetUri);
+         // Read BEFORE computeEdits, which overwrites the baseline and drops
+         // the opened snapshot. This is the text the client holds, and
+         // therefore the only text its echo of this push can be reconstructed
+         // against — whether or not the push below is keyed to it.
+         const before = this.__shadow.clientText(targetUri);
          const edits = this.__shadow.computeEdits(targetUri, newText);
          if (edits.length === 0) {
             continue;
@@ -1075,12 +1077,17 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
 
    /**
     * Decide what an incoming language-client change actually is, by
-    * reconstructing the client's resulting buffer against the OLDEST push still
-    * in flight for `clientFacing`.
+    * reconstructing the client's resulting buffer against the text its ranges
+    * address — the pre-push buffer of the OLDEST push still in flight for
+    * `clientFacing`, else whatever that client is believed to hold.
     *
-    * `undefined` when nothing of ours is in flight, which is the ordinary path:
-    * the client's ranges then address the synced text and the caller applies
-    * them to it directly.
+    * `undefined` when the client's ranges address the synced text itself —
+    * nothing in flight, and no evidence the client holds anything else. That
+    * is the ordinary path, and the caller then applies the ranges directly.
+    * The two texts part company without a push in flight whenever a client
+    * attaches to a document another client has already written: it opened
+    * from disk, so applying its ranges to the synced text splices lines they
+    * never addressed.
     *
     * **Why the oldest, and why reconstruct at all.** The client applies our
     * pushes in order and echoes each against the buffer it held before that
@@ -1111,22 +1118,28 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       document: T,
       changes: TextDocumentContentChangeEvent[]
    ): LanguageClientChangeOrigin | undefined {
-      const pending = this.__pendingPushes.get(clientFacing);
-      if (pending === undefined || pending.length === 0) {
+      const queued = this.__pendingPushes.get(clientFacing);
+      const pending = queued?.length ? queued : undefined;
+      // The text the client's ranges address: the buffer it held before the
+      // oldest push still in flight, else the buffer it is believed to hold.
+      const clientText = pending?.[0].before ?? this.__shadow.clientText(clientFacing);
+      if (pending === undefined && (clientText === undefined || clientText === document.getText())) {
          return undefined;
       }
       // Through the configured factories, not `TextDocument` directly, so an
       // adopter's custom text-document type governs how the ranges are applied
       // here exactly as it does on the synced document.
-      const probe = this.create(clientFacing, document.languageId, 0, pending[0].before ?? document.getText());
-      const clientText = this.update(probe, changes, 0).getText();
-      const matchIndex = pending.findIndex(push => push.afterHash === contentHash(clientText));
-      if (matchIndex >= 0) {
-         pending.splice(0, matchIndex + 1);
-         return { kind: 'echo' };
+      const probe = this.create(clientFacing, document.languageId, 0, clientText ?? document.getText());
+      const reconstructed = this.update(probe, changes, 0).getText();
+      if (pending !== undefined) {
+         const matchIndex = pending.findIndex(push => push.afterHash === contentHash(reconstructed));
+         if (matchIndex >= 0) {
+            pending.splice(0, matchIndex + 1);
+            return { kind: 'echo' };
+         }
+         pending.length = 0;
       }
-      pending.length = 0;
-      return { kind: 'divergent', text: clientText };
+      return { kind: 'divergent', text: reconstructed };
    }
 
    /**

@@ -1442,6 +1442,87 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
    });
 });
 
+describe('HydraniumTextDocuments incremental echo after an attach', () => {
+   // The disk text an editor opens, and the text a non-language client has
+   // already written over it in the store. They differ by a multi-line
+   // deletion AND by a value, which is what makes the client's echo
+   // multi-hunk: a serializer drops the header the file was authored with.
+   const ON_DISK = '// header one\n// header two\ndiagram Flow {\n   node A at 10, 10\n   node B at 20, 20\n}\n';
+   const AUTHORED = 'diagram Flow {\n   node A at 10, 10\n   node B at 20, 99\n}\n';
+
+   /**
+    * The `didChange` a client sends after applying a full-document replace.
+    *
+    * NOT the received edit played back: a Monaco host minimises a coarse
+    * replace against its own buffer before applying it (Theia's workspace
+    * routes every edit through `computeMoreMinimalEdits`), so what comes back
+    * is a set of small ranges keyed to the text the client held — ordered
+    * descending, so applying them in sequence is correct. A full-text echo, or
+    * one whole-document range, reconstructs the same under any baseline and so
+    * cannot discriminate here.
+    */
+   const MINIMISED_ECHO: TextDocumentContentChangeEvent[] = [
+      { range: Range.create(4, 0, 5, 0), text: '   node B at 20, 99\n' },
+      { range: Range.create(0, 0, 2, 0), text: '' }
+   ];
+
+   /** Open the document for a diagram session, write it, and let the editor attach to it. */
+   function attachEditorToAuthoredDocument(): {
+      docs: HydraniumTextDocuments<TextDocument>;
+      recorded: RecordedApplyEdit[];
+      fires: string[];
+   } {
+      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 0, text: ON_DISK } }, 'glsp-client');
+      docs.applyContentChange(URI, AUTHORED, 'glsp-client');
+      // The editor opens the same file afterwards, so its buffer is the disk
+      // text the write already superseded.
+      openInLanguageClient(docs, ON_DISK);
+      const fires: string[] = [];
+      docs.onDidChangeContent(event => fires.push(event.clientId));
+      return { docs, recorded, fires };
+   }
+
+   it('the fixture echo is what a client holding the disk text would send', () => {
+      // Guards the discriminator rather than the code: an echo that does not
+      // reconstruct the authored text from the client's own buffer would make
+      // the test below pass for the wrong reason.
+      const heldByClient = TextDocumentImpl.create(URI, 'plaintext', 0, ON_DISK);
+      expect(TextDocumentImpl.update(heldByClient, MINIMISED_ECHO, 1).getText()).toBe(AUTHORED);
+   });
+
+   it('does not adopt the echo of a push to a client that attached to an authored document', async () => {
+      const { docs, recorded, fires } = attachEditorToAuthoredDocument();
+      await docs.applyEditToLanguageClient(URI, AUTHORED);
+      expect(recorded).toHaveLength(1);
+
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: MINIMISED_ECHO }, LANGUAGE_CLIENT_ID);
+
+      // The client caught up and said so. Applying its ranges to the synced
+      // text instead splices lines the client never addressed, which collapses
+      // the document to a fragment that parses as nothing.
+      expect(docs.get(URI)?.getText()).toBe(AUTHORED);
+      expect(docs.version(URI)).toBe(1);
+      expect(fires).toHaveLength(0);
+   });
+
+   it('reconstructs a client edit that arrives before the attaching client has been synced', () => {
+      // Same desync, no push in flight: between the attach and the first sync
+      // the client's ranges still address its own buffer, and the synced text
+      // is not it.
+      const { docs, fires } = attachEditorToAuthoredDocument();
+
+      docs.notifyDidChangeTextDocument(
+         { textDocument: { uri: URI, version: 2 }, contentChanges: [{ range: Range.create(3, 17, 3, 19), text: '77' }] },
+         LANGUAGE_CLIENT_ID
+      );
+
+      expect(docs.get(URI)?.getText()).toBe(ON_DISK.replace('node A at 10, 10', 'node A at 10, 77'));
+      expect(docs.version(URI)).toBe(2);
+      expect(fires).toEqual([LANGUAGE_CLIENT_ID]);
+   });
+});
+
 describe('HydraniumTextDocuments URI normalization', () => {
    // LSP clients normally send already-percent-encoded URIs, so raw === normalized
    // and the gap below never bites in practice. But the manager keeps its own state
