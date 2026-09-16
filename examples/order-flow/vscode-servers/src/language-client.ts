@@ -7,7 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-server';
+// The leaf, NOT the barrel: this file is CommonJS and the server ESM, so the
+// imported graph lands in the host's `require.cache`, and the barrel's reaches a
+// JSON module Node caches with no `id`. Theia's plugin host scrubs that cache by
+// reading `id`, so the barrel breaks activation for every later plugin.
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-server/lib/head-ports.js';
 import type { ExtensionContext } from 'vscode';
 import { commands, workspace } from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
