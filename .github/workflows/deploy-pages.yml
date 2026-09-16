@@ -1,0 +1,148 @@
+name: Deploy Pages
+
+# Publishes the order-flow browser example to
+# https://eclipse-emfcloud.github.io/hydranium/ on every merge to `main`.
+#
+# That example is a static site already — a document and the bundles it loads
+# beside it — so this builds and copies rather than adapting anything: the page
+# behaves the same served from a local static server as from Pages.
+#
+# The build and the deploy are separate jobs because the deploy needs
+# `pages: write` and `id-token: write` and the build does not. Splitting them
+# keeps the token that can publish away from every step that runs third-party
+# build tooling.
+
+on:
+  push:
+    branches: [main]
+  # The site can fall behind its source with no commit to blame — a Pages
+  # outage, a cancelled run, a change to the environment's branch policy. This
+  # is how it is put back without an empty commit to `main`.
+  workflow_dispatch:
+
+# Keyed on the resource and not on the ref, because the live site is a single
+# global thing: a group that varied by ref would let two deploys race for it.
+#
+# `cancel-in-progress: false` because a superseded deploy is already
+# mid-publish, and cancelling it can leave the site on a half-uploaded artifact
+# rather than on either commit.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Read-only at the top level, so the build job below inherits nothing it could
+# write with. The deploy job restates the scopes it genuinely needs.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build site
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    # A fork that pushes to its own `main` would otherwise run this, burn its
+    # Actions minutes and fail at the deploy job with no Pages configured.
+    #
+    # This is tidiness, NOT the security boundary. A fork cannot reach the real
+    # site regardless: a pull request fires `pull_request` and not `push` so
+    # this workflow never starts for one, fork runs get a read-only token that
+    # cannot hold `pages: write`, and the `github-pages` environment is pinned
+    # to `main`. Those are what make it safe; this line only keeps other
+    # people's forks quiet.
+    if: github.repository == 'eclipse-emfcloud/hydranium'
+
+    env:
+      TURBO_UI: stream
+      FORCE_COLOR: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      # `lib/` is not committed, so `npm ci` finds `packages/cli/lib/cli.js`
+      # missing and SILENTLY skips the workspace `bin` symlink. The order-flow
+      # server, which this bundle depends on, invokes `hydranium-cli` in its
+      # build and dies with exit 127 — naming the example rather than the link
+      # that was never made.
+      #
+      # Building gives the symlink a target; the install after it creates it.
+      - name: Build the framework packages
+        run: npm run build
+
+      - name: Link the workspace bins
+        run: npm install --no-fund --no-audit
+
+      # The example's own `build:all` rather than a build from the repository
+      # root: its filter reaches exactly the dependencies this bundle needs,
+      # where a root build would also build the Theia and VS Code hosts, which
+      # this site does not serve.
+      - name: Build the browser example
+        run: npm --prefix examples/order-flow/browser run build:all
+
+      # Naming what gets published, rather than pointing the upload at the
+      # package directory. That directory would serve as a site unchanged — the
+      # document already sits beside the bundles it loads — so this step buys a
+      # whitelist and nothing else: without it, whatever anyone later drops in
+      # beside the document is served publicly on the next run, silently.
+      #
+      # The document AND the directory its references resolve into: the page
+      # takes its script, stylesheet and icon from there, and the page bundle
+      # constructs its workers from there too, so staging one without the other
+      # yields a document whose every request 404s.
+      #
+      # Those references are RELATIVE, which is what lets the site work
+      # unchanged under the `/hydranium/` prefix Pages serves it from. Nothing
+      # here rewrites a URL.
+      #
+      # No `.nojekyll`: Jekyll runs for the "deploy from a branch" build type
+      # and not for this one, so the file would be cargo.
+      - name: Stage the site
+        run: |
+          mkdir -p site
+          cp examples/order-flow/browser/index.html site/
+          cp -r examples/order-flow/browser/out site/out
+          du -sh site >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    # Granted to this job alone: `pages` to publish, `id-token` for the OIDC
+    # token the deploy exchanges for permission to do it. `contents` is not
+    # restated, so it stays at the workflow's `read`.
+    permissions:
+      pages: write
+      id-token: write
+
+    # Pinned to `main` by the organization configuration. Naming the
+    # environment here is what binds this job to that policy — GitHub refuses
+    # the deployment when the ref does not match, so the restriction holds
+    # whether or not the build job's `if:` is there.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
