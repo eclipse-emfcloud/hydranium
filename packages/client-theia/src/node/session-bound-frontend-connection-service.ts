@@ -53,6 +53,9 @@ export type FrontendChannel = Parameters<WebsocketFrontendConnectionService['han
  * Changed here: only the socket the session is currently using may act on a
  * disconnect. The handler is rewritten rather than wrapped because the problem
  * sits inside the listener Theia installs; the rest of the body is Theia's.
+ *
+ * Re-diff against Theia when the supported range moves: `override` catches a changed signature,
+ * not a changed body, so this copy can go stale in silence.
  */
 @injectable()
 export class SessionBoundFrontendConnectionService extends WebsocketFrontendConnectionService {
@@ -110,7 +113,8 @@ export class SessionBoundFrontendConnectionService extends WebsocketFrontendConn
       super.closeConnection(frontEndId, reason);
    }
 
-   /** Mirrors Theia's private `frontendConnectionTimeout`, including `Number('')` resolving to 0. */
+   /** Mirrors Theia's private `frontendConnectionTimeout`, including `Number('')` resolving to 0.
+    *  Private there, so the copy is forced; re-diff it with the handler above. */
    protected connectionTimeout(): number {
       const envValue = Number(process.env['FRONTEND_CONNECTION_TIMEOUT']);
       if (!isNaN(envValue)) {

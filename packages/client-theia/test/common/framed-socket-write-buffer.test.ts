@@ -159,6 +159,31 @@ describe('FramedSocketWriteBuffer', () => {
       expect(socket.sent.map(entry => entry[0])).toEqual([1, 2]);
    });
 
+   it('says what was stranded when a send throws, and that nothing will retry it', () => {
+      // Theia flushes once, from its reconnect handler, and by then that handler has deregistered.
+      // Without this the stall is reported only once the stuck backlog hits its limit, as an
+      // overflow, which names the wrong cause: the socket is up rather than absent.
+      const buffer = new FramedSocketWriteBuffer();
+      buffer.buffer(message(1));
+      buffer.buffer(message(2));
+      buffer.buffer(message(3));
+
+      expect(() =>
+         buffer.flush({
+            send(data: Uint8Array): void {
+               if (data[0] === 2) {
+                  throw new Error('transport gone');
+               }
+            }
+         })
+      ).toThrow(/transport gone/);
+
+      const reported = vi.mocked(console.error).mock.calls.at(-1)?.[0] as string;
+      expect(reported).toContain('send failed 1 message(s)');
+      expect(reported).toContain('2 still queued');
+      expect(reported).toMatch(/nothing will retry/);
+   });
+
    describe('sendOrQueue', () => {
       it('sends straight away when nothing is waiting', () => {
          const buffer = new FramedSocketWriteBuffer();

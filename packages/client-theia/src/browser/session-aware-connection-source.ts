@@ -91,6 +91,10 @@ export class SessionAwareConnectionSource extends WebSocketConnectionSource {
       return this.socket.connected && this.sessionResumed;
    }
 
+   /**
+    * Copied from Theia apart from the `onCommit` body, because the base builds that callback inline
+    * and exposes no narrower seam. Re-diff when the supported range moves.
+    */
    protected override createChannel(): AbstractChannel {
       const toDispose = new DisposableCollection();
       const messageHandler = (data: ArrayBuffer | Uint8Array): void => {
