@@ -180,6 +180,15 @@ const FIELD_COLUMN = EFFECT_LINE.indexOf('status');
 /** Where the enum literal begins — the third link, a hop through `Field.type`. */
 const LITERAL_COLUMN = EFFECT_LINE.indexOf('PAID');
 
+/**
+ * A commit for {@link stampBuildCommit} to write, full length because the page
+ * abbreviates it and the assertions check both forms.
+ */
+const BUILD_COMMIT = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+
+/** Where the stamp links, spelled as `build-stamp.ts` spells it. */
+const REPOSITORY_URL = 'https://github.com/eclipse-emfcloud/hydranium';
+
 test.describe('order-flow in a web worker', () => {
    test('all three heads answer from one Langium store', async ({ page }) => {
       const consoleOutput: string[] = [];
@@ -1317,6 +1326,45 @@ test.describe('order-flow in a web worker', () => {
       await expect(problems.filter({ hasText: 'Could not resolve reference to' }).filter({ hasText: 'AuditStamp' })).toHaveCount(1);
       await expect(problems.filter({ hasText: 'konnte nicht aufgelöst werden' })).toHaveCount(0);
    });
+
+   test('a build with no commit shows nothing rather than a bare icon', async ({ page }) => {
+      // The state every checkout is in: the document carries an empty
+      // `build-commit` until a deploy fills it.
+      //
+      // **`toBeHidden`, NOT `toHaveAttribute('hidden')`, and the distinction is
+      // the test.** The attribute is present either way; what decides the
+      // rendering is whether the title bar's own `display` outranks the user
+      // agent's `[hidden]` rule, so only a COMPUTED visibility assertion
+      // separates a suppressed stamp from a git glyph floating beside nothing.
+      await page.goto('/');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('#build-commit')).toBeHidden();
+   });
+
+   test('a stamped document names its commit and links to it', async ({ page }) => {
+      await stampBuildCommit(page);
+      await page.goto('/');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      await expect(page.locator('#build-commit')).toBeVisible();
+      await expect(page.locator('#build-commit-hash')).toHaveText(BUILD_COMMIT.slice(0, 7));
+      // The full value survives on both, which is what makes the short form in
+      // the title bar lossless.
+      await expect(page.locator('#build-commit')).toHaveAttribute('title', BUILD_COMMIT);
+      await expect(page.locator('#build-commit')).toHaveAttribute('href', `${REPOSITORY_URL}/commit/${BUILD_COMMIT}`);
+   });
+
+   test('a locale switch leaves the build stamp alone', async ({ page }) => {
+      // Why the hash sits in a span of its own rather than on the anchor:
+      // applying a catalogue writes `textContent`, which on the anchor takes
+      // the icon and the hash with it. Nothing but this asserts it.
+      await stampBuildCommit(page);
+      await page.goto('/?locale=de');
+      await expect(page.locator('#document-panel h2')).toHaveText('Arbeitsbereich');
+
+      await expect(page.locator('#build-commit-hash')).toHaveText(BUILD_COMMIT.slice(0, 7));
+      await expect(page.locator('#build-commit .codicon')).toBeVisible();
+   });
 });
 
 /**
@@ -1556,4 +1604,27 @@ async function expectLayoutEntry(page: Page, name: string): Promise<{ x: number;
       throw new Error(`Layout report has no trailing position: ${text}`);
    }
    return { x: Number(match[1]), y: Number(match[2]) };
+}
+
+/**
+ * Serve the document with its `build-commit` filled in, as a deploy does.
+ *
+ * The substitution is the deploy's, performed here on the response rather than
+ * against a fixture of our own: a copy of the markup would keep passing after
+ * the real document's attribute moved, which is the one thing these assertions
+ * exist to notice.
+ *
+ * Only the DOCUMENT is intercepted. Routing everything would put the bundles
+ * through the same detour, and they are twelve megabytes.
+ */
+async function stampBuildCommit(page: Page): Promise<void> {
+   await page.route(/\/(\?.*)?$/, async route => {
+      const response = await route.fetch();
+      const document = await response.text();
+      const stamped = document.replace('name="build-commit" content=""', `name="build-commit" content="${BUILD_COMMIT}"`);
+      if (stamped === document) {
+         throw new Error('The served document carries no empty `build-commit` meta to stamp');
+      }
+      await route.fulfill({ response, body: stamped });
+   });
 }

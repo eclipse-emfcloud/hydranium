@@ -4,6 +4,13 @@
       <meta charset="utf-8" />
       <title>Order Flow — language server in a web worker</title>
       <!--
+         EMPTY here and filled in the SERVED copy by the deploy. Through the
+         bundle instead it would be cached against declared input files, which
+         a hash is not, so a cache hit would republish the previous commit's
+         value. Empty on a checkout, where the title bar stays blank.
+      -->
+      <meta name="build-commit" content="" />
+      <!--
          Emitted by esbuild beside the page bundle: `@eclipse-glsp/client`'s
          modules import their own stylesheets, and the diagram's shared sheet is
          imported last so its rules win. Without this link the diagram renders,
@@ -182,6 +189,43 @@
          }
          .titlebar .spacer {
             flex: 1 1 auto;
+         }
+         /* `flex: none` so a narrow viewport truncates the tagline beside it
+            rather than the hash. */
+         .build-commit {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            flex: none;
+            font-family: ui-monospace, monospace;
+            font-size: 0.72rem;
+            color: var(--order-flow-muted-foreground);
+            text-decoration: none;
+         }
+         .build-commit .codicon {
+            font-size: 0.85rem;
+         }
+         /*
+            **Load-bearing: `hidden` alone does not survive the rule above.**
+            The attribute works through the user-agent's `[hidden]` rule, which
+            any author `display` outranks — so a build with no commit
+            renders the icon beside an empty span, which reads as a failed
+            glyph rather than as a page that has nothing to report.
+         */
+         .build-commit[hidden] {
+            display: none;
+         }
+         /* The underline is on the hash alone: across the whole anchor it runs
+            under the glyph too, which reads as a rendering fault. */
+         .build-commit:hover {
+            color: var(--order-flow-foreground);
+         }
+         .build-commit:hover span {
+            text-decoration: underline;
+         }
+         .build-commit:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 1px;
          }
          /*
             Sized in the document rather than here, because an `<img>` with no
@@ -894,6 +938,18 @@
          <h1>
             Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">three heads, one language server, one web worker</span>
          </h1>
+         <!--
+            The hash is its OWN span, for the reason the action labels are:
+            `textContent` on the anchor would take the `<i>` with it and leave
+            the icon gone. No `data-nls` either — the locale switch writes
+            `textContent`, so a translated node would replace the hash.
+
+            Hidden until one is filled in.
+         -->
+         <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
+            <i class="codicon codicon-git-commit" aria-hidden="true"></i>
+            <span id="build-commit-hash"></span>
+         </a>
          <span class="spacer"></span>
          <div class="actions">
             <!--
