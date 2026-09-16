@@ -123,15 +123,30 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
       }
       const count = this.pending.length;
       const bytes = this.pendingBytes;
-      // Drained one by one rather than snapshot-then-send, so `hasBacklog` stays true until the last
-      // message is out and anything produced meanwhile still queues behind it. Each message is
-      // removed only once it has been sent, so a throwing send leaves the backlog intact and in
-      // order rather than swallowing the message it failed on.
-      while (this.pending.length > 0) {
-         const message = this.pending[0];
-         socket.send(message);
-         this.pending.shift();
-         this.pendingBytes -= message.byteLength;
+      // Walked with an index and dropped in one slice, not shifted per message: a shift re-indexes
+      // the whole array, so the drain would cost the square of a backlog `bufferBytes` invites an
+      // adopter to enlarge. Leaving the queue in place is what keeps `hasBacklog` true until the
+      // last message is out, and re-reading the length is what drains one appended by a nested send.
+      let index = 0;
+      try {
+         while (index < this.pending.length) {
+            const message = this.pending[index];
+            socket.send(message);
+            index++;
+            this.pendingBytes -= message.byteLength;
+         }
+      } catch (error: unknown) {
+         // Said here because nothing retries: Theia flushes once, from a reconnect handler that has
+         // deregistered by now, so the stall would otherwise surface much later as an overflow —
+         // which names the wrong cause, the socket being up rather than absent.
+         console.error(
+            `${CONNECTION_LOG_PREFIX} send failed ${index} message(s) into a ${count}-message backlog; ` +
+               `${this.pending.length - index} still queued and nothing will retry them`,
+            error
+         );
+         throw error;
+      } finally {
+         this.pending = this.pending.slice(index);
       }
       this.overflowReported = false;
       console.info(`${CONNECTION_LOG_PREFIX} sent ${count} buffered message(s), ${bytes} bytes`);
