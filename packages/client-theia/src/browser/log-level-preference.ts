@@ -108,7 +108,18 @@ export class LogLevelPreferenceContribution implements FrontendApplicationContri
    protected applyLevel(): void {
       const level = parseLogLevel(this.preferences.get<string>(this.preferenceName));
       if (level) {
+         const previous = Logger.getLevel();
          Logger.setLevel(level);
+         if (previous !== level) {
+            // Through Theia's `ILogger`, which has a threshold of its own and so
+            // is not silenced by the value just applied — the framework logger
+            // this preference governs would drop the line on a switch to `error`.
+            //
+            // Frontend and server announce separately: this preference reaches
+            // the server only if a client delivers it as configuration, so one
+            // line without the other says it did not.
+            this.logger.info(`Log level ${previous} → ${level} (preference '${this.preferenceName}')`);
+         }
       }
    }
 }

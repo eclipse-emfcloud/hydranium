@@ -108,6 +108,15 @@ const CHROME_CATALOGUES: Readonly<Record<string, Readonly<Record<string, string>
    de: germanChrome
 };
 
+/** The catalogue in force: the `data-nls*` overlay reaches markup only, so a
+ *  string the page builds at runtime has nothing else to resolve against. */
+let activeCatalogue: Readonly<Record<string, string>> | undefined;
+
+/** Translate `key`, falling back to `english` as an unknown locale does. */
+export function pageText(key: string, english: string): string {
+   return activeCatalogue?.[key] ?? english;
+}
+
 /**
  * How each `data-nls*` attribute is applied.
  *
@@ -139,6 +148,7 @@ export function applyPageLocale(locale: string | undefined): void {
    if (catalogue === undefined) {
       return;
    }
+   activeCatalogue = catalogue;
    document.documentElement.lang = locale ?? 'en';
    for (const target of NLS_TARGETS) {
       for (const element of Array.from(document.querySelectorAll<HTMLElement>(`[${target.attribute}]`))) {

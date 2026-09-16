@@ -24,6 +24,7 @@ import { DefaultBuildPipelineIntegration, type BuildPipelineIntegration } from '
 import { type BuildPhasePassContribution } from './build-phase-pass/build-phase-pass.js';
 import { type BuildPhasePassService, DefaultBuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
 import { DefaultCstResidencyService, type CstResidencyService } from './residency/index.js';
+import { HydraniumConfigurationProvider } from './config/configuration-provider.js';
 import { HydraniumIndexManager } from './workspace/index-manager.js';
 import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
@@ -464,6 +465,10 @@ export function createServerSharedModule(
          TextDocuments: services => new HydraniumTextDocuments(services),
          WorkspaceManager: services => new HydraniumWorkspaceManager(services),
          IndexManager: services => new HydraniumIndexManager(services),
+         // Langium's default asks only about sections named after registered
+         // language ids, so a section `lsp.configurationRoot` is bound to reads
+         // `undefined` forever with no request on the wire.
+         ConfigurationProvider: services => new HydraniumConfigurationProvider(services),
          // Override Langium's factory so a `fromModel` (code-built) virtual
          // document retains serialized text via the per-language Serializer,
          // making it re-read-safe through the virtual-aware FileSystemProvider.

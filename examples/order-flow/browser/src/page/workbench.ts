@@ -51,7 +51,9 @@ import {
    InitializeRequest,
    LogMessageNotification,
    type PublishDiagnosticsParams,
-   PublishDiagnosticsNotification
+   PublishDiagnosticsNotification,
+   RegistrationRequest,
+   UnregistrationRequest
 } from 'vscode-languageserver-protocol';
 import { DataEvents, DataSession, type TransferDocument } from '@hydranium/protocol';
 import {
@@ -71,6 +73,7 @@ import {
 } from '../head-channels.js';
 import { requireButton, requireCheckbox, requireElement, requireSelect } from './dom.js';
 import { EditorArea } from './editor-area.js';
+import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
 import { LogPanel } from './log-panel.js';
 import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco-lsp-adapter.js';
 import { applyPageLocale, localeUrl, PAGE_LOCALES } from './page-nls.js';
@@ -572,6 +575,19 @@ export async function main(locale: string | undefined): Promise<void> {
    // reader most wants when the page does not come up.
    connection.onNotification(LogMessageNotification.type, params => log.append(params.type, params.message));
 
+   // Acknowledge dynamic registrations: declaring `workspace.configuration` makes
+   // the server register for the sections it watches, and an unanswered request
+   // surfaces as a page error. Nothing is kept — the page pushes its own
+   // section's changes whether or not anything registered for them.
+   connection.onRequest(RegistrationRequest.type, () => undefined);
+   connection.onRequest(UnregistrationRequest.type, () => undefined);
+
+   // Before `listen`, and the level control also before `initialize`: the server
+   // reads its configuration section while the workspace comes up, and an
+   // unanswered request there reads as a client with no settings.
+   wireLogLevelControl(connection);
+   wireTraceControl(connection, log);
+
    connection.listen();
 
    setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
@@ -598,7 +614,10 @@ export async function main(locale: string | undefined): Promise<void> {
       // absent capability makes Langium fall back to a shape every client
       // understands, whereas claiming one this page does not implement produces
       // a response it cannot render.
-      capabilities: { workspace: { applyEdit: true } },
+      // `configuration` DOES gate its request, unlike `applyEdit` above: the
+      // provider reads the declaration at `initialize` and, absent it, asks for
+      // no section ever, so the log-level picker would reach nothing.
+      capabilities: { workspace: { applyEdit: true, configuration: true } },
       workspaceFolders: [{ uri: WORKSPACE_ROOT_URI, name: 'order-flow' }]
    });
 

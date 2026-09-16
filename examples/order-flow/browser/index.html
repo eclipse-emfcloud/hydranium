@@ -1049,7 +1049,7 @@
             <div class="panel-head">
                <i class="codicon codicon-output" aria-hidden="true"></i>
                <h2 data-nls="order-flow/page/server-log">Server log</h2>
-               <span class="badge" id="log-summary" title="lines received" data-nls-title="order-flow/page/lines-received">0</span>
+               <span class="badge" id="log-summary" title="Lines received" data-nls-title="order-flow/page/lines-received">0</span>
                <span class="spacer"></span>
                <span class="filter-box">
                   <i class="codicon codicon-filter" aria-hidden="true"></i>
@@ -1062,6 +1062,20 @@
                      data-nls-aria-label="order-flow/page/filter-hint"
                   />
                </span>
+               <!--
+                  Two pickers on different halves of the wire: `log-level` is the
+                  SERVER's threshold over LSP configuration, `log-trace` is this
+                  page printing its own message traffic. Options are populated
+                  from script so each list has one source.
+               -->
+               <label class="scheme-switch action" title="Server log level" data-nls-title="order-flow/page/log-level">
+                  <i class="codicon codicon-settings-gear" aria-hidden="true"></i>
+                  <select id="log-level" aria-label="Server log level" data-nls-aria-label="order-flow/page/log-level"></select>
+               </label>
+               <label class="scheme-switch action" title="Trace LSP messages" data-nls-title="order-flow/page/log-trace">
+                  <i class="codicon codicon-arrow-swap" aria-hidden="true"></i>
+                  <select id="log-trace" aria-label="Trace LSP messages" data-nls-aria-label="order-flow/page/log-trace"></select>
+               </label>
                <button
                   type="button"
                   id="log-clear"

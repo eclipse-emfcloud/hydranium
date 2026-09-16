@@ -92,13 +92,16 @@ export class LspLogger extends AbstractLogger implements Logger {
          // a Node concern; skip it cleanly there.
          const env = processEnv();
          if (env) {
-            const envLevel = parseLogLevel(env[DEFAULT_LOG_LEVEL_ENV]);
-            if (envLevel) {
-               Logger.setLevel(envLevel);
-            }
+            // The file-tee target FIRST: the other order writes the level
+            // announcement before the sink exists, losing the one line that says
+            // which threshold the rest of the file was written at.
             const envLogFile = env[DEFAULT_LOG_FILE_ENV];
             if (envLogFile) {
                setLogFilePath(envLogFile);
+            }
+            const envLevel = parseLogLevel(env[DEFAULT_LOG_LEVEL_ENV]);
+            if (envLevel) {
+               this.applyLevel(envLevel, DEFAULT_LOG_LEVEL_ENV);
             }
          }
       }
@@ -109,13 +112,45 @@ export class LspLogger extends AbstractLogger implements Logger {
       if (options.logThreshold !== undefined) {
          const level = ObservableValue.from(options.logThreshold);
          if (level.value) {
-            Logger.setLevel(level.value);
+            this.applyLevel(level.value, 'setting');
          }
          level.onChange(next => {
             if (next) {
-               Logger.setLevel(next);
+               this.applyLevel(next, 'setting');
             }
          });
+      }
+   }
+
+   /**
+    * Set the process-wide threshold and announce the transition under whichever
+    * of the two thresholds can carry the notice, so a reader sees every change
+    * and its absence means the threshold never moved.
+    *
+    * `error` and `off` admit no notice of their own — `off` nothing at all, and
+    * an error-severity line is read as a fault, which a client that marks its
+    * log as having seen an error keeps for the session. Entering either is
+    * therefore announced BEFORE the switch, under the outgoing threshold; every
+    * other change is announced after it, at the level being entered. Leaving
+    * `error` or `off` for one of those two says nothing, both thresholds being
+    * unable to carry it.
+    *
+    * Only on a real transition: the bound setting re-fires for configuration
+    * changes that leave the value alone.
+    */
+   protected applyLevel(next: LogThreshold, source: string): void {
+      const previous = Logger.getLevel();
+      if (previous === next) {
+         return;
+      }
+      const message = `Log level ${previous} → ${next} (${source})`;
+      const announceFirst = next === 'error' || next === 'off';
+      if (announceFirst && previous !== 'error') {
+         this.logAt(previous, message);
+      }
+      Logger.setLevel(next);
+      if (!announceFirst) {
+         this.logAt(next, message);
       }
    }
 
