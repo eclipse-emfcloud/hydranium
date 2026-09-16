@@ -109,11 +109,18 @@ jobs:
       #
       # No `.nojekyll`: Jekyll runs for the "deploy from a branch" build type
       # and not for this one, so the file would be cargo.
+      #
+      # The build stamp goes into the COPY, so the bundle stays identical
+      # across commits and turbo's cache for the example stays valid. `grep`
+      # rather than trusting `sed`, which exits 0 having matched nothing: a
+      # markup change would otherwise ship a silently blank stamp.
       - name: Stage the site
         run: |
           mkdir -p site
           cp examples/order-flow/browser/index.html site/
           cp -r examples/order-flow/browser/out site/out
+          sed -i "s|name=\"build-commit\" content=\"\"|name=\"build-commit\" content=\"$GITHUB_SHA\"|" site/index.html
+          grep -q "name=\"build-commit\" content=\"[0-9a-f]\{40\}\"" site/index.html
           du -sh site >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the site

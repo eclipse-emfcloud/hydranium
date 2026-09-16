@@ -48,6 +48,7 @@
  * `MonacoEnvironment.getWorker` for strings no user sees.
  */
 
+import { applyBuildStamp } from './build-stamp.js';
 import { requireElement } from './dom.js';
 import { requestedLocale } from './page-nls.js';
 
@@ -95,6 +96,10 @@ async function boot(): Promise<void> {
    const { main } = await import('./workbench.js');
    await main(locale);
 }
+
+// Before `boot`, and synchronous, so the build is on screen even if the page
+// fails on its first await — the state in which knowing the build is most use.
+applyBuildStamp();
 
 boot().catch((error: unknown) => {
    // Written straight to the element rather than through `workbench.ts`'s
