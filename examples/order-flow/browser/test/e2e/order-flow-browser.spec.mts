@@ -817,6 +817,46 @@ test.describe('order-flow in a web worker', () => {
     * The diagnostic is the discriminating half of the pair, because it can only
     * be German if the locale reached `initialize` — the page cannot render it.
     */
+   /**
+    * The page as a CONFIGURATION client, which is the only thing this host has:
+    * a browser tab has no settings UI and no `process.env`, so without the LSP
+    * configuration route the server's threshold is fixed for the session.
+    *
+    * The announcement is the assertion because it is emitted AT the level being
+    * entered — so a line naming the transition can only appear if the server
+    * both received the value and applied it. Asserting some other debug line
+    * instead would pass on a server that was already at debug for another
+    * reason.
+    */
+   /**
+    * The PULL half, which the picker test below does not reach: measured, that
+    * one stays green with the framework's lazy section fetch disabled, because a
+    * level chosen from the picker travels as a `didChangeConfiguration` push and
+    * the base provider accepts any pushed section. Only a level already in force
+    * when the server first reads its section exercises the fetch.
+    */
+   test('a level in force before startup reaches the server through the configuration fetch', async ({ page }) => {
+      await page.goto('/?log=debug');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+
+      // No interaction at all: the only route from the query string to the
+      // server's threshold is its own `workspace/configuration` request.
+      await expect(page.locator('#log').getByText('Log level info → debug (setting)', { exact: false })).toHaveCount(1);
+      await expect(page.locator('#log-level')).toHaveValue('debug');
+   });
+
+   test('the log-level picker reaches the server threshold over LSP configuration', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      // Control: nothing has announced a transition yet, so the assertion below
+      // cannot pass on a line that was already there.
+      await expect(page.locator('#log').getByText('Log level', { exact: false })).toHaveCount(0);
+
+      await page.locator('#log-level').selectOption('debug');
+
+      await expect(page.locator('#log').getByText('Log level info → debug (setting)', { exact: false })).toHaveCount(1);
+   });
+
    test('one locale switch reaches the page chrome AND the server messages', async ({ page }) => {
       await page.goto('/?locale=de');
       await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
@@ -828,6 +868,8 @@ test.describe('order-flow in a web worker', () => {
       // accessible-name prose is exactly what gets left untranslated.
       await expect(page.locator('#reset-layout')).toHaveAttribute('title', 'Ursprüngliche Bereichsgrößen wiederherstellen');
       await expect(page.locator('#log-filter')).toHaveAttribute('placeholder', 'Filter');
+      // Assigned from script on every line, so the overlay alone cannot hold it.
+      await expect(page.locator('#log-summary')).toHaveAttribute('title', 'Empfangene Zeilen');
       await expect(page.locator('html')).toHaveAttribute('lang', 'de');
 
       // The server half, from the same parameter.

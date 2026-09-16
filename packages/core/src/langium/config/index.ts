@@ -7,4 +7,5 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './configuration-provider.js';
 export * from './settings.js';

@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Logger, SystemClock } from '@hydranium/protocol';
+import { Logger, type LogThreshold, type ObservableValue, SystemClock } from '@hydranium/protocol';
+import { Emitter } from 'vscode-languageserver';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -193,6 +194,115 @@ describe('LspLogger file-tee', () => {
 
       it('replaces filename-unsafe characters so the token is path-safe', () => {
          expect(toLogFileWorkspaceToken('file:///tmp/My Project (1)')).toBe('My_Project__1_');
+      });
+   });
+
+   describe('log-level announcement', () => {
+      // The threshold is process-wide, so a test that leaves it raised or
+      // silenced changes what every later test in the file can emit — which
+      // surfaces as an unrelated suite failing on a missing log FILE, since a
+      // suppressed line never opens the tee.
+      let entryLevel: LogThreshold;
+      beforeEach(() => {
+         entryLevel = Logger.getLevel();
+      });
+      afterEach(() => {
+         Logger.setLevel(entryLevel);
+      });
+
+      /**
+       * A threshold cell the test can drive, standing in for the bound setting.
+       * Same idiom as the update-handler suite's `makeObservable`.
+       */
+      function makeThreshold(initial: LogThreshold | undefined): ObservableValue<LogThreshold | undefined> & {
+         set: (next: LogThreshold | undefined) => void;
+      } {
+         const emitter = new Emitter<LogThreshold | undefined>();
+         let current = initial;
+         return {
+            get value(): LogThreshold | undefined {
+               return current;
+            },
+            onChange: emitter.event,
+            set(next: LogThreshold | undefined): void {
+               current = next;
+               emitter.fire(next);
+            }
+         };
+      }
+
+      it('announces a live change at the level being entered', () => {
+         // At the NEW level, so the line is present exactly when the new
+         // threshold is in force — which is what makes its absence evidence that
+         // a setting never reached this process, rather than evidence of nothing.
+         const path = join(tmpDir, 'level-change.log');
+         setLogFilePath(path);
+         Logger.setLevel('info');
+         const threshold = makeThreshold('info');
+         new LspLogger(makeServicesStub(), { logThreshold: threshold });
+
+         threshold.set('debug');
+
+         expect(readFileSync(path, 'utf-8')).toContain('Log level info → debug (setting)');
+         expect(Logger.getLevel()).toBe('debug');
+      });
+
+      it('announces nothing when the change leaves the level unchanged', () => {
+         // The bound setting re-fires for configuration changes that do not touch
+         // this value; a line per unchanged re-application trains the reader to
+         // ignore it.
+         const path = join(tmpDir, 'level-unchanged.log');
+         setLogFilePath(path);
+         Logger.setLevel('info');
+         const threshold = makeThreshold('info');
+         new LspLogger(makeServicesStub(), { logThreshold: threshold });
+
+         threshold.set('info');
+
+         expect(existsSync(path) ? readFileSync(path, 'utf-8') : '').not.toContain('Log level');
+      });
+
+      it('announces a switch to error under the outgoing threshold', () => {
+         // Not at the level being entered: an error-severity line is read as a
+         // fault, and a client that marks its log as having seen an error keeps
+         // that marker for the session. The `Info` prefix is the assertion —
+         // it is what says the notice did not go out as an error.
+         const path = join(tmpDir, 'level-error.log');
+         setLogFilePath(path);
+         Logger.setLevel('info');
+         const threshold = makeThreshold('info');
+         new LspLogger(makeServicesStub(), { logThreshold: threshold });
+
+         threshold.set('error');
+
+         expect(readFileSync(path, 'utf-8')).toMatch(/\[Info {2}- [\d:.]+\] Log level info → error \(setting\)/);
+         expect(Logger.getLevel()).toBe('error');
+      });
+
+      it('announces going off before the silence starts', () => {
+         const path = join(tmpDir, 'level-off.log');
+         setLogFilePath(path);
+         Logger.setLevel('info');
+         const threshold = makeThreshold('info');
+         new LspLogger(makeServicesStub(), { logThreshold: threshold });
+
+         threshold.set('off');
+
+         expect(readFileSync(path, 'utf-8')).toContain('Log level info → off (setting)');
+         expect(Logger.getLevel()).toBe('off');
+      });
+
+      it('says nothing when neither threshold can carry the notice', () => {
+         const path = join(tmpDir, 'level-error-off.log');
+         setLogFilePath(path);
+         Logger.setLevel('error');
+         const threshold = makeThreshold('error');
+         new LspLogger(makeServicesStub(), { logThreshold: threshold });
+
+         threshold.set('off');
+
+         expect(existsSync(path) ? readFileSync(path, 'utf-8') : '').not.toContain('Log level');
+         expect(Logger.getLevel()).toBe('off');
       });
    });
 

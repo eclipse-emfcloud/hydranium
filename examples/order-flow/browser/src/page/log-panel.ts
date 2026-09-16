@@ -22,6 +22,7 @@
 
 import { MessageType } from 'vscode-languageserver-protocol';
 import { el, requireElement } from './dom.js';
+import { pageText } from './page-nls.js';
 
 /**
  * Upper bound on lines kept in the panel.
@@ -101,11 +102,19 @@ export class LogPanel {
       // is that a server-side error over `window/logMessage` previously reached
       // nobody — and it stays called out after the line has scrolled away.
       this.count.classList.toggle('badge-error', this.sawError);
-      this.count.title = this.sawError ? 'one or more errors have been logged' : 'lines received';
+      this.count.title = this.summaryTitle();
 
       if (atBottom) {
          this.lines.scrollTop = this.lines.scrollHeight;
       }
+   }
+
+   /** Through the catalogue: this is assigned on every line, so the element's
+    *  `data-nls-title` cannot hold it and a literal reverts it to English. */
+   private summaryTitle(): string {
+      return this.sawError
+         ? pageText('order-flow/page/log-errors', 'One or more errors have been logged')
+         : pageText('order-flow/page/lines-received', 'Lines received');
    }
 
    /**
@@ -142,5 +151,7 @@ export class LogPanel {
       this.sawError = false;
       this.count.textContent = '0';
       this.count.classList.remove('badge-error');
+      // With the marker: left alone it still claims an error is held.
+      this.count.title = this.summaryTitle();
    }
 }

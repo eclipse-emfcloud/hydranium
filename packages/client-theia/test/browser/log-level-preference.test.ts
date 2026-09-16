@@ -53,7 +53,10 @@ function makeStubPreferences(initial: string | undefined): StubPreferences {
 }
 
 /** Wires the contribution's injected fields without resolving a container. */
-function makeContribution(preferences: PreferenceService, logger: { error: unknown } = { error: vi.fn() }): LogLevelPreferenceContribution {
+function makeContribution(
+   preferences: PreferenceService,
+   logger: { error: unknown; info?: unknown } = { error: vi.fn(), info: vi.fn() }
+): LogLevelPreferenceContribution {
    const contribution = new LogLevelPreferenceContribution();
    const fields = contribution as unknown as { preferenceName: string; preferences: PreferenceService; logger: unknown };
    fields.preferenceName = PREFERENCE;
@@ -100,6 +103,28 @@ describe('LogLevelPreferenceContribution', () => {
       prefs.setValue('warn');
       prefs.fireChange();
       expect(Logger.getLevel()).toBe('warn');
+   });
+
+   it('announces the transition, naming both levels and the preference', async () => {
+      // The line exists to answer "was this threshold actually applied here?",
+      // which a reader can only settle if it names where it came from: the same
+      // preference reaches the server through a separate delivery path, so an
+      // announcement that named only the levels would not say which side it is.
+      const logger = { error: vi.fn(), info: vi.fn() };
+      await start(makeContribution(makeStubPreferences('debug').service, logger));
+      expect(logger.info).toHaveBeenCalledWith(`Log level info → debug (preference '${PREFERENCE}')`);
+   });
+
+   it('announces nothing when a re-application leaves the level unchanged', async () => {
+      // The watched preference re-fires for changes that do not touch this value,
+      // and a line per unchanged re-application trains the reader to ignore it.
+      const logger = { error: vi.fn(), info: vi.fn() };
+      const prefs = makeStubPreferences('debug');
+      await start(makeContribution(prefs.service, logger));
+      logger.info.mockClear();
+      prefs.fireChange();
+      expect(logger.info).not.toHaveBeenCalled();
+      expect(Logger.getLevel()).toBe('debug');
    });
 
    it('ignores a change to an unrelated preference', async () => {
