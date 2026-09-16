@@ -589,22 +589,19 @@ export class MonacoLspAdapter {
     * omitting it does not turn it off. The page declares it anyway, because it
     * is true; what it must not do is rely on the omission to stay quiet.
     *
-    * **The echo does not LOOP, and is deliberately not suppressed here — but it
-    * is not harmless, and the difference is a server defect rather than a client
-    * one.** Applying the edit makes Monaco fire `onDidChangeContent`, which
+    * **The echo does not LOOP, and is deliberately not suppressed here.**
+    * Applying the edit makes Monaco fire `onDidChangeContent`, which
     * {@link openEditor} turns into a `didChange`. Measured: one drag costs
     * exactly one inbound request and no push follows it, so nothing ping-pongs.
-    * What the server then does with that echo is the problem —
-    * `HydraniumTextDocuments` applies its INCREMENTAL ranges to a copy already
-    * holding the pushed text, so a push that merely replaces a value is
-    * idempotent and fine, one that deletes a line yields a transient parse
-    * error, and one that INSERTS a line silently duplicates it.
+    * The server correlates that `didChange` against the push still in flight
+    * and reconstructs it against the buffer this client held BEFORE the push —
+    * which is the only text its incremental ranges address — so an echo mints
+    * no version and drives no rebuild.
     *
-    * Suppressing the echo here would hide that and break something else:
-    * `didChange` is what keeps the server's per-URI shadow and its per-client
-    * version aligned with this buffer, so withholding it makes the next outbound
-    * diff wrong and makes every versioned push arrive stale. A conforming client
-    * echoes; the fix belongs on the other side.
+    * Suppressing it would break what that correlation runs on: `didChange` is
+    * what keeps the server's per-URI shadow and its per-client version aligned
+    * with this buffer, so withholding it makes the next outbound diff wrong and
+    * makes every versioned push arrive stale. A conforming client echoes.
     */
    protected registerApplyEdit(): void {
       this.connection.onRequest(ApplyWorkspaceEditRequest.type, (params: ApplyWorkspaceEditParams) => this.applyWorkspaceEdit(params.edit));
