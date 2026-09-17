@@ -401,10 +401,17 @@ export class DefaultAstDocumentManager<TAst extends AstNode, TDiagnostic = unkno
       // transiently breaks cross-document linking mid-rebuild (a dependent briefly
       // seeing an `extends`/`type` reference unresolved). And because the constructor
       // wires `onDidOpen -> this.open`, it would fire a second, identical rebuild on
-      // every first open. So an already-open `open()` is a no-op.
+      // every first open.
+      //
+      // So an already-open `open()` records the attaching client's hold and nothing
+      // else. The hold is per `(uri, clientId)` and the last-close revert counts down
+      // to it, so skipping it lets the first holder's close tear down a document
+      // another client is still reading.
       if (!this.isOpen(args.uri)) {
          const textDocument = await this.createDocumentFromTextOrFileSystem(args.uri, args.languageId, args.version, args.text);
          this.textDocuments.notifyDidOpenTextDocument({ textDocument }, args.clientId);
+      } else {
+         this.textDocuments.attachClient(args.uri, args.clientId);
       }
       return Disposable.create(() => this.close(args));
    }

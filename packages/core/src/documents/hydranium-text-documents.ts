@@ -715,11 +715,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.__onDidChangeContent.fire(toFire);
       } else {
          // An additional client attaches to a document already open by another client.
-         this.log(
-            uri,
-            `Attach client: ${clientId} joined existing document (version ${document.version}, ` +
-               `now open in: ${[...existingClients, clientId].join(', ')})`
-         );
+         this.logClientJoined(uri, clientId, document.version, existingClients);
          if (clientId === LANGUAGE_CLIENT_ID) {
             // Monaco's own buffer, which on this path is NOT the synced text — another
             // client opened the document and may already have changed it. Recorded as
@@ -730,6 +726,46 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          }
          this.refreshContent(uri, clientId);
       }
+   }
+
+   /**
+    * Record `clientId` as an additional holder of a document another client
+    * already has open.
+    *
+    * Unlike the attach branch of {@link notifyDidOpenTextDocument} this does
+    * not refresh. That branch re-renders an attaching TEXTUAL view; a client
+    * reaching a document through a non-textual route has nothing to re-render,
+    * and refreshing per attach turns each into a Langium rebuild and dependent
+    * relink cascade.
+    *
+    * The staleness guard baselines at the SYNCED version, not a declared buffer
+    * version, because a client arriving this way holds no buffer of its own.
+    * Unifying the two routes therefore rebaselines a textual client's guard to a
+    * version it never declared.
+    *
+    * Returns whether a hold was added — `false` when `uri` is not open, or
+    * `clientId` already holds it.
+    */
+   attachClient(uri: DocumentUri, clientId: string): boolean {
+      const key = this.documentKey(uri);
+      const document = this.__syncedDocuments.get(key);
+      if (!document || this.isOpenInClient(key, clientId)) {
+         return false;
+      }
+      const record = this.trackingFor(key);
+      const existingClients = [...record.clients];
+      record.clients.add(clientId);
+      record.clientVersions.set(clientId, document.version);
+      this.logClientJoined(key, clientId, document.version, existingClients);
+      return true;
+   }
+
+   protected logClientJoined(uri: DocumentUri, clientId: string, version: number, existingClients: readonly string[]): void {
+      this.log(
+         uri,
+         `Attach client: ${clientId} joined existing document (version ${version}, ` +
+            `now open in: ${[...existingClients, clientId].join(', ')})`
+      );
    }
 
    refreshContent(uri: DocumentUri, clientId: string): void {
