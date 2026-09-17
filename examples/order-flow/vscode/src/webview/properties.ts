@@ -45,7 +45,17 @@ import {
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { DataEvents, DataSession, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { DataConnection, DataEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+
+/**
+ * This webview's identity on the data head.
+ *
+ * Stable for its lifetime because it is the echo key — a client that cannot
+ * recognise its own `sourceClientId` treats its own write as a concurrent
+ * third-party one. Distinct from the framework's sentinels and from the Theia
+ * panel's id, both of which can reach the same server.
+ */
+const PROPERTIES_WEBVIEW_CLIENT_ID = 'order-flow-properties-webview';
 import { HOST_EXTENSION, type MessageParticipant } from 'vscode-messenger-common';
 import { Messenger, type VsCodeApi } from 'vscode-messenger-webview';
 
@@ -104,7 +114,8 @@ function main(): void {
 
    const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), reportError);
    const events = new DataEvents<OrderFlowTransferRoot>();
-   const session = new DataSession<OrderFlowTransferRoot>(port, events);
+   const connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+   const session = connection.createSession(PROPERTIES_WEBVIEW_CLIENT_ID);
    const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
 
    const form = new PropertiesForm(root, {

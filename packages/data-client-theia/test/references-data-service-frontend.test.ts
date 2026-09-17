@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 import 'reflect-metadata';
-import { Deferred } from '@theia/core/lib/common/promise-util';
 import type {
+   RpcProxy,
    FindNextNameArgs,
    ReferenceCandidate,
    ReferenceContext,
@@ -18,6 +18,7 @@ import type {
    ReferenceTarget,
    TransferElement
 } from '@hydranium/protocol';
+import { Emitter } from '@theia/core';
 import { describe, expect, it } from 'vitest';
 import { AbstractReferencesDataServiceFrontend } from '../src/browser/references-data-service-frontend';
 
@@ -58,25 +59,33 @@ class TestFrontend extends AbstractReferencesDataServiceFrontend<TransferElement
    protected readonly clientMethods = [];
 
    constructor(
-      server: RecordingServer,
+      protected readonly fake: RecordingServer,
       private readonly log: string[]
    ) {
       super();
-      this.server = server;
    }
 
-   /** Stand in for a live, already-initialized connection and log the gate. */
+   // The connection is not the subject here: this suite asserts that each
+   // delegate gates before forwarding. Overriding the getter keeps the real
+   // lifecycle out of a test that would only stub it.
+   protected override get server(): RpcProxy<RecordingServer> {
+      return asProxy(this.fake);
+   }
+
+   /** Stand in for a settled readiness gate, logging that it was awaited. */
    protected override ensureConnected(): Promise<void> {
       this.log.push('gate');
-      if (!this.initialized) {
-         this.initialized = new Deferred<void>();
-         this.initialized.resolve();
-      }
-      return this.initialized.promise;
+      return Promise.resolve();
    }
 }
 
 const CONTEXT: ReferenceContext = { source: { uri: 'file:///a.x' }, property: 'ref' };
+
+/** A recording server presented as the proxy shape the base exposes. */
+function asProxy(server: RecordingServer): RpcProxy<RecordingServer> {
+   const never = new Emitter<void>().event;
+   return Object.assign(server, { onDidOpenConnection: never, onDidCloseConnection: never });
+}
 
 describe('AbstractReferencesDataServiceFrontend', () => {
    it('gates on readiness before delegating each reference method to the server', async () => {

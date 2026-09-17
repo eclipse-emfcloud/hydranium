@@ -118,24 +118,13 @@ class TestFrontend extends AbstractDataServiceFrontend<TestServerProtocol, Recor
       return this.server;
    }
 
-   get initializedRef(): unknown {
-      return this.initialized;
-   }
-
    connect(): Promise<void> {
       return this.ensureConnected();
    }
 
-   /** Count how often the readiness gate ran — one per connection generation. */
-   protected override async doInitialize(initialized: { resolve(): void; reject(error: unknown): void }): Promise<void> {
+   /** Count how often the readiness gate settled — once per connection generation. */
+   protected override onReady(): void {
       this.readyCalls++;
-      try {
-         await this.connectionPromise;
-         await this.server.waitForReady();
-         initialized.resolve();
-      } catch (error) {
-         initialized.reject(error);
-      }
    }
 }
 
@@ -196,9 +185,9 @@ describe('AbstractDataServiceFrontend', () => {
       await flush();
 
       // The readiness gate has to run again: a restarted server has an unwarmed
-      // workspace, and a stale resolved Deferred would let the first request
-      // through against a server still walking it.
-      expect(frontend.initializedRef).toBeUndefined();
+      // workspace, and reusing the settled gate would let the first request
+      // through against a server still walking it. The second count is what
+      // witnesses the drop — the generation itself is not observable.
       await frontend.connect();
       expect(frontend.readyCalls).toBe(2);
       expect(await frontend.proxy.ping({ value: 'x' })).toBe('second');

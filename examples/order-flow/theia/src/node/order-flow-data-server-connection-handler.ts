@@ -9,7 +9,7 @@
 
 import { DataServerConnectionHandler } from '@hydranium/data-client-theia/lib/node';
 import { injectable } from '@theia/core/shared/inversify';
-import { ORDER_FLOW_DATA_DIAGNOSTICS_PATH, ORDER_FLOW_HOST_PORT_COMMANDS } from '../common/order-flow-diagram-language';
+import { ORDER_FLOW_HOST_PORT_COMMANDS } from '../common/order-flow-diagram-language';
 
 /**
  * Bridges the frontend's data channel to the model server's TCP socket.
@@ -25,21 +25,5 @@ import { ORDER_FLOW_DATA_DIAGNOSTICS_PATH, ORDER_FLOW_HOST_PORT_COMMANDS } from 
 export class OrderFlowDataServerConnectionHandler extends DataServerConnectionHandler {
    constructor() {
       super({ portCommand: ORDER_FLOW_HOST_PORT_COMMANDS.dataServer });
-   }
-}
-
-/**
- * The same bridge on a SECOND service path, for the memory-diagnostics frontend.
- *
- * Two handlers rather than one because Theia keys a frontend channel by its
- * service path and refuses a second channel on a path already open — see
- * {@link ORDER_FLOW_DATA_DIAGNOSTICS_PATH} for what that failure looks like when
- * it happens. Only the path differs: the port command is the same, so both
- * forward to the one data server this extension talks to.
- */
-@injectable()
-export class OrderFlowDiagnosticsDataConnectionHandler extends DataServerConnectionHandler {
-   constructor() {
-      super({ portCommand: ORDER_FLOW_HOST_PORT_COMMANDS.dataServer, servicePath: ORDER_FLOW_DATA_DIAGNOSTICS_PATH });
    }
 }

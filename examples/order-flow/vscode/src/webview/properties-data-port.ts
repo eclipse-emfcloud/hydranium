@@ -34,14 +34,6 @@ import { createMessageConnection } from 'vscode-jsonrpc/browser';
  * compile time rather than on the first message.
  */
 export class WebviewDataPort {
-   /**
-    * Stable for the session, because it is the echo key — a client that cannot
-    * recognise its own `sourceClientId` treats its own write as a concurrent
-    * third-party one. Distinct from the framework's own well-known client ids,
-    * which `DataPort.clientId` lists.
-    */
-   readonly clientId = 'order-flow-properties-webview';
-
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose: Event<void> = this.disposeEmitter.event;
 

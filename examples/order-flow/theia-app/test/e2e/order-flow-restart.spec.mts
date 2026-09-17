@@ -160,12 +160,11 @@ test.describe.serial('Order-flow data connection across a language-server restar
    });
 
    test('the diagnostics frontend reaches the data head before the restart', async () => {
-      // The SECOND data-head consumer, and it recovers by a different route: the
-      // panel's port drives `DataSession`, while `OrderFlowDiagnosticsDataService`
-      // is an `AbstractDataServiceFrontend` rebinding its own proxy from
-      // `onDidLoseConnection`. That is framework code whose only other coverage is
-      // a unit test over a fake connection provider, which decides the question by
-      // construction.
+      // The SECOND data-head consumer, recovering over the SAME connection as
+      // the panel: the port reports the loss, the connection drops its
+      // generation, and the next call builds a fresh one. That is framework code
+      // whose only other coverage is a unit test over a fake connection
+      // provider, which decides the question by construction.
       //
       // This half is what makes the recovery assertion below mean anything.
       // Without it, a passing post-restart command is equally explained by a

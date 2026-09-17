@@ -28,18 +28,19 @@ fourth is backend-only.
 Four things here are worth reading, because each is a decision rather than
 wiring:
 
-- **`OrderFlowTheiaDataPort` is the whole host-specific half of the properties
-  panel**, and it is short: in a Theia frontend the client _is_ the RPC
-  endpoint, so opening the transport is one `openChannelConnection` call. The
-  VS Code shell needs an extension-side hop, a messenger and a `postMessage`
-  transport to reach the same place. Everything above the port — `DataSession`,
+- **`OrderFlowTheiaDataPort` names a service path and nothing else.** The
+  channel, the workspace gate, the reconnect signal and the error sink all ship
+  in `ChannelDataPort`; in a Theia frontend the client _is_ the RPC endpoint, so
+  there is nothing else to supply. The VS Code shell needs an extension-side
+  hop, a messenger and a `postMessage` transport to reach the same place.
+  Everything above the port — `DataConnection`, `DataSession`,
   `OrderFlowPropertiesModel`, `PropertiesForm` — is shared verbatim with that
   shell.
-- **Two service paths, one data server.** The panel and the diagnostics
-  frontend each need their own service path and their own backend forwarder,
-  because Theia refuses a second channel on a path already open — see
-  [`@hydranium/data-client-theia`](../../../packages/data-client-theia/README.md)
-  for what sharing one costs.
+- **One connection, two participants.** The panel takes a session on it and the
+  memory-diagnostics commands take the proxy off the same one. Theia refuses a
+  second channel on a path already open, so a second consumer that wanted its
+  own path would need a second backend forwarder too — sessions are what make
+  that unnecessary.
 - **The panel goes into Theia's built-in Properties view**, claiming a selection
   only when it names an order-flow document. No selection glue is contributed:
   the navigator, the tab bar and the open GLSP diagram all publish a selection

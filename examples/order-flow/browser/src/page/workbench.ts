@@ -55,7 +55,7 @@ import {
    RegistrationRequest,
    UnregistrationRequest
 } from 'vscode-languageserver-protocol';
-import { DataEvents, DataSession, type TransferDocument } from '@hydranium/protocol';
+import { DataConnection, DataEvents, type DataSession, type TransferDocument } from '@hydranium/protocol';
 import {
    type DomainModel,
    isLayoutModel,
@@ -354,26 +354,28 @@ function bootstrapWorker(): WorkerChannels {
    };
 }
 
-/** The data head's client end: one session, shared by every read and watch. */
+/** The data head's client end: the page's session, and the events it reads. */
 interface DataHead {
    readonly session: DataSession<OrderFlowTransferRoot>;
    readonly events: DataEvents<OrderFlowTransferRoot>;
 }
 
 /**
- * One session for the whole page, not one per read.
+ * One connection for the whole page, not one per read.
  *
- * A second `DataSession` over the same port would be a second JSON-RPC
+ * A second `DataConnection` over the same port would be a second JSON-RPC
  * connection on it, and `BrowserMessageReader` assigns `port.onmessage` — so the
- * later reader silently replaces the earlier one and the first session's replies
- * stop arriving. Sharing is also what makes the echo filter mean anything: both
- * halves of this page write and watch under one `clientId`, so
- * `DataSession.isOwnEcho` can distinguish them from the GLSP head's writes.
+ * later reader silently replaces the earlier one and the first connection's
+ * replies stop arriving. A second interested party takes a second session off
+ * this one instead, which costs no transport and keeps the echo filter
+ * meaningful: two parties sharing one `clientId` read each other's writes as
+ * their own echoes and ignore them.
  */
 function openDataHead(dataPort: MessagePort): DataHead {
-   const port = new WorkerDataPort('order-flow-browser-page', dataPort);
+   const port = new WorkerDataPort(dataPort);
    const events = new DataEvents<OrderFlowTransferRoot>();
-   return { session: new DataSession<OrderFlowTransferRoot>(port, events), events };
+   const connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+   return { session: connection.createSession('order-flow-browser-page'), events };
 }
 
 /**
@@ -509,9 +511,8 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter): Pro
    }
    setWorkspaceReport(`saving ${documents.length} document(s)…`);
    try {
-      const server = await dataHead.session.connected();
       for (const document of documents) {
-         await server.saveModelDocument({ uri: document.uri, clientId: dataHead.session.clientId, model: document.text });
+         await dataHead.session.saveDocument({ uri: document.uri, model: document.text });
          // Marked one at a time, so a failure part-way through leaves the
          // documents it never reached dirty and a second press retries exactly
          // those.

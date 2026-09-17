@@ -61,16 +61,6 @@ describe('makeFakeDataPort', () => {
       port.dispose();
    });
 
-   it('defaults to a clientId that is none of the framework sentinels', () => {
-      const port = makeFakeDataPort({ connect: () => connection('one') });
-
-      // A double that defaulted to `'language-client'` or `'unknown'` would make
-      // an echo-filtering test pass by colliding with the server's own sentinel.
-      expect(['language-client', 'unknown', 'revert-on-close']).not.toContain(port.clientId);
-      expect(makeFakeDataPort({ connect: () => connection('one'), clientId: 'chosen' }).clientId).toBe('chosen');
-      port.dispose();
-   });
-
    it('records every reportError with the resolved message beside the error', () => {
       const port = makeFakeDataPort({ connect: () => connection('one') });
       const failure = new Error('boom');

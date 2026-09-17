@@ -8,13 +8,9 @@
  ********************************************************************************/
 
 import { createDataServerConnectionContainerModule } from '@hydranium/data-client-theia/lib/node';
-import {
-   OrderFlowDataServerConnectionHandler,
-   OrderFlowDiagnosticsDataConnectionHandler
-} from './order-flow-data-server-connection-handler';
+import { OrderFlowDataServerConnectionHandler } from './order-flow-data-server-connection-handler';
 
-// One handler per SERVICE PATH, both forwarding to the same data server: the
-// properties panel's host-neutral port on the framework default, and the
-// memory-diagnostics frontend on its own. Theia refuses a second channel on a
-// path already open, so this is a requirement rather than a tidy split.
-export default createDataServerConnectionContainerModule(OrderFlowDataServerConnectionHandler, OrderFlowDiagnosticsDataConnectionHandler);
+// One handler, because the frontend opens one channel: every consumer of the
+// data head takes a session off the one connection rather than a path of its
+// own.
+export default createDataServerConnectionContainerModule(OrderFlowDataServerConnectionHandler);

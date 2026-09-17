@@ -32,7 +32,8 @@ import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib
 import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
-   DataSession,
+   DataConnection,
+   type DataSession,
    RELAY_TRANSPORT_OPEN_FAILED,
    type DataPort,
    type MessageRelay,
@@ -126,6 +127,7 @@ let workspace: ScratchWorkspace | undefined;
 let dataServer: SocketDataServer | undefined;
 let port: RelayedWebviewPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
+let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
 let model: OrderFlowPropertiesModel<OrderFlowTransferRoot> | undefined;
 let crossed: Message[] = [];
@@ -141,8 +143,10 @@ function uriOf(relativePath: string): string {
 function mountClient(clientPort: RelayedWebviewPort): void {
    port = clientPort;
    events = new DataEvents<OrderFlowTransferRoot>();
-   session = new DataSession<OrderFlowTransferRoot>(clientPort, events);
-   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
+   connection = new DataConnection<OrderFlowTransferRoot>(clientPort, events);
+   const dataSession = connection.createSession('order-flow-relay-test');
+   session = dataSession;
+   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events);
 }
 
 describe('order-flow data head over a socket relayed onto a clone hop', () => {

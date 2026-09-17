@@ -56,7 +56,8 @@ import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib
 import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
-   DataSession,
+   DataConnection,
+   type DataSession,
    type DataPort,
    type MessageRelay,
    type PostMessageChannel,
@@ -150,6 +151,7 @@ let hub: FakeMessengerHub<Participant> | undefined;
 let relay: MessageRelay | undefined;
 let port: MessengerHopPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
+let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
 let model: OrderFlowPropertiesModel<OrderFlowTransferRoot> | undefined;
 
@@ -180,8 +182,10 @@ function mountHop(webview: Participant = 'webview'): void {
    // Webview: the mirror channel, and the whole host-invariant stack above it.
    port = new MessengerHopPort(createWebviewSideChannel(messengerHub.asWebview('webview'), 'host-extension'));
    events = new DataEvents<OrderFlowTransferRoot>();
-   session = new DataSession<OrderFlowTransferRoot>(port, events);
-   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
+   connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+   const dataSession = connection.createSession('order-flow-hop-test');
+   session = dataSession;
+   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events);
 }
 
 /** Write `root` as a third party, ungated, so it always lands. */
