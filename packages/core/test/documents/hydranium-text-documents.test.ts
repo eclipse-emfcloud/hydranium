@@ -1523,6 +1523,66 @@ describe('HydraniumTextDocuments incremental echo after an attach', () => {
    });
 });
 
+describe('HydraniumTextDocuments change with no known client buffer', () => {
+   const ORIGINAL = 'diagram Flow {\n   node A at 10, 10\n}\n';
+   const AUTHORED = 'diagram Flow {\n   node A at 10, 99\n}\n';
+
+   /**
+    * Drive a push the client REFUSES, then the full-replace recovery.
+    *
+    * The rejection is what makes the client's buffer unknowable: it drops both
+    * the tracked text and the opened snapshot, and the recovery push is
+    * therefore sent with no record of what it lands on. Nothing narrower
+    * reproduces that — a push to a client that never opened the document is the
+    * other route, and it cannot then send a `didChange` at all.
+    */
+   async function pushAfterRejection(): Promise<{ docs: HydraniumTextDocuments<TextDocument>; fires: string[] }> {
+      let attempts = 0;
+      const { docs } = makeDocs({ workspace: { applyEdit: async () => ({ applied: attempts++ > 0 }) } });
+      openInLanguageClient(docs, ORIGINAL);
+      docs.applyContentChange(URI, AUTHORED, 'glsp-client');
+      // Refused, so the shadow is invalidated and the retry is a full replace
+      // with nothing recorded about the buffer it reaches.
+      await docs.applyEditToLanguageClient(URI, AUTHORED);
+      await docs.applyEditToLanguageClient(URI, AUTHORED);
+      const fires: string[] = [];
+      docs.onDidChangeContent(event => fires.push(event.clientId));
+      return { docs, fires };
+   }
+
+   it('drops a ranged change rather than reconstructing it against the pushed text', async () => {
+      const { docs, fires } = await pushAfterRejection();
+
+      // Keyed to the buffer the client held, which this store no longer knows.
+      // Reconstructed against the pushed text instead, these ranges splice it.
+      docs.notifyDidChangeTextDocument(
+         {
+            textDocument: { uri: URI, version: 3 },
+            contentChanges: [{ range: Range.create(1, 14, 1, 16), text: '99' }]
+         },
+         LANGUAGE_CLIENT_ID
+      );
+
+      expect(docs.get(URI)?.getText()).toBe(AUTHORED);
+      expect(docs.version(URI)).toBe(2);
+      expect(fires).toHaveLength(0);
+   });
+
+   it('still classifies a full-text change, which any baseline reconstructs alike', async () => {
+      // The non-regression guard, and it stays GREEN under the control below —
+      // which is what says the drop is scoped to changes carrying ranges.
+      const { docs, fires } = await pushAfterRejection();
+
+      docs.notifyDidChangeTextDocument(
+         { textDocument: { uri: URI, version: 3 }, contentChanges: [{ text: AUTHORED }] },
+         LANGUAGE_CLIENT_ID
+      );
+
+      expect(docs.get(URI)?.getText()).toBe(AUTHORED);
+      expect(fires).toHaveLength(0);
+   });
+});
+
 describe('HydraniumTextDocuments URI normalization', () => {
    // LSP clients normally send already-percent-encoded URIs, so raw === normalized
    // and the gap below never bites in practice. But the manager keeps its own state
