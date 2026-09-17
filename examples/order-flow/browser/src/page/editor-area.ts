@@ -58,6 +58,15 @@ export interface EditorAreaOptions {
    readonly initialSelection: string;
    /** Called whenever the visible set changes, so the document list can mark it. */
    readonly onVisibleChanged: (visible: VisibleDocuments) => void;
+   /**
+    * Called with the document of whichever editor the reader is now in.
+    *
+    * FOCUS, not selection, because three editors are on screen at once and two
+    * of them are pinned: a selection names the document in one pane, where focus
+    * names the one being read. Fires on every focus, including a repeat, so a
+    * consumer that must not re-act guards on the value.
+    */
+   readonly onFocusChanged?: (path: string) => void;
 }
 
 export class EditorArea {
@@ -98,6 +107,11 @@ export class EditorArea {
       const fixed = this.fixed.find(pane => pane.path === path);
       if (fixed !== undefined) {
          fixed.editor.focus();
+         // Announced here as well as from the focus listener: focusing an editor
+         // that already HAS focus fires no event, so a reader re-selecting the
+         // document they are already in would leave a consumer on whatever was
+         // announced last.
+         this.options.onFocusChanged?.(path);
          return;
       }
       if (path !== this.selected.path) {
@@ -105,6 +119,7 @@ export class EditorArea {
          this.announce();
       }
       this.selected.editor.focus();
+      this.options.onFocusChanged?.(path);
    }
 
    /**
@@ -127,10 +142,41 @@ export class EditorArea {
       return { fixed: [this.fixed[0].path, this.fixed[1].path], selected: this.selected.path };
    }
 
+   /**
+    * The document of whichever editor holds the caret, or `undefined` when none
+    * does.
+    *
+    * `hasTextFocus` rather than reading `document.activeElement` against the
+    * container: Monaco mounts overlays of its own inside that container — the
+    * find box among them — and a reader typing in one of those is not editing
+    * the document.
+    */
+   focusedPath(): string | undefined {
+      return [...this.fixed, this.selected].find(pane => pane.editor.hasTextFocus())?.path;
+   }
+
    /** Re-measure every editor, for a divider drag that changed their boxes. */
    layout(): void {
       for (const pane of [...this.fixed, this.selected]) {
          pane.editor.layout();
+      }
+   }
+
+   /**
+    * Mark each title whose buffer has moved since that document was last saved.
+    *
+    * Public because a SAVE clears the state and the save does not happen here:
+    * `markSaved` is recorded on the adapter by whoever performed it, and nothing
+    * on an editor fires when that happens, so the page says when to look again.
+    *
+    * Read from the adapter rather than tracked here, so one definition of dirty
+    * serves both the marks and what a save actually writes — a second definition
+    * would eventually disagree with the button.
+    */
+   refreshDirtyMarks(): void {
+      const dirty = new Set(this.options.adapter.dirtyDocuments().map(document => document.uri));
+      for (const pane of [...this.fixed, this.selected]) {
+         pane.title.classList.toggle('is-dirty', dirty.has(this.uriOf(pane.path)));
       }
    }
 
@@ -144,6 +190,14 @@ export class EditorArea {
       // out of the selection editor by selecting a third one — at which point the
       // position they left it at is only recoverable if it was already recorded.
       pane.editor.onDidBlurEditorWidget(() => this.remember(pane));
+      // `onDidFocusEditorText`, not `…EditorWidget`: the widget form also fires
+      // for the find box and any other overlay Monaco mounts inside the editor,
+      // which are not a change of document and would republish on every search.
+      pane.editor.onDidFocusEditorText(() => this.options.onFocusChanged?.(pane.path));
+      // Every content change, not only a keystroke: a diagram drag reaches this
+      // buffer through `workspace/applyEdit`, and that edit is as unsaved as a
+      // typed one.
+      pane.editor.onDidChangeModelContent(() => this.refreshDirtyMarks());
       this.setTitle(pane, path);
       this.revealOnce(pane, path);
       return pane;
@@ -163,6 +217,9 @@ export class EditorArea {
       } else {
          this.revealOnce(pane, path);
       }
+      // The pane now shows a different document, whose dirtiness is its own and
+      // is not announced by a content change.
+      this.refreshDirtyMarks();
    }
 
    private setTitle(pane: Pane, path: string): void {

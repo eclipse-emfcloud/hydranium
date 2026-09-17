@@ -118,6 +118,9 @@
                are equally the subject, so neither gets the larger share. */
             --diagram-split: 50%;
             --fixed-split: 50%;
+            /* The list above is a fixed seed with no way to add a file, so it
+               has no use for the larger share. */
+            --properties-height: 50%;
             --dock-height: 240px;
             /*
                The LOG takes the width and problems a quarter of it. A diagnostic
@@ -604,9 +607,102 @@
             overflow: auto;
             padding: 0.2rem 0;
          }
+         /*
+            The column, split into the list and the properties panel. A grid
+            rather than a flex column for the reason the page body is one: the
+            properties half is a resizable TRACK, and `grid-template-rows` is
+            where a track size can be named by a custom property.
+
+            `minmax(0, 1fr)` on the list so it can shrink — `1fr` alone resolves
+            to `minmax(auto, 1fr)`, and the list's own content height would then
+            push the properties panel off the bottom on a long workspace.
+         */
          .sidebar {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) var(--divider) var(--properties-height);
+            min-height: 0;
             background: var(--order-flow-recessed);
             border-right: 1px solid var(--order-flow-panel-border);
+         }
+         #properties-panel {
+            border-top: 1px solid var(--order-flow-panel-border);
+         }
+         /*
+            The form's own DOM is `PropertiesForm`'s, shared verbatim with the
+            Theia widget and the VS Code webview — hence class selectors here
+            rather than element ones, and hence the page painting it from its own
+            colour roles instead of the host variables that sheet cannot know.
+         */
+         /* Indented to the panel HEADERS' edge rather than the list rows', which
+            sit 2px further right behind their selection bar: this form's own
+            header is the line directly above it. */
+         #properties-body {
+            padding: 0.5rem 0.6rem;
+         }
+         /*
+            A field holding something the server has not been told about. Marked
+            on the LABEL rather than on the input: the input carries a focus
+            outline, and a second edge on the same element reads as a rendering
+            fault at exactly the moment the field is being edited.
+         */
+         #properties-body .field[data-pending] label::after {
+            content: ' *';
+            color: var(--order-flow-warning);
+         }
+         #properties-body .field-hint {
+            margin-top: 0.15rem;
+            color: var(--order-flow-muted-foreground);
+            font-size: 0.65rem;
+         }
+         #properties-body h1 {
+            margin: 0 0 0.6rem;
+            font-size: 0.82rem;
+            font-weight: 600;
+         }
+         #properties-body .field {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 0.5rem;
+         }
+         #properties-body .field label {
+            margin-bottom: 0.15rem;
+            color: var(--order-flow-muted-foreground);
+         }
+         #properties-body .field input {
+            padding: 0.15rem 0.35rem;
+            border: 1px solid var(--order-flow-panel-border);
+            background: var(--order-flow-surface);
+            color: var(--order-flow-foreground);
+            font: inherit;
+         }
+         #properties-body .field input:focus {
+            outline: 1px solid var(--order-flow-focus-border);
+         }
+         #properties-body .field input:disabled {
+            opacity: 0.5;
+         }
+         #properties-body .status {
+            margin: 0.5rem 0;
+            min-height: 1em;
+            color: var(--order-flow-muted-foreground);
+         }
+         #properties-body .status[data-kind='merged'] {
+            color: var(--order-flow-focus-border);
+         }
+         #properties-body .status[data-kind='conflict'] {
+            color: var(--order-flow-warning);
+         }
+         #properties-body .status[data-kind='error'] {
+            color: var(--order-flow-invalid);
+         }
+         #properties-body .diagnostics {
+            list-style: none;
+            margin: 0.5rem 0 0;
+            padding: 0;
+         }
+         #properties-body .diagnostics li {
+            margin-bottom: 0.2rem;
+            color: var(--order-flow-invalid);
          }
          .badge {
             font-family: ui-monospace, monospace;
@@ -763,6 +859,18 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            color: var(--order-flow-foreground);
+         }
+         /*
+            A document whose buffer has moved since it was last saved. The dot
+            every editor uses, and DELIBERATELY not the `*` the properties panel
+            puts on a field: that one says the server has not been told, this one
+            says storage has not been told, and typing here has already reached
+            the server. One mark for both would blur the two ends of the pipeline
+            this page exists to show apart.
+         */
+         .pane-head .pane-title.is-dirty::after {
+            content: ' ●';
             color: var(--order-flow-foreground);
          }
          .pane-head .hint {
@@ -1107,15 +1215,53 @@
             the problems list in the dock navigable rather than a report about
             files the page gives no way to see.
          -->
-         <section class="panel sidebar" id="document-panel">
-            <div class="panel-head">
-               <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
-               <h2 data-nls="order-flow/page/workspace">Workspace</h2>
-               <span class="spacer"></span>
-               <span class="badge" id="document-list-count" title="documents" data-nls-title="order-flow/page/documents">0</span>
-            </div>
-            <div class="panel-body" id="document-list"></div>
-         </section>
+         <!--
+            The navigation column: what to open, above the properties of what is
+            open. Both are about a DOCUMENT rather than about the canvas, which
+            is why they share a column and why the properties panel is not under
+            the diagram it most often describes.
+         -->
+         <div class="sidebar" id="sidebar-column">
+            <!--
+               Every seeded document, with its diagnostic count. This is what
+               makes the problems list in the dock navigable rather than a report
+               about files the page gives no way to see.
+            -->
+            <section class="panel" id="document-panel">
+               <div class="panel-head">
+                  <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
+                  <h2 data-nls="order-flow/page/workspace">Workspace</h2>
+                  <span class="spacer"></span>
+                  <span class="badge" id="document-list-count" title="documents" data-nls-title="order-flow/page/documents">0</span>
+               </div>
+               <div class="panel-body" id="document-list"></div>
+            </section>
+
+            <div
+               class="splitter"
+               data-splitter="--properties-height"
+               data-measure="#properties-panel"
+               data-axis="y"
+               data-invert
+               data-min="80"
+               data-max="600"
+            ></div>
+
+            <!--
+               The page's SECOND data-head participant, on its own session over
+               the one connection. It follows editor focus rather than the list
+               above it: a `.domain` root carries no editable string property at
+               all, so a panel bound to the selection would open empty on this
+               workspace and stay that way.
+            -->
+            <section class="panel" id="properties-panel">
+               <div class="panel-head">
+                  <i class="codicon codicon-settings" aria-hidden="true"></i>
+                  <h2 data-nls="order-flow/page/properties">Properties</h2>
+               </div>
+               <div class="panel-body" id="properties-body"></div>
+            </section>
+         </div>
 
          <!--
             This one DOES carry an absolute ceiling, and the difference is the
@@ -1127,7 +1273,7 @@
          <div
             class="splitter"
             data-splitter="--sidebar-width"
-            data-measure="#document-panel"
+            data-measure="#sidebar-column"
             data-axis="x"
             data-min="180"
             data-max="600"

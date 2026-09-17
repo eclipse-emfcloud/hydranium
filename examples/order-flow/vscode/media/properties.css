@@ -48,6 +48,23 @@ h1 {
    opacity: 0.85;
 }
 
+/*
+ * A field holding something the server has not been told about. Marked on the
+ * LABEL rather than on the input: the input carries a focus outline, and a
+ * second edge on the same element reads as a rendering fault at exactly the
+ * moment the field is being edited.
+ */
+.field[data-pending] label::after {
+   content: ' *';
+   color: var(--vscode-editorWarning-foreground);
+}
+
+.field-hint {
+   margin-top: 0.2rem;
+   font-size: 0.85em;
+   opacity: 0.75;
+}
+
 .field input {
    background: var(--vscode-input-background);
    color: var(--vscode-input-foreground);

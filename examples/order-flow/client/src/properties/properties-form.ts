@@ -47,6 +47,16 @@ const OUTCOME_MESSAGES: Record<SetFieldOutcome['status'], string> = {
    unavailable: 'Not saved — the document could not be re-read to resolve a conflict.'
 };
 
+/**
+ * Outcomes after which the server holds the value that was written.
+ *
+ * `conflict` and `unavailable` are absent deliberately: the write was dropped,
+ * so the box still shows something the server does not have and the field stays
+ * marked. `merged` belongs here — a merge keeps both intents, so this field's
+ * value did land.
+ */
+const SETTLED_ON_THE_WRITTEN_VALUE = new Set<SetFieldOutcome['status']>(['applied', 'unchanged', 'merged']);
+
 /** Which outcomes colour the status line, and how. */
 const OUTCOME_KINDS: Partial<Record<SetFieldOutcome['status'], string>> = {
    merged: 'merged',
@@ -61,6 +71,17 @@ export class PropertiesForm {
    protected readonly diagnosticsHost: HTMLUListElement;
    /** The inputs currently on screen, by field name. */
    protected inputs = new Map<string, HTMLInputElement>();
+   /**
+    * Per field, the value this form last WROTE into its input.
+    *
+    * Not the model's current value, and the difference is what makes the
+    * pending marker mean one thing. {@link setFields} deliberately never writes
+    * into the input the user is typing in, so a foreign edit to that field
+    * moves the model and leaves this alone — and the field is correctly NOT
+    * marked, because the reader has changed nothing. Comparing against the model
+    * instead would mark a field the reader never touched.
+    */
+   protected rendered = new Map<string, string>();
    /** Whether {@link rebuild} has ever run — see {@link sameNames}. */
    protected built = false;
    /** Whether a document load is in flight — see {@link setLoading}. */
@@ -157,7 +178,36 @@ export class PropertiesForm {
          const input = this.inputs.get(field.name);
          if (input && document.activeElement !== input) {
             input.value = field.value;
+            this.rendered.set(field.name, field.value);
+            this.markPending(field.name);
          }
+      }
+   }
+
+   /**
+    * Mark `name` when its input no longer holds what was written into it.
+    *
+    * The marker locates the field; the note beside it says what to do about it,
+    * which is why the marker itself needs no words and so no catalogue entry in
+    * any host. The note is what an input points `aria-describedby` at, generated
+    * marker content being announced inconsistently and a bare asterisk saying
+    * nothing useful when it is.
+    */
+   protected markPending(name: string): void {
+      const input = this.inputs.get(name);
+      const wrapper = input?.parentElement;
+      if (!input || !wrapper) {
+         return;
+      }
+      const pending = input.value !== this.rendered.get(name);
+      if (pending) {
+         wrapper.setAttribute('data-pending', '');
+      } else {
+         wrapper.removeAttribute('data-pending');
+      }
+      const hint = wrapper.querySelector<HTMLElement>('.field-hint');
+      if (hint) {
+         hint.hidden = !pending;
       }
    }
 
@@ -222,6 +272,7 @@ export class PropertiesForm {
    protected rebuild(fields: readonly PropertyField[]): void {
       this.built = true;
       this.inputs = new Map();
+      this.rendered = new Map();
       this.fieldsHost.replaceChildren(
          ...fields.map(field => {
             const wrapper = this.createElement('div');
@@ -233,6 +284,15 @@ export class PropertiesForm {
             input.id = `field-${field.name}`;
             input.type = 'text';
             input.value = field.value;
+            const hint = this.createElement('div');
+            hint.id = `field-${field.name}-hint`;
+            hint.className = 'field-hint';
+            hint.textContent = 'Press Enter to apply';
+            // Hidden by the ATTRIBUTE rather than by a stylesheet rule, so a
+            // host that adds no CSS for this gets the behaviour rather than a
+            // note that never goes away.
+            hint.hidden = true;
+            input.setAttribute('aria-describedby', hint.id);
             // `change`, not `input`: a field edit is a read-modify-write of the
             // WHOLE transfer root (`TransferUpdateArgs.model` IS the root — there
             // is no path-scoped variant), so writing per keystroke would send one
@@ -240,8 +300,13 @@ export class PropertiesForm {
             // `change` fires on blur and on Enter, which is the granularity the
             // wire shape actually wants.
             input.addEventListener('change', () => void this.write(field.name, input.value));
-            wrapper.append(label, input);
+            // `input` DOES fire per keystroke, and may: it moves no data, only
+            // the marker that says this field is holding something the server
+            // has not been told about.
+            input.addEventListener('input', () => this.markPending(field.name));
+            wrapper.append(label, input, hint);
             this.inputs.set(field.name, input);
+            this.rendered.set(field.name, field.value);
             return wrapper;
          })
       );
@@ -256,6 +321,15 @@ export class PropertiesForm {
       try {
          const outcome = await this.handlers.setField(name, value);
          this.report(OUTCOME_MESSAGES[outcome.status], OUTCOME_KINDS[outcome.status]);
+         if (SETTLED_ON_THE_WRITTEN_VALUE.has(outcome.status)) {
+            // The server now holds what was typed, so it is no longer pending —
+            // and this is the only place that can say so when the write came
+            // from Enter: `setFields` refuses to touch a focused input, and
+            // Enter does not blur, so the redraw that normally moves the
+            // baseline never reaches this field.
+            this.rendered.set(name, value);
+            this.markPending(name);
+         }
       } catch (error: unknown) {
          this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, detail: describeError(error) }));
          this.report(describeError(error), 'error');

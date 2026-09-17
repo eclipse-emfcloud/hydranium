@@ -9,6 +9,7 @@
   "order-flow/page/scheme-dark": "Dunkel",
   "order-flow/page/scheme-hint": "Hell oder dunkel",
   "order-flow/page/workspace": "Arbeitsbereich",
+  "order-flow/page/properties": "Eigenschaften",
   "order-flow/page/documents": "Dokumente",
   "order-flow/page/selected": "ausgewählt",
   "order-flow/page/diagram-hint": "Knoten ziehen – der Layout-Editor folgt",
