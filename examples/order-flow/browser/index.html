@@ -767,16 +767,16 @@
             flex: 0 0 auto;
          }
          /*
-            TWO markers, because the list has two things to say and one of them is
-            not a selection.
+            Only ONE of the row markers is a selection, and the rest are marked
+            so as not to read like one.
 
             `is-selected` is the last click: it drives the lookup editor, so it
             takes the accent bar and the weight — the affordances a reader reads as
             "this row is why that pane shows what it shows".
 
             `is-pinned` is the pair beside the diagram, which is on screen whatever
-            the reader clicks. Marking it the same way made three of seven rows
-            look selected and made clicking one of THEM look like it did nothing,
+            the reader clicks. Marking it the same way makes several rows at once
+            look selected and makes clicking one of THEM look like it did nothing,
             so it gets a pin at the trailing edge and no bar at all.
          */
          .document-row.is-selected {
@@ -789,6 +789,17 @@
          .document-row.is-pinned > .codicon-pinned {
             color: var(--order-flow-task-accent);
             font-size: 0.8rem;
+         }
+         /*
+            The same dot the editor titles carry, so one mark means one thing
+            wherever a reader meets it. In the FOREGROUND colour rather than the
+            pin's accent: an unsaved buffer is a state of the document, not a
+            category of it, and a colour of its own would be one more thing a
+            reader has to have learnt before the list means anything.
+         */
+         .document-row.is-dirty > .codicon-circle-filled {
+            color: var(--order-flow-foreground);
+            font-size: 0.55rem;
          }
          .problem-group-head {
             display: flex;
@@ -1308,7 +1319,7 @@
             <section class="pane" id="diagram-pane">
                <div class="pane-head">
                   <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i>
-                  <span class="pane-title">orders/fulfillment.process</span>
+                  <span class="pane-title" id="diagram-title">orders/fulfillment.process</span>
                   <span class="hint" data-nls="order-flow/page/diagram-hint">drag a node; the layout editor follows</span>
                </div>
                <div id="order-flow-process-diagram"></div>

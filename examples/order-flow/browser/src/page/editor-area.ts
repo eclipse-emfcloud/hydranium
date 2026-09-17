@@ -67,6 +67,15 @@ export interface EditorAreaOptions {
     * consumer that must not re-act guards on the value.
     */
    readonly onFocusChanged?: (path: string) => void;
+   /**
+    * Called with the URIs whose buffer has moved since they were last saved,
+    * whenever that set is recomputed.
+    *
+    * Pushed rather than polled, and the editors are the only ones who can push
+    * it: a document goes unsaved on a content change and clean on a save, and
+    * neither is an event a consumer can subscribe to for itself.
+    */
+   readonly onDirtyChanged?: (dirty: ReadonlySet<string>) => void;
 }
 
 export class EditorArea {
@@ -85,6 +94,27 @@ export class EditorArea {
 
    /** URIs already scrolled to their declaration, which is a one-time reveal. */
    private readonly revealed = new Set<string>();
+
+   /**
+    * URIs already subscribed for the dirty marks. A model is Monaco's per-URI
+    * singleton and outlives the pane showing it, so a second subscription when
+    * it returns to the selection editor would recompute the marks once per
+    * visit it has ever had.
+    */
+   private readonly watched = new Set<string>();
+
+   /**
+    * The diagram's title, which is marked from the FIXED pair rather than from
+    * a document of its own.
+    *
+    * The canvas has no buffer, so a mark driven by what it draws is the only
+    * one it can carry — and it draws both of the pinned documents, the
+    * semantics and the coordinates a drag rewrites. Marking it from the one it
+    * is labelled with would leave a drag showing an unsaved layout editor under
+    * a diagram reporting itself saved, which is the pair this page exists to
+    * show moving together.
+    */
+   private readonly diagramTitle = requireElement('diagram-title');
 
    constructor(private readonly options: EditorAreaOptions) {
       this.fixed = [
@@ -163,7 +193,8 @@ export class EditorArea {
    }
 
    /**
-    * Mark each title whose buffer has moved since that document was last saved.
+    * Mark each title whose buffer has moved since that document was last saved,
+    * and announce the same set to whoever else shows it.
     *
     * Public because a SAVE clears the state and the save does not happen here:
     * `markSaved` is recorded on the adapter by whoever performed it, and nothing
@@ -171,13 +202,22 @@ export class EditorArea {
     *
     * Read from the adapter rather than tracked here, so one definition of dirty
     * serves both the marks and what a save actually writes — a second definition
-    * would eventually disagree with the button.
+    * would eventually disagree with the button. The announcement carries that
+    * same set for the same reason, rather than letting a second reader compute
+    * one of its own.
     */
    refreshDirtyMarks(): void {
       const dirty = new Set(this.options.adapter.dirtyDocuments().map(document => document.uri));
       for (const pane of [...this.fixed, this.selected]) {
          pane.title.classList.toggle('is-dirty', dirty.has(this.uriOf(pane.path)));
       }
+      const drawn = this.fixed.filter(pane => dirty.has(this.uriOf(pane.path)));
+      this.diagramTitle.classList.toggle('is-dirty', drawn.length > 0);
+      // Which document, not merely that one moved: the diagram is labelled with
+      // the semantics alone, so an unmarked tooltip would leave a reader whose
+      // drag rewrote the coordinates looking for the change in the wrong file.
+      this.diagramTitle.title = drawn.map(pane => `${this.uriOf(pane.path)} — unsaved`).join('\n');
+      this.options.onDirtyChanged?.(dirty);
    }
 
    private mount(containerId: string, titleId: string, path: string): Pane {
@@ -194,10 +234,6 @@ export class EditorArea {
       // for the find box and any other overlay Monaco mounts inside the editor,
       // which are not a change of document and would republish on every search.
       pane.editor.onDidFocusEditorText(() => this.options.onFocusChanged?.(pane.path));
-      // Every content change, not only a keystroke: a diagram drag reaches this
-      // buffer through `workspace/applyEdit`, and that edit is as unsaved as a
-      // typed one.
-      pane.editor.onDidChangeModelContent(() => this.refreshDirtyMarks());
       this.setTitle(pane, path);
       this.revealOnce(pane, path);
       return pane;
@@ -257,7 +293,27 @@ export class EditorArea {
       if (text === undefined) {
          throw new Error(`The worker's filesystem has no ${path}`);
       }
-      return this.options.adapter.openDocument(this.uriOf(path), text);
+      const uri = this.uriOf(path);
+      const model = this.options.adapter.openDocument(uri, text);
+      if (!this.watched.has(uri)) {
+         this.watched.add(uri);
+         // Every content change, not only a keystroke: a diagram drag reaches
+         // this buffer through `workspace/applyEdit`, and that edit is as
+         // unsaved as a typed one.
+         //
+         // **On the MODEL, not on the editor, and an undo is what separates
+         // them.** Monaco delivers a content change twice from one edit: first
+         // straight into the attached view models, which is what an editor's
+         // `onDidChangeModelContent` re-emits, and then through the model's own
+         // deferred emitter. Undo restores the alternative version id BETWEEN
+         // those two, so a listener on the editor reads the monotonic id, marks
+         // the document unsaved, and is never called again to correct it — the
+         // mark then outlives the edit it was reporting, and outlives it in the
+         // one direction that matters, since the dirty set is also what a save
+         // writes.
+         model.onDidChangeContent(() => this.refreshDirtyMarks());
+      }
+      return model;
    }
 
    private uriOf(path: string): string {

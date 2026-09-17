@@ -28,6 +28,12 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 /** Must match `WORKSPACE_ROOT_URI` / the seeded workspace in `src/head-channels.ts`. */
 const WORKSPACE_DOCUMENT_COUNT = 8;
 
+/**
+ * Restated rather than imported, the page's modules needing `lib.dom` that this
+ * Node-hosted tier deliberately drops.
+ */
+const WORKSPACE_ROOT_URI = 'file:///order-flow';
+
 /** The one deliberate error in `examples/order-flow/workspace`. */
 const WORKSPACE_DIAGNOSTIC_COUNT = 1;
 
@@ -1487,6 +1493,98 @@ test.describe('order-flow in a web worker', () => {
       await expect(dirtyTitle).toHaveCount(0);
    });
 
+   test('an undone edit stops being unsaved, and stops being saved', async ({ page }) => {
+      await page.goto('/');
+      const title = page.locator('#selected-editor-title');
+      await expect(page.locator('#selected-editor .view-line').first()).toBeVisible();
+      await expect(title).not.toHaveClass(/is-dirty/);
+
+      // ONE character and ONE undo, because Monaco groups a typing run into a
+      // single stack element: a longer string would need as many undos as the
+      // grouping happened to produce, and a mark left standing would then be
+      // indistinguishable from an edit that was never fully reverted.
+      await page.locator('#selected-editor .view-line').first().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('X');
+      await expect(title).toHaveClass(/is-dirty/);
+
+      await page.keyboard.press('Control+Z');
+      await expect(title).not.toHaveClass(/is-dirty/);
+      await expect(page.locator('.document-row.is-dirty')).toHaveCount(0);
+
+      // The mark and the save set are the same set, so the save is what makes
+      // this more than a repaint assertion: a page that cleared the title and
+      // still offered the document would write a file it did not change, which
+      // pins it in storage and stops a later edit to the committed fixture from
+      // ever reaching a reader who once pressed save.
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', 'nothing to save');
+   });
+
+   test('the document list marks the same unsaved documents the titles do', async ({ page }) => {
+      await page.goto('/');
+      const title = page.locator('#selected-editor-title');
+      const markedRow = page.locator('.document-row.is-dirty');
+      await expect(page.locator('#selected-editor .view-line').first()).toBeVisible();
+      await expect(markedRow).toHaveCount(0);
+
+      await page.locator('#selected-editor .view-line').first().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('X');
+
+      // The row is matched against the TITLE's text rather than against a name
+      // written here, because the claim is that the two views agree — a test
+      // that named the document itself would pass with each of them reading a
+      // set of its own, which is the state this marking exists to rule out.
+      await expect(title).toHaveClass(/is-dirty/);
+      await expect(markedRow).toHaveCount(1);
+      await expect(markedRow.locator('.row-label')).toHaveText(await title.innerText());
+      // The glyph as well as the class, because the class is what the test can
+      // see and the glyph is what the reader can: a row that carried the state
+      // and rendered nothing would pass every assertion above it.
+      await expect(markedRow.locator('.codicon-circle-filled')).toBeVisible();
+
+      // A save clears both, and the count is what says it cleared them for the
+      // right reason: one document was written, so one mark had to go.
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      await expect(markedRow).toHaveCount(0);
+      await expect(page.locator('.pane-title.is-dirty')).toHaveCount(0);
+   });
+
+   test('the diagram is marked unsaved by EITHER document it draws', async ({ page }) => {
+      await page.goto('/');
+      const diagram = page.locator('#diagram-title');
+      const panel = page.locator('#properties-body');
+      await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
+      await expect(diagram).not.toHaveClass(/is-dirty/);
+
+      // The COORDINATES first, which is the half a title labelled with the
+      // semantics would miss: a drag rewrites `.layout` and leaves `.process`
+      // untouched, so a diagram reading only its own label stays clean under an
+      // editor that has gone unsaved.
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      await expectLayoutEntry(page, 'Cancel');
+      await expect(diagram).toHaveClass(/is-dirty/);
+      await expect(diagram).toHaveAttribute('title', `${WORKSPACE_ROOT_URI}/orders/fulfillment.layout — unsaved`);
+      await expect(page.locator('#process-editor-title')).not.toHaveClass(/is-dirty/);
+
+      // And the SEMANTICS, through the other direction that reaches a pinned
+      // buffer. Both are now unsaved, so the tooltip has to name both — one
+      // line each, since a reader clearing them saves two files.
+      await panel.locator('#field-name').fill('Express');
+      await panel.locator('#field-name').press('Enter');
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+      await expect(diagram).toHaveAttribute(
+         'title',
+         `${WORKSPACE_ROOT_URI}/orders/fulfillment.process — unsaved\n${WORKSPACE_ROOT_URI}/orders/fulfillment.layout — unsaved`
+      );
+
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 2 document\(s\)/);
+      await expect(diagram).not.toHaveClass(/is-dirty/);
+   });
+
    test('Ctrl+S saves the focused document, and everything when focus is elsewhere', async ({ page }) => {
       await page.goto('/');
       const panel = page.locator('#properties-body');
@@ -1499,7 +1597,12 @@ test.describe('order-flow in a web worker', () => {
       await page.locator('#selected-editor .view-line').first().click();
       await page.keyboard.press('Control+End');
       await page.keyboard.type('\n// touched');
-      await expect(page.locator('.pane-title.is-dirty')).toHaveCount(2);
+      // Named rather than counted: the diagram's title is marked from the
+      // documents it draws and carries no buffer of its own, so a count over
+      // every `.pane-title` no longer answers "how many documents are unsaved".
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+      await expect(page.locator('#selected-editor-title')).toHaveClass(/is-dirty/);
+      await expect(page.locator('#layout-editor-title')).not.toHaveClass(/is-dirty/);
 
       // Focus is in the selection editor, so this saves THAT document alone —
       // the count in the report is what distinguishes scoped from save-all.

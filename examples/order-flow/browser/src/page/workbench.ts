@@ -773,7 +773,11 @@ export async function main(locale: string | undefined): Promise<void> {
          sidebar.panel?.setVisible(visible);
          sidebar.panel?.render(diagnosticsByUri);
       },
-      onFocusChanged: path => properties.panel?.showDocument(`${WORKSPACE_ROOT_URI}/${path}`)
+      onFocusChanged: path => properties.panel?.showDocument(`${WORKSPACE_ROOT_URI}/${path}`),
+      onDirtyChanged: dirty => {
+         sidebar.panel?.setDirty(dirty);
+         sidebar.panel?.render(diagnosticsByUri);
+      }
    });
 
    sidebar.panel = new WorkspacePanel(Object.keys(ready.files), WORKSPACE_ROOT_URI, {
