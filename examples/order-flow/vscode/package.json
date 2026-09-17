@@ -74,7 +74,7 @@
             "filenamePattern": "*.process"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "grammars": [
@@ -153,5 +153,5 @@
   "engines": {
     "vscode": "^1.101.0"
   },
-  "//customEditors": "Note for contributes.customEditors, kept OUT of `contributes` because VS Code schema-validates that object and reports an unknown key there as an invalid contribution point. `viewType` must equal ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE in src/process-diagram-editor.ts, and `filenamePattern` must cover PROCESS_DIAGRAM_FILE_EXTENSIONS from the client's diagram types. VS Code reads `contributes` statically, so neither can be imported from the source and a mismatch is silent: Open With offers no diagram editor, and registerCustomEditorProvider binds a view type nothing opens. `priority: option` (not `default`) is deliberate — a `.process` file is primarily TEXT, and stealing the double-click from the text editor is not this example's call to make; the diagram is reached with Open With / Reopen Editor With."
+  "//customEditors": "Note for contributes.customEditors, kept OUT of `contributes` because VS Code schema-validates that object and reports an unknown key there as an invalid contribution point. `viewType` must equal ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE in src/process-diagram-editor.ts, and `filenamePattern` must cover PROCESS_DIAGRAM_FILE_EXTENSIONS from the client's diagram types. VS Code reads `contributes` statically, so neither can be imported from the source and a mismatch is silent: Open With offers no diagram editor, and registerCustomEditorProvider binds a view type nothing opens. `priority: default` opens a `.process` as a diagram on double-click, with the text editor reached through Open With / Reopen Editor With — the same way round as the Theia app, where the GLSP diagram claims the file above any priority a manifest can declare."
 }

@@ -21,9 +21,10 @@ hosts cannot drift on `documentSelector` or the file watcher.
 
 - One command, `order-flow.properties.show` — _Order Flow: Show Properties_.
 - One custom editor, `orderFlow.processDiagram`, selecting `*.process` at
-  `priority: "option"`. **Deliberately not `default`**: a `.process` file is
-  primarily text, so the diagram is reached through _Open With_ / _Reopen Editor
-  With_ rather than by stealing the double-click.
+  `priority: "default"` — double-clicking a `.process` opens the diagram, and
+  the text editor is reached through _Open With_ / _Reopen Editor With_. That
+  is the same way round as the Theia app, so the file opens as the same thing
+  in both hosts rather than as whichever editor the host happens to favour.
 - The three languages and their TextMate grammars, and two settings
   (`order-flow.log.level`, `order-flow.trace.server`).
 
