@@ -424,6 +424,24 @@ describe('AstDocumentManager open / close lifecycle', () => {
       expect(manager.isOpen(URI_B)).toBe(true);
    });
 
+   it('open() on an already-open URI registers the attaching client as a holder', async () => {
+      // `manager.isOpen` is any-client, so it cannot witness this: it reads
+      // `true` whether or not `c2` was recorded. The per-client hold is what
+      // the last-close revert counts down to, so an unrecorded client has its
+      // document torn down when the first holder closes.
+      const { manager, textDocuments } = makeManagerHarness();
+      await manager.open({ uri: URI_B, clientId: 'c1', languageId: 'plaintext', text: 'seed\n' });
+      await manager.open({ uri: URI_B, clientId: 'c2', languageId: 'plaintext' });
+
+      expect(textDocuments.isOpenInClient(URI_B, 'c1')).toBe(true);
+      expect(textDocuments.isOpenInClient(URI_B, 'c2')).toBe(true);
+
+      // The consequence the registration exists for.
+      await manager.close({ uri: URI_B, clientId: 'c1' });
+      expect(textDocuments.isOpenInClient(URI_B, 'c2')).toBe(true);
+      expect(textDocuments.isOpenInAnyClient(URI_B)).toBe(true);
+   });
+
    it('open() on a fresh URI fires exactly one rebuild — no re-entrant double-build', async () => {
       // Regression guard for the re-entrant double-build. The constructor wires
       // `textDocuments.onDidOpen -> this.open`, so a first open runs:
