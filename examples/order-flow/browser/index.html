@@ -375,7 +375,11 @@
          #reports {
             display: flex;
             align-items: baseline;
-            gap: 0 0.9rem;
+            /* Wraps rather than clipping. Six labels fit one line at any usable
+               width, but a narrow window must lose none of them — the strip is
+               the only place a category is named. */
+            flex-wrap: wrap;
+            gap: 0.15rem 1.1rem;
             margin: 0;
             padding: 0.25rem 0.75rem;
             border-top: 1px solid var(--order-flow-panel-border);
@@ -383,19 +387,24 @@
             font-size: 0.74rem;
             overflow: hidden;
          }
+         /*
+            No `min-width: 0` here, deliberately. That would override the
+            automatic min-content floor and let an entry shrink below its own
+            LABEL, which the strip then clips — the label is what a reader needs
+            to know a head reported at all. The floor is on the value instead, so
+            a long value gives up its width and the legend survives.
+         */
          #reports > div {
             display: flex;
             align-items: baseline;
             gap: 0.35rem;
-            min-width: 0;
          }
-         /* The three heads first, so they get the room a long value needs; the
-            two derived reports shrink before they do. */
-         #reports > div.head {
-            flex: 1 1 auto;
-         }
-         #reports > div.derived {
-            flex: 0 1 auto;
+         /* Nothing grows. The strip carries labels, which have a natural width
+            and no use for spare room — letting the first three absorb it spaced
+            them apart and pushed the rest against the right edge, which reads as
+            two groups where there is one legend. */
+         #reports > div {
+            flex: 0 0 auto;
          }
          #reports dt {
             color: var(--order-flow-muted-foreground);
@@ -406,14 +415,99 @@
             font-size: 0.85rem;
             vertical-align: -2px;
          }
-         #reports dd {
+         /* A category that has not reported yet, so a reader sees the heads come
+            up without opening anything. */
+         #reports .report-toggle[data-pending] {
+            opacity: 0.45;
+         }
+         /*
+            A category whose value does not fit on one line reveals it here
+            instead. The detail OVERLAYS the workbench rather than taking a grid
+            row: a row would resize the editors and the canvas on every open, and
+            both cache their bounds — `wireSplitters` exists to tell them when
+            that happens, and nothing else should have to.
+
+            Anchored on this wrapper rather than on `#reports`, which clips:
+            `overflow: hidden` there is what makes the values ellipsise, and it
+            would clip an absolutely positioned child to nothing.
+         */
+         .status-area {
+            position: relative;
+            min-width: 0;
+         }
+         #report-detail {
+            position: absolute;
+            bottom: 100%;
+            /* 90% and centred rather than edge to edge: a region spanning the
+               whole window reads as a second dock, where an inset one reads as
+               something opened over the page and dismissible. */
+            left: 5%;
+            right: 5%;
+            display: flex;
+            flex-direction: column;
+            max-height: 60vh;
+            /* The SURFACE colour, not the panel one: this floats over the dock,
+               which is already `--order-flow-recessed`, and a panel-coloured box
+               on a recessed panel has too little contrast to read as lifted. */
+            background: var(--order-flow-surface);
+            border: 1px solid var(--order-flow-panel-border);
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+            box-shadow: 0 -3px 16px rgb(0 0 0 / 35%);
+         }
+         #report-detail[hidden] {
+            display: none;
+         }
+         .report-detail-head {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 0.85rem 0.4rem;
+            border-bottom: 1px solid var(--order-flow-panel-border);
+            color: var(--order-flow-muted-foreground);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+         }
+         #report-detail-body {
             margin: 0;
+            padding: 0.6rem 0.85rem 0.7rem;
+            overflow: auto;
             font-family: ui-monospace, monospace;
             font-size: 0.72rem;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            line-height: 1.45;
+            /* Wraps rather than `pre`: most categories are a sentence, and the
+               one that is a table is emitted pre-aligned and short enough not to
+               need the horizontal scroll that `pre` would add for everyone. */
+            white-space: pre-wrap;
+         }
+         /*
+            A category label, which is also the control that opens its detail.
+            Carries no button chrome — the strip is a legend, and six framed
+            buttons along the bottom of the window would read as a toolbar.
+
+            `display: inline`, NOT a flex or inline-block box: the icon beside
+            each label is positioned by `vertical-align`, which a flex container
+            ignores — a button laid out any other way sits its label a pixel or
+            two off the value beside it, on six rows that are meant to read as
+            one line.
+         */
+         .report-toggle {
+            display: inline;
+            padding: 0;
+            border: none;
+            background: none;
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+         }
+         .report-toggle:hover {
+            color: var(--order-flow-foreground);
+            text-decoration: underline dotted;
+         }
+         .report-toggle:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 2px;
          }
 
          /* ---- workbench ------------------------------------------------ */
@@ -1175,32 +1269,95 @@
          </section>
       </section>
 
-      <!--
-         The head reports, as the status bar. They are what tells a reader the
-         page works, and the e2e asserts on all of them.
-      -->
-      <dl id="reports">
-         <div class="head">
-            <dt><i class="codicon codicon-symbol-namespace"></i> LSP</dt>
-            <dd id="status">loading…</dd>
+      <div class="status-area">
+         <!--
+            Where a category that has more to say than fits puts it. One at a
+            time, and the category that opened it closes it.
+         -->
+         <div id="report-detail" hidden>
+            <div class="report-detail-head">
+               <span id="report-detail-title"></span>
+            </div>
+            <pre id="report-detail-body"></pre>
          </div>
-         <div class="head">
-            <dt><i class="codicon codicon-symbol-structure"></i> Data</dt>
-            <dd id="data-head">…</dd>
-         </div>
-         <div class="head">
-            <dt><i class="codicon codicon-type-hierarchy"></i> GLSP</dt>
-            <dd id="glsp-head">…</dd>
-         </div>
-         <div class="derived">
-            <dt><i class="codicon codicon-symbol-ruler"></i> Layout</dt>
-            <dd id="layout-head">…</dd>
-         </div>
-         <div class="derived">
-            <dt><i class="codicon codicon-database"></i> Storage</dt>
-            <dd id="workspace">…</dd>
-         </div>
-      </dl>
+
+         <!--
+            The head reports, as the status bar. They are what tells a reader the
+            page works, and the e2e asserts on all of them.
+         -->
+         <!--
+            LABELS, not label-and-value pairs. Every value here is long — the
+            layout report names each positioned node, the storage one each
+            restored file — and six of them across the foot of the window either
+            wrap to a second row or lose whichever category is last to the
+            strip's own clipping. So the value moves into the region above and
+            the label becomes the control that opens it.
+
+            `data-report` names the category, and `report-detail.ts` wires all of
+            them from that attribute rather than from a list it would have to be
+            kept in step with. `data-pending` is dropped on the first report, so
+            a reader watches the heads answer without opening anything.
+         -->
+         <dl id="reports">
+            <div class="head">
+               <dt>
+                  <button type="button" class="report-toggle" data-report="status" data-pending>
+                     <i class="codicon codicon-symbol-namespace" aria-hidden="true"></i> LSP
+                  </button>
+               </dt>
+            </div>
+            <div class="head">
+               <dt>
+                  <button type="button" class="report-toggle" data-report="data-head" data-pending>
+                     <i class="codicon codicon-symbol-structure" aria-hidden="true"></i> Data
+                  </button>
+               </dt>
+            </div>
+            <div class="head">
+               <dt>
+                  <button type="button" class="report-toggle" data-report="glsp-head" data-pending>
+                     <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i> GLSP
+                  </button>
+               </dt>
+            </div>
+            <div class="derived">
+               <dt>
+                  <button type="button" class="report-toggle" data-report="layout-head" data-pending>
+                     <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i> Layout
+                  </button>
+               </dt>
+            </div>
+            <div class="derived">
+               <dt>
+                  <button type="button" class="report-toggle" data-report="workspace" data-pending>
+                     <i class="codicon codicon-database" aria-hidden="true"></i> Storage
+                  </button>
+               </dt>
+            </div>
+            <!--
+               The one category READ rather than published: a poll would put its
+               own calls into the window it reports on, so the click IS the read.
+
+               Carries no `data-pending`, unlike the five above. That marks a
+               category still waiting on its head, and this one is never waiting
+               — dimming it until the first click would report the one category
+               that is always ready as the only one that is not.
+            -->
+            <div class="derived">
+               <dt>
+                  <button
+                     type="button"
+                     class="report-toggle"
+                     data-report="latency"
+                     title="Read RPC latency from the data head"
+                     data-nls-title="order-flow/page/latency-hint"
+                  >
+                     <i class="codicon codicon-pulse" aria-hidden="true"></i> Latency
+                  </button>
+               </dt>
+            </div>
+         </dl>
+      </div>
       <script src="./out/order-flow-page.js"></script>
    </body>
 </html>

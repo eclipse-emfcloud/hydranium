@@ -29,7 +29,7 @@ export function isLatencyEnabled(): boolean {
 
 /**
  * A {@link LatencyCollector} when {@link DEFAULT_LATENCY_ENV} is set, otherwise
- * `undefined`. Heads pass the result straight to `instrumentLspConnection`, the
+ * `undefined`. Heads pass the result straight to `lspLatencyOptions`, the
  * `DataServer` `latency` option and the RPC binder; all three treat `undefined`
  * as "seam off", so this single factory is the one place a head decides whether
  * timing runs. `clock` is forwarded to the collector so tests stay deterministic.

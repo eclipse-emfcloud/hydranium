@@ -59,8 +59,9 @@ import type {
 // `createLspServerSharedModule` fails here instead of booting on Langium's
 // default handler. Browser-neutral, so the worker takes the same composition
 // check every other host does.
-import { startLanguageServer } from '@hydranium/core/lsp';
+import { lspLatencyOptions, startLanguageServer } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
+import { LatencyCollector } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { BrowserMessageReader, BrowserMessageWriter, createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
@@ -101,7 +102,7 @@ addEventListener('unhandledrejection', event => reportError('unhandled rejection
  * builds them around a stdio one — which is why this function, and not the
  * bootstrap handler, owns their creation.
  */
-function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem): OrderFlowSharedServices {
+function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latency: LatencyCollector): OrderFlowSharedServices {
    // `BrowserMessageReader` assigns `port.onmessage`, which starts a
    // `MessagePort` implicitly — so no `port.start()` here. Adding one is
    // harmless; omitting it would be fatal only if the reader had used
@@ -114,7 +115,12 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem): Order
    // between these two statements loses the `initialize` the page has already
    // sent — no error, no reply, a page that waits forever. Everything
    // asynchronous therefore happens before this function is called.
-   const connection = createConnection(ProposedFeatures.all, new BrowserMessageReader(port), new BrowserMessageWriter(port));
+   const connection = createConnection(
+      ProposedFeatures.all,
+      new BrowserMessageReader(port),
+      new BrowserMessageWriter(port),
+      lspLatencyOptions(latency)
+   );
    const { shared } = createOrderFlowServices(
       { connection, ...fileSystem },
       // The one option this host sets, for the reason in the module doc: no
@@ -137,9 +143,9 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem): Order
  * its constructor, and a connection that is already listening can deliver a
  * message before they exist.
  */
-function startDataHead(port: MessagePort, shared: OrderFlowSharedServices): void {
+function startDataHead(port: MessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
    const connection = createMessageConnection(new BrowserMessageReader(port), new BrowserMessageWriter(port));
-   new DataServer<OrderFlowTransferRoot>(connection, shared);
+   new DataServer<OrderFlowTransferRoot>(connection, shared, { latency });
    connection.listen();
 }
 
@@ -246,8 +252,15 @@ async function onBootstrap(message: BootstrapMessage): Promise<void> {
       seed: ORDER_FLOW_WORKSPACE_SEED,
       rootUri: WORKSPACE_ROOT_URI
    });
-   const shared = startLspHead(message.ports.lsp, fileSystem);
-   startDataHead(message.ports.data, shared);
+   // ONE collector for both heads: a second would split the report, `getLatency`
+   // serving only what the data head was given. Ring-buffer rather than the
+   // `keep-all` default, which is sized for a window that gets read and reset —
+   // a page is left open, so retention has to be bounded, and 200 keeps the
+   // nearest-rank p99 describing a tail rather than standing in for the maximum.
+   // No env gate, unlike the Node entry: a browser has none to read.
+   const latency = new LatencyCollector(undefined, { kind: 'ring-buffer', maxSamplesPerMethod: 200 });
+   const shared = startLspHead(message.ports.lsp, fileSystem, latency);
+   startDataHead(message.ports.data, shared, latency);
    startGlspHead(message.ports.glsp, shared);
    // After the heads, so a page never receives content for a composition that
    // failed to come up — it would open editors against a server that cannot

@@ -55,7 +55,16 @@ import {
    RegistrationRequest,
    UnregistrationRequest
 } from 'vscode-languageserver-protocol';
-import { DataConnection, DataEvents, type DataSession, type TransferDocument } from '@hydranium/protocol';
+import {
+   DataConnection,
+   DataEvents,
+   type DataServerDiagnosticsProtocol,
+   type DataServerProtocol,
+   type DataSession,
+   formatLatencyReport,
+   type LatencyReport,
+   type TransferDocument
+} from '@hydranium/protocol';
 import {
    type DomainModel,
    isLayoutModel,
@@ -71,13 +80,14 @@ import {
    WORKSPACE_ROOT_URI,
    type WorkspaceReadyMessage
 } from '../head-channels.js';
-import { requireButton, requireCheckbox, requireElement, requireSelect } from './dom.js';
+import { requireButton, requireCheckbox, requireSelect } from './dom.js';
 import { EditorArea } from './editor-area.js';
 import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
 import { LogPanel } from './log-panel.js';
 import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco-lsp-adapter.js';
 import { applyPageLocale, localeUrl, PAGE_LOCALES } from './page-nls.js';
 import { mountProcessDiagram } from './process-diagram.js';
+import { publishReport, ReportDetail } from './report-detail.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
 import { WorkspacePanel } from './workspace-panel.js';
 import { WorkerDataPort } from './worker-data-port.js';
@@ -193,15 +203,11 @@ function isWorkspaceDocument(uri: string): boolean {
 }
 
 function setWorkspaceReport(text: string): void {
-   const report = requireElement('workspace');
-   report.textContent = text;
-   // On the `title` too, because the strip truncates: the value here is the only
-   // account of where the content came from, and a restore names its files.
-   report.title = text;
+   publishReport('workspace', text);
 }
 
 function setStatus(text: string): void {
-   requireElement('status').textContent = text;
+   publishReport('status', text);
 }
 
 /**
@@ -354,9 +360,19 @@ function bootstrapWorker(): WorkerChannels {
    };
 }
 
+/**
+ * What this page asks of the data server: the document protocol plus the
+ * diagnostics one.
+ *
+ * Named rather than taken from `DataConnection`'s default, which covers the
+ * document methods alone — `getLatency` lives on the diagnostics protocol, and a
+ * connection left at the default types a call to it as an error.
+ */
+type OrderFlowDataServer = DataServerProtocol<OrderFlowTransferRoot> & DataServerDiagnosticsProtocol;
+
 /** The data head's client end: the page's session, and the events it reads. */
 interface DataHead {
-   readonly session: DataSession<OrderFlowTransferRoot>;
+   readonly session: DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
    readonly events: DataEvents<OrderFlowTransferRoot>;
 }
 
@@ -374,7 +390,7 @@ interface DataHead {
 function openDataHead(dataPort: MessagePort): DataHead {
    const port = new WorkerDataPort(dataPort);
    const events = new DataEvents<OrderFlowTransferRoot>();
-   const connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+   const connection = new DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>(port, events);
    return { session: connection.createSession('order-flow-browser-page'), events };
 }
 
@@ -389,7 +405,7 @@ function describeDataDocument(document: TransferDocument<OrderFlowTransferRoot>)
 }
 
 function setDataReport(document: TransferDocument<OrderFlowTransferRoot>): void {
-   requireElement('data-head').textContent = describeDataDocument(document);
+   publishReport('data-head', describeDataDocument(document));
 }
 
 /**
@@ -455,11 +471,7 @@ function describeLayout(root: LayoutModel): string {
 }
 
 function setLayoutReport(root: LayoutModel): void {
-   const report = requireElement('layout-head');
-   report.textContent = describeLayout(root);
-   // The strip truncates, and this value grows by an entry on every create — so
-   // the full text has to be reachable without resizing the window.
-   report.title = report.textContent;
+   publishReport('layout-head', describeLayout(root));
 }
 
 /**
@@ -528,6 +540,32 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter): Pro
    }
 }
 
+/** The strip's one line: how wide the window is, and how much answered in it. */
+function summariseLatency(report: LatencyReport): string {
+   if (report.methods.length === 0) {
+      return 'no calls timed yet';
+   }
+   return `${report.methods.length} method(s) over ${(report.windowMs / 1000).toFixed(1)}s`;
+}
+
+/**
+ * Let the Latency category read the data head when it is opened.
+ *
+ * The only category that ASKS rather than being published, which is why it needs
+ * a provider at all. The read happens on the opening click alone: `getLatency`
+ * is itself a timed call, so a refresh while the region is open — or on a timer
+ * — would grow the report by an entry that exists only because someone was
+ * reading it.
+ */
+function provideLatency(dataHead: DataHead, detail: ReportDetail): void {
+   detail.provide('latency', async () => {
+      const server = await dataHead.session.connected();
+      const report = await server.getLatency();
+      publishReport('latency', summariseLatency(report));
+      return formatLatencyReport(report);
+   });
+}
+
 /** Enable the save / reset controls, now that there is a head behind them. */
 function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, adapter: MonacoLspAdapter): void {
    const save = requireButton('save-workspace');
@@ -561,6 +599,10 @@ export async function main(locale: string | undefined): Promise<void> {
    applyPageLocale(locale);
    wireLocaleSwitch(locale);
    wireSchemeSwitch();
+   // Before anything publishes into the strip: the categories carry a placeholder
+   // until their head answers, and a label that does nothing until then reads as
+   // a dead control rather than as a value not yet in.
+   const reportDetail = new ReportDetail();
    const log = new LogPanel();
    setStatus('starting worker…');
    const channels = bootstrapWorker();
@@ -714,6 +756,7 @@ export async function main(locale: string | undefined): Promise<void> {
    // Enabled here, after the data head has answered once: the save goes through
    // it, so a control armed before that could only fail.
    wireWorkspaceControls(channels, dataHead, adapter);
+   provideLatency(dataHead, reportDetail);
 
    // Before the diagram, so the layout report is already live when the first
    // edit lands. Opening it after mounting would leave the window between the
@@ -726,9 +769,7 @@ export async function main(locale: string | undefined): Promise<void> {
    // other's timing. Its own try/catch for the same reason: a diagram that
    // cannot load must not take the diagnostics report down with it — the LSP
    // head's answer is the older claim and stands on its own.
-   const setGlspReport = (report: string): void => {
-      requireElement('glsp-head').textContent = report;
-   };
+   const setGlspReport = (report: string): void => publishReport('glsp-head', report);
    setGlspReport('loading…');
    try {
       // The callback keeps the line current as elements are created and deleted;
@@ -736,7 +777,7 @@ export async function main(locale: string | undefined): Promise<void> {
       // stale on the first palette gesture, beside a layout report that does not.
       setGlspReport(await mountProcessDiagram(channels.glspPort, GLSP_HEAD_DOCUMENT, setGlspReport));
    } catch (error: unknown) {
-      requireElement('glsp-head').textContent = `failed: ${error instanceof Error ? error.message : String(error)}`;
+      setGlspReport(`failed: ${error instanceof Error ? error.message : String(error)}`);
    }
 
    // The diagnostics report does NOT depend on the editors above. Langium
