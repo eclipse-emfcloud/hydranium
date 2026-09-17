@@ -45,7 +45,7 @@ import {
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { DataConnection, DataEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { DataConnectionWithEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
  * This webview's identity on the data head.
@@ -113,10 +113,9 @@ function main(): void {
    };
 
    const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), reportError);
-   const events = new DataEvents<OrderFlowTransferRoot>();
-   const connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
    const session = connection.createSession(PROPERTIES_WEBVIEW_CLIENT_ID);
-   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
+   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);
 
    const form = new PropertiesForm(root, {
       setField: (name, value) => model.setField(name, value),

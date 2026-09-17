@@ -6,10 +6,12 @@ Theia client primitives for the hydranium **data head** — the companion of
 
 The data head's frontend speaks the data server's own `vscode-jsonrpc` protocol
 over a channel that the Theia backend relays byte-for-byte onto the server's
-socket. This package is both halves of that arrangement: the browser-side
-connection and typed-frontend bases, and the backend-side connection handler and
-forwarder. Install it if a Theia application needs form editors, trees, or
-code-gen driven from the live AST rather than from LSP text edits.
+socket. This package is the Theia-specific half of that arrangement: the browser-side
+transport and the backend-side connection handler and forwarder. Everything above
+the transport — the connection, its sessions, the event fan-out — is host-neutral
+and lives in `@hydranium/protocol/client`. Install it if a Theia application needs
+form editors, trees, or code-gen driven from the live AST rather than from LSP
+text edits.
 
 ## What it gives you
 
@@ -22,19 +24,13 @@ code-gen driven from the live AST rather than from LSP text edits.
   channel ever arrives on its own. Retries follow `DEFAULT_RECONNECT_DELAYS`,
   escalating per consecutive loss and resetting after
   `RECONNECT_ESCALATION_RESET_MS`.
-- **`AbstractDataServiceFrontend`** — base for a frontend that owns the
-  data-server connection: the workspace-gated connect, the typed server proxy,
-  the inbound client binding, and a lazy idempotent init gate (`ensureConnected`).
-  You supply the connection seams (`connectionProvider`, `servicePath`,
-  `methodNamespace`, `client`, `clientMethods`); progress UI and domain caching
-  layer on top.
-- **`AbstractDiagnosticsDataServiceFrontend`** and
-  **`AbstractReferencesDataServiceFrontend`** — the same base specialised for the
-  two protocol fragments an adopter most often keeps: each diagnostics
-  (`dumpServerState`, `writeHeapSnapshot`, `dumpPodMemory`, the profiling and
-  latency calls) and each reference method is implemented as a readiness-gated
-  pass-through, so you do not hand-write identical one-line bodies. They are
-  deliberately independent bases rather than chained.
+- **`ChannelDataPort`** — the `DataPort` implementation over a Theia frontend
+  channel, and the only class a Theia adopter has to write against. Subclass it
+  with a `servicePath`; it supplies the channel, the workspace gate, the
+  reconnect signal and the `MessageService` error sink. Bind one per service path
+  in singleton scope. Hand it to `DataConnectionWithEvents` (from
+  `@hydranium/protocol`) and the connection, its sessions and its event fan-out
+  are the host-neutral ones every other shell uses.
 - **`EmitterDataClient`** (on `./common`, not `./browser`) — the default
   client-side implementation of the data protocol's inbound notifications,
   fanning each one out to a Theia `Event`: `onDidUpdateDocument`,
@@ -81,17 +77,20 @@ This package declares no `theiaExtensions` — it is a library your own Theia
 extension builds on. That extension's `package.json` declares the entries, and
 each entry names one frontend/backend module pair:
 
-- the **frontend** module binds your `AbstractDataServiceFrontend` subclass (and,
-  for the diagnostics commands, calls `bindHostDiagnostics`);
+- the **frontend** module binds your `ChannelDataPort` subclass and the
+  connection over it, both in singleton scope (and, for the diagnostics commands,
+  calls `bindHostDiagnostics`);
 - the **backend** module is typically a one-liner:
   `export default createDataServerConnectionContainerModule(MyHandler)`, where
   `MyHandler` extends `DataServerConnectionHandler`.
 
 More than one handler is the normal case, not an exotic one. Theia keys a
 frontend channel by its service path and refuses a second channel on a path
-already open, so every frontend abstraction reaching the data head needs its own
-`servicePath` — while the shared `portCommand` still names the one server process
-behind them all.
+already open, so every frontend abstraction reaching the data head on its own
+channel needs its own `servicePath` — while the shared `portCommand` still names
+the one server process behind them all. Several participants over ONE channel
+need no second handler: that is what `DataConnection`'s sessions are for, and it
+is the cheaper arrangement.
 
 The refusal is silent, which is what makes it expensive: the loser's promise is
 left unsettled rather than rejected, so a frontend that shared a path hangs on

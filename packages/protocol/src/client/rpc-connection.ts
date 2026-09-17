@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import type { MessageConnection } from 'vscode-jsonrpc';
-import { defineMessage, describeError, resolve } from '../messages/primitives';
+import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import { type RpcProxy, createRpcProxy } from '../rpc';
 import type { DataPort } from './data-port';
 
@@ -125,13 +125,30 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
     * The current generation's proxy WITHOUT awaiting readiness — calls queue
     * against the connection promise.
     *
+    * **Protected, and that is the point.** An early request is answered
+    * correctly from a registry the workspace walk has not filled yet, which
+    * reads as a broken project tier rather than as a race — so every caller has
+    * to interpose the gate, and every caller forgetting to is a silent bug.
+    * {@link connected} is the public route and returns this same proxy once the
+    * gate has settled, which leaves nothing to forget. The one caller that
+    * cannot use it is {@link awaitReady}, whose whole job is running the gate.
+    *
     * Read per access, never cached: a reconnect replaces the generation, and a
-    * held reference would address the dead one. Prefer {@link connected}, which
-    * also waits for the server's startup gate.
+    * held reference would address the dead one.
     */
-   get server(): RpcProxy<TServer> {
+   protected get server(): RpcProxy<TServer> {
       this.assertLive();
       return this.currentGeneration().server;
+   }
+
+   /**
+    * Surface a failure the way this host does, through the port's sink.
+    *
+    * Here rather than only on the port so every participant sharing the
+    * connection reports through one route without being handed the transport.
+    */
+   reportError(error: unknown, reported: ResolvedMessage): void {
+      this.port.reportError(error, reported);
    }
 
    /** Tear down the current connection and stop tracking the port. Idempotent. */

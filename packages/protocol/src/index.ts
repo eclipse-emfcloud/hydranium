@@ -16,6 +16,7 @@
 
 export * from './abstract-logger';
 export * from './client';
+export * from './client-ids';
 export * from './clock';
 export * from './data';
 export * from './browser-runtime';

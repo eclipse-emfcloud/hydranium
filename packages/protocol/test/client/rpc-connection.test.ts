@@ -22,6 +22,7 @@ import type { MessageConnection } from 'vscode-jsonrpc';
 import type { ReadyServer, RpcConnectionLifecycle } from '../../src/client/rpc-connection';
 import { RpcConnection } from '../../src/client/rpc-connection';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
+import type { RpcProxy } from '../../src/rpc/create-rpc-proxy';
 import { tick, waitFor } from '../../src/testing';
 import { makeFakeDataPort } from '../../src/testing/data-doubles';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '../../src/testing/node';
@@ -61,8 +62,22 @@ function serveGeneration(connection: MessageConnection, label: string): ServerDo
    };
 }
 
+/**
+ * Reaches the protected ungated proxy.
+ *
+ * `server` is protected because every caller must interpose the readiness gate
+ * and `connected()` is the route that cannot be forgotten — but the
+ * read-per-access contract is still a property of the class, so it is asserted
+ * from the one place entitled to see it: a subclass.
+ */
+class ProbeRpcConnection<TServer extends ReadyServer, TClient extends object> extends RpcConnection<TServer, TClient> {
+   get ungatedServer(): RpcProxy<TServer> {
+      return this.server;
+   }
+}
+
 interface Harness {
-   readonly rpc: RpcConnection<TestServer, RecordingClient>;
+   readonly rpc: ProbeRpcConnection<TestServer, RecordingClient>;
    readonly port: ReturnType<typeof makeFakeDataPort>;
    readonly client: RecordingClient;
    /** One entry per generation the port has opened, in order. */
@@ -82,7 +97,7 @@ function harness(lifecycle: RpcConnectionLifecycle = {}): Harness {
          return pair.right;
       }
    });
-   const rpc = new RpcConnection<TestServer, RecordingClient>(port, client, {
+   const rpc = new ProbeRpcConnection<TestServer, RecordingClient>(port, client, {
       methodNamespace: WIRE_PREFIX,
       clientMethods: CLIENT_METHODS,
       lifecycle
@@ -166,11 +181,11 @@ describe('RpcConnection reconnect', () => {
       const test = harness();
       try {
          await test.rpc.connected();
-         const proxy = test.rpc.server;
-         expect(test.rpc.server).toBe(proxy);
+         const proxy = test.rpc.ungatedServer;
+         expect(test.rpc.ungatedServer).toBe(proxy);
 
          test.port.fireDispose();
-         const afterReconnect = test.rpc.server;
+         const afterReconnect = test.rpc.ungatedServer;
 
          // Read per access: a caller holding `proxy` across the reconnect
          // addresses a disposed connection, where requests never settle.

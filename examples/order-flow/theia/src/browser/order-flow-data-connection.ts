@@ -8,14 +8,12 @@
  ********************************************************************************/
 
 import {
-   DataConnection,
-   DataEvents,
+   DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
-   type ResolvedMessage,
    type TransferElement
 } from '@hydranium/protocol';
-import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
 import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 
 /** The transfer root, left at the framework's bound: nothing here reads a typed property. */
@@ -38,36 +36,18 @@ export interface OrderFlowDataServer extends DataServerProtocol<OrderFlowTransfe
  * commands their own path to dodge that, which cost a second forwarder and a
  * second connection to the same server. Sessions are the supported way to have
  * more than one participant.
+ *
+ * **The whole adopter cost of the data head in Theia is this class and the
+ * port.** The sessions, the event fan-out, the readiness gate, the reconnect
+ * generation and the error sink all come from the framework.
+ *
+ * CONSTRUCTOR injection, not a `@postConstruct`: the connection takes its port
+ * at construction, and a `@inject` field is filled afterwards — too late to pass
+ * to `super`.
  */
 @injectable()
-export class OrderFlowDataConnection {
-   @inject(OrderFlowTheiaDataPort) protected readonly port!: OrderFlowTheiaDataPort;
-
-   protected connection!: DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>;
-   readonly events = new DataEvents<OrderFlowTransferRoot>();
-
-   @postConstruct()
-   protected init(): void {
-      this.connection = new DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>(this.port, this.events);
-   }
-
-   /** Mint a participant. `clientId` must be distinct per participant and stable. */
-   createSession(clientId: string): ReturnType<DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>['createSession']> {
-      return this.connection.createSession(clientId);
-   }
-
-   /** Surface a failure the way the host does — the port's sink, shared by every participant. */
-   reportError(error: unknown, reported: ResolvedMessage): void {
-      this.port.reportError(error, reported);
-   }
-
-   /** The ready proxy, for the methods that carry no `clientId`. */
-   connected(): ReturnType<DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>['connected']> {
-      return this.connection.connected();
-   }
-
-   dispose(): void {
-      this.connection.dispose();
-      this.events.dispose();
+export class OrderFlowDataConnection extends DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer> {
+   constructor(@inject(OrderFlowTheiaDataPort) port: OrderFlowTheiaDataPort) {
+      super(port);
    }
 }

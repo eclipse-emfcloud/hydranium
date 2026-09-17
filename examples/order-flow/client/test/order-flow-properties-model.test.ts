@@ -224,6 +224,28 @@ describe('order-flow properties model', () => {
       expect(model.diagnostics.map(diagnostic => diagnostic.message).join('\n')).toContain('AuditStamp');
    });
 
+   it("reports diagnostics for the client's OWN edit", async () => {
+      // The counterpart to the test above: a document the client broke itself
+      // must report the breakage, not read as clean. Without it the panel is
+      // trustworthy about validity only for documents nobody has touched, which
+      // is the half that matters least.
+      //
+      // **It does not pin WHICH delivery supplies them, and that was measured
+      // rather than assumed.** With `handleDocumentUpdated` made a no-op the
+      // test still passes, because the write's own response already carries
+      // them — so this covers the user-visible property and not the
+      // subscription. The `waitFor` is therefore a tolerance, not the subject:
+      // it also passes if a later push is what fills them in.
+      const model = followingModel();
+      await model.open(uriOf(FULFILLMENT_PROCESS));
+      expect(model.diagnostics).toEqual([]);
+
+      await model.setField('subject', 'NoSuchEntity');
+
+      await waitFor(() => model.diagnostics.length > 0, { message: "diagnostics never arrived for the client's own edit" });
+      expect(model.diagnostics.map(diagnostic => diagnostic.message).join('\n')).toContain('NoSuchEntity');
+   });
+
    it('writes a field back as a typed transfer root', async () => {
       const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);

@@ -56,8 +56,7 @@ import {
    UnregistrationRequest
 } from 'vscode-languageserver-protocol';
 import {
-   DataConnection,
-   DataEvents,
+   DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
    type DataSession,
@@ -371,34 +370,29 @@ function bootstrapWorker(): WorkerChannels {
  */
 type OrderFlowDataServer = DataServerProtocol<OrderFlowTransferRoot> & DataServerDiagnosticsProtocol;
 
-/** The data head's client end: the page's session, and the events it reads. */
-interface DataHead {
-   readonly session: DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
-   readonly events: DataEvents<OrderFlowTransferRoot>;
-   /** Mint another participant on the same wire — see {@link openDataHead}. */
-   readonly createSession: (clientId: string) => DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
-}
+/** The page's own participant, alongside whatever else takes a session. */
+const PAGE_CLIENT_ID = 'order-flow-browser-page';
 
 /**
  * One connection for the whole page, not one per read.
  *
- * A second `DataConnection` over the same port would be a second JSON-RPC
- * connection on it, and `BrowserMessageReader` assigns `port.onmessage` — so the
- * later reader silently replaces the earlier one and the first connection's
- * replies stop arriving. A second interested party takes a second session off
- * this one instead, which costs no transport and keeps the echo filter
- * meaningful: two parties sharing one `clientId` read each other's writes as
- * their own echoes and ignore them.
+ * A second connection over the same port would be a second JSON-RPC connection
+ * on it, and `BrowserMessageReader` assigns `port.onmessage` — so the later
+ * reader silently replaces the earlier one and the first connection's replies
+ * stop arriving. A second interested party takes a second session off this one
+ * instead, which costs no transport and keeps the echo filter meaningful: two
+ * parties sharing one `clientId` read each other's writes as their own echoes
+ * and ignore them.
  */
 function openDataHead(dataPort: MessagePort): DataHead {
-   const port = new WorkerDataPort(dataPort);
-   const events = new DataEvents<OrderFlowTransferRoot>();
-   const connection = new DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>(port, events);
-   return {
-      session: connection.createSession('order-flow-browser-page'),
-      events,
-      createSession: clientId => connection.createSession(clientId)
-   };
+   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(new WorkerDataPort(dataPort));
+   return { connection, session: connection.createSession(PAGE_CLIENT_ID) };
+}
+
+/** The connection plus the page's own session on it. */
+interface DataHead {
+   readonly connection: DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>;
+   readonly session: DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
 }
 
 /**
@@ -435,8 +429,8 @@ function setDataReport(document: TransferDocument<OrderFlowTransferRoot>): void 
  * {@link watchLayoutThroughDataHead} gives: the open can itself trigger a
  * rebuild whose phase event lands while the promise is still in flight.
  */
-async function watchThroughDataHead({ session, events }: DataHead): Promise<void> {
-   events.onDidUpdateDocument(event => {
+async function watchThroughDataHead({ session, connection }: DataHead): Promise<void> {
+   connection.events.onDidUpdateDocument(event => {
       if (event.document.uri === DATA_HEAD_DOCUMENT) {
          setDataReport(event.document);
       }
@@ -490,8 +484,8 @@ function setLayoutReport(root: LayoutModel): void {
  * attached afterwards would miss it, leaving the report showing the open
  * snapshot with no later event guaranteed to correct it.
  */
-async function watchLayoutThroughDataHead({ session, events }: DataHead): Promise<void> {
-   events.onDidUpdateDocument(event => {
+async function watchLayoutThroughDataHead({ session, connection }: DataHead): Promise<void> {
+   connection.events.onDidUpdateDocument(event => {
       if (event.document.uri === LAYOUT_DOCUMENT && isLayoutModel(event.document.root)) {
          setLayoutReport(event.document.root);
       }
@@ -816,7 +810,7 @@ export async function main(locale: string | undefined): Promise<void> {
    // The SECOND participant on the one connection, and the reason the page needs
    // sessions at all: it holds its own documents open and reads its own writes
    // back as echoes rather than as foreign edits.
-   properties.panel = new PropertiesPanel(dataHead.createSession(PROPERTIES_CLIENT_ID), dataHead.events);
+   properties.panel = new PropertiesPanel(dataHead.connection.createSession(PROPERTIES_CLIENT_ID), dataHead.connection.events);
 
    // The panel's first document is established by FOCUSING one, not by opening
    // it directly: an initial document chosen here would be a second answer to
