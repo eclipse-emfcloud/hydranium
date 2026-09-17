@@ -13,8 +13,9 @@
  *
  * Where `./data` is the wire *contract* and `./rpc` is the machinery that lowers
  * it onto a connection, this is what a client wraps around both: the seam a host
- * fills in (`DataPort`), the lifecycle above it (`DataSession` —
- * readiness gate, open/watch ordering, echo recognition, reconnect), the inbound
+ * fills in (`DataPort`), the connection above it (`DataConnection` — readiness
+ * gate and reconnect), the participants on that connection (`DataSession` —
+ * identity, open/watch ordering, echo recognition), the inbound
  * fan-out (`DataEvents`), and the two halves of the hop for hosts whose
  * client cannot hold a socket — `createPostMessageTransport` on the client
  * side and `relayToPostMessageChannel` on the side that does hold it.
@@ -33,8 +34,10 @@
  * Theia DI.
  */
 
+export * from './data-connection';
 export * from './data-events';
 export * from './data-port';
 export * from './data-session';
 export * from './message-relay';
 export * from './post-message-transport';
+export * from './rpc-connection';

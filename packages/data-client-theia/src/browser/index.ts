@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 export * from './channel-connection';
+export * from './channel-data-port';
 export * from './data-service-frontend';
 export * from './diagnostics-data-service-frontend';
 export * from './host-diagnostics-frontend';

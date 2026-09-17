@@ -12,11 +12,14 @@ import type { ResolvedMessage } from '../messages/primitives';
 
 /**
  * The one thing a host has to supply for the data head: a live JSON-RPC
- * connection to the data server, plus the identity and failure sink that go
- * with it.
+ * connection to the data server, plus the failure sink that goes with it.
  *
- * "Port" in the hexagonal sense — the host implements it, `DataSession`
+ * "Port" in the hexagonal sense — the host implements it, `DataConnection`
  * consumes it, and nothing on either side of the boundary imports the other.
+ *
+ * Carries no identity. A `clientId` names a participant, and one transport
+ * serves as many as the host has; binding an identity here is what makes two
+ * of them share one, so it lives on `DataSession` instead.
  *
  * **This deliberately does NOT wrap the protocol methods.** `createRpcProxy`
  * already takes a promise of a connection and produces the whole typed
@@ -46,22 +49,6 @@ import type { ResolvedMessage } from '../messages/primitives';
  *   calls on the promise but never calls `listen` itself.
  */
 export interface DataPort {
-   /**
-    * Stable identity of this client on the data server, passed as `clientId`
-    * on every document request.
-    *
-    * It has to be stable for the session because it is the echo key: an
-    * inbound `onDocumentUpdated` carries the originating mutation's
-    * `clientId` as `sourceClientId`, and a client that cannot recognise its
-    * own echo treats its own write as a concurrent third-party one. It also
-    * has to be distinct per client, since it keys the server's per-
-    * `(uri, clientId)` watch bucket.
-    *
-    * Avoid the three values the framework itself uses as sentinels —
-    * `'language-client'`, `'unknown'` and `'revert-on-close'`.
-    */
-   readonly clientId: string;
-
    /**
     * Open the transport and hand back a listening `MessageConnection`.
     *

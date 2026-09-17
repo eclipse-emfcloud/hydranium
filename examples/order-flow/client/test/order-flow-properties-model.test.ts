@@ -37,7 +37,7 @@ import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/lib/node';
 import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
 import { DataServer } from '@hydranium/data-server';
-import { DataEvents, DataSession, TransferDocument, type DataPort } from '@hydranium/protocol';
+import { DataConnection, DataEvents, type DataSession, TransferDocument, type DataPort } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/lib/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/lib/testing/node';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
@@ -122,6 +122,7 @@ let workspace: ScratchWorkspace | undefined;
 let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let port: FakeDataPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
+let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
 const models: OrderFlowPropertiesModel<OrderFlowTransferRoot>[] = [];
 
@@ -169,7 +170,9 @@ describe('order-flow properties model', () => {
          void new DataServer<OrderFlowTransferRoot>(channel, shared);
       });
       events = new DataEvents<OrderFlowTransferRoot>();
-      session = new DataSession<OrderFlowTransferRoot>(port, events);
+      connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+      const dataSession = connection.createSession('order-flow-model-test');
+      session = dataSession;
    });
 
    afterEach(() => {

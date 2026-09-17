@@ -11,12 +11,10 @@
  * Theia end-to-end for the memory-diagnostics commands.
  *
  * A third spec beside the properties and diagram ones because its subject is
- * neither view: it is the extension's SECOND channel to the data head. The
- * properties panel drives that head through a host-neutral `DataPort`, while
- * `OrderFlowDiagnosticsDataService` is a Theia `AbstractDataServiceFrontend`
- * owning its own channel — and Theia keys a frontend channel by its service
- * path and refuses a second channel on a path already open, so the two need
- * separate paths and a backend forwarder each.
+ * neither view: it is the SECOND consumer of the data head. The panel takes a
+ * session on the frontend's one connection and this takes the proxy off the
+ * same one, so what this asserts is that two participants coexist on a single
+ * channel.
  *
  * **Why this spec exists rather than being folded into the panel's.** The
  * diagnostics commands had no end-to-end coverage at all, and the cost of that

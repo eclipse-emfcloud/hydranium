@@ -10,7 +10,9 @@
 import { bindMemoryDiagnostics, MemoryDiagnosticsService } from '@hydranium/client-theia/lib/browser';
 import { bindHostDiagnostics } from '@hydranium/data-client-theia/lib/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
-import { OrderFlowDiagnosticsDataService } from './order-flow-diagnostics-data-service';
+import { OrderFlowDataConnection } from './order-flow-data-connection';
+import { OrderFlowMemoryDiagnostics } from './order-flow-memory-diagnostics';
+import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 
 /**
  * Wires the framework's parameterised `MemoryDiagnosticsContribution` into the
@@ -25,14 +27,19 @@ import { OrderFlowDiagnosticsDataService } from './order-flow-diagnostics-data-s
  *
  * A separate `theiaExtensions` entry from the panel and the diagram, because it
  * is separately loadable: diagnostics need only the data head, so a deployment
- * can take these commands without a properties view or a diagram. It is also why
- * this module binds its own service rather than reusing the panel's — see
- * {@link OrderFlowDiagnosticsDataService} for why the two connections are
- * deliberate.
+ * can take these commands without a properties view or a diagram. The shared
+ * connection is therefore bound here too, guarded, rather than owned by the
+ * panel's entry.
  */
-export default new ContainerModule(bind => {
-   bind(OrderFlowDiagnosticsDataService).toSelf().inSingletonScope();
-   bind(MemoryDiagnosticsService).toService(OrderFlowDiagnosticsDataService);
+export default new ContainerModule((bind, _unbind, isBound) => {
+   // Guarded because the properties entry binds the same two, and either
+   // module may be loaded alone or beside the other.
+   if (!isBound(OrderFlowTheiaDataPort)) {
+      bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
+      bind(OrderFlowDataConnection).toSelf().inSingletonScope();
+   }
+   bind(OrderFlowMemoryDiagnostics).toSelf().inSingletonScope();
+   bind(MemoryDiagnosticsService).toService(OrderFlowMemoryDiagnostics);
    bindMemoryDiagnostics(bind, {
       commandIdPrefix: 'order-flow',
       category: 'Order Flow',

@@ -7,118 +7,64 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { MessageConnection } from 'vscode-jsonrpc';
-import { DATA_CLIENT_PROTOCOL_METHODS, DATA_SERVER_WIRE_PREFIX, type DataClientProtocol, type DataServerProtocol } from '../data';
-import { defineMessage, describeError, resolve } from '../messages/primitives';
-import { type RpcProxy, createRpcProxy } from '../rpc';
+import type { DataServerProtocol, TransferSaveDocumentArgs, TransferUpdateDocumentArgs } from '../data';
+import type { RpcProxy } from '../rpc';
 import type { TransferDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
-import type { DataPort } from './data-port';
+
+/** Update a document through a session; the session supplies `clientId`. */
+export type DataSessionUpdateArgs<TTransfer> = Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>;
+
+/** Persist a document through a session; the session supplies `clientId`. */
+export type DataSessionSaveArgs<TTransfer> = Omit<TransferSaveDocumentArgs<TTransfer>, 'clientId'>;
 
 /**
- * The transport never opened. A complete sentence rather than a fragment: a
- * fragment is nested inside a sentence the framework does not own, so no
- * translator controls the whole and the composition cannot be made to read
- * correctly in every language.
+ * What a {@link DataSession} needs from the connection that minted it.
+ *
+ * Narrower than the connection itself so the dependency points one way:
+ * `DataConnection` constructs sessions, and nothing here imports it back.
  */
-export const DATA_SERVER_CONNECT_FAILED = defineMessage(
-   'hydranium/protocol/data-server-connect-failed',
-   'Could not connect to the data server: {detail}'
-);
-
-export const DATA_SERVER_NOT_READY = defineMessage(
-   'hydranium/protocol/data-server-not-ready',
-   'The data server did not become ready: {detail}'
-);
-
-/** Options for {@link DataSession}. */
-export interface DataSessionOptions {
-   /**
-    * Wire namespace the server is addressed under. Defaults to the
-    * framework's {@link DATA_SERVER_WIRE_PREFIX}, which is what an unmodified
-    * `DataServer` binds. Override only alongside the server's own
-    * `methodNamespace` option — a mismatch turns every request into
-    * "Unhandled method" rather than failing at wire-up.
-    */
-   readonly methodNamespace?: string;
-}
-
-/** One connection generation: its connection, its proxy, and its readiness. */
-interface Generation<TTransfer extends TransferElement> {
-   readonly connection: Promise<MessageConnection>;
-   readonly server: RpcProxy<DataServerProtocol<TTransfer>>;
-   /** Set on first use; the shared readiness gate for this generation. */
-   ready?: Promise<void>;
+export interface DataSessionHost<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer>> {
+   connected(): Promise<RpcProxy<TServer>>;
+   releaseSession(session: DataSession<TTransfer, TServer>): void;
 }
 
 /**
- * The host-invariant half of talking to the data head: everything above
- * {@link DataPort} that would otherwise be re-derived by every host
- * adapter.
+ * One participant on a data connection: a properties panel, a tree, a
+ * form editor.
  *
- * Three jobs, and deliberately no fourth:
+ * The server keys every hold and watch per `(uri, clientId)`, so the identity
+ * belongs to the participant rather than to the wire — several sessions share
+ * one connection, and two participants forced to share one identity cannot
+ * distinguish each other's writes from their own echoes.
  *
- * 1. **Build the typed proxy** over the port's connection, with the framework's
- *    wire prefix and its drift-proof client-method allowlist.
- * 2. **Own the readiness gate** — `waitForReady` once per connection, shared
- *    across concurrent callers. A socket client can connect before the
- *    workspace walk finishes, and an early request is then answered correctly
- *    from an empty registry, which reads as a broken project tier rather than
- *    as a race.
- * 3. **Own the reconnect policy**, by dropping its connection generation when
- *    the port disposes and building a fresh one on the next request.
+ * Every document operation stamps {@link clientId} itself. A caller that
+ * passed its own could pass another participant's, and the server would
+ * attribute the write and release the hold accordingly.
  *
- * It does **not** wrap the protocol methods; callers reach them through
- * {@link connected}. The one exception is {@link openDocument}, which exists
- * because the open/watch *order* is silently wrong the other way round — see
- * its own doc.
- *
- * Generic over the transfer root so this file names no grammar. An adopter
- * binds the concrete root (or the union of them, for a multi-grammar head) at
- * its own edge.
+ * Generic over the transfer root so this file names no grammar.
  */
-export class DataSession<TTransfer extends TransferElement> {
-   protected readonly methodNamespace: string;
-   /** The current generation, or `undefined` before the first request / after a teardown. */
-   protected generation?: Generation<TTransfer>;
+export class DataSession<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer> = DataServerProtocol<TTransfer>> {
+   /** URIs this session holds open, so {@link dispose} can release exactly those. */
+   protected readonly openUris = new Set<string>();
    protected disposed = false;
-   protected readonly portDisposeListener: { dispose(): void };
 
    constructor(
-      protected readonly port: DataPort,
-      protected readonly client: DataClientProtocol<TTransfer>,
-      options: DataSessionOptions = {}
-   ) {
-      this.methodNamespace = options.methodNamespace ?? DATA_SERVER_WIRE_PREFIX;
-      this.portDisposeListener = this.port.onDispose(() => this.dropGeneration());
-   }
-
-   /** The identity every request is made under — the port's, not a second one. */
-   get clientId(): string {
-      return this.port.clientId;
-   }
+      readonly clientId: string,
+      protected readonly host: DataSessionHost<TTransfer, TServer>
+   ) {}
 
    /**
-    * The connected, READY server proxy.
-    *
-    * Returns the proxy rather than `void` on purpose. A reconnect replaces the
-    * proxy, so a caller that cached one from an earlier call would go on
-    * addressing a dead connection with no error — handing it back per call
-    * makes the stale reference unrepresentable.
-    *
-    * Concurrent callers share one readiness promise, so `waitForReady` is
-    * awaited once per generation and not once per caller.
+    * The connected, READY server proxy, for protocol methods this session does
+    * not wrap — the ones carrying no `clientId`, so no identity can be got
+    * wrong through them.
     */
-   async connected(): Promise<RpcProxy<DataServerProtocol<TTransfer>>> {
-      if (this.disposed) {
-         throw new Error('DataSession is disposed');
-      }
-      const generation = this.currentGeneration();
-      if (!generation.ready) {
-         generation.ready = this.awaitReady(generation);
-      }
-      await generation.ready;
-      return generation.server;
+   async connected(): Promise<RpcProxy<TServer>> {
+      // `async` so a disposed session REJECTS rather than throwing
+      // synchronously: the connection's own `connected` rejects, and a caller
+      // reaching for `.catch` on one of them would not catch the other.
+      this.assertLive();
+      return this.host.connected();
    }
 
    /**
@@ -143,6 +89,7 @@ export class DataSession<TTransfer extends TransferElement> {
       const server = await this.connected();
       const document = await server.openModelDocument({ uri, clientId: this.clientId });
       await server.watchModelDocument({ uri, clientId: this.clientId });
+      this.openUris.add(uri);
       return document;
    }
 
@@ -152,11 +99,24 @@ export class DataSession<TTransfer extends TransferElement> {
     */
    async closeDocument(uri: string): Promise<void> {
       const server = await this.connected();
+      this.openUris.delete(uri);
       await server.closeModelDocument({ uri, clientId: this.clientId });
    }
 
+   /** Write `args.model` back as this session. */
+   async updateDocument(args: DataSessionUpdateArgs<TTransfer>): Promise<TransferDocument<TTransfer>> {
+      const server = await this.connected();
+      return server.updateModelDocument({ ...args, clientId: this.clientId });
+   }
+
+   /** Persist `args.model` to disk as this session. */
+   async saveDocument(args: DataSessionSaveArgs<TTransfer>): Promise<TransferDocument<TTransfer>> {
+      const server = await this.connected();
+      return server.saveModelDocument({ ...args, clientId: this.clientId });
+   }
+
    /**
-    * Whether `event.sourceClientId` identifies this session's own write.
+    * Whether `sourceClientId` identifies this session's own write.
     *
     * Every watcher needs this and the check is one comparison, so getting it
     * wrong is cheap to do and expensive to find: an unfiltered echo looks
@@ -166,63 +126,46 @@ export class DataSession<TTransfer extends TransferElement> {
       return sourceClientId === this.clientId;
    }
 
-   /** Tear down the current connection and stop tracking the port. Idempotent. */
+   /**
+    * Release this session's holds and detach it from the connection.
+    * Idempotent, and leaves the connection usable by its other sessions.
+    *
+    * The closes are fired without being awaited, because a `Disposable` cannot
+    * be: a host disposing a widget has nowhere to put the promise. A close
+    * that fails is no worse than the leak this exists to prevent, so the
+    * rejection is swallowed rather than surfaced from a teardown.
+    */
    dispose(): void {
       if (this.disposed) {
          return;
       }
       this.disposed = true;
-      this.portDisposeListener.dispose();
-      this.dropGeneration();
-   }
-
-   /** The live generation, building one if there is none. */
-   protected currentGeneration(): Generation<TTransfer> {
-      if (this.generation) {
-         return this.generation;
-      }
-      const connection = this.port.connect();
-      // Rejection is reported here rather than left to float: an unhandled
-      // rejection on a connection promise is the failure mode that reads as
-      // "the model is empty" instead of "the transport never opened".
-      connection.catch((error: unknown) =>
-         this.port.reportError(error, resolve(DATA_SERVER_CONNECT_FAILED, { detail: describeError(error) }))
-      );
-      const server = createRpcProxy<DataServerProtocol<TTransfer>, DataClientProtocol<TTransfer>>(connection, {
-         methodNamespace: this.methodNamespace,
-         localTarget: this.client,
-         localMethods: DATA_CLIENT_PROTOCOL_METHODS
-      });
-      this.generation = { connection, server };
-      return this.generation;
-   }
-
-   /** Await the connection and the server's startup gate for one generation. */
-   protected async awaitReady(generation: Generation<TTransfer>): Promise<void> {
-      try {
-         await generation.connection;
-         await generation.server.waitForReady();
-      } catch (error: unknown) {
-         // Drop the generation so the next request retries rather than
-         // re-awaiting a settled rejection forever.
-         if (this.generation === generation) {
-            this.generation = undefined;
-         }
-         this.port.reportError(error, resolve(DATA_SERVER_NOT_READY, { detail: describeError(error) }));
-         throw error;
+      const uris = [...this.openUris];
+      this.openUris.clear();
+      this.host.releaseSession(this);
+      for (const uri of uris) {
+         void this.host
+            .connected()
+            .then(server => server.closeModelDocument({ uri, clientId: this.clientId }))
+            .catch(() => undefined);
       }
    }
 
    /**
-    * Discard the current generation, disposing its connection if it opened.
-    * The next {@link connected} builds a fresh one.
+    * Come off the connection because it is going away.
+    *
+    * Sends no close, unlike {@link dispose}: the server releases every hold on
+    * a connection it sees close, and the close would travel over the very
+    * connection being disposed.
     */
-   protected dropGeneration(): void {
-      const generation = this.generation;
-      this.generation = undefined;
-      if (!generation) {
-         return;
+   detach(): void {
+      this.disposed = true;
+      this.openUris.clear();
+   }
+
+   protected assertLive(): void {
+      if (this.disposed) {
+         throw new Error('DataSession is disposed');
       }
-      generation.connection.then(connection => connection.dispose()).catch(() => undefined);
    }
 }

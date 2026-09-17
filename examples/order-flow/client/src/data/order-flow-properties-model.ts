@@ -222,12 +222,10 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       }
 
       const attempted = withField(baseline.root, name, value);
-      const server = await this.session.connected();
       try {
          this.adopt(
-            await server.updateModelDocument({
+            await this.session.updateDocument({
                uri: baseline.uri,
-               clientId: this.session.clientId,
                model: attempted,
                baseVersion: baseline.version
             })
@@ -287,9 +285,8 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       switch (outcome.status) {
          case 'merged':
             this.adopt(
-               await server.updateModelDocument({
+               await this.session.updateDocument({
                   uri: baseline.uri,
-                  clientId: this.session.clientId,
                   model: outcome.merged,
                   baseVersion: fresh?.version
                })

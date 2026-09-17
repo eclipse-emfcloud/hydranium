@@ -41,7 +41,8 @@ import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib
 import { DataServer } from '@hydranium/data-server';
 import {
    DATA_SERVER_NOT_READY,
-   DataSession,
+   DataConnection,
+   type DataSession,
    type DataClientProtocol,
    type DataPort,
    type ResolvedMessage,
@@ -144,6 +145,7 @@ function makeCapturingClient(): {
 
 let workspace: ScratchWorkspace | undefined;
 let port: FakeDataPort | undefined;
+let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
 let updates: TransferDocumentUpdatedEvent<OrderFlowTransferRoot>[] = [];
 
@@ -179,12 +181,15 @@ describe('order-flow data port', () => {
       });
       const capturing = makeCapturingClient();
       updates = capturing.updates;
-      session = new DataSession<OrderFlowTransferRoot>(port, capturing.client);
+      connection = new DataConnection<OrderFlowTransferRoot>(port, capturing.client);
+      session = connection.createSession('order-flow-port-test');
    });
 
    afterEach(() => {
       session?.dispose();
       session = undefined;
+      connection?.dispose();
+      connection = undefined;
       port?.dispose();
       port = undefined;
       workspace?.dispose();
@@ -321,7 +326,7 @@ describe('order-flow data port', () => {
          // Attach no server, so nothing answers under any namespace.
       });
       const capturing = makeCapturingClient();
-      const failing = new DataSession<OrderFlowTransferRoot>(deadPort, capturing.client, {
+      const failing = new DataConnection<OrderFlowTransferRoot>(deadPort, capturing.client, {
          methodNamespace: 'wrong-namespace/'
       });
       try {

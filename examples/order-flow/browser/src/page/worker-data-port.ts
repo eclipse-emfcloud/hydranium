@@ -19,10 +19,10 @@ import {
 /**
  * The host half of the data head for a page talking to a worker.
  *
- * The whole port is four members, and this is what a browser host has to write
- * to reach the data head — everything above it (the open/watch order,
- * `baseVersion` conflict handling, echo filtering by `sourceClientId`) is
- * host-invariant and already in `DataSession`.
+ * This is the whole of what a browser host has to write to reach the data head
+ * — everything above it (the open/watch order, `baseVersion` conflict handling,
+ * echo filtering by `sourceClientId`) is host-invariant and already in
+ * `DataConnection` and `DataSession`.
  *
  * `vscode-jsonrpc/browser`, never the package root: version 9's root entry ships
  * no runtime abstraction layer and throws on the first message rather than at
@@ -33,10 +33,7 @@ export class WorkerDataPort implements DataPort {
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose = this.disposeEmitter.event;
 
-   constructor(
-      readonly clientId: string,
-      protected readonly port: MessagePort
-   ) {}
+   constructor(protected readonly port: MessagePort) {}
 
    /**
     * The transport is the port the worker was already handed at bootstrap, so

@@ -10,10 +10,10 @@
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import { PROPERTIES_CLOSE_FAILED, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { DataEvents, DataSession, describeError, resolve, type TransferElement } from '@hydranium/protocol';
+import { describeError, resolve, type TransferElement } from '@hydranium/protocol';
 import { BaseWidget } from '@theia/core/lib/browser/widgets/widget';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
-import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
+import { OrderFlowDataConnection } from './order-flow-data-connection';
 
 /**
  * The transfer root, left at the framework's own bound.
@@ -28,12 +28,22 @@ import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 type OrderFlowTransferRoot = TransferElement;
 
 /**
+ * This panel's identity on the data head.
+ *
+ * Distinct from the framework's own sentinels (`'language-client'`,
+ * `'unknown'`, `'revert-on-close'`) and from the VS Code panel's id, because it
+ * keys the server's per-`(uri, clientId)` hold and watch, and is the echo key
+ * an inbound `onDocumentUpdated` is matched against.
+ */
+const ORDER_FLOW_PROPERTIES_CLIENT_ID = 'order-flow-theia-properties';
+
+/**
  * The order-flow properties panel as a Theia `PropertyViewContentWidget`.
  *
  * **A wiring job, not a form.** The DOM belongs to `PropertiesForm`, which is
  * shared verbatim with the VS Code webview and has no host coupling of its own;
  * the open/watch/write/reconcile policy belongs to `OrderFlowPropertiesModel`;
- * the transport belongs to {@link OrderFlowTheiaDataPort}. What this class adds
+ * the transport belongs to {@link OrderFlowDataConnection}. What this class adds
  * is what only a Theia widget can do: own a node, follow the selection Theia
  * hands it, and stay alive across selection changes.
  *
@@ -53,7 +63,7 @@ type OrderFlowTransferRoot = TransferElement;
 export class OrderFlowPropertiesWidget extends BaseWidget {
    static readonly ID = 'order-flow-properties-widget';
 
-   @inject(OrderFlowTheiaDataPort) protected readonly port!: OrderFlowTheiaDataPort;
+   @inject(OrderFlowDataConnection) protected readonly dataConnection!: OrderFlowDataConnection;
 
    protected form!: PropertiesForm;
    protected model!: OrderFlowPropertiesModel<OrderFlowTransferRoot>;
@@ -67,9 +77,8 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       this.addClass('order-flow-properties');
       this.node.tabIndex = 0;
 
-      const events = new DataEvents<OrderFlowTransferRoot>();
-      const session = new DataSession<OrderFlowTransferRoot>(this.port, events);
-      this.model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
+      const session = this.dataConnection.createSession(ORDER_FLOW_PROPERTIES_CLIENT_ID);
+      this.model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, this.dataConnection.events);
 
       const host = document.createElement('div');
       host.className = 'order-flow-properties-body';
@@ -79,11 +88,12 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       // which fire when the server is unreachable and it alone can word.
       this.form = new PropertiesForm(host, {
          setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, reported) => this.port.reportError(error, reported)
+         reportError: (error, reported) => this.dataConnection.reportError(error, reported)
       });
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));
       this.toDispose.push(this.model);
+      // The session only; the connection is shared and outlives this widget.
       this.toDispose.push(session);
    }
 
@@ -119,7 +129,9 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
          this.form.setTitle(undefined);
          void this.model
             .close()
-            .catch((error: unknown) => this.port.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeError(error) })));
+            .catch((error: unknown) =>
+               this.dataConnection.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeError(error) }))
+            );
          return;
       }
       this.form.setTitle(uri.substring(uri.lastIndexOf('/') + 1));
@@ -139,7 +151,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
          })
          .catch((error: unknown) => {
             this.form.setLoading(false);
-            this.port.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
+            this.dataConnection.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
             this.form.report(describeError(error), 'error');
          });
    }

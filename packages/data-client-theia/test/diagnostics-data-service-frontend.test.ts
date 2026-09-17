@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 import 'reflect-metadata';
-import { Deferred } from '@theia/core/lib/common/promise-util';
-import type { DataServerDiagnosticsProtocol, LatencyReport } from '@hydranium/protocol';
+import type { DataServerDiagnosticsProtocol, LatencyReport, RpcProxy } from '@hydranium/protocol';
+import { Emitter } from '@theia/core';
 import { describe, expect, it } from 'vitest';
 import { AbstractDiagnosticsDataServiceFrontend } from '../src/browser/diagnostics-data-service-frontend';
 
@@ -54,20 +54,28 @@ class TestFrontend extends AbstractDiagnosticsDataServiceFrontend<RecordingServe
    protected readonly clientMethods = [];
    gateAwaited = false;
 
-   constructor(server: RecordingServer) {
+   constructor(protected readonly fake: RecordingServer) {
       super();
-      this.server = server;
    }
 
-   /** Stand in for a live, already-initialized connection and record that the gate was awaited. */
+   // The connection is not the subject here: these suites assert that each
+   // delegate gates before forwarding. Overriding the getter keeps the real
+   // lifecycle out of a test that would only stub it.
+   protected override get server(): RpcProxy<RecordingServer> {
+      return asProxy(this.fake);
+   }
+
+   /** Stand in for a settled readiness gate, recording that it was awaited. */
    protected override ensureConnected(): Promise<void> {
       this.gateAwaited = true;
-      if (!this.initialized) {
-         this.initialized = new Deferred<void>();
-         this.initialized.resolve();
-      }
-      return this.initialized.promise;
+      return Promise.resolve();
    }
+}
+
+/** A recording server presented as the proxy shape the base exposes. */
+function asProxy(server: RecordingServer): RpcProxy<RecordingServer> {
+   const never = new Emitter<void>().event;
+   return Object.assign(server, { onDidOpenConnection: never, onDidCloseConnection: never });
 }
 
 describe('AbstractDiagnosticsDataServiceFrontend', () => {

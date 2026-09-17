@@ -58,13 +58,6 @@ export interface FakeDataPortOptions {
     * which the consumer surfaces through {@link FakeDataPort.reported}.
     */
    connect(): MessageConnection | Promise<MessageConnection>;
-   /**
-    * Stable client identity. Defaults to `'fake-data-port'`, which avoids the
-    * three sentinels the framework reserves (`'language-client'`, `'unknown'`,
-    * `'revert-on-close'`); override it when a test needs two distinguishable
-    * clients on one server.
-    */
-   clientId?: string;
 }
 
 /** A {@link DataPort} that records what passed through it. */
@@ -107,7 +100,6 @@ export function makeFakeDataPort(options: FakeDataPortOptions): FakeDataPort {
    const reported: { error: unknown; message: ResolvedMessage }[] = [];
    const disposeEmitter = new Emitter<void>();
    return {
-      clientId: options.clientId ?? 'fake-data-port',
       connections,
       reported,
       onDispose: disposeEmitter.event,

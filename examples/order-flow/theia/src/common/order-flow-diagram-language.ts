@@ -58,26 +58,6 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
 } as const;
 
 /**
- * Theia service path the memory-diagnostics frontend opens its channel to.
- *
- * A SECOND path to the one data server, and it is required rather than tidy:
- * Theia keys a frontend channel by its service path and refuses a second
- * channel on a path already open. This extension has two independent consumers
- * of the data head — the properties panel's host-neutral `DataPort` on the
- * framework default `DATA_SERVER_PATH`, and `OrderFlowDiagnosticsDataService`,
- * a Theia `AbstractDataServiceFrontend` that owns its own channel — so sharing
- * one path breaks whichever opens second.
- *
- * The failure is worth knowing because it does not look like a collision: the
- * throw escapes the `openChannelConnection` the other consumer was awaiting, so
- * its promise is left unsettled rather than rejected. The properties panel sat
- * on `Loading…` forever with a clean server log and one page error nobody was
- * reading. Both handlers still forward to the SAME process — the shared
- * `ORDER_FLOW_HOST_PORT_COMMANDS.dataServer` is what names it.
- */
-export const ORDER_FLOW_DATA_DIAGNOSTICS_PATH = '/order-flow/data-server/diagnostics';
-
-/**
  * Theia Output channel the order-flow LSP client writes to.
  *
  * Must match the `name` the VS Code extension passes to `new LanguageClient`
