@@ -8,34 +8,38 @@
  ********************************************************************************/
 
 /**
- * How `HydraniumGlspStorage.saveSourceModel` reacts when a concurrent edit has
- * advanced the document past the version this diagram was last captured at.
+ * How `HydraniumGlspStorage.saveSourceModel` delivers its result: whether the
+ * GLSP save action awaits the write, and what happens on failure.
  *
- * A save spans otherwise-independent choices — whether to guard on the captured
- * based-on version, whether the GLSP save action awaits the persist, and what
- * happens on failure. Each arm bundles those into one coherent, nameable policy
- * so an adopter selects a whole behaviour rather than assembling an incoherent
- * mix: fire-and-forget plus rethrow would leave an unhandled rejection. It is a
- * *selection of configuration*, delivered as a bound option (see the
- * {@link SaveConflictPolicy} symbol) rather than a behaviour hook.
+ * The two are not independent — fire-and-forget plus rethrow would leave an
+ * unhandled rejection — so each arm bundles them into one coherent, nameable
+ * policy an adopter selects whole. It is a *selection of configuration*,
+ * delivered as a bound option (see the {@link SaveConflictPolicy} symbol) rather
+ * than a behaviour hook.
+ *
+ * **No arm guards on a based-on version**, despite the name. A save flushes the
+ * store's settled text rather than authoring from the diagram's captured model,
+ * and the store already holds every other client's change — so there is no stale
+ * copy for a guard to refuse, and refusing would withhold a correct write.
  */
 export type SaveConflictPolicy =
    /**
-    * Last-write-wins: no based-on guard, await the persist, propagate any
-    * failure to the GLSP save action. The default; correct for a single-editor
-    * head where nothing races the save.
+    * Await the write and propagate any failure to the GLSP save action. The
+    * default.
     */
    | { kind: 'overwrite' }
    /**
-    * Guard on the captured version, await the persist, and surface a
-    * `ConflictError` (and any other failure) to the GLSP save action.
+    * Await the write and surface any failure to the GLSP save action.
+    * Indistinguishable from `overwrite` now that neither guards a version;
+    * retained because an adopter binding it means "a failed save must be
+    * visible", which a future arm may honour differently.
     */
    | { kind: 'reject' }
    /**
-    * Guard on the captured version, fire-and-forget, and log + swallow every
-    * failure. Correct when another editor of the same document may already have
-    * written the truth, so a stale diagram save is benign and must neither
-    * block the action nor surface as an error.
+    * Fire-and-forget, logging and swallowing every failure. Correct when a
+    * failed diagram save must neither block the action nor surface as an error,
+    * which is the posture a head takes when GLSP exposes no save-failure
+    * back-channel to report it on.
     */
    | { kind: 'drop-and-log' };
 

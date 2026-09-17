@@ -144,14 +144,12 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
  * whole flow, and select a {@link SaveConflictPolicy} via the bound option to
  * tune how {@link saveSourceModel} reacts to a concurrent edit.
  *
- * **Default `saveSourceModel` flow.** Delegates to `ModelService.save`, which
- * serialises through the language-specific `Serializer` bound at
- * `services.serializer.Serializer` (resolved per-URI via `ServiceRegistry`),
- * updates the multi-client text-document store, drives a rebuild, and writes the
- * result via the `WritableFileSystemProvider`. The bound
- * {@link SaveConflictPolicy} (default {@link DEFAULT_SAVE_CONFLICT_POLICY},
- * `overwrite`) decides the based-on-version guard, await-vs-fire-and-forget, and
- * failure handling.
+ * **Default `saveSourceModel` flow.** Flushes the stored text of the primary and
+ * every tracked secondary to disk via `AstDocumentManager.save`, with no
+ * serializer in the path — the update path already put the settled text in the
+ * store. The bound {@link SaveConflictPolicy} (default
+ * {@link DEFAULT_SAVE_CONFLICT_POLICY}, `overwrite`) decides
+ * await-vs-fire-and-forget and failure handling.
  *
  * **tempId filter.** GLSP's `DefaultGlobalActionProvider` spins up a
  * throwaway per-diagram-type container with upstream's {@link TEMPORARY_CLIENT_ID}
@@ -610,26 +608,37 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Default save flow: route through `ModelService.save`. The framework
-    * serialise-and-persist machinery handles serialisation (via the
-    * language-specific `Serializer` bound at `services.serializer.Serializer`),
-    * the multi-client text-document update, the rebuild, and the eventual
-    * `WritableFileSystemProvider.writeFile`.
+    * Default save flow: write the store's current text for every document this
+    * diagram owns.
+    *
+    * **A save persists, it does not author.** Every diagram gesture already
+    * reached the store through `ModelService.update`, so the store holds the
+    * settled text and disk is the only thing behind. Re-serializing from the AST
+    * here cannot improve on that text and can only damage it: a serializer
+    * normalises formatting and carries no comments, so a save would rewrite a
+    * document nothing changed — which is what a pure bounds drag does to the
+    * semantic file when only its layout moved.
+    *
+    * **The write set is the primary plus every tracked secondary**
+    * (`AbstractHydraniumGlspState.trackSecondaryDocument`), so a document the
+    * diagram wrote reaches disk whether or not it is the one the client named.
+    * Order is irrelevant here, unlike on the update path: each write is an
+    * independent flush of already-settled text, with no reparse and no
+    * cross-document link to satisfy. A document no client holds open is skipped
+    * — there is no stored text to flush, and nothing wrote it.
     *
     * The configured {@link SaveConflictPolicy} (see {@link saveConflictPolicy})
-    * decides how a concurrent edit that advanced the document is handled:
-    * - `overwrite` (default): no based-on guard, await, propagate failures —
-    *   last-write-wins, correct for a single-editor head.
-    * - `reject`: guard on the captured `state.version`, await, surface a
-    *   `ConflictError` (and any other failure) to the GLSP save action.
-    * - `drop-and-log`: guard, fire-and-forget, log + swallow failures — a stale
-    *   diagram save is dropped because a concurrent form/code edit already wrote
-    *   the truth, and GLSP exposes no save-failure back-channel.
+    * decides await-vs-fire-and-forget and failure handling. It carries no
+    * based-on guard on this path: the guard exists to stop a stale writer
+    * overwriting a newer document, and a flush writes the store — which already
+    * holds every other client's change, including the one that advanced the
+    * version.
     *
     * Returns `MaybePromise<void>` to match upstream `SourceModelStorage`:
-    * resolves with the persist under `overwrite`/`reject`, returns synchronously
-    * under `drop-and-log`. Adopters that bypass `ModelService` (writing through
-    * `WritableFileSystemProvider` directly) still override the whole method.
+    * resolves with the flush under `overwrite`/`reject`, returns synchronously
+    * under `drop-and-log`. Adopters that bypass `AstDocumentManager` (writing
+    * through `WritableFileSystemProvider` directly) still override the whole
+    * method.
     */
    saveSourceModel(action: SaveModelAction): MaybePromise<void> {
       // Normalised for the same reason the load path is: `SaveModelAction.fileUri`
@@ -640,12 +649,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // return what the action said — is unchanged for adopters overriding it.
       const uri = this.toSourceModelUri(this.getFileUri(action));
       const policy = this.saveConflictPolicy;
-      const persisted = this.sharedServices.model.ModelService.save({
-         uri,
-         model: this.state.sourceRoot,
-         clientId: this.state.clientId,
-         baseVersion: policy.kind === 'overwrite' ? undefined : this.state.version
-      }).then(() => undefined);
+      const persisted = this.flushWriteSet(uri);
 
       if (policy.kind === 'drop-and-log') {
          // Fire-and-forget: the diagram save lost the race to a concurrent edit
@@ -654,9 +658,50 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          persisted.catch(error => this.logger.error(`Save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`));
          return undefined;
       }
-      // overwrite / reject: await; a ConflictError (reject) or any other failure
-      // propagates to GLSP's save-action handler.
+      // overwrite / reject: await; any failure propagates to GLSP's save-action
+      // handler.
       return persisted;
+   }
+
+   /**
+    * Write the stored text of `primaryUri` and every tracked secondary to disk.
+    *
+    * Deduplicated, because a state that tracks its own primary as a secondary
+    * would otherwise write it twice and fire two save notifications for one
+    * save.
+    */
+   protected async flushWriteSet(primaryUri: string): Promise<void> {
+      const documents = this.sharedServices.workspace.AstDocumentManager;
+      for (const target of new Set([primaryUri, ...this.state.secondaryUris])) {
+         if (documents.isOpen(target) && !(await this.matchesDisk(target))) {
+            await documents.save(target, this.state.clientId);
+         }
+      }
+   }
+
+   /**
+    * Whether the file at `uri` already holds the document's stored text.
+    *
+    * A save writes every document the diagram owns, and on a typical gesture
+    * most of them changed in neither the store nor on disk — so writing them
+    * would move an mtime for byte-identical content, which is enough to make a
+    * watcher fire, an editor offer to reload, and an mtime-keyed build treat the
+    * file as new work.
+    *
+    * Compared by CONTENT rather than by a remembered version, so an external
+    * write is still corrected: a version this session already saved says nothing
+    * about what is on disk now. `false` when the file cannot be read at all,
+    * which is the answer that writes — a document whose file does not exist yet
+    * is exactly the one a first save has to create.
+    */
+   protected async matchesDisk(uri: string): Promise<boolean> {
+      const stored = this.sharedServices.workspace.TextDocuments.get(uri)?.getText();
+      if (stored === undefined) {
+         return false;
+      }
+      return this.sharedServices.workspace.FileSystemProvider.readFile(URI.parse(uri))
+         .then(onDisk => onDisk === stored)
+         .catch(() => false);
    }
 
    /**

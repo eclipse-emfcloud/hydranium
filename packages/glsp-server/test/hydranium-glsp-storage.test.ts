@@ -184,11 +184,22 @@ class PolicyStorage extends HydraniumGlspStorage<TestRoot> {}
 const SAVE_VERSION = 7;
 
 /**
- * Build a {@link PolicyStorage} over a mock `ModelService.save` and a stub state
- * (`clientId`, `sourceRoot`, `version`). Binds {@link SaveConflictPolicyToken}
- * only when a policy is given, so the unbound default path is testable.
+ * Build a {@link PolicyStorage} over a mock `AstDocumentManager.save` and a stub
+ * state (`clientId`, `sourceRoot`, `secondaryUris`). Binds
+ * {@link SaveConflictPolicyToken} only when a policy is given, so the unbound
+ * default path is testable.
+ *
+ * `openUris` is what the flush skips against: a tracked document no client holds
+ * has no stored text to write.
  */
-function createPolicyStorage(options: { policy?: SaveConflictPolicy; save: (args: unknown) => Promise<unknown> }): {
+function createPolicyStorage(options: {
+   policy?: SaveConflictPolicy;
+   save: (uri: string, clientId: string) => Promise<unknown>;
+   secondaryUris?: readonly string[];
+   openUris?: readonly string[];
+   /** Text on disk per URI. Defaults to content that DIFFERS, so the flush writes. */
+   onDisk?: (uri: string) => Promise<string>;
+}): {
    storage: PolicyStorage;
    saveMock: ReturnType<typeof vi.fn>;
    root: TestRoot;
@@ -196,12 +207,21 @@ function createPolicyStorage(options: { policy?: SaveConflictPolicy; save: (args
 } {
    const root: TestRoot = { $type: 'TestRoot' };
    const saveMock = vi.fn(options.save);
+   const open = new Set(options.openUris ?? ['file:///x.a', ...(options.secondaryUris ?? [])]);
    const { logger, lines } = makeCapturingGlspLogger();
    const container = new Container();
    container.bind(GlspLogger).toConstantValue(logger);
-   container
-      .bind(HydraniumTypes.SharedCoreServices)
-      .toConstantValue(makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: { save: saveMock } } }));
+   container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(
+      makeNoopSharedServices<ServerSharedServices>({
+         workspace: {
+            AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) },
+            // The stored text every open document reports, against which the
+            // flush compares disk before writing.
+            TextDocuments: { get: () => ({ getText: () => 'stored' }) },
+            FileSystemProvider: { readFile: options.onDisk ?? (async () => 'on disk, and different') }
+         }
+      })
+   );
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
    container.bind(ClientSessionManager).toConstantValue({
       addListener() {},
@@ -221,8 +241,9 @@ function createPolicyStorage(options: { policy?: SaveConflictPolicy; save: (args
       clientId: 'client-1',
       sourceRoot: root,
       version: SAVE_VERSION,
-      // Read by `init` to watch the write set. These cases have no secondaries,
-      // so the subscription never fires; the slot has to exist all the same.
+      secondaryUris: options.secondaryUris ?? [],
+      // Read by `init` to watch the write set; the subscription never fires in
+      // these cases, but the slot has to exist all the same.
       onSecondaryUrisChanged: () => ({ dispose() {} })
    } as unknown as ModelState);
    if (options.policy) {
@@ -533,36 +554,88 @@ describe('HydraniumGlspStorage', () => {
       });
    });
 
+   describe('saveSourceModel — write set', () => {
+      it('flushes the stored text of the primary, with no model handed to the write', async () => {
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve() });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls).toEqual([['file:///x.a', 'client-1']]);
+      });
+
+      it('flushes every tracked secondary, not only the document the action names', async () => {
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), secondaryUris: ['file:///x.layout'] });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a', 'file:///x.layout']);
+      });
+
+      it('skips a tracked document no client holds open, which has no stored text to write', async () => {
+         const { storage, saveMock } = createPolicyStorage({
+            save: () => Promise.resolve(),
+            secondaryUris: ['file:///x.layout'],
+            openUris: ['file:///x.a']
+         });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+      });
+
+      it('writes nothing when the file already holds the stored text', async () => {
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), onDisk: async () => 'stored' });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock).not.toHaveBeenCalled();
+      });
+
+      it('writes when the file cannot be read, which is how a first save creates it', async () => {
+         const { storage, saveMock } = createPolicyStorage({
+            save: () => Promise.resolve(),
+            onDisk: () => Promise.reject(new Error('ENOENT'))
+         });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+      });
+
+      it('writes a primary tracked as its own secondary once', async () => {
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), secondaryUris: ['file:///x.a'] });
+         await storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+      });
+   });
+
    describe('saveSourceModel — conflict policy', () => {
-      it('defaults to overwrite (no baseVersion, awaits) when no policy is bound', async () => {
-         const { storage, saveMock, root } = createPolicyStorage({ save: () => Promise.resolve() });
+      it('defaults to awaiting the flush when no policy is bound', async () => {
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve() });
          const result = storage.saveSourceModel(saveAction);
          expect(result).toBeInstanceOf(Promise);
          await result;
          expect(saveMock).toHaveBeenCalledTimes(1);
-         expect(saveMock.mock.calls[0][0]).toEqual({ uri: 'file:///x.a', model: root, clientId: 'client-1', baseVersion: undefined });
       });
 
-      it('reject guards on the captured version and propagates the failure', async () => {
-         const conflict = new Error('stale');
-         const { storage, saveMock } = createPolicyStorage({ policy: { kind: 'reject' }, save: () => Promise.reject(conflict) });
-         const result = storage.saveSourceModel(saveAction);
-         await expect(result).rejects.toBe(conflict);
-         expect(saveMock.mock.calls[0][0]).toMatchObject({ baseVersion: SAVE_VERSION });
+      it('reject propagates the failure', async () => {
+         const failure = new Error('disk full');
+         const { storage } = createPolicyStorage({ policy: { kind: 'reject' }, save: () => Promise.reject(failure) });
+         await expect(storage.saveSourceModel(saveAction)).rejects.toBe(failure);
       });
 
-      it('drop-and-log guards, fires-and-forgets (returns undefined), and swallows + logs failures', async () => {
-         const { storage, saveMock, lines } = createPolicyStorage({
+      it('drop-and-log fires-and-forgets (returns undefined), and swallows + logs failures', async () => {
+         const { storage, lines } = createPolicyStorage({
             policy: { kind: 'drop-and-log' },
-            save: () => Promise.reject(new Error('stale'))
+            save: () => Promise.reject(new Error('disk full'))
          });
          const result = storage.saveSourceModel(saveAction);
          expect(result).toBeUndefined();
-         expect(saveMock.mock.calls[0][0]).toMatchObject({ baseVersion: SAVE_VERSION });
-         // Let the rejected save settle; it must be caught + logged, never rethrown.
-         await Promise.resolve();
-         await Promise.resolve();
-         expect(lines.some(line => line.level === 'error' && line.message.includes('Save failed for file:///x.a'))).toBe(true);
+         // Wait for the line rather than for a fixed number of microtasks: the
+         // flush consults disk before writing, so how many ticks separate the
+         // call from the rejection is an implementation detail this assertion
+         // must not encode.
+         const logged = async (): Promise<boolean> => {
+            for (let attempt = 0; attempt < 50; attempt++) {
+               if (lines.some(line => line.level === 'error' && line.message.includes('Save failed for file:///x.a'))) {
+                  return true;
+               }
+               await new Promise(resolve => setTimeout(resolve, 1));
+            }
+            return false;
+         };
+         // Caught and logged, never rethrown.
+         expect(await logged()).toBe(true);
       });
    });
 
