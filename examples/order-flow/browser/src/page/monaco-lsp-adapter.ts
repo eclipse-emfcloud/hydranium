@@ -210,7 +210,7 @@ for (const scheme of ['light', 'dark'] as const) {
  *
  * Module state, matching Monaco's own: `setTheme` is GLOBAL in standalone Monaco
  * — there is no per-editor theme — so tracking it per adapter instance would
- * imply a choice the library cannot honour. Read by {@link MonacoLspAdapter.openEditor}
+ * imply a choice the library cannot honour. Read by {@link MonacoLspAdapter.createEditor}
  * so an editor created after a switch opens in the current scheme rather than in
  * whatever the last `defineTheme` left as the default.
  */
@@ -501,14 +501,6 @@ function declarationLine(text: string): number {
    return index < 0 ? 1 : index + 1;
 }
 
-/**
- * Registers the order-flow languages with Monaco and keeps its models in step
- * with the LSP head on the other end of `connection`.
- *
- * Construction registers the languages, the providers and the inbound
- * `workspace/applyEdit` handler; {@link openEditor} opens one document.
- * Diagnostics are NOT subscribed here — see {@link applyDiagnostics}.
- */
 /** One open document's content and the buffer version that content was read at. */
 export interface EditorDocument {
    readonly uri: string;
@@ -516,6 +508,14 @@ export interface EditorDocument {
    readonly version: number;
 }
 
+/**
+ * Registers the order-flow languages with Monaco and keeps its models in step
+ * with the LSP head on the other end of `connection`.
+ *
+ * Construction registers the languages, the providers and the inbound
+ * `workspace/applyEdit` handler; {@link openDocument} opens one document.
+ * Diagnostics are NOT subscribed here — see {@link applyDiagnostics}.
+ */
 export class MonacoLspAdapter {
    protected readonly openUris = new Set<string>();
    /** Per URI, the buffer version last known to be persisted. */
@@ -591,7 +591,7 @@ export class MonacoLspAdapter {
     *
     * **The echo does not LOOP, and is deliberately not suppressed here.**
     * Applying the edit makes Monaco fire `onDidChangeContent`, which
-    * {@link openEditor} turns into a `didChange`. Measured: one drag costs
+    * {@link openDocument} turns into a `didChange`. Measured: one drag costs
     * exactly one inbound request and no push follows it, so nothing ping-pongs.
     * The server correlates that `didChange` against the push still in flight
     * and reconstructs it against the buffer this client held BEFORE the push —

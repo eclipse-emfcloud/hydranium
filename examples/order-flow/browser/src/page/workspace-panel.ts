@@ -100,6 +100,16 @@ export class WorkspacePanel {
    private visible: VisibleDocuments = { fixed: [], selected: undefined };
 
    /**
+    * The URIs whose buffer has moved since they were last saved.
+    *
+    * Empty until the editors announce otherwise, which is the correct opening
+    * state: the workspace the worker sends is by definition what storage holds,
+    * so a list that opened marked would make the first save rewrite files
+    * nothing had touched.
+    */
+   private dirty: ReadonlySet<string> = new Set();
+
+   /**
     * @param paths every seeded document, by path under the workspace root. Taken
     * from the WORKER's filesystem rather than from the generated seed, so a
     * restored workspace lists what the heads actually came up on.
@@ -115,6 +125,17 @@ export class WorkspacePanel {
    /** Which documents are showing, so the list marks them without re-querying the editors. */
    setVisible(visible: VisibleDocuments): void {
       this.visible = visible;
+   }
+
+   /**
+    * Which documents are unsaved, by URI.
+    *
+    * Taken from the editors rather than computed here, so this list and the
+    * editor titles can never disagree about a document — they are two views of
+    * the one set a save writes.
+    */
+   setDirty(dirty: ReadonlySet<string>): void {
+      this.dirty = dirty;
    }
 
    /**
@@ -138,17 +159,29 @@ export class WorkspacePanel {
             const worst = this.worstSeverity(diagnosticsByUri.get(`${this.rootUri}/${path}`));
             const pinned = this.visible.fixed.includes(path);
             const selected = this.visible.selected === path;
+            const unsaved = this.dirty.has(`${this.rootUri}/${path}`);
             return el(
                'button',
                {
-                  class: `row document-row${selected ? ' is-selected' : ''}${pinned ? ' is-pinned' : ''}`,
-                  title: pinned ? `${this.rootUri}/${path} — pinned beside the diagram` : `${this.rootUri}/${path}`,
+                  class: `row document-row${selected ? ' is-selected' : ''}${pinned ? ' is-pinned' : ''}${unsaved ? ' is-dirty' : ''}`,
+                  // Named in the tooltip as well as marked, because a row can
+                  // carry two glyphs at once and neither says which of them the
+                  // other is: a pinned document that is also unsaved otherwise
+                  // shows a reader two dots and no way to tell them apart.
+                  title: [`${this.rootUri}/${path}`, pinned && 'pinned beside the diagram', unsaved && 'unsaved']
+                     .filter(part => part !== false)
+                     .join(' — '),
                   attrs: { type: 'button', 'aria-current': selected ? 'true' : 'false' },
                   onClick: () => this.handlers.onOpenDocument(path)
                },
                [
                   icon('file-code'),
                   el('span', { class: 'row-label', text: path }),
+                  // At the trailing edge as its own glyph rather than appended to
+                  // the label, which truncates: `.row-label` ellipsises, so a mark
+                  // rendered inside it disappears on exactly the long paths a
+                  // narrow sidebar makes.
+                  unsaved && icon('circle-filled'),
                   // A pin rather than the selection's accent bar, because the pair
                   // beside the diagram is on screen whichever row is selected —
                   // it is a property of the document, not of the last click.
