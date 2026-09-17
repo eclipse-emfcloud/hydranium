@@ -100,11 +100,36 @@ Any unknown tag falls back to English on both halves, which is the same
 pass-through an adopter with no entry for a code gets.
 
 The page starts the worker, hands each head its own `MessageChannel`, sends LSP
-`initialize` for a workspace it never had on disk, and reports five things: the
-diagnostics the LSP head publishes, one document read back through the data
+`initialize` for a workspace it never had on disk, and reports along the bottom:
+the diagnostics the LSP head publishes, one document read back through the data
 head, a `.process` diagram rendered by the GLSP head, the current contents of
 `orders/fulfillment.layout` — which changes when you drag a node — and where the
 workspace itself came from, seed or storage.
+
+**The strip carries LABELS, not values.** Every value here is long — the layout
+report names each positioned node, the storage one each restored file — and six
+of them across the foot of the window either wrap to a second row or lose
+whichever category is last. So each label is a button: clicking one opens its
+value above the strip, and hovering shows the same text as a tooltip. Clicking
+the same label, clicking anywhere else, or pressing `Escape` closes it, and only
+one is open at a time. A label is dimmed until its category has reported, so the
+heads coming up is visible without opening anything.
+
+The last category, **Latency**, is the one that is read rather than published:
+it asks the data head for `DataServerDiagnosticsProtocol.getLatency`, which
+reports per-method count, p50/p99 and max. It is not polled — `getLatency` is
+itself a timed call, so a refresh on a timer would put its own calls into the
+window it reports on.
+
+**One collector covers both heads**, which is the part worth looking at: the
+worker builds a single `LatencyCollector`, passes it to the `DataServer` as its
+`latency` option and to the LSP connection through `lspLatencyOptions`, so a
+single report interleaves `textDocument/semanticTokens/full` with
+`data-server/openModelDocument` and the two are comparable. It turns that
+collector on where a Node host would read `HYDRANIUM_LATENCY` from the
+environment, there being no environment to read here, and sizes it as a ring
+buffer rather than taking the `keep-all` default: a page is left open, so
+retention has to be bounded.
 
 Below the diagram, `orders/fulfillment.process` and `orders/fulfillment.layout`
 open in two Monaco editors over the same LSP channel: type an error and the

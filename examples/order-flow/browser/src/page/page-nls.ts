@@ -35,10 +35,10 @@
  * - **`Order Flow`** — a product noun. `conventions.md` is explicit that a
  *   product name is not i18n: routing one through a catalogue asks a translator
  *   to render a name.
- * - **The status-bar head labels** (`LSP`, `Data`, `GLSP`, `Layout`, `Storage`)
- *   — they name which head answered. Three are protocol names that have no
- *   translation, so translating the other two would leave a legend that reads
- *   half-converted.
+ * - **The status-bar category labels** — they name which head answered, and
+ *   several are protocol names that have no translation, so translating the rest
+ *   would leave a legend that reads half-converted. Their HINTS are translated,
+ *   a hint being a sentence rather than a legend.
  * - **Every report VALUE the page computes** — `8 documents validated, 1
  *   diagnostics` and its siblings. These are measurements read against
  *   `hydranium-cli validate` from a Node process, which prints English; a

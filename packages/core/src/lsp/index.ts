@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 export * from './completion/hydranium-completion-provider.js';
-export * from './instrument-connection.js';
+export * from './lsp-latency.js';
 export * from './semantic-token-provider.js';
 export * from './language-module.js';
 export * from './shared-module.js';

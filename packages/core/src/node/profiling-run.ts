@@ -55,8 +55,8 @@ export interface ProfilingRunOptions {
    /**
     * Optional latency collector. When present, {@link ProfilingRun.finish} writes
     * its report to `server-latency.json` and records a `server-latency` manifest artefact. A
-    * head feeds it via the RPC binding / `instrumentLspConnection`; a pure
-    * headless build with no request traffic leaves it empty.
+    * head feeds it via the RPC binding / `lspLatencyOptions`; a pure headless
+    * build with no request traffic leaves it empty.
     */
    latency?: LatencyCollector;
 }

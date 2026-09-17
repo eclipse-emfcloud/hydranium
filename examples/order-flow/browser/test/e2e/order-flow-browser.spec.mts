@@ -201,7 +201,8 @@ test.describe('order-flow in a web worker', () => {
       // validate` over `examples/order-flow/workspace` from Node. A SHORTER list
       // is the failure this seeding arrangement is most likely to produce, so the
       // count is exact rather than a lower bound.
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -209,16 +210,19 @@ test.describe('order-flow in a web worker', () => {
       // same document is the one-store claim; two heads calling a document clean
       // would be satisfied by a head that never looked, which is why the fixture
       // document is the one with the deliberate error.
-      await expect(page.locator('#data-head')).toHaveText(/^root DomainModel, 1 diagnostic\(s\)$/);
+      await expect(page.locator('[data-report="data-head"]')).toHaveAttribute('title', /^root DomainModel, 1 diagnostic\(s\)$/);
 
       // The GLSP head, on the third channel.
-      await expect(page.locator('#glsp-head')).toHaveText(`${EXPECTED_NODES.length} node(s) and ${EXPECTED_EDGE_COUNT} edge(s)`);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute(
+         'title',
+         `${EXPECTED_NODES.length} node(s) and ${EXPECTED_EDGE_COUNT} edge(s)`
+      );
 
       // The layout secondary, read back through the data head. Asserted here as
       // the pre-edit baseline the editing test below measures against — an edit
       // test that computes its own baseline cannot tell "the entry was created"
       // from "the entry was already there".
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       // Both Monaco editors, over the same LSP channel the diagnostics above
       // arrive on. Their content is not asserted here because the STATUS LINE
@@ -271,7 +275,7 @@ test.describe('order-flow in a web worker', () => {
       // graph is still being laid out is not a smaller box, it is a zero one —
       // the same reading a missing stylesheet produces, so the wait is what
       // keeps this test about the property it names.
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       const size = await page.evaluate(
          ([graphSelector, mountSelector]) => {
@@ -303,7 +307,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('the loaded model is framed inside the canvas rather than anchored in a corner', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       const framing = await page.evaluate(
          ([graphSelector, mountSelector]) => {
@@ -354,7 +358,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('dragging a never-positioned node CREATES its layout entry', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       // `Cancel` because it has no seeded entry. A drag of `Pay` would exercise
       // the update branch, which is the one a fixture where everything is
@@ -379,7 +383,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('a diagram drag reaches the layout EDITOR, not only the store', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
 
@@ -417,8 +421,9 @@ test.describe('order-flow in a web worker', () => {
 
    test('the applyEdit echo of a diagram drag does not corrupt the document', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -450,7 +455,8 @@ test.describe('order-flow in a web worker', () => {
       // server's own log, the echo is applied ~35 ms after the write's line; a
       // second is thirty times that.
       await page.waitForTimeout(1000);
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -459,12 +465,12 @@ test.describe('order-flow in a web worker', () => {
       // instead of emptying the file, and duplicate entries are legal in this
       // grammar — so that shape yields no diagnostic at all and only the count
       // can see it.
-      await expect(page.locator('#layout-head')).toContainText('5 entries:');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', /5 entries:/);
    });
 
    test('creating a task from the palette writes both documents', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
       // The canvas click below is a pointer gesture, so it needs the framed
       // viewport for the same reason a drag does.
       await expectFramedDiagram(page);
@@ -620,7 +626,8 @@ test.describe('order-flow in a web worker', () => {
       page.on('worker', worker => workers.push(worker.url()));
 
       await page.goto('/');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -637,7 +644,8 @@ test.describe('order-flow in a web worker', () => {
       // arrived and the document was rebuilt. Asserted before the marker so each
       // direction has an assertion that can fail alone — the marker depends on
       // both, and would mask this one.
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT + 1} diagnostics`
       );
 
@@ -755,7 +763,8 @@ test.describe('order-flow in a web worker', () => {
 
    test('the workspace list reaches the documents the diagnostics report names', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -846,7 +855,7 @@ test.describe('order-flow in a web worker', () => {
     */
    test('a level in force before startup reaches the server through the configuration fetch', async ({ page }) => {
       await page.goto('/?log=debug');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       // No interaction at all: the only route from the query string to the
       // server's threshold is its own `workspace/configuration` request.
@@ -856,7 +865,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('the log-level picker reaches the server threshold over LSP configuration', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
       // Control: nothing has announced a transition yet, so the assertion below
       // cannot pass on a line that was already there.
       await expect(page.locator('#log').getByText('Log level', { exact: false })).toHaveCount(0);
@@ -868,7 +877,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('one locale switch reaches the page chrome AND the server messages', async ({ page }) => {
       await page.goto('/?locale=de');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       await expect(page.locator('#document-panel h2')).toHaveText('Arbeitsbereich');
       await expect(page.locator('#log-panel h2')).toHaveText('Serverprotokoll');
@@ -903,14 +912,14 @@ test.describe('order-flow in a web worker', () => {
       // readable, not empty. `zz` reaches neither the page's overlay nor the
       // server's.
       await page.goto('/?locale=zz');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
       await expect(page.locator('#document-panel h2')).toHaveText('Workspace');
       await expect(page.locator('#problem-list .problem-row')).toContainText('Could not resolve reference');
    });
 
    test('the language switch is the URL, so the choice is addressable', async ({ page }) => {
       await page.goto('/?locale=de');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
       await expect(page.locator('#page-locale')).toHaveValue('de');
 
       // Back to the default, which DELETES the parameter rather than emptying it
@@ -924,7 +933,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('the log panel carries all three heads on one channel', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       // The count, which survives a filter and a scroll and is therefore the one
       // place the panel's whole contents are stated. A bare `> 0` rather than an
@@ -970,7 +979,7 @@ test.describe('order-flow in a web worker', () => {
       // `prefers-color-scheme` claim rather than a default that happens to agree.
       await page.emulateMedia({ colorScheme: 'dark' });
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
       // The editor colour cannot be read before the semantic tokens arrive: until
       // then the line is one unsplit span with the editor's default foreground,
       // which is a different colour from either scheme's `namespace` rule and
@@ -1004,8 +1013,8 @@ test.describe('order-flow in a web worker', () => {
       // known baseline. Playwright gives each test its own storage partition, so
       // every test in this file starts here — but that is a property of the
       // harness rather than of the page, and this line is what makes it visible.
-      await expect(page.locator('#workspace')).toHaveText(FIRST_VISIT);
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', FIRST_VISIT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       // A diagram drag, so what is persisted has been through the whole write
       // path — GLSP operation, `ModelService.update`, `applyEdit` into the
@@ -1020,8 +1029,8 @@ test.describe('order-flow in a web worker', () => {
       // persisted on every write would pass the reload assertion below while
       // being a different design.
       await page.reload();
-      await expect(page.locator('#workspace')).toHaveText(FIRST_VISIT);
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', FIRST_VISIT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
       const saved = await expectLayoutEntry(page, 'Cancel');
@@ -1029,7 +1038,7 @@ test.describe('order-flow in a web worker', () => {
       // ONE document, not two: both editors are open and only the layout was
       // written, so a save that reported two would be pinning
       // `fulfillment.process` in storage at bytes nobody changed.
-      await expect(page.locator('#workspace')).toHaveText(/^saved 1 document\(s\)/);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
 
       await page.reload();
 
@@ -1038,7 +1047,7 @@ test.describe('order-flow in a web worker', () => {
       // produced for the reloaded document, so it measures what the language
       // server read out of the restored filesystem — where the editor's own
       // content would only show what the page put into it.
-      await expect(page.locator('#layout-head')).toHaveText(`${FIVE_ENTRIES}; Cancel ${saved.x},${saved.y}`);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', `${FIVE_ENTRIES}; Cancel ${saved.x},${saved.y}`);
       // And the same position the pre-reload write produced, so this is the
       // stored edit rather than a second drag's coincidence.
       expect(saved).toEqual(entry);
@@ -1047,23 +1056,27 @@ test.describe('order-flow in a web worker', () => {
       // deliberate error. A restore that shadowed a seeded file with an empty
       // entry, or lost one, moves this line — and it is the only assertion here
       // that covers the seven documents the page never opens.
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
       // The page's own account of where the content came from, which is the one
       // observable that distinguishes "restored" from "the seed happens to say
       // this too".
-      await expect(page.locator('#workspace')).toHaveText('restored 1 file(s) from storage: orders/fulfillment.layout');
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute(
+         'title',
+         'restored 1 file(s) from storage: orders/fulfillment.layout'
+      );
    });
 
    test('resetting the workspace returns the next load to the committed seed', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
       await expectLayoutEntry(page, 'Cancel');
       await page.locator('#save-workspace').click();
-      await expect(page.locator('#workspace')).toHaveText(/^saved 1 document\(s\)/);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
 
       // Reset reloads the page itself, once the worker answers that the store is
       // empty — so there is no explicit `page.reload()` here and its absence is
@@ -1071,16 +1084,17 @@ test.describe('order-flow in a web worker', () => {
       // showing the edit it just discarded.
       await page.locator('#reset-workspace').click();
 
-      await expect(page.locator('#workspace')).toHaveText(FIRST_VISIT);
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', FIRST_VISIT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
    });
 
    test("Monaco's editor worker computes, and not merely gets constructed", async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT);
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       // **In-place replace is the one thing this page does whose ANSWER comes
       // from Monaco's editor worker.** `InPlaceReplaceController` routes through
@@ -1116,7 +1130,10 @@ test.describe('order-flow in a web worker', () => {
       // Langium store now holds it. Compared against the seeded line with one
       // number substituted, so an edit that disturbed any other entry fails here
       // too.
-      await expect(page.locator('#layout-head')).toHaveText(SEEDED_LAYOUT.replace('Ship 660,200', 'Ship 661,200'));
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute(
+         'title',
+         SEEDED_LAYOUT.replace('Ship 660,200', 'Ship 661,200')
+      );
    });
 
    /**
@@ -1130,7 +1147,8 @@ test.describe('order-flow in a web worker', () => {
     */
    test('renders diagnostics in the locale the page declared', async ({ page }) => {
       await page.goto('/?locale=de');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -1159,7 +1177,7 @@ test.describe('order-flow in a web worker', () => {
       // rather than as code the page never loaded. The whole set names what
       // arrived.
       await page.goto('/?locale=de');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Aufgabe', 'Verzweigung', 'Übergang', 'Effekt']);
    });
@@ -1222,7 +1240,8 @@ test.describe('order-flow in a web worker', () => {
     */
    test('renders a lexer error in the declared locale', async ({ page }) => {
       await page.goto('/?locale=de');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -1241,7 +1260,8 @@ test.describe('order-flow in a web worker', () => {
       // message, since chevrotain's own sentence is what the pass must reproduce
       // for an adopter shipping no catalogue.
       await page.goto('/');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -1270,14 +1290,14 @@ test.describe('order-flow in a web worker', () => {
     */
    test('the log says which language the server renders in', async ({ page }) => {
       await page.goto('/?locale=de');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       const lines = page.locator('#log div');
       await expect(lines.filter({ hasText: "rendering messages in locale 'de'" })).not.toHaveCount(0);
       await expect(lines.filter({ hasText: 'no locale declared' })).toHaveCount(0);
 
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       const englishLines = page.locator('#log div');
       await expect(englishLines.filter({ hasText: 'no locale declared' })).not.toHaveCount(0);
@@ -1308,7 +1328,7 @@ test.describe('order-flow in a web worker', () => {
 
    test('labels the palette in English with no locale — the control on the row above', async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Task', 'Gateway', 'Transition', 'Effect']);
    });
@@ -1318,7 +1338,8 @@ test.describe('order-flow in a web worker', () => {
       // this the row above would pass against a page that always got German, and
       // against a server that ignored the locale entirely.
       await page.goto('/');
-      await expect(page.locator('#status')).toHaveText(
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
 
@@ -1337,14 +1358,14 @@ test.describe('order-flow in a web worker', () => {
       // agent's `[hidden]` rule, so only a COMPUTED visibility assertion
       // separates a suppressed stamp from a git glyph floating beside nothing.
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
       await expect(page.locator('#build-commit')).toBeHidden();
    });
 
    test('a stamped document names its commit and links to it', async ({ page }) => {
       await stampBuildCommit(page);
       await page.goto('/');
-      await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       await expect(page.locator('#build-commit')).toBeVisible();
       await expect(page.locator('#build-commit-hash')).toHaveText(BUILD_COMMIT.slice(0, 7));
@@ -1364,6 +1385,76 @@ test.describe('order-flow in a web worker', () => {
 
       await expect(page.locator('#build-commit-hash')).toHaveText(BUILD_COMMIT.slice(0, 7));
       await expect(page.locator('#build-commit .codicon')).toBeVisible();
+   });
+
+   test('a status-bar category opens its value, one at a time', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+      const detail = page.locator('#report-detail');
+      await expect(detail).toBeHidden();
+
+      // Layout, because it is the longest value the page publishes: the strip
+      // carries labels alone, so this is the assertion that a reader can reach
+      // the value at all.
+      await page.locator('[data-report="layout-head"]').click();
+      await expect(detail).toBeVisible();
+      await expect(page.locator('#report-detail-title')).toHaveText('Layout');
+      await expect(page.locator('#report-detail-body')).toHaveText(SEEDED_LAYOUT);
+
+      // A second category REPLACES rather than stacking. Asserted through the
+      // title, there being one region either way — a count of visible regions
+      // would pass on a page that never opened the second.
+      await page.locator('[data-report="status"]').click();
+      await expect(page.locator('#report-detail-title')).toHaveText('LSP');
+      await expect(page.locator('#report-detail-body')).toHaveText(
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      // The open category closes it, and so does a click anywhere else — the
+      // dismissal a reader expects of something that holds a reading and never
+      // an action.
+      await page.locator('[data-report="status"]').click();
+      await expect(detail).toBeHidden();
+
+      await page.locator('[data-report="status"]').click();
+      await expect(detail).toBeVisible();
+      await page.locator('#log').click();
+      await expect(detail).toBeHidden();
+   });
+
+   test('the latency category reports both heads from one collector', async ({ page }) => {
+      await page.goto('/');
+      // Waits for the data head to have answered, which is also what puts calls
+      // in the window: a report read before any RPC has run is empty for a
+      // reason that has nothing to do with the collector being wired.
+      await expect(page.locator('[data-report="data-head"]')).toHaveAttribute('title', /^root DomainModel, 1 diagnostic\(s\)$/);
+
+      // Unread until asked for, where every other category has published by now:
+      // `getLatency` is itself a timed call, so the page reads it on the opening
+      // click rather than publishing it — a poll would put its own calls into
+      // the window it reports on.
+      await expect(page.locator('[data-report="latency"]')).not.toHaveAttribute('title', /method\(s\) over/);
+      // And it is NOT dimmed for that, unlike a category still waiting on its
+      // head: nothing is pending here, the reading simply has not been asked for.
+      await expect(page.locator('[data-report="latency"]')).not.toHaveAttribute('data-pending', '');
+
+      await page.locator('[data-report="latency"]').click();
+      await expect(page.locator('#report-detail-title')).toHaveText('Latency');
+
+      // One method per head, from the SAME collector. Both are demanded because
+      // either alone passes on a head that is timed while the other is not, and
+      // the LSP half is the one that silently reported nothing: a decoration of
+      // the `Connection` object never reaches the named helpers Langium
+      // registers through, so `lspLatencyOptions` sits on the dispatch path
+      // instead. `initialize` in particular is special-cased into `onInitialize`
+      // and is invisible to any `onRequest` decoration.
+      await expect(page.locator('#report-detail-body')).toContainText('data-server/openModelDocument');
+      await expect(page.locator('#report-detail-body')).toContainText('initialize');
+      await expect(page.locator('#report-detail-body')).toContainText('n=');
+
+      // The strip's line is written from the same reading, so the two cannot
+      // disagree about how many methods answered.
+      await expect(page.locator('[data-report="latency"]')).toHaveAttribute('title', /^\d+ method\(s\) over [\d.]+s$/);
    });
 });
 
@@ -1537,20 +1628,20 @@ async function tokenSpansOnLine(page: Page, editorId: string, text: string): Pro
 /**
  * Wait until the diagram is not only rendered but FRAMED.
  *
- * Required before any pointer gesture on the canvas, and `#layout-head` is not a
- * substitute even though it settles first: the page opens the layout document
- * through the data head BEFORE it mounts the diagram, so a test that gates on
- * that report can press the mouse while the fit is still pending — the press is
- * measured against the load-time viewport and the release against the fitted
- * one, and the operation goes out with a delta that matches neither.
+ * Required before any pointer gesture on the canvas, and the LAYOUT category is
+ * not a substitute even though it settles first: the page opens the layout
+ * document through the data head BEFORE it mounts the diagram, so a test that
+ * gates on that report can press the mouse while the fit is still pending — the
+ * press is measured against the load-time viewport and the release against the
+ * fitted one, and the operation goes out with a delta that matches neither.
  *
- * `#glsp-head` is the right gate because `mountProcessDiagram` frames the model
- * before it counts the shapes, so the line appearing means both are done. The
+ * The GLSP category is the right gate because `mountProcessDiagram` frames the
+ * model before it counts the shapes, so the report appearing means both are done. The
  * symptom without this is a drag that lands at the wrong coordinates
  * intermittently, which reads as a flaky write path.
  */
 async function expectFramedDiagram(page: Page): Promise<void> {
-   await expect(page.locator('#glsp-head')).toHaveText(RENDERED_REPORT);
+   await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 }
 
 /** One rendered flow node, by the id the server's index assigns it. */
@@ -1596,9 +1687,12 @@ async function dragBy(page: Page, target: (page: Page) => Locator, by: { x: numb
  * reflows the whole file is a real hazard on this path.
  */
 async function expectLayoutEntry(page: Page, name: string): Promise<{ x: number; y: number }> {
-   const report = page.locator('#layout-head');
-   await expect(report).toHaveText(new RegExp(`^5 entries: ${SEEDED_LAYOUT.slice('4 entries: '.length)}; ${name} -?[\\d.]+,-?[\\d.]+$`));
-   const text = await report.textContent();
+   const report = page.locator('[data-report="layout-head"]');
+   await expect(report).toHaveAttribute(
+      'title',
+      new RegExp(`^5 entries: ${SEEDED_LAYOUT.slice('4 entries: '.length)}; ${name} -?[\\d.]+,-?[\\d.]+$`)
+   );
+   const text = await report.getAttribute('title');
    const match = /(-?[\d.]+),(-?[\d.]+)$/.exec(text ?? '');
    if (match === null) {
       throw new Error(`Layout report has no trailing position: ${text}`);

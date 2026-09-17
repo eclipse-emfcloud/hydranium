@@ -283,9 +283,9 @@ export interface DataServerOptions extends LogNameOptions {
     * When supplied, every inbound data-server RPC is timed into this collector
     * (via the `createRpcProxy` binding) and exposed through
     * {@link DataServerDiagnosticsProtocol.getLatency}. A head that also runs an
-    * LSP connection can pass the SAME collector to
-    * `instrumentLspConnection(connection, latency)` so one report covers both
-    * heads. Absent by default (no timing overhead).
+    * LSP connection can pass the SAME collector through `lspLatencyOptions` to
+    * that connection, so one report covers both heads. Absent by default (no
+    * timing overhead).
     */
    readonly latency?: LatencyCollector;
 }
