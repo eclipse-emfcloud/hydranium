@@ -143,11 +143,15 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    /**
     * Diagnostics as of the last snapshot.
     *
-    * Trustworthy straight after {@link open}, which settles at validation for
-    * exactly that reason. Still NOT trustworthy straight after a write: an
-    * update is answered at the integrity landmark, so validity for the edited
-    * state arrives on the next `onDidUpdateDocument` — which is one reason this
-    * model follows the document rather than reading it once.
+    * Trustworthy straight after {@link open}, which reads twice for exactly
+    * that reason, and straight after a write: `ModelService.update` awaits the
+    * whole build — validation included — before its phase wait, and a wait for
+    * an already-reached phase resolves at once. The bound is the build's
+    * default validation categories, so a check an adopter registered as `slow`
+    * is still owed afterwards.
+    *
+    * So a write needs no `onDidUpdateDocument` to fill its own diagnostics in.
+    * This model follows the document for FOREIGN edits.
     */
    get diagnostics(): readonly TransferDiagnostic[] {
       return this.snapshot?.diagnostics ?? [];

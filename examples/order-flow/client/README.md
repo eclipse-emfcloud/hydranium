@@ -136,7 +136,7 @@ follows the document as it changes. A host renders `fields` and calls
 `setField`; it supplies no policy.
 
 <!-- snippet-preamble
-import { DataConnection, DataEvents, type DataPort } from '@hydranium/protocol';
+import { DataConnectionWithEvents, type DataPort } from '@hydranium/protocol';
 import { OrderFlowPropertiesModel, type PropertyField } from '@hydranium/example-order-flow-client';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model.js';
 declare const port: DataPort;
@@ -149,10 +149,9 @@ declare const render: (fields: readonly PropertyField[]) => void;
 // transfer model — the same union `main.ts` hands the data server.
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
 
-const events = new DataEvents<OrderFlowTransferRoot>();
-const connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
 const session = connection.createSession('order-flow-properties');
-const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
+const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);
 
 await model.open(uri);
 model.onDidChange(() => render(model.fields));

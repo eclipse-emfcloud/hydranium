@@ -27,11 +27,11 @@
  * carries the entries.
  *
  * The Theia-specific mounting of the same contract lives in
- * `@hydranium/data-client-theia`: its `AbstractDataServiceFrontend` solves the
- * same problem against Theia's channel transport, and its `EmitterDataClient`
- * is the Theia-bound counterpart of `DataEvents`. Prefer this tier for
- * anything new, and reach for the Theia package only for what genuinely needs
- * Theia DI.
+ * `@hydranium/data-client-theia`, and is now only the TRANSPORT: its
+ * `ChannelDataPort` fills the `DataPort` seam over a Theia channel, and its
+ * `EmitterDataClient` is the Theia-bound counterpart of `DataEvents`.
+ * Everything above the port is here, so a Theia frontend and a browser page
+ * differ by which port they construct and nothing else.
  */
 
 export * from './data-connection';

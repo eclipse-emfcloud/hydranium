@@ -27,11 +27,12 @@ import { ContainerModule, type interfaces } from '@theia/core/shared/inversify';
  *
  * **More than one handler is the normal case, not an exotic one.** Theia keys a
  * frontend channel by its service path and refuses a second channel on a path
- * already open, so every frontend abstraction reaching the data head needs its
- * own path and therefore its own handler — a host-neutral `DataPort` beside a
- * Theia `AbstractDataServiceFrontend` is exactly that shape. They still forward
+ * already open, so every frontend abstraction reaching the data head on its own
+ * channel needs its own path and therefore its own handler. They still forward
  * to the SAME data server: the path distinguishes the channel, the shared
- * `portCommand` names the one process behind it.
+ * `portCommand` names the one process behind it. Several participants over ONE
+ * channel need no second handler — that is what `DataConnection`'s sessions are
+ * for, and it is the cheaper arrangement.
  */
 export function createDataServerConnectionContainerModule(...handlerClasses: interfaces.Newable<ConnectionHandler>[]): ContainerModule {
    const frontendScopedConnectionModule = ConnectionContainerModule.create(({ bind }) => {

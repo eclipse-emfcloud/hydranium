@@ -7,8 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { FRAMEWORK_CLIENT_IDS } from '../client-ids';
 import { DATA_CLIENT_PROTOCOL_METHODS, DATA_SERVER_WIRE_PREFIX, type DataClientProtocol, type DataServerProtocol } from '../data';
 import type { TransferElement } from '../transfer-element';
+import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
 import { DataSession } from './data-session';
 import { RpcConnection, type RpcConnectionLifecycle } from './rpc-connection';
@@ -85,12 +87,19 @@ export class DataConnection<
     *
     * `clientId` must be distinct per participant and stable for its lifetime:
     * it keys the server's per-`(uri, clientId)` hold and watch, and it is the
-    * echo key an inbound `onDocumentUpdated` is matched against. Avoid the
-    * three values the framework uses as sentinels — `'language-client'`,
-    * `'unknown'` and `'revert-on-close'`.
+    * echo key an inbound `onDocumentUpdated` is matched against.
+    *
+    * Throws for an id in {@link FRAMEWORK_CLIENT_IDS} — those are authors the
+    * SERVER emits rather than participants, so a session holding one would read
+    * the framework's own broadcasts as its own echoes and drop them. Nothing
+    * about that fails on its own: the document simply stops following, which
+    * looks like a dead connection.
     */
    createSession(clientId: string): DataSession<TTransfer, TServer> {
       this.assertLive();
+      if (FRAMEWORK_CLIENT_IDS.includes(clientId)) {
+         throw new Error(`clientId '${clientId}' is reserved by the framework and cannot identify a participant`);
+      }
       const session = new DataSession<TTransfer, TServer>(clientId, {
          connected: () => this.connected(),
          releaseSession: released => this.sessions.delete(released)
@@ -110,5 +119,42 @@ export class DataConnection<
       }
       this.sessions.clear();
       super.dispose();
+   }
+}
+
+/**
+ * A {@link DataConnection} that brings its own {@link DataEvents}, so a host
+ * with several interested parties does not have to supply one.
+ *
+ * **The client slot holds exactly one object, and that is why this exists.**
+ * `createRpcProxy` binds a single `localTarget`, and underneath a method name
+ * maps to one handler — a second registration replaces the first silently. So a
+ * properties panel and a tree cannot both be the client; one fan-out sits in the
+ * slot and both subscribe to it.
+ *
+ * Use {@link DataConnection} directly instead when the client is yours: an
+ * adopter service that implements the protocol plus its own methods, a single
+ * consumer that IS the client, or a request/response-only client that binds
+ * nothing.
+ */
+export class DataConnectionWithEvents<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer> = DataServerProtocol<TTransfer>
+> extends DataConnection<TTransfer, TServer, DataEvents<TTransfer>> {
+   /** Server pushes, fanned out to as many local listeners as the host has. */
+   readonly events: DataEvents<TTransfer>;
+
+   constructor(port: DataPort, options?: DataConnectionOptions) {
+      // Built as a local because `this` is unavailable before `super`, then
+      // read back onto the field.
+      const events = new DataEvents<TTransfer>();
+      super(port, events, options);
+      this.events = events;
+   }
+
+   /** Disposes the fan-out it created, which no caller else holds. */
+   override dispose(): void {
+      super.dispose();
+      this.events.dispose();
    }
 }

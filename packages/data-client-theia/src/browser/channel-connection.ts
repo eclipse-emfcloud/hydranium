@@ -199,8 +199,8 @@ export interface ChannelConnectionHandle {
    /**
     * The current connection. Read it per use rather than caching it: after a
     * reconnect this returns a NEW promise, and a cached one resolves to the
-    * dead connection forever. The same reasoning makes
-    * `AbstractDataServiceFrontend` rebuild its proxy rather than hold one.
+    * dead connection forever. The same reasoning makes `RpcConnection` rebuild
+    * its proxy per generation rather than hold one.
     */
    readonly current: Promise<MessageConnection>;
 

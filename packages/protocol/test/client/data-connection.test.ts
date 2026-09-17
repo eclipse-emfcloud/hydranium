@@ -17,12 +17,13 @@
 
 import { describe, expect, it } from 'vitest';
 import type { MessageConnection } from 'vscode-jsonrpc';
-import { DataConnection } from '../../src/client/data-connection';
+import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
+import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
 import { DATA_SERVER_WIRE_PREFIX } from '../../src/data';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { tick, waitFor } from '../../src/testing';
-import { makeFakeDataPort } from '../../src/testing/data-doubles';
+import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
 import { makeDuplexConnectionPair } from '../../src/testing/node';
 import type { TransferElement } from '../../src/transfer-element';
 
@@ -71,7 +72,7 @@ function recordingServer(connection: MessageConnection): ServerCall[] {
    return calls;
 }
 
-function harness(): { connection: DataConnection<ProbeElement>; calls: ServerCall[]; dispose(): void } {
+function harness(): { connection: DataConnection<ProbeElement>; calls: ServerCall[]; port: FakeDataPort; dispose(): void } {
    const pair = makeDuplexConnectionPair();
    const calls = recordingServer(pair.left);
    const port = makeFakeDataPort({ connect: () => pair.right });
@@ -79,6 +80,7 @@ function harness(): { connection: DataConnection<ProbeElement>; calls: ServerCal
    return {
       connection,
       calls,
+      port,
       dispose: () => {
          connection.dispose();
          pair.dispose();
@@ -211,6 +213,109 @@ describe('DataConnection sessions', () => {
          // wire survives, so the two together discriminate.
          expect(closes(calls)).toEqual([]);
          await expect(panel.openDocument(URI_C)).rejects.toThrow('DataSession is disposed');
+      } finally {
+         dispose();
+      }
+   });
+
+   it('refuses a clientId the framework reserves for its own broadcasts', () => {
+      const { connection, dispose } = harness();
+      try {
+         // A session under one of these would match the framework's OWN
+         // broadcasts as its own echoes and drop them, so the document silently
+         // stops following — indistinguishable from a dead connection. Every
+         // reserved id is checked rather than a representative one, since the
+         // guard is a list membership and a single case passes for a hardcoded
+         // comparison against that one value.
+         for (const reserved of FRAMEWORK_CLIENT_IDS) {
+            expect(() => connection.createSession(reserved)).toThrow(reserved);
+         }
+         expect(() => connection.createSession('panel')).not.toThrow();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('surfaces a failure through the port, for every participant', () => {
+      const { connection, port, dispose } = harness();
+      try {
+         const failure = new Error('boom');
+         const reported = { code: 'test/failed', text: 'boom', params: {} };
+
+         connection.reportError(failure, reported);
+
+         // Through the PORT, not swallowed and not a channel of its own: the
+         // port is the host's one sink, so a panel and a tree on the same
+         // connection report the same way without being handed the transport.
+         expect(port.reported).toEqual([{ error: failure, message: reported }]);
+      } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataConnectionWithEvents', () => {
+   function eventsHarness(): { connection: DataConnectionWithEvents<ProbeElement>; notify: (uri: string) => void; dispose(): void } {
+      const pair = makeDuplexConnectionPair();
+      recordingServer(pair.left);
+      const fakePort = makeFakeDataPort({ connect: () => pair.right });
+      const connection = new DataConnectionWithEvents<ProbeElement>(fakePort);
+      return {
+         connection,
+         notify: (uri: string) =>
+            void pair.left
+               .sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentUpdated`, {
+                  document: document(uri),
+                  sourceClientId: 'panel',
+                  reason: 'changed'
+               })
+               .catch(() => undefined),
+         dispose: () => {
+            connection.dispose();
+            pair.dispose();
+         }
+      };
+   }
+
+   it('fans one server push out to every listener', async () => {
+      const { connection, notify, dispose } = eventsHarness();
+      try {
+         // A connection binds exactly ONE client, and a method name maps to one
+         // handler — a second registration replaces the first silently. So
+         // without the fan-out only the first interested party could ever hear
+         // the server, and two listeners is the smallest case that tells
+         // fan-out from plain delivery.
+         const seen: string[] = [];
+         connection.events.onDidUpdateDocument(event => seen.push(`first:${event.document.uri}`));
+         connection.events.onDidUpdateDocument(event => seen.push(`second:${event.document.uri}`));
+         // The generation, and with it the inbound binding, is built lazily on
+         // first use — nothing is bound until something asks.
+         await connection.connected();
+
+         notify(URI_A);
+         await waitFor(() => seen.length >= 2);
+
+         expect(seen).toEqual([`first:${URI_A}`, `second:${URI_A}`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('disposes the fan-out it created', async () => {
+      const { connection, dispose } = eventsHarness();
+      try {
+         const seen: string[] = [];
+         connection.events.onDidUpdateDocument(() => seen.push('heard'));
+         await connection.connected();
+
+         connection.dispose();
+         // Driven through the WIRE method rather than the server: disposing the
+         // connection already kills the transport, so a real push reaches
+         // nothing whether or not the emitters were torn down — the absence
+         // would hold in both states and witness neither.
+         connection.events.onDocumentUpdated({ document: document(URI_A), sourceClientId: 'panel', reason: 'changed' } as never);
+
+         expect(seen).toEqual([]);
       } finally {
          dispose();
       }
