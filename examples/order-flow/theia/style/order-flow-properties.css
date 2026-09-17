@@ -41,6 +41,21 @@
    opacity: 0.8;
 }
 
+/* A field holding something the server has not been told about. Marked on the
+   LABEL rather than on the input: the input carries a focus outline, and a
+   second edge on the same element reads as a rendering fault at exactly the
+   moment the field is being edited. */
+.order-flow-properties-body .field[data-pending] label::after {
+   content: ' *';
+   color: var(--theia-editorWarning-foreground);
+}
+
+.order-flow-properties-body .field-hint {
+   margin-top: 2px;
+   font-size: var(--theia-ui-font-size0);
+   opacity: 0.75;
+}
+
 .order-flow-properties-body .field input {
    background: var(--theia-input-background);
    color: var(--theia-input-foreground);

@@ -80,13 +80,14 @@ import {
    WORKSPACE_ROOT_URI,
    type WorkspaceReadyMessage
 } from '../head-channels.js';
-import { requireButton, requireCheckbox, requireSelect } from './dom.js';
+import { requireButton, requireCheckbox, requireElement, requireSelect } from './dom.js';
 import { EditorArea } from './editor-area.js';
 import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
 import { LogPanel } from './log-panel.js';
 import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco-lsp-adapter.js';
 import { applyPageLocale, localeUrl, PAGE_LOCALES } from './page-nls.js';
-import { mountProcessDiagram } from './process-diagram.js';
+import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
+import { PROPERTIES_CLIENT_ID, PropertiesPanel } from './properties-panel.js';
 import { publishReport, ReportDetail } from './report-detail.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
 import { WorkspacePanel } from './workspace-panel.js';
@@ -374,6 +375,8 @@ type OrderFlowDataServer = DataServerProtocol<OrderFlowTransferRoot> & DataServe
 interface DataHead {
    readonly session: DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
    readonly events: DataEvents<OrderFlowTransferRoot>;
+   /** Mint another participant on the same wire — see {@link openDataHead}. */
+   readonly createSession: (clientId: string) => DataSession<OrderFlowTransferRoot, OrderFlowDataServer>;
 }
 
 /**
@@ -391,7 +394,11 @@ function openDataHead(dataPort: MessagePort): DataHead {
    const port = new WorkerDataPort(dataPort);
    const events = new DataEvents<OrderFlowTransferRoot>();
    const connection = new DataConnection<OrderFlowTransferRoot, OrderFlowDataServer>(port, events);
-   return { session: connection.createSession('order-flow-browser-page'), events };
+   return {
+      session: connection.createSession('order-flow-browser-page'),
+      events,
+      createSession: clientId => connection.createSession(clientId)
+   };
 }
 
 /**
@@ -515,8 +522,11 @@ async function watchLayoutThroughDataHead({ session, events }: DataHead): Promis
  * over the shared store, and two of those interleaved would have the second
  * rebuild racing the first document's settle for no gain on two files.
  */
-async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter): Promise<void> {
-   const documents = adapter.dirtyDocuments();
+async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, editors: EditorArea, only?: string): Promise<void> {
+   // Filtered from the same dirty set the button uses rather than read another
+   // way, so "what Ctrl+S writes" and "what Save workspace writes" can never
+   // disagree about whether a document had changed.
+   const documents = adapter.dirtyDocuments().filter(document => only === undefined || document.uri === only);
    if (documents.length === 0) {
       setWorkspaceReport('nothing to save');
       return;
@@ -530,6 +540,7 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter): Pro
          // those.
          adapter.markSaved(document);
       }
+      editors.refreshDirtyMarks();
       setWorkspaceReport(`saved ${documents.length} document(s) — a reload restores them`);
    } catch (error: unknown) {
       // Reported rather than swallowed, because the store can genuinely refuse:
@@ -566,10 +577,46 @@ function provideLatency(dataHead: DataHead, detail: ReportDetail): void {
    });
 }
 
+/**
+ * Save on `Ctrl+S` / `Cmd+S`, scoped to whatever the reader is in.
+ *
+ * An editor saves ITS document and the properties panel saves the one it is
+ * showing; anywhere else saves everything, which is what the toolbar button has
+ * always done. Two scopes because the shortcut means "persist what I am working
+ * on" and a page with three editors open has to answer which one that is.
+ *
+ * ONE document-level listener rather than a command registered per editor:
+ * measured, Monaco neither binds nor swallows this chord, so the same handler
+ * serves the editors, the panel and the rest of the page — and the three cases
+ * are decided in one place instead of diverging across three registrations.
+ *
+ * `preventDefault` is the whole of the browser accommodation: without it the
+ * chord also opens the native Save-Page dialog.
+ */
+function wireSaveShortcut(save: (only?: string) => void, editors: EditorArea, properties: { panel?: PropertiesPanel }): void {
+   document.addEventListener(
+      'keydown',
+      event => {
+         if (event.key.toLowerCase() !== 's' || !(event.ctrlKey || event.metaKey) || event.altKey) {
+            return;
+         }
+         event.preventDefault();
+         const focused = editors.focusedPath();
+         if (focused !== undefined) {
+            save(`${WORKSPACE_ROOT_URI}/${focused}`);
+            return;
+         }
+         const inPanel = event.target instanceof Element && event.target.closest('#properties-body') !== null;
+         save(inPanel ? properties.panel?.documentUri : undefined);
+      },
+      true
+   );
+}
+
 /** Enable the save / reset controls, now that there is a head behind them. */
-function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, adapter: MonacoLspAdapter): void {
+function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, adapter: MonacoLspAdapter, editors: EditorArea): void {
    const save = requireButton('save-workspace');
-   save.addEventListener('click', () => void saveWorkspace(dataHead, adapter));
+   save.addEventListener('click', () => void saveWorkspace(dataHead, adapter, editors));
    save.disabled = false;
 
    const reset = requireButton('reset-workspace');
@@ -675,6 +722,12 @@ export async function main(locale: string | undefined): Promise<void> {
    // built until the worker has sent the workspace it came up on. So the handler
    // reads through this slot and does nothing until it is filled.
    const sidebar: { panel?: WorkspacePanel } = {};
+   // Same deferred slot as `sidebar.panel`, for the same ordering: the editors
+   // are built from the worker's workspace, and the properties panel needs a
+   // data-head session, which is opened after them. A focus that lands before
+   // the panel exists is dropped, and the panel opens on the focused document
+   // once it is wired.
+   const properties: { panel?: PropertiesPanel } = {};
 
    // ONE handler for the notification, fanning out to all three consumers. A
    // second `onNotification` for the same method would silently REPLACE this one
@@ -719,7 +772,8 @@ export async function main(locale: string | undefined): Promise<void> {
       onVisibleChanged: visible => {
          sidebar.panel?.setVisible(visible);
          sidebar.panel?.render(diagnosticsByUri);
-      }
+      },
+      onFocusChanged: path => properties.panel?.showDocument(`${WORKSPACE_ROOT_URI}/${path}`)
    });
 
    sidebar.panel = new WorkspacePanel(Object.keys(ready.files), WORKSPACE_ROOT_URI, {
@@ -755,8 +809,24 @@ export async function main(locale: string | undefined): Promise<void> {
 
    // Enabled here, after the data head has answered once: the save goes through
    // it, so a control armed before that could only fail.
-   wireWorkspaceControls(channels, dataHead, adapter);
+   wireWorkspaceControls(channels, dataHead, adapter, editors);
+   wireSaveShortcut(only => void saveWorkspace(dataHead, adapter, editors, only), editors, properties);
    provideLatency(dataHead, reportDetail);
+
+   // The SECOND participant on the one connection, and the reason the page needs
+   // sessions at all: it holds its own documents open and reads its own writes
+   // back as echoes rather than as foreign edits.
+   properties.panel = new PropertiesPanel(dataHead.createSession(PROPERTIES_CLIENT_ID), dataHead.events);
+
+   // The panel's first document is established by FOCUSING one, not by opening
+   // it directly: an initial document chosen here would be a second answer to
+   // "which document is shown", and whichever of the two landed last would win.
+   // `show` focuses and announces through the one path every later change takes.
+   //
+   // The process document because it is the one with editable fields — a
+   // `.domain` root has none — and because it is what the diagram and both
+   // pinned editors are already about.
+   editors.show(FIXED_DOCUMENTS[0]);
 
    // Before the diagram, so the layout report is already live when the first
    // edit lands. Opening it after mounting would leave the window between the
@@ -776,6 +846,21 @@ export async function main(locale: string | undefined): Promise<void> {
       // the resolved value is the first reading. A report written once would go
       // stale on the first palette gesture, beside a layout report that does not.
       setGlspReport(await mountProcessDiagram(channels.glspPort, GLSP_HEAD_DOCUMENT, setGlspReport));
+      // AFTER the mount, and the ordering is the whole of it: a listener put on
+      // this element before the diagram takes it over never fires — measured,
+      // the same registration moved above this line stops working.
+      //
+      // The diagram is a view of the process document and has to announce that
+      // itself, being no Monaco editor and so raising no editor focus — without
+      // this the panel stays on whatever was focused before, which reads as
+      // having stopped following. `pointerdown` in the CAPTURE phase, because
+      // the canvas takes DOM focus on some gestures and not others, and its own
+      // mouse handling stops the event on the way back up.
+      requireElement(PROCESS_DIAGRAM_ELEMENT_ID).addEventListener(
+         'pointerdown',
+         () => properties.panel?.showDocument(GLSP_HEAD_DOCUMENT),
+         true
+      );
    } catch (error: unknown) {
       setGlspReport(`failed: ${error instanceof Error ? error.message : String(error)}`);
    }

@@ -146,6 +146,39 @@ under the diagram it is a view of, and the workspace list on the left drives a
 separate lookup editor beside it. The list marks the two states differently: a pin
 for the pair, the accent bar for the selection.
 
+**Under the list is a properties panel, and it is the page's SECOND data-head
+participant.** It takes its own `DataSession` off the one connection rather than
+a connection of its own, so the server holds a separate `(uri, clientId)` hold
+and watch for it and each participant reads its own writes back as echoes. Edit
+`name` there and the `.process` text rewrites; edit `subject` to a name nothing
+declares and the write is accepted and comes back as a diagnostic, because the
+transfer form of a cross-reference is its text and the server has nothing to
+reject.
+
+**`Ctrl+S` saves what you are in**, and everything when you are in neither an
+editor nor the panel — which is what the toolbar button has always done. Until
+now a save could only ever write the whole workspace; the shortcut is where the
+per-document one arrived. Monaco neither binds nor swallows that chord, so one
+document-level listener serves all three cases, and the `preventDefault` on it
+is the only reason the browser's own Save-Page dialog stays shut.
+
+**Two outstanding states, marked apart on purpose.** A field you have typed in
+but not committed shows `*` beside its label and a `Press Enter to apply` note:
+the server has not been told. An editor whose buffer has moved since it was last
+saved shows `●` beside its title: storage has not been told. They are never the
+same condition — typing in an editor reaches the server immediately, and
+committing a field makes its document unsaved — so one mark for both would blur
+the two ends of the pipeline this page exists to show apart.
+
+**It follows editor FOCUS rather than the workspace list, which is a
+consequence of the grammars rather than a preference.** A `DomainModel` root has
+no top-level string property at all, so a panel bound to the selection editor
+would open on `orders.domain` and show nothing to edit; the two roots that do
+have editable fields — `ProcessModel` and `LayoutModel` — are exactly the two
+documents pinned under the diagram, which the selection editor will not load
+because one document in two editors splits the cursor between them. Click into a
+`.domain` and the panel says so rather than going blank.
+
 **Drag a node and watch the `.layout` editor, not just the report line.** That is
 `workspace/applyEdit` arriving — the diagram→text direction, and the one thing on
 this page that makes it a client of a framework seam no other host has exercised.

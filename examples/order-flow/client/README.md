@@ -54,6 +54,16 @@ look Theia-only.
 - `src/properties/properties-form.ts` — `PropertiesForm`, the drawing half:
   plain DOM over the model's `fields`, mounted unchanged by the Theia widget
   and the VS Code webview alike. It is the only file here that touches the DOM.
+  A write goes out on `change` — Enter or leaving the field — rather than per
+  keystroke, because `TransferUpdateArgs.model` is the whole document root and
+  there is no path-scoped variant, so a keystroke-level write would reparse and
+  reserialize the file on every letter. Until it goes, the field carries
+  `data-pending` and reveals its `.field-hint`; each host styles those two, and
+  a host that styles neither still gets a hidden hint rather than a note that
+  never clears. **Pending means the input differs from what this form last WROTE
+  into it, not from the model** — `setFields` refuses to overwrite a focused
+  input, so comparing against the model would mark a field that someone else
+  changed and the reader never touched.
 - `src/properties/properties-messages.ts` — the panel's own user-facing
   messages, declared with the framework's `defineMessage`. This is the adopter
   half of message externalization: a stable code beside an English default,

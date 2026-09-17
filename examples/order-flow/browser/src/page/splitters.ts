@@ -223,6 +223,7 @@ export function resetSplitters(properties: readonly string[], onResize: ResizeLi
 /** The dividers' properties, so a reset can name them. */
 export const SPLITTER_PROPERTIES = [
    '--sidebar-width',
+   '--properties-height',
    '--selected-width',
    '--diagram-split',
    '--fixed-split',

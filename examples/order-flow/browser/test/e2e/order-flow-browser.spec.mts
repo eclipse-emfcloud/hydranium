@@ -1387,6 +1387,135 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#build-commit .codicon')).toBeVisible();
    });
 
+   test('the properties panel follows editor focus, on a second data-head session', async ({ page }) => {
+      await page.goto('/');
+      const panel = page.locator('#properties-body');
+
+      // Opens on the process document, nothing having been focused yet.
+      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+      await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
+      // `subject` is a cross-reference, whose transfer form is its text — which
+      // is why it is presented as an ordinary string field.
+      await expect(panel.locator('#field-subject')).toHaveValue('Order');
+
+      // Focusing the selection editor moves the panel to ITS document, and a
+      // `.domain` root has no top-level string property at all. Asserted rather
+      // than avoided: it is the state a reader meets first if they click there,
+      // and a panel that went blank instead would read as broken.
+      await page.locator('#selected-editor').click();
+      await expect(panel.locator('h1')).toHaveText('orders.domain');
+      await expect(panel).toContainText('This document root has no editable text properties.');
+
+      // And back, which proves the panel re-opens rather than only ever closing.
+      await page.locator('#process-editor').click();
+      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+      await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
+
+      // The DIAGRAM counts as well, and has to say so itself: it is a view of
+      // the process document but is no Monaco editor, so it announces no focus.
+      // Asserted from the `.domain` state, or a panel that simply never moved
+      // would pass — `fulfillment.process` is what it shows by default.
+      await page.locator('#selected-editor').click();
+      await expect(panel.locator('h1')).toHaveText('orders.domain');
+      // A NODE rather than a point on the canvas: the palette and the status
+      // overlay cover parts of the mount, so a coordinate is a guess about what
+      // is on top, where a rendered node is unambiguously the diagram.
+      await expectFramedDiagram(page);
+      await nodeLocator('Pay')(page).click();
+      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+   });
+
+   test('a properties write reaches the document, and its diagnostics come back', async ({ page }) => {
+      await page.goto('/');
+      const panel = page.locator('#properties-body');
+      await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
+      );
+
+      // A cross-reference pointed at a name nothing declares. The write is
+      // ACCEPTED — the transfer form of a reference is its text, so the server
+      // has no way to reject it — and comes back as a diagnostic instead. That
+      // is what makes this an end-to-end assertion rather than a DOM one: the
+      // count can only move if the write reached the store and was re-validated.
+      await panel.locator('#field-subject').fill('NoSuchEntity');
+      await panel.locator('#field-subject').blur();
+
+      await expect(page.locator('[data-report="status"]')).toHaveAttribute(
+         'title',
+         `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT + 1} diagnostics`
+      );
+      // And the panel shows it, so the writer sees the consequence of the write
+      // without going to the problems list.
+      await expect(panel.locator('.diagnostics li')).toHaveCount(1);
+   });
+
+   test('the two outstanding states are marked apart: a field pending, a buffer unsaved', async ({ page }) => {
+      await page.goto('/');
+      const panel = page.locator('#properties-body');
+      const nameField = panel.locator('#field-name');
+      await expect(nameField).toHaveValue('Fulfillment');
+
+      const pendingField = panel.locator('.field[data-pending]');
+      const dirtyTitle = page.locator('.pane-title.is-dirty');
+      await expect(pendingField).toHaveCount(0);
+      await expect(dirtyTitle).toHaveCount(0);
+
+      // Typed and NOT committed: the server has not been told, so the field is
+      // marked and its note appears. Nothing is unsaved yet, because nothing has
+      // reached a buffer.
+      await nameField.click();
+      await nameField.pressSequentially('Express');
+      await expect(pendingField).toHaveCount(1);
+      await expect(panel.locator('#field-name-hint')).toBeVisible();
+      await expect(dirtyTitle).toHaveCount(0);
+
+      // Committed: the field mark clears because the server now has it, and the
+      // `.process` buffer becomes unsaved because storage does not. The two
+      // marks are never both on for the same reason, which is the distinction
+      // they exist to draw.
+      await nameField.press('Enter');
+      await expect(pendingField).toHaveCount(0);
+      await expect(panel.locator('#field-name-hint')).toBeHidden();
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+
+      // Saving clears it, and nothing on an editor fires when that happens — so
+      // this also pins that the page asks for the marks to be recomputed.
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      await expect(dirtyTitle).toHaveCount(0);
+   });
+
+   test('Ctrl+S saves the focused document, and everything when focus is elsewhere', async ({ page }) => {
+      await page.goto('/');
+      const panel = page.locator('#properties-body');
+      await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
+
+      // Two documents dirtied, through the two directions that reach a buffer:
+      // a properties write rewrites `.process`, and typing reaches `.domain`.
+      await panel.locator('#field-name').fill('Express');
+      await panel.locator('#field-name').press('Enter');
+      await page.locator('#selected-editor .view-line').first().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('\n// touched');
+      await expect(page.locator('.pane-title.is-dirty')).toHaveCount(2);
+
+      // Focus is in the selection editor, so this saves THAT document alone —
+      // the count in the report is what distinguishes scoped from save-all.
+      await page.keyboard.press('Control+S');
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      await expect(page.locator('#selected-editor-title')).not.toHaveClass(/is-dirty/);
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+
+      // Focus outside any editor and outside the panel: the whole workspace,
+      // which is what the toolbar button has always done.
+      await page.locator('#log').click();
+      await page.keyboard.press('Control+S');
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      await expect(page.locator('.pane-title.is-dirty')).toHaveCount(0);
+   });
+
    test('a status-bar category opens its value, one at a time', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
