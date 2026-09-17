@@ -34,11 +34,14 @@ export class HydraniumConfigurationProvider extends DefaultConfigurationProvider
    protected fetchSections?: (items: ConfigurationItem[]) => Promise<unknown>;
 
    /**
-    * Sections already asked about, holding the in-flight request so concurrent
+    * Sections already dealt with, holding the in-flight work so concurrent
     * readers share one round trip. Entries stay after they settle: they record
-    * that the question was ASKED, and without that an unset section is
+    * that the section was HANDLED, and without that an unset section is
     * re-requested on every read, "unset" and "not fetched" being the same
     * absence in the store.
+    *
+    * A section the client's capabilities ruled out counts as handled, having
+    * been settled by asking nothing.
     */
    protected readonly requestedSections = new Map<string, Promise<void>>();
 
@@ -74,6 +77,23 @@ export class HydraniumConfigurationProvider extends DefaultConfigurationProvider
    }
 
    /**
+    * The hooks are gated on the client having declared `workspace.configuration`.
+    * A connection binds them whatever the client said, so their presence is not
+    * consent: calling them sends a `client/registerCapability` and a
+    * `workspace/configuration` to a client that advertised support for neither,
+    * which is entitled to answer either with a method-not-found and may drop the
+    * connection.
+    *
+    * That flag is exact for the fetch and KNOWINGLY coarse for the registration,
+    * which the spec governs by
+    * `workspace.didChangeConfiguration.dynamicRegistration`. The base registers
+    * under `workspace.configuration` alone before any of this runs, so gating
+    * the registration on the narrower flag here would withhold a request whose
+    * twin has already gone out, sparing the client nothing. A client declaring
+    * `workspace.configuration` without dynamic registration is still registered
+    * for, by the base and by this; closing that means changing the base's pass,
+    * not this gate.
+    *
     * Registering before fetching, so an edit landing between the two arrives as
     * a notification instead of being lost; the reverse order drops it.
     *
@@ -83,6 +103,9 @@ export class HydraniumConfigurationProvider extends DefaultConfigurationProvider
     * change that is only this provider catching up.
     */
    protected async doRequestSection(section: string): Promise<void> {
+      if (!this.workspaceConfig) {
+         return;
+      }
       this.registerForSection?.({ section });
       if (!this.fetchSections) {
          return;

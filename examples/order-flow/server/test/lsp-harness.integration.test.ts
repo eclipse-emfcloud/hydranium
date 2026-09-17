@@ -32,10 +32,10 @@ import { NodeFileSystem } from '@hydranium/core/node';
 import { type LspHarness, makeLspHarness, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { AllSemanticTokenModifiers, AllSemanticTokenTypes } from '@hydranium/langium/lsp';
 import { Logger } from '@hydranium/protocol';
-import { DidChangeConfigurationNotification } from 'vscode-languageserver';
+import { ConfigurationRequest, DidChangeConfigurationNotification, RegistrationRequest } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DomainLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
-import { createOrderFlowServices, type OrderFlowOptions } from '../src/language-server/order-flow-module.js';
+import { createOrderFlowServices, ORDER_FLOW_CONFIGURATION_ROOT, type OrderFlowOptions } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 
 let harness: LspHarness | undefined;
@@ -247,6 +247,59 @@ describe('order-flow LSP head over the wire', () => {
       // already covered by `packages/glsp-server/test/glsp-client-logger.test.ts`
       // with a control. The reachability claim ("one setting, every head") is
       // carried by the global being global, not by a second test.
+   });
+
+   describe('server-to-client configuration traffic', () => {
+      /**
+       * Boot a head against a client declaring `capabilities`, and collect what
+       * the server asks of it while a section is read.
+       *
+       * The read is driven here and awaited, the settings binding's own read
+       * settling nothing observable. That await is what makes the absence
+       * provable where a fixed wait would not: the provider resolves only once
+       * it has decided whether to ask, and an ask awaits its fetch, so the
+       * registration written ahead of that fetch has been handled by the time
+       * the read returns.
+       */
+      async function trafficWhileReadingASection(capabilities: Record<string, unknown>): Promise<{
+         registered: string[];
+         asked: string[];
+      }> {
+         const scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-config-' });
+         const head = makeLspHarness({
+            createServices: connection => createOrderFlowServices({ connection, ...NodeFileSystem }).shared
+         });
+         const registered: string[] = [];
+         const asked: string[] = [];
+         head.client.onRequest(RegistrationRequest.type, params => {
+            registered.push(...params.registrations.map(registration => registration.method));
+         });
+         head.client.onRequest(ConfigurationRequest.type, params => {
+            asked.push(...params.items.map(item => item.section ?? ''));
+            return params.items.map(() => null);
+         });
+
+         try {
+            await head.initialize({ capabilities, workspaceFolders: [{ uri: scratch.uri(), name: 'order-flow' }] });
+            await head.services.workspace.ConfigurationProvider.getConfiguration(ORDER_FLOW_CONFIGURATION_ROOT, 'log');
+            return { registered, asked };
+         } finally {
+            head.dispose();
+            scratch.dispose();
+         }
+      }
+
+      it('asks nothing of a client that declared no `workspace.configuration`', async () => {
+         const minimal = await trafficWhileReadingASection({});
+         // The declaring run is this harness's control: without it, a hook bound
+         // to the wrong request type, or a section name that reaches the wire
+         // differently, would leave the empty arrays above passing vacuously.
+         const declaring = await trafficWhileReadingASection({ workspace: { configuration: true } });
+
+         expect(minimal).toEqual({ registered: [], asked: [] });
+         expect(declaring.registered).toContain('workspace/didChangeConfiguration');
+         expect(declaring.asked).toContain(ORDER_FLOW_CONFIGURATION_ROOT);
+      });
    });
 
    describe('semantic tokens', () => {

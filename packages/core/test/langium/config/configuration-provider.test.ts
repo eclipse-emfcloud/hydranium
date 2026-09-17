@@ -9,8 +9,9 @@
 
 /**
  * Whether a configuration section nobody named after a language id is ever asked
- * about. Both directions are pinned: the section must be requested, and it must
- * be requested only once.
+ * about. Each direction is pinned: the section must be requested, it must be
+ * requested only once, and it must not be requested at all of a client that
+ * declared no `workspace.configuration`.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -40,13 +41,21 @@ interface Harness {
  * Boot a provider through the real `initialize` / `initialized` handshake, with
  * the client answering `values` per section. A section absent from `values`
  * answers `null`, which is what a client sends for a setting with no value.
+ *
+ * The hooks are supplied whatever `capabilities` says, matching a real
+ * connection, which binds them before reading the client's declaration.
+ * Withholding them for a client that declared nothing would make the hooks
+ * themselves the guard and leave the capability check unprobed.
  */
-async function boot(values: Record<string, unknown>): Promise<Harness> {
+async function boot(
+   values: Record<string, unknown>,
+   capabilities: InitializeParams['capabilities'] = { workspace: { configuration: true } }
+): Promise<Harness> {
    const provider = new HydraniumConfigurationProvider(makeServicesStub());
    const fetched: string[] = [];
    const registered: string[] = [];
 
-   provider.initialize({ capabilities: { workspace: { configuration: true } } } as unknown as InitializeParams);
+   provider.initialize({ capabilities } as unknown as InitializeParams);
    await provider.initialized({
       register: params => {
          const section = params.section;
@@ -123,6 +132,18 @@ describe('HydraniumConfigurationProvider', () => {
 
       expect(await provider.getConfiguration(LANGUAGE_ID, 'feature')).toEqual({ enabled: true });
       expect(fetched).toEqual([LANGUAGE_ID]);
+   });
+
+   it('asks a client that declared no `workspace.configuration` about nothing', async () => {
+      // A client answering here is what makes this discriminating: the section
+      // HAS a value, so a provider that asks gets one back and the read below
+      // resolves it.
+      const { provider, fetched, registered } = await boot({ [PROJECT_ROOT]: { log: { level: 'debug' } } }, {});
+
+      expect(await provider.getConfiguration(PROJECT_ROOT, 'log')).toBeUndefined();
+
+      expect(registered).toEqual([]);
+      expect(fetched).toEqual([]);
    });
 
    it('falls back to the base behaviour with no client hooks', async () => {
