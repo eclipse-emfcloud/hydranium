@@ -8,7 +8,14 @@
  ********************************************************************************/
 
 import { FRAMEWORK_CLIENT_IDS } from '../client-ids';
-import { DATA_CLIENT_PROTOCOL_METHODS, DATA_SERVER_WIRE_PREFIX, type DataClientProtocol, type DataServerProtocol } from '../data';
+import {
+   DATA_CLIENT_PROTOCOL_METHODS,
+   DATA_SERVER_WIRE_PREFIX,
+   type DataClientProtocol,
+   type DataServerProtocol,
+   type DiagnosticOf,
+   type ProjectOf
+} from '../data';
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
@@ -65,7 +72,7 @@ export type DataConnectionArgs<TTransfer extends TransferElement, TClient extend
  */
 export class DataConnection<
    TTransfer extends TransferElement,
-   TServer extends DataServerProtocol<TTransfer> = DataServerProtocol<TTransfer>,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>,
    TClient extends object = DataClientProtocol<TTransfer>
 > extends RpcConnection<TServer, TClient> {
    protected readonly sessions = new Set<DataSession<TTransfer, TServer>>();
@@ -139,15 +146,15 @@ export class DataConnection<
  */
 export class DataConnectionWithEvents<
    TTransfer extends TransferElement,
-   TServer extends DataServerProtocol<TTransfer> = DataServerProtocol<TTransfer>
-> extends DataConnection<TTransfer, TServer, DataEvents<TTransfer>> {
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> extends DataConnection<TTransfer, TServer, DataEvents<TTransfer, DiagnosticOf<TServer>, ProjectOf<TServer>>> {
    /** Server pushes, fanned out to as many local listeners as the host has. */
-   readonly events: DataEvents<TTransfer>;
+   readonly events: DataEvents<TTransfer, DiagnosticOf<TServer>, ProjectOf<TServer>>;
 
    constructor(port: DataPort, options?: DataConnectionOptions) {
       // Built as a local because `this` is unavailable before `super`, then
       // read back onto the field.
-      const events = new DataEvents<TTransfer>();
+      const events = new DataEvents<TTransfer, DiagnosticOf<TServer>, ProjectOf<TServer>>();
       super(port, events, options);
       this.events = events;
    }

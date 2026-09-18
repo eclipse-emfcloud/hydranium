@@ -20,9 +20,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DataConnection } from '../../src/client/data-connection';
+import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import type { DataPort } from '../../src/client/data-port';
 import type { DataClientProtocol, DataServerProtocol } from '../../src/data';
+import type { Project } from '../../src/project';
+import type { TransferDiagnostic } from '../../src/transfer-diagnostic';
 import type { TransferElement } from '../../src/transfer-element';
 
 interface Root extends TransferElement {
@@ -67,6 +69,36 @@ async function typeAssertions(
    new DataConnection<Root, AdopterServer, AdopterClient>(port, adopterClient, { clientMethods: ['nope'] });
 }
 
+/** An adopter's diagnostic and project, to pin that the fan-out takes both from the server. */
+interface RichDiagnostic extends TransferDiagnostic {
+   ruleId: string;
+}
+interface RichProject extends Project {
+   vendor: string;
+}
+type RichServer = DataServerProtocol<Root, RichDiagnostic, RichProject>;
+
+function eventTypeAssertions(port: DataPort): void {
+   // Accepted: naming the SERVER is enough — the fan-out reads both shapes off
+   // it, so there is no parameter to omit and narrow by.
+   const connection = new DataConnectionWithEvents<Root, RichServer>(port);
+   connection.events.onDidUpdateDocument(event => {
+      const ruleId: string | undefined = event.document.diagnostics[0]?.ruleId;
+      void ruleId;
+   });
+   connection.events.onDidChangeProjects(event => {
+      const vendor: string = event.project.vendor;
+      void vendor;
+   });
+
+   const framework = new DataConnectionWithEvents<Root>(port);
+   framework.events.onDidUpdateDocument(event => {
+      // @ts-expect-error the default instantiation answers the framework diagnostic
+      const absent: string | undefined = event.document.diagnostics[0]?.ruleId;
+      void absent;
+   });
+}
+
 interface UnrelatedServer {
    waitForReady(): Promise<void>;
 }
@@ -76,5 +108,6 @@ export type RejectedInstantiation = DataConnection<Root, UnrelatedServer, DataCl
 describe('DataConnection type parameters', () => {
    it('compiles, which is the assertion', () => {
       expect(typeAssertions).toBeTypeOf('function');
+      expect(eventTypeAssertions).toBeTypeOf('function');
    });
 });

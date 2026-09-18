@@ -103,7 +103,7 @@ describe('DataConnection lifecycle hooks', () => {
          onFailed: () => steps.push('failed')
       });
       try {
-         await connection.createSession('panel').openDocument(URI_A);
+         await connection.createSession('panel').openDocument({ uri: URI_A });
          expect(steps).toEqual(['connecting', 'ready']);
       } finally {
          connection.dispose();
@@ -135,8 +135,8 @@ describe('DataConnection sessions', () => {
          const panel = connection.createSession('panel');
          const tree = connection.createSession('tree');
 
-         await panel.openDocument(URI_A);
-         await tree.openDocument(URI_A);
+         await panel.openDocument({ uri: URI_A });
+         await tree.openDocument({ uri: URI_A });
 
          // One connection, one document, two holders — which is the whole point
          // of the split. A session taking its identity from the transport would
@@ -180,8 +180,8 @@ describe('DataConnection sessions', () => {
       try {
          const panel = connection.createSession('panel');
          const tree = connection.createSession('tree');
-         await panel.openDocument(URI_A);
-         await tree.openDocument(URI_B);
+         await panel.openDocument({ uri: URI_A });
+         await tree.openDocument({ uri: URI_B });
 
          panel.dispose();
          await waitFor(() => closes(calls).length > 0);
@@ -189,7 +189,7 @@ describe('DataConnection sessions', () => {
          // A round trip AFTER the close landed, so a wrongly-issued close for
          // the other session has had a full exchange to arrive before the
          // count is read — and it proves the connection outlives its session.
-         await tree.openDocument(URI_C);
+         await tree.openDocument({ uri: URI_C });
 
          expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
          expect(opens(calls).map(call => call.uri)).toEqual([URI_A, URI_B, URI_C]);
@@ -202,7 +202,7 @@ describe('DataConnection sessions', () => {
       const { connection, calls, dispose } = harness();
       try {
          const panel = connection.createSession('panel');
-         await panel.openDocument(URI_A);
+         await panel.openDocument({ uri: URI_A });
 
          connection.dispose();
          await tick();
@@ -212,7 +212,7 @@ describe('DataConnection sessions', () => {
          // session-dispose case above is what proves closes are sent when the
          // wire survives, so the two together discriminate.
          expect(closes(calls)).toEqual([]);
-         await expect(panel.openDocument(URI_C)).rejects.toThrow('DataSession is disposed');
+         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
       } finally {
          dispose();
       }

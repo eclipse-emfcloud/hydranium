@@ -185,7 +185,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       if (this.snapshot && this.snapshot.uri !== uri) {
          await this.close();
       }
-      this.snapshot = await this.session.openDocument(uri);
+      this.snapshot = await this.session.openDocument({ uri });
       const server = await this.session.connected();
       this.snapshot = await server.getModelDocument({ uri, includeDiagnostics: true });
       this.changeEmitter.fire(undefined);
@@ -253,7 +253,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          return;
       }
       this.snapshot = undefined;
-      await this.session.closeDocument(open.uri);
+      await this.session.closeDocument({ uri: open.uri });
       this.changeEmitter.fire(undefined);
    }
 

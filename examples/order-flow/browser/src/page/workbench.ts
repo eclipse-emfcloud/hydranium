@@ -435,7 +435,7 @@ async function watchThroughDataHead({ session, connection }: DataHead): Promise<
          setDataReport(event.document);
       }
    });
-   await session.openDocument(DATA_HEAD_DOCUMENT);
+   await session.openDocument({ uri: DATA_HEAD_DOCUMENT });
    // `openDocument` settles at the integrity landmark, so the diagnostics on
    // its snapshot are NOT GUARANTEED — and a client cannot tell which case it
    // got. A document the settle had to build arrives pre-validation with an
@@ -490,7 +490,7 @@ async function watchLayoutThroughDataHead({ session, connection }: DataHead): Pr
          setLayoutReport(event.document.root);
       }
    });
-   const document = await session.openDocument(LAYOUT_DOCUMENT);
+   const document = await session.openDocument({ uri: LAYOUT_DOCUMENT });
    if (isLayoutModel(document.root)) {
       setLayoutReport(document.root);
    }

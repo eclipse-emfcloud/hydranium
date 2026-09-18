@@ -33,7 +33,15 @@ export interface ReadyServer {
    waitForReady(): Promise<void>;
 }
 
-/** Lifecycle reporting, for a host that raises warm-up UI around the two waits. */
+/**
+ * Lifecycle reporting, for a host that raises warm-up UI around the two waits.
+ *
+ * Nothing fires until something asks for the connection — the generation is
+ * built on the first {@link RpcConnection.connected}. A host that wants the
+ * sequence at startup drives that call itself, or a workspace where nobody
+ * opens a document reports neither the connect nor the readiness its UI waits
+ * on.
+ */
 export interface RpcConnectionLifecycle {
    /** A generation is opening its transport, including on each reconnect. */
    readonly onConnecting?: () => void;
