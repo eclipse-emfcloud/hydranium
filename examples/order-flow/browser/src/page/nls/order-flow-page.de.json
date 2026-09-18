@@ -17,7 +17,7 @@
   "order-flow/page/coordinates": "Koordinaten",
   "order-flow/page/server-log": "Serverprotokoll",
   "order-flow/page/lines-received": "Empfangene Zeilen",
-  "order-flow/page/log-errors": "Mindestens ein Fehler wurde protokolliert",
+  "order-flow/page/log-errors": "Mindestens ein Fehler ist unter den gehaltenen Zeilen",
   "order-flow/page/filter": "Filter",
   "order-flow/page/filter-hint": "Serverprotokoll filtern",
   "order-flow/page/log-level": "Protokollstufe des Servers",

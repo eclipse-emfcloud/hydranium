@@ -34,9 +34,16 @@ import { pageText } from './page-nls.js';
  */
 const LOG_LINE_CAP = 500;
 
+/**
+ * The class an error line carries. Named because the eviction path reads it
+ * back off the DOM to know what it is dropping, so the stylesheet's colour and
+ * the marker's arithmetic must not drift apart.
+ */
+const ERROR_LINE_CLASS = 'error';
+
 /** LSP `MessageType` to the class the stylesheet colours by. */
 const LOG_LEVEL_CLASSES: Readonly<Partial<Record<MessageType, string>>> = {
-   [MessageType.Error]: 'error',
+   [MessageType.Error]: ERROR_LINE_CLASS,
    [MessageType.Warning]: 'warning',
    [MessageType.Info]: 'info',
    [MessageType.Log]: 'log',
@@ -51,8 +58,16 @@ export class LogPanel {
    /** Lines currently held, so the cap is enforced without querying the DOM. */
    private held = 0;
 
-   /** Whether any line has arrived at `MessageType.Error`. */
-   private sawError = false;
+   /**
+    * Error lines currently HELD — not seen, and not visible.
+    *
+    * The marker reads "there is an error in this panel", so it has to fall with
+    * the last error line the cap evicts; a latch on "an error arrived" keeps
+    * claiming one after the line is gone, with nothing a reader can scroll to.
+    * Filtering and scrolling leave it alone for the same reason the counter
+    * beside it counts held rather than visible lines.
+    */
+   private heldErrors = 0;
 
    /** Lowercased needle, or empty for everything. */
    private filter = '';
@@ -89,19 +104,24 @@ export class LogPanel {
       this.hideIfFiltered(line);
       this.lines.append(line);
       this.held += 1;
+      if (type === MessageType.Error) {
+         this.heldErrors += 1;
+      }
       while (this.held > LOG_LINE_CAP && this.lines.firstChild !== null) {
-         this.lines.removeChild(this.lines.firstChild);
+         const evicted = this.lines.firstChild;
+         if (evicted instanceof HTMLElement && evicted.classList.contains(ERROR_LINE_CLASS)) {
+            this.heldErrors -= 1;
+         }
+         this.lines.removeChild(evicted);
          this.held -= 1;
       }
 
-      if (type === MessageType.Error) {
-         this.sawError = true;
-      }
       this.count.textContent = String(this.held);
       // An error is called out by name because the whole reason this panel exists
       // is that a server-side error over `window/logMessage` previously reached
-      // nobody — and it stays called out after the line has scrolled away.
-      this.count.classList.toggle('badge-error', this.sawError);
+      // nobody — and it stays called out while the line is held, whether it has
+      // scrolled away or the filter is hiding it.
+      this.count.classList.toggle('badge-error', this.heldErrors > 0);
       this.count.title = this.summaryTitle();
 
       if (atBottom) {
@@ -112,8 +132,8 @@ export class LogPanel {
    /** Through the catalogue: this is assigned on every line, so the element's
     *  `data-nls-title` cannot hold it and a literal reverts it to English. */
    private summaryTitle(): string {
-      return this.sawError
-         ? pageText('order-flow/page/log-errors', 'One or more errors have been logged')
+      return this.heldErrors > 0
+         ? pageText('order-flow/page/log-errors', 'One or more errors are among the lines held')
          : pageText('order-flow/page/lines-received', 'Lines received');
    }
 
@@ -148,7 +168,7 @@ export class LogPanel {
    private clear(): void {
       this.lines.replaceChildren();
       this.held = 0;
-      this.sawError = false;
+      this.heldErrors = 0;
       this.count.textContent = '0';
       this.count.classList.remove('badge-error');
       // With the marker: left alone it still claims an error is held.
