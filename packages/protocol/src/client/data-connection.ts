@@ -101,11 +101,25 @@ export class DataConnection<
     * the framework's own broadcasts as its own echoes and drop them. Nothing
     * about that fails on its own: the document simply stops following, which
     * looks like a dead connection.
+    *
+    * Throws, too, for an id a LIVE session on this connection already holds.
+    * Per-document membership is a set of client ids, so two participants
+    * sharing one collapse to a single hold and the first close releases it
+    * under the survivor, which then stops receiving updates for a document it
+    * is still showing. A constant bound once per participant KIND — one per
+    * widget class rather than per instance — satisfies the type and violates
+    * this.
+    *
+    * The check spans this connection only, so a head several connections reach
+    * can still be addressed twice under one id.
     */
    createSession(clientId: string): DataSession<TTransfer, TServer> {
       this.assertLive();
       if (FRAMEWORK_CLIENT_IDS.includes(clientId)) {
          throw new Error(`clientId '${clientId}' is reserved by the framework and cannot identify a participant`);
+      }
+      if ([...this.sessions].some(session => session.clientId === clientId)) {
+         throw new Error(`clientId '${clientId}' already identifies a live participant on this connection`);
       }
       const session = new DataSession<TTransfer, TServer>(clientId, {
          connected: () => this.connected(),

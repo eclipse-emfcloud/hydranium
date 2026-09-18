@@ -158,6 +158,16 @@ model.onDidChange(() => render(model.fields));
 const outcome = await model.setField('name', 'Fulfilment');
 ```
 
+**The literal above is an id per PARTICIPANT, not per participant kind.** It
+keys the server's `(uri, clientId)` hold and watch and is the echo key a write
+is matched against, so two participants sharing it collapse onto one hold — the
+first close releases it under the survivor, which then stops receiving updates
+for a document it is still showing — and each reads the other's writes as its
+own echo. A constant is right only where exactly one participant can exist per
+connection, as in a singleton view; anything the host can open twice mints the
+id per instance, and `createSession` throws on a duplicate rather than
+degrading.
+
 **Document-scoped, not selection-scoped**, and that is a decision. Nothing in
 the framework bridges GLSP selection to a host widget, so selection is
 shell-owned glue; and a transfer element carries only `$type` — no id — so the
