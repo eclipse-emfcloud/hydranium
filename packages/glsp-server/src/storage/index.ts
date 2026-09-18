@@ -8,4 +8,4 @@
  ********************************************************************************/
 
 export * from './hydranium-glsp-storage.js';
-export * from './save-conflict-policy.js';
+export * from './save-delivery-policy.js';

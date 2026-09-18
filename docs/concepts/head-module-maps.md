@@ -140,7 +140,7 @@ bound per `DiagramModule` — there is no framework GModel factory.
 | `node/` | `./node` | `startGlspServer` (socket launcher, GLSP `SocketServerLauncher`) |
 | `browser/` | `./browser` | `startGlspServerInWorker` (web-worker launcher, GLSP `WorkerServerLauncher`, on a transferred `MessagePort`) |
 | `state/` | `.` | base state classes (`AbstractHydraniumGlspState`, `Reconciling…`, `FullText…`), `HydraniumGlspIndex`, the `HydraniumTypes` DI token registry |
-| `storage/` | `.` | `HydraniumGlspStorage` (load/save + settle/parse-error seams) + `SaveConflictPolicy` |
+| `storage/` | `.` | `HydraniumGlspStorage` (load/save + settle/parse-error seams) + `SaveDeliveryPolicy` |
 | `submission/` | `.` | `HydraniumGlspSubmissionHandler` (readyEvent-gated submit) |
 | `command/` | `.` | `HydraniumGlspRecordingCommand` — the operation-handler seam (no base handler class) |
 | `dispatcher/` | `.` | `HydraniumGlspServerActionDispatcher` (timing + direction) |

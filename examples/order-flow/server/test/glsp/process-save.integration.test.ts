@@ -26,7 +26,7 @@ import { ChangeBoundsOperation, SaveModelAction, ServerModule } from '@eclipse-g
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
@@ -122,15 +122,19 @@ describe('order-flow .process save', () => {
       expect(readFileSync(processPath, 'utf8')).toBe(processOnDisk);
    });
 
-   it('leaves a document whose content already matches disk unwritten', async () => {
+   it('leaves a document whose content already matches disk unwritten, and announces it anyway', async () => {
       // Byte equality cannot tell "not written" from "rewritten identically",
-      // and the difference is an mtime — enough to wake a watcher, prompt an
-      // editor to reload, and make an mtime-keyed build treat the file as work.
-      // The store's own save announcement is the observable that distinguishes
-      // them, and it does not depend on filesystem timestamp resolution.
+      // and the difference is an mtime — enough to prompt an editor to reload
+      // and to make an mtime-keyed build treat the file as work. The save
+      // announcement cannot separate them either: a save announces that the
+      // content is on disk, which holds for a document that was already there.
+      // So the mtime is the observable, and the layout's is what separates a
+      // skipped write from a save that never ran at all.
       const diagram = await openDiagram();
-      const layoutUri = diagram.state.layoutUri;
+      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
       const layoutPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+      const processMtime = statSync(processPath).mtimeMs;
+      const layoutMtime = statSync(layoutPath).mtimeMs;
 
       diagram.dispatch(
          ChangeBoundsOperation.create([
@@ -142,6 +146,10 @@ describe('order-flow .process save', () => {
       diagram.dispatch(SaveModelAction.create());
       await waitForFileToContain(layoutPath, 'node Pay at 300, 220 size 200, 80');
 
-      expect(savedUris).toEqual([layoutUri]);
+      expect(statSync(processPath).mtimeMs).toBe(processMtime);
+      expect(statSync(layoutPath).mtimeMs).not.toBe(layoutMtime);
+      // Every document in the write set announces, written or not: a consumer
+      // that clears a dirty marker on save must not have to know which.
+      expect(savedUris).toEqual([diagram.state.sourceUri, diagram.state.layoutUri]);
    });
 });

@@ -15,12 +15,14 @@ import type { OrderFlowSourceModel } from './order-flow-glsp-state.js';
 /**
  * `.process` source-model storage, inheriting both framework defaults:
  * `loadSourceModel` (open + settle + `setSourceRoot`) and `saveSourceModel`
- * (through `ModelService.save` → the per-URI `Serializer` → the multi-client
- * text store → `WritableFileSystemProvider`).
+ * (flush the store's text for the primary and every tracked secondary through
+ * `AstDocumentManager.save` → `WritableFileSystemProvider`).
  *
- * The per-URI resolution matters more here than in a single-grammar adopter: a
- * serializer is bound per grammar, and the save flow has to reach the `.process`
- * one rather than whichever was registered last.
+ * No serializer runs on the save path — a save persists what the diagram's
+ * operations already wrote to the store. Serialization happens per operation, on
+ * the update path, where `OrderFlowGlspState.persist` reaches the per-URI
+ * `Serializer`: one is bound per grammar, and a multi-grammar adopter has to
+ * reach the `.process` one rather than whichever was registered last.
  */
 @injectable()
 export class OrderFlowGlspStorage extends HydraniumGlspStorage<ProcessModel, OrderFlowSourceModel> {}
