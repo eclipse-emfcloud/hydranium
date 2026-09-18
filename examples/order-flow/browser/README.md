@@ -64,10 +64,18 @@ move together is the point:
   framework claims it as `hydranium/core/unresolved-reference` and the server
   renders before publishing. Then type a character no token can start with —
   `§` — into `fulfillment.process`: that one is **chevrotain's**, a dependency
-  further out still, claimed as `hydranium/core/lexing-error` with the offending
+  further out still, claimed as `hydranium/core/unexpected-character` with the offending
   character carried as a parameter. It is the first message a user of a new
   language meets, and before the identity existed no adopter catalogue could
-  reach it.
+  reach it. Then type a character that lexes perfectly well but belongs nowhere —
+  a bare `a` between two tasks — and the PARSER is what objects instead. All four
+  of its sentences are claimed, the two Langium words
+  (`hydranium/core/unexpected-token`, `hydranium/core/trailing-input`) and the
+  two it leaves to chevrotain (`hydranium/core/no-viable-alternative`,
+  `hydranium/core/missing-iteration`). The last two carry chevrotain's generated
+  list of candidate token sequences as a single parameter, so a catalogue
+  translates the sentence around it and the list itself arrives intact — token
+  names are grammar vocabulary and are no more translatable than `'}'` is.
 - **The page's own chrome.** The panel titles, buttons, hints and tooltips, from
   a catalogue in `src/page/nls/`. A plain document has no host to resolve
   `nls.localize` against, so this is one more seam a browser host implements

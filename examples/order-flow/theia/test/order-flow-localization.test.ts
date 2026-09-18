@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { renderFrameworkMessage, resolve } from '@hydranium/protocol';
+import { collectMessages, renderFrameworkMessage, resolve } from '@hydranium/protocol';
 // The `./lib/testing` twin, not the short `./testing` specifier: this package
 // resolves with `moduleResolution: "Node"`, which reaches no `exports` subpath —
 // the same reason the message barrels below are spelled `/lib/messages`.
@@ -15,6 +15,7 @@ import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydrani
 import * as protocolMessages from '@hydranium/protocol/lib/messages';
 import { DATA_SERVER_CONNECT_FAILED } from '@hydranium/protocol/lib/messages';
 import * as coreMessages from '@hydranium/core/lib/messages';
+import * as dataServerMessages from '@hydranium/data-server/lib/messages';
 import * as glspServerMessages from '@hydranium/glsp-server/lib/messages';
 import * as orderFlowMessages from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import * as orderFlowServerMessages from '@hydranium/example-order-flow-server/lib/messages';
@@ -71,7 +72,7 @@ const serverTranslations = readCatalogue(SERVER_CATALOGUE);
  * barrel's other exports, and a hand-rolled union over `Object.values` does not
  * narrow.
  */
-const BARRELS = [protocolMessages, coreMessages, glspServerMessages, orderFlowMessages, orderFlowServerMessages];
+const BARRELS = [protocolMessages, coreMessages, dataServerMessages, glspServerMessages, orderFlowMessages, orderFlowServerMessages];
 
 /**
  * The one exemption, and it has to be exactly this narrow.
@@ -98,6 +99,22 @@ describe('the German catalogue', () => {
       // The server catalogue over the same barrels, with NO exemption: nothing
       // there resolves through `nls.localize`, so every key is checkable.
       expect(findUndeclaredCodes(Object.keys(serverTranslations), BARRELS)).toEqual([]);
+   });
+
+   it('translates every code the barrels declare, across the two catalogues', () => {
+      // The converse of the audit above, and the only thing keeping this example
+      // a COMPLETE demonstration rather than one that silently stops covering
+      // the next message someone adds. Which catalogue a code belongs in is the
+      // rendering side's decision and is asserted separately; here the two are
+      // unioned, because a code translated on the wrong side still reaches no
+      // reader and the disjointness test is what catches that.
+      const covered = new Set([...Object.keys(translations), ...Object.keys(serverTranslations)]);
+      const untranslated = BARRELS.flatMap(barrel => collectMessages(barrel))
+         .map(declaration => declaration.code)
+         .filter(code => !covered.has(code))
+         .sort();
+
+      expect(untranslated).toEqual([]);
    });
 
    it('names a real key for every host-bound entry', () => {
