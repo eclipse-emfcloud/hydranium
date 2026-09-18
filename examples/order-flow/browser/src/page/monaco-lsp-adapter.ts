@@ -602,6 +602,14 @@ export class MonacoLspAdapter {
     * what keeps the server's per-URI shadow and its per-client version aligned
     * with this buffer, so withholding it makes the next outbound diff wrong and
     * makes every versioned push arrive stale. A conforming client echoes.
+    *
+    * **This page echoes the ranges it was handed, and a server must not assume
+    * that.** A host is free to minimise a coarse edit against its own buffer
+    * before applying it — Theia routes every workspace edit through
+    * `computeMoreMinimalEdits` — so the echo of a single full-document replace
+    * can arrive as a set of small ranges keyed to text the server never sent.
+    * Reading this page as the shape an echo takes is what produces a server
+    * that only survives the echo of its own edits.
     */
    protected registerApplyEdit(): void {
       this.connection.onRequest(ApplyWorkspaceEditRequest.type, (params: ApplyWorkspaceEditParams) => this.applyWorkspaceEdit(params.edit));
