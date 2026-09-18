@@ -37,6 +37,7 @@ import {
    OptionalVersionedTextDocumentIdentifier,
    type RequestHandler,
    type TextDocumentChangeEvent,
+   TextDocumentContentChangeEvent as ContentChange,
    TextDocumentEdit,
    TextDocumentSyncKind,
    type TextDocumentWillSaveEvent,
@@ -193,7 +194,14 @@ type LanguageClientChangeOrigin =
     * raced a push, or an edit to a buffer the store has already been written
     * past. The reconstructed text is what it now holds, and is authoritative.
     */
-   | { readonly kind: 'divergent'; readonly text: string };
+   | { readonly kind: 'divergent'; readonly text: string }
+   /**
+    * The change carries ranges and no known text addresses them, so no
+    * reconstruction is offered. Adopting one anyway splices the document and
+    * stores an edit nobody made; dropping costs at most the one keystroke the
+    * client still holds and the next push contradicts.
+    */
+   | { readonly kind: 'unreconstructable' };
 
 /**
  * Cheap, stable, non-cryptographic content hash (cyrb53) for the version
@@ -490,6 +498,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // back would make the next outbound diff wrong against what the
             // client actually holds.
             this.logUri(uri, `Skip rebuild: echo of a server-authored push (client version ${td.version})`, 'debug');
+            return;
+         }
+         if (origin?.kind === 'unreconstructable') {
+            this.tracer.with(uri).warn(`Drop change: no known client buffer for its ranges (client version ${td.version})`);
             return;
          }
 
@@ -1161,6 +1173,19 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const clientText = pending?.[0].before ?? this.__shadow.clientText(clientFacing);
       if (pending === undefined && (clientText === undefined || clientText === document.getText())) {
          return undefined;
+      }
+      if (pending !== undefined && pending[0].before === undefined && changes.some(change => ContentChange.isIncremental(change))) {
+         // A push sent to a client whose buffer was unknown — a first sync, or
+         // the recovery push after a rejection. The shadow now holds the text
+         // that push MOVES the client to, which is the one text the echo's
+         // ranges provably do not address, so the fallback above is a baseline
+         // known to be wrong rather than merely unverified. Drop the queue and
+         // the shadow: the next sync is then a full replace, which lands on
+         // whatever the client holds. A full-text change is exempt because it
+         // reconstructs identically against any baseline.
+         pending.length = 0;
+         this.__shadow.invalidate(clientFacing);
+         return { kind: 'unreconstructable' };
       }
       // Through the configured factories, not `TextDocument` directly, so an
       // adopter's custom text-document type governs how the ranges are applied
