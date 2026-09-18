@@ -66,10 +66,16 @@ export class PropertiesPanel {
 
    constructor(session: DataSession<OrderFlowTransferRoot>, events: DataEvents<OrderFlowTransferRoot>) {
       this.model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
-      this.form = new PropertiesForm(requireElement('properties-body'), {
-         setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, reported) => this.reportError(error, reported)
-      });
+      this.form = new PropertiesForm(
+         requireElement('properties-body'),
+         {
+            setField: (name, value) => this.model.setField(name, value),
+            reportError: (error, reported) => this.reportError(error, reported)
+         },
+         // The form's heading is the document's, and here it sits inside a panel
+         // the page has already headed `Properties` with an `h2`.
+         { headingLevel: 'h3' }
+      );
       this.model.onDidChange(() => this.render());
    }
 

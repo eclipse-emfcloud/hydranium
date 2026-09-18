@@ -63,15 +63,21 @@
             every rule.
          */
          :root[data-theme='light'] {
-            --order-flow-surface: #ffffff;
-            --order-flow-foreground: #3b3b3b;
-            --order-flow-muted-foreground: #6c6c6c;
-            --order-flow-panel-background: #f8f8f8;
+            /*
+               The surface is off-white rather than `#ffffff` so that ELEVATED
+               has somewhere to go: a panel floating over the canvas has to be
+               lighter than it, and nothing is lighter than white. That one step
+               is what the report overlay and the dialogs are drawn with.
+            */
+            --order-flow-surface: #f9fbfc;
+            --order-flow-foreground: #1e2124;
+            --order-flow-muted-foreground: #545657;
+            --order-flow-panel-background: #ffffff;
             --order-flow-panel-foreground: var(--order-flow-foreground);
-            --order-flow-panel-border: #e5e5e5;
+            --order-flow-panel-border: #d6d8d9;
             --order-flow-hover-background: rgb(0 0 0 / 6%);
-            --order-flow-focus-border: #005fb8;
-            --order-flow-invalid: #e51400;
+            --order-flow-focus-border: #0757ba;
+            --order-flow-invalid: #cf222e;
             /*
                The accents are the only roles the dark set leaves alone, because
                they are mid-tones drawn as a 1px border and a 16% wash rather
@@ -84,16 +90,67 @@
          }
 
          /*
-            Two roles this SHELL adds on top of the diagram's vocabulary, because
-            a workbench has surfaces a diagram does not: a warning colour for the
-            problems list, and a slightly recessed background so a sidebar and a
-            dock read as behind the editors rather than beside them. Derived from
-            the diagram's roles wherever possible so one switch still moves
-            everything.
+            The roles a WORKBENCH needs and a diagram does not: a warning colour,
+            the two surfaces BELOW the canvas, and a third text tier.
+
+            `recessed` and `chrome-background` are stated per theme, not derived
+            from `panel-background` — that role is the step ABOVE the surface, so
+            deriving gives a step of the wrong SIGN, and on dark it lands within
+            one level of the canvas and paints no boundary at all.
+
+            Without the third tier everything that is not primary text collapses
+            onto `muted-foreground`, and a CONTROL at rest is painted like a
+            disabled hint.
          */
          :root {
-            --order-flow-warning: #cca700;
-            --order-flow-recessed: color-mix(in srgb, var(--order-flow-panel-background) 70%, var(--order-flow-surface));
+            --order-flow-warning: #e3b341;
+            --order-flow-chrome-background: #13151a;
+            --order-flow-recessed: #1b1d22;
+            --order-flow-secondary-foreground: #b1b6b9;
+            /*
+               A shadow is a LIGHT-theme cue: black over near-black cannot darken
+               it at any alpha. On dark the job falls to the elevated border.
+            */
+            --order-flow-shadow: rgb(0 0 0 / 30%);
+            --order-flow-elevated-border: #4d525c;
+
+            /*
+               GLSP's OWN role family, filled in by nothing else here. Left alone
+               it resolves to the library's defaults — literal `red`, `yellow`,
+               and an 85%-white issue background over a dark canvas. Nothing
+               fails; the colours are simply not this page's. The issue
+               background takes ELEVATED because a marker's popup floats, as the
+               tool palette does.
+            */
+            --glsp-error-foreground: var(--order-flow-invalid);
+            --glsp-warning-foreground: var(--order-flow-warning);
+            --glsp-info-foreground: var(--order-flow-focus-border);
+            --glsp-issue-background: var(--order-flow-panel-background);
+            --glsp-search-highlight: var(--order-flow-focus-border);
+            --glsp-navigation-highlight: color-mix(in srgb, var(--order-flow-focus-border) 20%, transparent);
+
+            /*
+               The type and spacing steps, in PX rather than `rem`.
+
+               `rem` resolves against the 16px ROOT, not the 13px this page sets
+               on `body`, so fractions written as steps land in a band under a
+               pixel wide where none of them is visible. Icons are a separate
+               pair because a codicon is sized to the text beside it.
+            */
+            --font-xs: 11px;
+            --font-sm: 12px;
+            --font-md: 13px;
+            --font-lg: 15px;
+            --icon-dot: 9px;
+            --icon-sm: 12px;
+            --icon-md: 14px;
+
+            --space-2xs: 2px;
+            --space-xs: 4px;
+            --space-sm: 6px;
+            --space-md: 8px;
+            --space-lg: 12px;
+            --space-xl: 16px;
             /*
                The resizable tracks. Every one of these is a divider's target —
                see `src/page/splitters.ts`, which writes them onto this element —
@@ -133,7 +190,12 @@
             --divider: 5px;
          }
          :root[data-theme='light'] {
-            --order-flow-warning: #bf8803;
+            --order-flow-warning: #8a5a00;
+            --order-flow-chrome-background: #e6e8e9;
+            --order-flow-recessed: #f1f3f4;
+            --order-flow-secondary-foreground: #414344;
+            --order-flow-shadow: rgb(0 0 0 / 18%);
+            --order-flow-elevated-border: #c9cdcf;
          }
 
          /*
@@ -152,21 +214,40 @@
             margin: 0;
          }
          body {
-            /*
-               A grid rather than a flex column, because the dock's height is a
-               resizable track and `grid-template-rows` is where a track size can
-               be named by a custom property. The `minmax(0, 1fr)` on the
-               workbench row is what lets it SHRINK: `1fr` alone resolves to
-               `minmax(auto, 1fr)`, and `auto` refuses to go below its content —
-               Monaco reports a content height from the whole file, so without
-               this the editors push the dock off the bottom of the viewport.
-            */
             display: grid;
-            grid-template-rows: auto minmax(0, 1fr) var(--divider) var(--dock-height) auto;
+            grid-template-rows: auto minmax(0, 1fr) auto;
             font-family: system-ui, sans-serif;
             font-size: 13px;
             background: var(--order-flow-surface);
             color: var(--order-flow-foreground);
+         }
+         /*
+            A grid rather than a flex column, because the dock's height is a
+            resizable track and `grid-template-rows` is where a track size can be
+            named by a custom property.
+
+            The `minmax(0, …)` here and on the body row above are both what lets
+            this SHRINK: `1fr` alone resolves to `minmax(auto, 1fr)`, and `auto`
+            refuses to go below its content — Monaco reports a content height
+            from the whole file, so without either one the editors push the dock
+            off the bottom of the viewport.
+         */
+         main {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) var(--divider) var(--dock-height);
+            min-height: 0;
+         }
+
+         /*
+            The icon default for this page's chrome; the codicon sheet sizes
+            every glyph at 16px, larger than any label here. The diagram is
+            excluded because its palette is GLSP's DOM and relies on that
+            default. `:where` keeps the selector at the codicon rule's weight, so
+            coming later is what wins and every per-component size still wins in
+            turn.
+         */
+         .codicon[class*='codicon-']:where(:not(.sprotty *)) {
+            font-size: var(--icon-md);
          }
 
          /* ---- title bar ------------------------------------------------ */
@@ -174,13 +255,12 @@
          .titlebar {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-            padding: 0.4rem 0.75rem;
-            border-bottom: 1px solid var(--order-flow-panel-border);
-            background: var(--order-flow-panel-background);
+            gap: var(--space-xl);
+            padding: var(--space-md) var(--space-xl);
+            background: var(--order-flow-chrome-background);
          }
          .titlebar h1 {
-            font-size: 0.95rem;
+            font-size: var(--font-lg);
             font-weight: 600;
             margin: 0;
             white-space: nowrap;
@@ -188,7 +268,7 @@
          .titlebar .subtitle {
             font-weight: 400;
             color: var(--order-flow-muted-foreground);
-            margin-left: 0.5rem;
+            margin-left: var(--space-md);
          }
          .titlebar .spacer {
             flex: 1 1 auto;
@@ -198,15 +278,15 @@
          .build-commit {
             display: inline-flex;
             align-items: center;
-            gap: 0.3rem;
+            gap: var(--space-sm);
             flex: none;
             font-family: ui-monospace, monospace;
-            font-size: 0.72rem;
-            color: var(--order-flow-muted-foreground);
+            font-size: var(--font-xs);
+            color: var(--order-flow-secondary-foreground);
             text-decoration: none;
          }
          .build-commit .codicon {
-            font-size: 0.85rem;
+            font-size: var(--icon-sm);
          }
          /*
             **Load-bearing: `hidden` alone does not survive the rule above.**
@@ -242,7 +322,7 @@
          .actions {
             display: flex;
             align-items: center;
-            gap: 0.3rem;
+            gap: var(--space-sm);
             /* The controls must not be pushed off the edge by a long title, which
                is what a plain flex row does at a narrow viewport. */
             flex: 0 0 auto;
@@ -255,13 +335,13 @@
          .action {
             display: inline-flex;
             align-items: center;
-            gap: 0.35rem;
+            gap: var(--space-sm);
             font: inherit;
             color: var(--order-flow-panel-foreground);
             background: transparent;
             border: 1px solid transparent;
             border-radius: 4px;
-            padding: 0.25rem 0.55rem;
+            padding: var(--space-xs) var(--space-md);
             cursor: pointer;
             white-space: nowrap;
          }
@@ -278,10 +358,124 @@
             color: var(--order-flow-muted-foreground);
             cursor: default;
          }
+         /*
+            A group of actions of one KIND. The separator is drawn between groups
+            rather than around them, so the row still reads as one toolbar — a
+            box per group turns a toolbar into a row of panels.
+         */
+         .action-group {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-sm);
+         }
+         .action-group + .action-group {
+            margin-left: var(--space-xs);
+            padding-left: var(--space-lg);
+            border-left: 1px solid var(--order-flow-panel-border);
+         }
+         /*
+            Reserved for an action that DESTROYS, and deliberately only on hover
+            and focus: at rest it would shout from the title bar permanently, and
+            a warning a reader has learnt to ignore is not one. The colour is the
+            error role, so it means the same thing here as in the problems list.
+         */
+         .action.destructive:hover:enabled,
+         .action.destructive:focus-visible {
+            color: var(--order-flow-invalid);
+            border-color: var(--order-flow-invalid);
+            background: color-mix(in srgb, var(--order-flow-invalid) 12%, transparent);
+         }
+         /*
+            The two-option language switch. The pressed one takes the accent
+            WASH rather than the accent as text, so the pair stays legible: an
+            accent-coloured label on a ground tinted with that same accent is
+            the pair that fails.
+         */
+         .locale-switch {
+            gap: var(--space-xs);
+            padding: var(--space-2xs) var(--space-sm) var(--space-2xs) var(--space-md);
+            cursor: default;
+         }
+         .locale-option {
+            font: inherit;
+            color: var(--order-flow-secondary-foreground);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            padding: 2px var(--space-xs);
+            cursor: pointer;
+            white-space: nowrap;
+         }
+         .locale-option:hover {
+            color: var(--order-flow-foreground);
+            background: var(--order-flow-hover-background);
+         }
+         .locale-option[aria-pressed='true'] {
+            color: var(--order-flow-foreground);
+            background: color-mix(in srgb, var(--order-flow-focus-border) 22%, transparent);
+            border-color: var(--order-flow-focus-border);
+         }
+         .locale-option:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 1px;
+         }
+         /*
+            The confirmations. Painted from the ELEVATED role, like every other
+            surface that floats over the page, and centred by the user agent —
+            a `<dialog>` in its top layer needs no positioning of ours.
+         */
+         .dialog {
+            max-width: 32rem;
+            color: var(--order-flow-foreground);
+            background: var(--order-flow-panel-background);
+            border: 1px solid var(--order-flow-elevated-border);
+            border-radius: 8px;
+            padding: var(--space-xl) calc(var(--space-xl) + var(--space-xs)) var(--space-xl);
+            box-shadow: 0 8px 32px var(--order-flow-shadow);
+         }
+         .dialog::backdrop {
+            background: rgb(0 0 0 / 45%);
+         }
+         .dialog h2 {
+            margin: 0 0 var(--space-md);
+            font-size: var(--font-lg);
+            font-weight: 600;
+         }
+         /*
+            The FOREGROUND, not the secondary tier that carries supporting text
+            elsewhere. A dialog's prose is the thing a reader has to read before
+            answering, so it is primary content wherever it happens to sit — and
+            it sits on the elevated surface, which is the lightest of the dark
+            set and therefore where a lower tier has least contrast to give.
+         */
+         .dialog p {
+            margin: 0 0 var(--space-xl);
+            color: var(--order-flow-foreground);
+            line-height: 1.5;
+         }
+         .dialog .dialog-detail {
+            display: block;
+            margin-top: var(--space-sm);
+            color: var(--order-flow-secondary-foreground);
+         }
+         .dialog .dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: var(--space-md);
+         }
+         .dialog .action {
+            border-color: var(--order-flow-panel-border);
+         }
+         /* The recommended answer, which is the one that loses nothing. */
+         .dialog .action.primary {
+            color: var(--order-flow-foreground);
+            background: color-mix(in srgb, var(--order-flow-focus-border) 28%, transparent);
+            border-color: var(--order-flow-focus-border);
+         }
          .scheme-switch {
             display: inline-flex;
             align-items: center;
-            gap: 0.4rem;
+            gap: var(--space-md);
             color: var(--order-flow-panel-foreground);
             user-select: none;
          }
@@ -298,15 +492,36 @@
             it a dark chrome opens a white menu, because the popup is drawn by the
             browser and CSS colours do not reach it.
          */
-         .scheme-switch select {
-            font: inherit;
-            font-size: 0.85rem;
+         /*
+            An INPUT surface, shared by every control a reader types into or
+            picks from — the pickers here, the log filter, the properties fields.
+            One rule, because three controls sitting in the same panel with
+            three different backgrounds read as three states of one control
+            rather than as three controls. The surface role puts the field a step
+            ABOVE the container it sits in, which is what distinguishes a field
+            from the panel around it in either scheme.
+         */
+         .scheme-switch select,
+         .filter-box,
+         #properties-body .field input {
             color: inherit;
-            background: var(--order-flow-recessed);
-            color-scheme: dark;
+            background: var(--order-flow-surface);
             border: 1px solid var(--order-flow-panel-border);
             border-radius: 4px;
-            padding: 0.05rem 0.2rem;
+         }
+         .scheme-switch select {
+            font: inherit;
+            font-size: var(--font-sm);
+            /*
+               What makes the native popup follow the page: without it a dark
+               chrome opens a white menu, because the popup is drawn by the
+               browser and CSS colours do not reach it.
+            */
+            color-scheme: dark;
+            /* Matched to the filter box beside it: the two sit in one panel head, so
+               a height difference between them reads as one of the three being in a
+               different state rather than as three separate controls. */
+            padding: 2px var(--space-md);
          }
          :root[data-theme='light'] .scheme-switch select {
             color-scheme: light;
@@ -341,7 +556,7 @@
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background: var(--order-flow-muted-foreground);
+            background: var(--order-flow-secondary-foreground);
             transition: transform 0.15s ease-out;
          }
          .scheme-switch input:checked {
@@ -382,12 +597,12 @@
                width, but a narrow window must lose none of them — the strip is
                the only place a category is named. */
             flex-wrap: wrap;
-            gap: 0.15rem 1.1rem;
+            gap: 2px var(--space-xl);
             margin: 0;
-            padding: 0.25rem 0.75rem;
-            border-top: 1px solid var(--order-flow-panel-border);
-            background: var(--order-flow-panel-background);
-            font-size: 0.74rem;
+            padding: var(--space-xs) var(--space-xl);
+            list-style: none;
+            background: var(--order-flow-chrome-background);
+            font-size: var(--font-sm);
             overflow: hidden;
          }
          /*
@@ -397,26 +612,44 @@
             to know a head reported at all. The floor is on the value instead, so
             a long value gives up its width and the legend survives.
          */
-         #reports > div {
+         #reports > li {
             display: flex;
             align-items: baseline;
-            gap: 0.35rem;
+            gap: var(--space-sm);
+            color: var(--order-flow-secondary-foreground);
+            white-space: nowrap;
          }
          /* Nothing grows. The strip carries labels, which have a natural width
             and no use for spare room — letting the first three absorb it spaced
             them apart and pushed the rest against the right edge, which reads as
             two groups where there is one legend. */
-         #reports > div {
+         #reports > li {
             flex: 0 0 auto;
          }
-         #reports dt {
-            color: var(--order-flow-muted-foreground);
-            white-space: nowrap;
-            flex: 0 0 auto;
-         }
-         #reports dt .codicon {
-            font-size: 0.85rem;
+         #reports > li .codicon {
+            font-size: var(--icon-sm);
             vertical-align: -2px;
+         }
+         /*
+            The group boundaries the markup names: what a head PUBLISHES, what the
+            page derives from those, and the build the whole lot is running. Selected as the first member
+            after a change of class rather than by position, so adding a
+            category to either group needs no rule here.
+
+            The build group is EMPTY until a deploy fills the commit meta in, and
+            both halves of that have to be said or the strip opens on a rule with
+            nothing to its left: the entry still claims the strip's gap, and the
+            boundary after it still matches — a sibling combinator reads the
+            markup, which `display: none` does not change.
+         */
+         #reports .build:not(:has(> a:not([hidden]))) {
+            display: none;
+         }
+         #reports .build:has(> a:not([hidden])) + .head,
+         #reports .head + .derived {
+            margin-left: var(--space-xs);
+            padding-left: var(--space-lg);
+            border-left: 1px solid var(--order-flow-panel-border);
          }
          /* A category that has not reported yet, so a reader sees the heads come
             up without opening anything. */
@@ -441,47 +674,90 @@
          #report-detail {
             position: absolute;
             bottom: 100%;
-            /* 90% and centred rather than edge to edge: a region spanning the
-               whole window reads as a second dock, where an inset one reads as
-               something opened over the page and dismissible. */
-            left: 5%;
-            right: 5%;
+            /*
+               Aligned with the LABELS that open it, and capped rather than
+               stretched. Inset rather than edge to edge because a region
+               spanning the whole window reads as a second dock, where an inset
+               one reads as something opened over the page and dismissible —
+               but centred, it opened half a window from the control that opened
+               it, so clicking along the strip meant reading somewhere the eye
+               had just left. The offset is the strip's own padding, which puts
+               the panel's left edge under the first label.
+            */
+            left: var(--space-xl);
+            right: auto;
+            /* Wrapping the pre-aligned latency table turns columns into ragged
+               prose. Characters plus chrome, because `border-box` eats a bare
+               `ch` cap by the padding. */
+            max-width: min(calc(100ch + var(--space-xl) * 2 + 2px), calc(100% - var(--space-xl) * 2));
             display: flex;
             flex-direction: column;
             max-height: 60vh;
-            /* The SURFACE colour, not the panel one: this floats over the dock,
-               which is already `--order-flow-recessed`, and a panel-coloured box
-               on a recessed panel has too little contrast to read as lifted. */
-            background: var(--order-flow-surface);
-            border: 1px solid var(--order-flow-panel-border);
+            /* The ELEVATED role, which is what this is: a panel opened OVER the
+               dock. Taking the surface colour instead would put it a step below
+               the thing it floats on in one theme and a step above it in the
+               other, so it would read as lifted in only one of them. */
+            background: var(--order-flow-panel-background);
+            border: 1px solid var(--order-flow-elevated-border);
             border-bottom: none;
-            border-radius: 6px 6px 0 0;
-            box-shadow: 0 -3px 16px rgb(0 0 0 / 35%);
+            border-radius: 8px 8px 0 0;
+            /*
+               A themed shadow, because a fixed black one is elevation on a light
+               canvas and a smear on a dark one — darker than the surface it is
+               meant to lift off. The border already separates it; the shadow
+               only has to imply the gap.
+            */
+            box-shadow: 0 -4px 28px var(--order-flow-shadow);
          }
          #report-detail[hidden] {
             display: none;
          }
+         /*
+            The panel's own title, and it takes the PRIMARY text role: uppercased
+            at 11px with tracking it is already the hardest thing here to read,
+            so painting it a tier down as well made the panel's heading the
+            faintest text in it.
+         */
          .report-detail-head {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
-            padding: 0.45rem 0.85rem 0.4rem;
+            gap: var(--space-md);
+            padding: var(--space-md) var(--space-xl);
             border-bottom: 1px solid var(--order-flow-panel-border);
-            color: var(--order-flow-muted-foreground);
-            font-size: 0.7rem;
+            color: var(--order-flow-foreground);
+            font-size: var(--font-xs);
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.04em;
          }
          #report-detail-body {
             margin: 0;
-            padding: 0.6rem 0.85rem 0.7rem;
+            padding: var(--space-lg) var(--space-xl);
+            /*
+               A floor, because the panel grows UPWARD from the strip: without
+               one its top edge tracks the length of whatever category is open,
+               so clicking along the strip makes the panel jump under the
+               pointer. Three lines covers the short reports, and the long ones
+               scroll within `max-height` as before.
+            */
+            min-height: calc(var(--space-xl) * 3);
             overflow: auto;
             font-family: ui-monospace, monospace;
-            font-size: 0.72rem;
-            line-height: 1.45;
-            /* Wraps rather than `pre`: most categories are a sentence, and the
-               one that is a table is emitted pre-aligned and short enough not to
-               need the horizontal scroll that `pre` would add for everyone. */
+            /*
+               A step above the strip that opens it, unlike every other secondary
+               surface on the page. This is the one place a reader stops to READ a
+               value rather than glance at a label, and it is monospace — which
+               renders smaller at a given size than the UI face beside it, so the
+               step only brings the two level.
+            */
+            font-size: var(--font-md);
+            line-height: 1.5;
+            /*
+               Wraps rather than `pre`, so a category whose value outgrows the
+               cap stays readable instead of scrolling sideways. The one that is
+               a TABLE is why the cap above is what it is: wrapping is the
+               fallback for prose, not the plan for aligned columns.
+            */
             white-space: pre-wrap;
          }
          /*
@@ -586,13 +862,12 @@
          .panel-head {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
-            padding: 0.35rem 0.6rem;
-            border-bottom: 1px solid var(--order-flow-panel-border);
-            color: var(--order-flow-muted-foreground);
+            gap: var(--space-md);
+            padding: var(--space-md) var(--space-lg) var(--space-xs);
+            color: var(--order-flow-secondary-foreground);
          }
          .panel-head h2 {
-            font-size: 0.7rem;
+            font-size: var(--font-xs);
             font-weight: 600;
             letter-spacing: 0.06em;
             text-transform: uppercase;
@@ -605,7 +880,7 @@
             flex: 1 1 auto;
             min-height: 0;
             overflow: auto;
-            padding: 0.2rem 0;
+            padding: var(--space-xs) 0 var(--space-md);
          }
          /*
             The column, split into the list and the properties panel. A grid
@@ -622,10 +897,6 @@
             grid-template-rows: minmax(0, 1fr) var(--divider) var(--properties-height);
             min-height: 0;
             background: var(--order-flow-recessed);
-            border-right: 1px solid var(--order-flow-panel-border);
-         }
-         #properties-panel {
-            border-top: 1px solid var(--order-flow-panel-border);
          }
          /*
             The form's own DOM is `PropertiesForm`'s, shared verbatim with the
@@ -637,7 +908,7 @@
             sit 2px further right behind their selection bar: this form's own
             header is the line directly above it. */
          #properties-body {
-            padding: 0.5rem 0.6rem;
+            padding: var(--space-lg);
          }
          /*
             A field holding something the server has not been told about. Marked
@@ -650,28 +921,26 @@
             color: var(--order-flow-warning);
          }
          #properties-body .field-hint {
-            margin-top: 0.15rem;
+            margin-top: var(--space-xs);
             color: var(--order-flow-muted-foreground);
-            font-size: 0.65rem;
+            font-size: var(--font-xs);
          }
-         #properties-body h1 {
-            margin: 0 0 0.6rem;
-            font-size: 0.82rem;
+         #properties-body h3 {
+            margin: 0 0 var(--space-lg);
+            font-size: var(--font-md);
             font-weight: 600;
          }
          #properties-body .field {
             display: flex;
             flex-direction: column;
-            margin-bottom: 0.5rem;
+            margin-bottom: var(--space-xl);
          }
          #properties-body .field label {
-            margin-bottom: 0.15rem;
-            color: var(--order-flow-muted-foreground);
+            margin-bottom: var(--space-xs);
+            color: var(--order-flow-secondary-foreground);
          }
          #properties-body .field input {
-            padding: 0.15rem 0.35rem;
-            border: 1px solid var(--order-flow-panel-border);
-            background: var(--order-flow-surface);
+            padding: var(--space-xs) var(--space-md);
             color: var(--order-flow-foreground);
             font: inherit;
          }
@@ -682,9 +951,9 @@
             opacity: 0.5;
          }
          #properties-body .status {
-            margin: 0.5rem 0;
+            margin: var(--space-md) 0;
             min-height: 1em;
-            color: var(--order-flow-muted-foreground);
+            color: var(--order-flow-secondary-foreground);
          }
          #properties-body .status[data-kind='merged'] {
             color: var(--order-flow-focus-border);
@@ -697,35 +966,44 @@
          }
          #properties-body .diagnostics {
             list-style: none;
-            margin: 0.5rem 0 0;
+            margin: var(--space-md) 0 0;
             padding: 0;
          }
          #properties-body .diagnostics li {
-            margin-bottom: 0.2rem;
+            margin-bottom: var(--space-xs);
             color: var(--order-flow-invalid);
          }
          .badge {
             font-family: ui-monospace, monospace;
-            font-size: 0.7rem;
+            font-size: var(--font-xs);
             line-height: 1.4;
-            padding: 0 0.35rem;
+            padding: 0 var(--space-sm);
             border-radius: 8px;
             background: var(--order-flow-hover-background);
-            color: var(--order-flow-muted-foreground);
+            color: var(--order-flow-secondary-foreground);
             flex: 0 0 auto;
          }
+         /*
+            A badge's TEXT is the role pulled towards the foreground, not the
+            role itself. A role is picked to carry meaning against the page
+            surface, and a badge does not sit on the page surface — it sits on a
+            wash of ITSELF, which moves the background towards the text and
+            takes the pair below a readable contrast in both directions at once.
+            Mixing towards `--order-flow-foreground` corrects it in whichever
+            direction the theme runs, because that is the role that flips.
+         */
          .badge-error {
             background: color-mix(in srgb, var(--order-flow-invalid) 22%, transparent);
-            color: var(--order-flow-invalid);
+            color: color-mix(in srgb, var(--order-flow-invalid) 60%, var(--order-flow-foreground));
          }
          .badge-warning {
             background: color-mix(in srgb, var(--order-flow-warning) 22%, transparent);
-            color: var(--order-flow-warning);
+            color: color-mix(in srgb, var(--order-flow-warning) 60%, var(--order-flow-foreground));
          }
          .badge-info,
          .badge-hint {
             background: color-mix(in srgb, var(--order-flow-focus-border) 20%, transparent);
-            color: var(--order-flow-focus-border);
+            color: color-mix(in srgb, var(--order-flow-focus-border) 60%, var(--order-flow-foreground));
          }
 
          /*
@@ -736,7 +1014,7 @@
          .row {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
+            gap: var(--space-md);
             width: 100%;
             font: inherit;
             text-align: left;
@@ -744,7 +1022,7 @@
             background: transparent;
             border: 0;
             border-left: 2px solid transparent;
-            padding: 0.2rem 0.6rem;
+            padding: var(--space-sm) var(--space-lg);
             cursor: pointer;
          }
          .row:hover {
@@ -762,8 +1040,8 @@
             white-space: nowrap;
          }
          .row .codicon {
-            font-size: 0.85rem;
-            color: var(--order-flow-muted-foreground);
+            font-size: var(--icon-md);
+            color: var(--order-flow-secondary-foreground);
             flex: 0 0 auto;
          }
          /*
@@ -788,7 +1066,7 @@
          }
          .document-row.is-pinned > .codicon-pinned {
             color: var(--order-flow-task-accent);
-            font-size: 0.8rem;
+            font-size: var(--icon-sm);
          }
          /*
             The same dot the editor titles carry, so one mark means one thing
@@ -799,20 +1077,20 @@
          */
          .document-row.is-dirty > .codicon-circle-filled {
             color: var(--order-flow-foreground);
-            font-size: 0.55rem;
+            font-size: var(--icon-dot);
          }
          .problem-group-head {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
-            padding: 0.3rem 0.6rem 0.1rem;
-            color: var(--order-flow-muted-foreground);
+            gap: var(--space-md);
+            padding: var(--space-md) var(--space-lg) var(--space-xs);
+            color: var(--order-flow-secondary-foreground);
             font-family: ui-monospace, monospace;
-            font-size: 0.72rem;
+            font-size: var(--font-sm);
          }
          .problem-row {
-            padding-left: 1.4rem;
-            font-size: 0.76rem;
+            padding-left: calc(var(--space-xl) + var(--space-lg));
+            font-size: var(--font-sm);
          }
          .problem-row.error > .codicon {
             color: var(--order-flow-invalid);
@@ -825,7 +1103,7 @@
             color: var(--order-flow-focus-border);
          }
          .hint-text {
-            font-size: 0.72rem;
+            font-size: var(--font-xs);
             color: var(--order-flow-muted-foreground);
             overflow: hidden;
             text-overflow: ellipsis;
@@ -834,7 +1112,7 @@
          }
          .empty {
             margin: 0;
-            padding: 0.4rem 0.6rem;
+            padding: var(--space-md) var(--space-lg);
             color: var(--order-flow-muted-foreground);
          }
 
@@ -856,13 +1134,34 @@
          .pane-head {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
-            padding: 0.3rem 0.6rem;
-            color: var(--order-flow-muted-foreground);
-            background: var(--order-flow-panel-background);
-            border-bottom: 1px solid var(--order-flow-panel-border);
+            gap: var(--space-md);
+            padding: var(--space-md) var(--space-lg);
+            color: var(--order-flow-secondary-foreground);
+            background: var(--order-flow-chrome-background);
             font-family: ui-monospace, monospace;
-            font-size: 0.74rem;
+            font-size: var(--font-sm);
+         }
+         /*
+            Which pane a keystroke will reach. Four of them take input — three
+            text editors and a diagram — and they are edited by different
+            machinery, so "where am I typing" is not answerable from the caret
+            alone: a diagram has none, and an editor that lost focus keeps
+            drawing the one it had.
+
+            Drawn on the HEAD rather than as a ring around the pane, because a
+            ring lands between two panes that share a divider and reads as
+            belonging to whichever one you were not looking at. Inset, so
+            marking a pane active moves nothing.
+
+            Along the head's BOTTOM edge, which is its boundary with the content
+            it labels. The top edge is against a divider or the title bar, so a
+            bar there reads as belonging to the chrome above rather than to this
+            pane, and one on both edges encloses the head — which makes the head
+            itself look selected instead of labelling what is.
+         */
+         .pane.is-active > .pane-head {
+            color: var(--order-flow-foreground);
+            box-shadow: inset 0 -2px 0 var(--order-flow-focus-border);
          }
          .pane-head .pane-title {
             flex: 0 1 auto;
@@ -905,7 +1204,6 @@
             display: grid;
             grid-template-rows: minmax(0, var(--diagram-split)) var(--divider) minmax(0, 1fr);
             min-width: 0;
-            border-left: 1px solid var(--order-flow-panel-border);
          }
          .fixed-editors {
             display: grid;
@@ -947,6 +1245,21 @@
             height: 100%;
          }
          /*
+            The diagram's type, which neither GLSP nor the shared stylesheet
+            supplies: sprotty ships a Helvetica stack of its own, so a node label
+            lands in a different family from every other word on the page and its
+            labels fall through to bare `sans-serif`. Both other shells bind this
+            to their host's UI font — a page is its own host, so it states it.
+
+            The size is the base the shared sheet's label fractions are taken
+            from, so it sets the whole diagram's type scale rather than one
+            element's.
+         */
+         .sprotty {
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+         }
+         /*
             Monaco is sized entirely by its container, like the diagram mount: it
             measures the element it was created in and a `div` with no height has
             none, so the editor renders as a 0px strip with no error.
@@ -954,6 +1267,24 @@
          .editor {
             flex: 1 1 auto;
             min-height: 0;
+         }
+         /*
+            Monaco's own theme paints its background, and a standalone theme's
+            value is a constant — so it does not move when this page's surface
+            role does, and the editors end up a step BELOW the canvas they are
+            supposed to share. That inverts the depth order inside the content
+            area, where it is least expected and reads as the editors being a
+            different kind of surface.
+
+            Binding the background here fixes the ORDER, not the theme: the token
+            colours are still Monaco's and are tuned for its own background.
+            `monaco.editor.defineTheme`, given these roles, is what makes the two
+            halves one palette; until then the highlighting is a guest.
+         */
+         .monaco-editor,
+         .monaco-editor .monaco-editor-background,
+         .monaco-editor .margin {
+            background-color: var(--order-flow-surface);
          }
 
          /* ---- dock ----------------------------------------------------- */
@@ -978,15 +1309,14 @@
             grid-template-columns: minmax(0, var(--dock-split)) var(--divider) minmax(0, 1fr);
             min-height: 0;
             background: var(--order-flow-recessed);
-            border-top: 1px solid var(--order-flow-panel-border);
          }
          #log {
             flex: 1 1 auto;
             min-height: 0;
             overflow: auto;
-            padding: 0.2rem 0.75rem 0.5rem;
+            padding: var(--space-md) var(--space-xl) var(--space-lg);
             font-family: ui-monospace, monospace;
-            font-size: 0.73rem;
+            font-size: var(--font-sm);
             /*
                `pre-wrap`: the server pre-formats each line with a padded level
                and a timestamp, so collapsing whitespace would destroy the column
@@ -995,7 +1325,7 @@
             white-space: pre-wrap;
          }
          #log div {
-            color: var(--order-flow-muted-foreground);
+            color: var(--order-flow-secondary-foreground);
          }
          #log div.error {
             color: var(--order-flow-invalid);
@@ -1009,19 +1339,16 @@
          .filter-box {
             display: inline-flex;
             align-items: center;
-            gap: 0.3rem;
-            padding: 0.1rem 0.4rem;
-            border: 1px solid var(--order-flow-panel-border);
-            border-radius: 4px;
-            background: var(--order-flow-surface);
+            gap: var(--space-sm);
+            padding: 2px var(--space-md);
          }
          .filter-box .codicon {
-            font-size: 0.8rem;
+            font-size: var(--icon-sm);
             color: var(--order-flow-muted-foreground);
          }
          .filter-box input {
             font: inherit;
-            font-size: 0.75rem;
+            font-size: var(--font-sm);
             width: 12ch;
             color: inherit;
             background: transparent;
@@ -1151,18 +1478,6 @@
          <h1>
             Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">three heads, one language server, one web worker</span>
          </h1>
-         <!--
-            The hash is its OWN span, for the reason the action labels are:
-            `textContent` on the anchor would take the `<i>` with it and leave
-            the icon gone. No `data-nls` either — the locale switch writes
-            `textContent`, so a translated node would replace the hash.
-
-            Hidden until one is filled in.
-         -->
-         <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
-            <i class="codicon codicon-git-commit" aria-hidden="true"></i>
-            <span id="build-commit-hash"></span>
-         </a>
          <span class="spacer"></span>
          <div class="actions">
             <!--
@@ -1182,132 +1497,172 @@
                switch writes `textContent`, and writing it on the button would
                take the `<i>` with it and leave an iconless label.
             -->
-            <button type="button" id="save-workspace" class="action" disabled>
-               <i class="codicon codicon-save" aria-hidden="true"></i> <span data-nls="order-flow/page/save-workspace">Save workspace</span>
-            </button>
-            <button type="button" id="reset-workspace" class="action" disabled>
-               <i class="codicon codicon-discard" aria-hidden="true"></i>
-               <span data-nls="order-flow/page/reset-workspace">Reset workspace</span>
-            </button>
-            <button
-               type="button"
-               id="reset-layout"
-               class="action"
-               title="Restore the default pane sizes"
-               data-nls-title="order-flow/page/reset-layout-hint"
-            >
-               <i class="codicon codicon-screen-normal" aria-hidden="true"></i>
-               <span data-nls="order-flow/page/reset-layout">Reset layout</span>
-            </button>
-            <label class="scheme-switch action" title="Light or dark" data-nls-title="order-flow/page/scheme-hint">
-               <input type="checkbox" id="dark-scheme" />
-               <i class="codicon codicon-color-mode" aria-hidden="true"></i>
-               <span data-nls="order-flow/page/scheme-dark">Dark</span>
-            </label>
             <!--
-               The language switch, and it is a `<select>` rather than a second
-               checkbox because the set is open: a third catalogue is a row in
-               `PAGE_LOCALES` and nothing else. Its options are NOT translated —
-               a reader looking for their own language looks for its name in that
-               language, which is why every picker of this kind lists `Deutsch`
-               and not `German`. Populated from script so the list has one
-               source; see `src/page/page-nls.ts`.
+               GROUPED by what an action can COST: writing or destroying the
+               workspace, rearranging panes, and stating a preference. Ungrouped,
+               the only thing separating "restore the pane sizes" from "discard
+               every stored edit" is word order.
             -->
-            <label class="scheme-switch action" title="Language" data-nls-title="order-flow/page/language">
-               <i class="codicon codicon-globe" aria-hidden="true"></i>
-               <select id="page-locale" aria-label="Language" data-nls-aria-label="order-flow/page/language"></select>
-            </label>
+            <div class="action-group">
+               <button type="button" id="save-workspace" class="action" disabled>
+                  <i class="codicon codicon-save" aria-hidden="true"></i>
+                  <span data-nls="order-flow/page/save-workspace">Save workspace</span>
+               </button>
+               <!--
+                  Marked `destructive`, which is a COLOUR on hover and nothing
+                  else — the dialog is what actually guards it. The two together
+                  are the pair that matters: the colour says which button this is
+                  before the click, the dialog catches the click that lands
+                  anyway.
+               -->
+               <button type="button" id="reset-workspace" class="action destructive" disabled>
+                  <i class="codicon codicon-discard" aria-hidden="true"></i>
+                  <span data-nls="order-flow/page/reset-workspace">Reset workspace</span>
+               </button>
+            </div>
+            <div class="action-group">
+               <button
+                  type="button"
+                  id="reset-layout"
+                  class="action"
+                  title="Restore the default pane sizes"
+                  data-nls-title="order-flow/page/reset-layout-hint"
+               >
+                  <i class="codicon codicon-screen-normal" aria-hidden="true"></i>
+                  <span data-nls="order-flow/page/reset-layout">Reset layout</span>
+               </button>
+            </div>
+            <div class="action-group">
+               <label class="scheme-switch action" title="Light or dark" data-nls-title="order-flow/page/scheme-hint">
+                  <input type="checkbox" id="dark-scheme" />
+                  <i class="codicon codicon-color-mode" aria-hidden="true"></i>
+                  <span data-nls="order-flow/page/scheme-dark">Dark</span>
+               </label>
+               <!--
+                  The language switch, as two buttons rather than a `<select>`,
+                  because the set is CLOSED at two and because the switch asks before
+                  it navigates. A `<select>` changes its displayed value
+                  the moment you pick, before the dialog resolves — so cancelling
+                  means remembering the previous locale and writing it back, and
+                  that restore is the step a reader notices when it is missed.
+                  Two buttons carry no such state: cancelling is not navigating.
+
+                  The names are NOT translated — a reader looking for their own
+                  language looks for its name in that language, which is why every
+                  picker of this kind lists `Deutsch` and not `German`. Populated
+                  from script so `PAGE_LOCALES` stays the one source.
+               -->
+               <div
+                  id="page-locale"
+                  class="action locale-switch"
+                  role="group"
+                  aria-label="Language"
+                  data-nls-aria-label="order-flow/page/language"
+               >
+                  <i class="codicon codicon-globe" aria-hidden="true"></i>
+               </div>
+            </div>
          </div>
       </header>
 
-      <div id="layout">
-         <!--
-            Every seeded document, with its diagnostic count. This is what makes
-            the problems list in the dock navigable rather than a report about
-            files the page gives no way to see.
-         -->
-         <!--
+      <main>
+         <div id="layout">
+            <!--
             The navigation column: what to open, above the properties of what is
             open. Both are about a DOCUMENT rather than about the canvas, which
             is why they share a column and why the properties panel is not under
             the diagram it most often describes.
          -->
-         <div class="sidebar" id="sidebar-column">
-            <!--
+            <div class="sidebar" id="sidebar-column">
+               <!--
                Every seeded document, with its diagnostic count. This is what
                makes the problems list in the dock navigable rather than a report
                about files the page gives no way to see.
             -->
-            <section class="panel" id="document-panel">
-               <div class="panel-head">
-                  <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
-                  <h2 data-nls="order-flow/page/workspace">Workspace</h2>
-                  <span class="spacer"></span>
-                  <span class="badge" id="document-list-count" title="documents" data-nls-title="order-flow/page/documents">0</span>
-               </div>
-               <div class="panel-body" id="document-list"></div>
-            </section>
+               <section class="panel" id="document-panel" aria-labelledby="workspace-heading">
+                  <div class="panel-head">
+                     <i class="codicon codicon-folder-opened" aria-hidden="true"></i>
+                     <h2 id="workspace-heading" data-nls="order-flow/page/workspace">Workspace</h2>
+                     <span class="spacer"></span>
+                     <span class="badge" id="document-list-count" title="documents" data-nls-title="order-flow/page/documents">0</span>
+                  </div>
+                  <div class="panel-body" id="document-list"></div>
+               </section>
 
-            <div
-               class="splitter"
-               data-splitter="--properties-height"
-               data-measure="#properties-panel"
-               data-axis="y"
-               data-invert
-               data-min="80"
-               data-max="600"
-            ></div>
+               <div
+                  class="splitter"
+                  data-splitter="--properties-height"
+                  data-measure="#properties-panel"
+                  data-axis="y"
+                  data-invert
+                  data-min="80"
+                  data-max="600"
+               ></div>
 
-            <!--
+               <!--
                The page's SECOND data-head participant, on its own session over
                the one connection. It follows editor focus rather than the list
                above it: a `.domain` root carries no editable string property at
                all, so a panel bound to the selection would open empty on this
                workspace and stay that way.
             -->
-            <section class="panel" id="properties-panel">
-               <div class="panel-head">
-                  <i class="codicon codicon-settings" aria-hidden="true"></i>
-                  <h2 data-nls="order-flow/page/properties">Properties</h2>
-               </div>
-               <div class="panel-body" id="properties-body"></div>
-            </section>
-         </div>
+               <section class="panel" id="properties-panel" aria-labelledby="properties-heading">
+                  <div class="panel-head">
+                     <i class="codicon codicon-settings" aria-hidden="true"></i>
+                     <h2 id="properties-heading" data-nls="order-flow/page/properties">Properties</h2>
+                     <span class="spacer"></span>
+                     <!--
+                        What drives the panel, said in the head. Sitting under
+                        the workspace list it otherwise reads as a detail view
+                        of the selected row, and the two disagree the moment a
+                        pinned editor takes the focus.
+                     -->
+                     <span
+                        class="hint-text"
+                        title="the panel shows the document holding the editor focus, not the selected row"
+                        data-nls-title="order-flow/page/properties-hint"
+                        data-nls="order-flow/page/follows-focus"
+                        >follows editor focus</span
+                     >
+                  </div>
+                  <div class="panel-body" id="properties-body"></div>
+               </section>
+            </div>
 
-         <!--
+            <!--
             This one DOES carry an absolute ceiling, and the difference is the
             default: `--sidebar-width` is a length, so no window width can push
             the divider past 600 and leave it there. A list of file names has a
             width past which it is only whitespace, which no measurement of the
             neighbouring pane expresses.
          -->
-         <div
-            class="splitter"
-            data-splitter="--sidebar-width"
-            data-measure="#sidebar-column"
-            data-axis="x"
-            data-min="180"
-            data-max="600"
-         ></div>
+            <div
+               class="splitter"
+               data-splitter="--sidebar-width"
+               data-measure="#sidebar-column"
+               data-axis="x"
+               data-min="180"
+               data-max="600"
+            ></div>
 
-         <!--
+            <!--
             ONE editor for whatever was last selected, and it sits here — beside
             the list that drives it — rather than across the window: a selection
             should change the pane the reader's eye is already on.
          -->
-         <section class="pane" id="selected-pane">
-            <div class="pane-head">
-               <i class="codicon codicon-go-to-file" aria-hidden="true"></i>
-               <span class="pane-title" id="selected-editor-title">…</span>
-               <span class="hint" data-nls="order-flow/page/selected">selected</span>
-            </div>
-            <div id="selected-editor" class="editor"></div>
-         </section>
+            <section class="pane" id="selected-pane">
+               <div class="pane-head">
+                  <i class="codicon codicon-go-to-file" aria-hidden="true"></i>
+                  <span class="pane-title" id="selected-editor-title">…</span>
+                  <span class="hint" data-nls="order-flow/page/selected">selected</span>
+               </div>
+               <div id="selected-editor" class="editor"></div>
+            </section>
 
-         <!-- `--selected-width` defaults to a fraction, so no absolute ceiling. -->
-         <div class="splitter" data-splitter="--selected-width" data-measure="#selected-pane" data-axis="x" data-min="220"></div>
+            <!-- `--selected-width` defaults to a fraction, so no absolute ceiling. -->
+            <div class="splitter" data-splitter="--selected-width" data-measure="#selected-pane" data-axis="x" data-min="220"></div>
 
-         <!--
+            <!--
             The subject: the diagram over the two documents it is a view of, both
             FIXED. `.process` carries the semantics the canvas draws and `.layout`
             the coordinates a drag rewrites, so neither may be swapped out by a
@@ -1315,116 +1670,183 @@
             one of them and not the other, and it is unobservable if either can
             leave the screen. See `src/page/editor-area.ts`.
          -->
-         <div class="subject">
-            <section class="pane" id="diagram-pane">
-               <div class="pane-head">
-                  <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i>
-                  <span class="pane-title" id="diagram-title">orders/fulfillment.process</span>
-                  <span class="hint" data-nls="order-flow/page/diagram-hint">drag a node; the layout editor follows</span>
+            <div class="subject">
+               <section class="pane" id="diagram-pane">
+                  <div class="pane-head">
+                     <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i>
+                     <span class="pane-title" id="diagram-title">orders/fulfillment.process</span>
+                     <span class="hint" data-nls="order-flow/page/diagram-hint">drag a node; the layout editor follows</span>
+                  </div>
+                  <div id="order-flow-process-diagram"></div>
+               </section>
+               <!-- `--diagram-split` defaults to a percentage, so no absolute ceiling. -->
+               <div class="splitter" data-splitter="--diagram-split" data-measure="#diagram-pane" data-axis="y" data-min="120"></div>
+               <div class="fixed-editors">
+                  <section class="pane" id="process-pane">
+                     <div class="pane-head">
+                        <i class="codicon codicon-symbol-event" aria-hidden="true"></i>
+                        <span class="pane-title" id="process-editor-title">…</span>
+                        <span class="hint" data-nls="order-flow/page/semantics">semantics</span>
+                     </div>
+                     <div id="process-editor" class="editor"></div>
+                  </section>
+                  <!-- `--fixed-split` defaults to a percentage, so no absolute ceiling. -->
+                  <div class="splitter" data-splitter="--fixed-split" data-measure="#process-pane" data-axis="x" data-min="180"></div>
+                  <section class="pane">
+                     <div class="pane-head">
+                        <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i>
+                        <span class="pane-title" id="layout-editor-title">…</span>
+                        <span class="hint" data-nls="order-flow/page/coordinates">coordinates</span>
+                     </div>
+                     <div id="layout-editor" class="editor"></div>
+                  </section>
                </div>
-               <div id="order-flow-process-diagram"></div>
-            </section>
-            <!-- `--diagram-split` defaults to a percentage, so no absolute ceiling. -->
-            <div class="splitter" data-splitter="--diagram-split" data-measure="#diagram-pane" data-axis="y" data-min="120"></div>
-            <div class="fixed-editors">
-               <section class="pane" id="process-pane">
-                  <div class="pane-head">
-                     <i class="codicon codicon-symbol-event" aria-hidden="true"></i>
-                     <span class="pane-title" id="process-editor-title">…</span>
-                     <span class="hint" data-nls="order-flow/page/semantics">semantics</span>
-                  </div>
-                  <div id="process-editor" class="editor"></div>
-               </section>
-               <!-- `--fixed-split` defaults to a percentage, so no absolute ceiling. -->
-               <div class="splitter" data-splitter="--fixed-split" data-measure="#process-pane" data-axis="x" data-min="180"></div>
-               <section class="pane">
-                  <div class="pane-head">
-                     <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i>
-                     <span class="pane-title" id="layout-editor-title">…</span>
-                     <span class="hint" data-nls="order-flow/page/coordinates">coordinates</span>
-                  </div>
-                  <div id="layout-editor" class="editor"></div>
-               </section>
             </div>
          </div>
-      </div>
 
-      <div class="splitter" data-splitter="--dock-height" data-measure="#dock" data-axis="y" data-invert data-min="60" data-max="700"></div>
+         <div
+            class="splitter"
+            data-splitter="--dock-height"
+            data-measure="#dock"
+            data-axis="y"
+            data-invert
+            data-min="60"
+            data-max="700"
+         ></div>
 
-      <section class="dock" id="dock">
-         <section class="panel" id="log-panel">
-            <div class="panel-head">
-               <i class="codicon codicon-output" aria-hidden="true"></i>
-               <h2 data-nls="order-flow/page/server-log">Server log</h2>
-               <span class="badge" id="log-summary" title="Lines received" data-nls-title="order-flow/page/lines-received">0</span>
-               <span class="spacer"></span>
-               <span class="filter-box">
-                  <i class="codicon codicon-filter" aria-hidden="true"></i>
-                  <input
-                     type="text"
-                     id="log-filter"
-                     placeholder="filter"
-                     aria-label="Filter the server log"
-                     data-nls-placeholder="order-flow/page/filter"
-                     data-nls-aria-label="order-flow/page/filter-hint"
-                  />
-               </span>
-               <!--
+         <section class="dock" id="dock">
+            <section class="panel" id="log-panel" aria-labelledby="log-heading">
+               <div class="panel-head">
+                  <i class="codicon codicon-output" aria-hidden="true"></i>
+                  <h2 id="log-heading" data-nls="order-flow/page/server-log">Server log</h2>
+                  <span class="badge" id="log-summary" title="Lines received" data-nls-title="order-flow/page/lines-received">0</span>
+                  <span class="spacer"></span>
+                  <span class="filter-box">
+                     <i class="codicon codicon-filter" aria-hidden="true"></i>
+                     <input
+                        type="text"
+                        id="log-filter"
+                        placeholder="filter"
+                        aria-label="Filter the server log"
+                        data-nls-placeholder="order-flow/page/filter"
+                        data-nls-aria-label="order-flow/page/filter-hint"
+                     />
+                  </span>
+                  <!--
                   Two pickers on different halves of the wire: `log-level` is the
                   SERVER's threshold over LSP configuration, `log-trace` is this
                   page printing its own message traffic. Options are populated
                   from script so each list has one source.
                -->
-               <label class="scheme-switch action" title="Server log level" data-nls-title="order-flow/page/log-level">
-                  <i class="codicon codicon-settings-gear" aria-hidden="true"></i>
-                  <select id="log-level" aria-label="Server log level" data-nls-aria-label="order-flow/page/log-level"></select>
-               </label>
-               <label class="scheme-switch action" title="Trace LSP messages" data-nls-title="order-flow/page/log-trace">
-                  <i class="codicon codicon-arrow-swap" aria-hidden="true"></i>
-                  <select id="log-trace" aria-label="Trace LSP messages" data-nls-aria-label="order-flow/page/log-trace"></select>
-               </label>
-               <button
-                  type="button"
-                  id="log-clear"
-                  class="action"
-                  title="Clear the lines held here"
-                  data-nls-title="order-flow/page/clear-log"
-               >
-                  <i class="codicon codicon-clear-all" aria-hidden="true"></i>
-               </button>
-            </div>
-            <div id="log"></div>
-         </section>
-         <!--
+                  <label class="scheme-switch action" title="Server log level" data-nls-title="order-flow/page/log-level">
+                     <i class="codicon codicon-settings-gear" aria-hidden="true"></i>
+                     <select id="log-level" aria-label="Server log level" data-nls-aria-label="order-flow/page/log-level"></select>
+                  </label>
+                  <label class="scheme-switch action" title="Trace LSP messages" data-nls-title="order-flow/page/log-trace">
+                     <i class="codicon codicon-arrow-swap" aria-hidden="true"></i>
+                     <select id="log-trace" aria-label="Trace LSP messages" data-nls-aria-label="order-flow/page/log-trace"></select>
+                  </label>
+                  <button
+                     type="button"
+                     id="log-clear"
+                     class="action"
+                     title="Clear the lines held here"
+                     data-nls-title="order-flow/page/clear-log"
+                     aria-label="Clear the lines held here"
+                     data-nls-aria-label="order-flow/page/clear-log"
+                  >
+                     <i class="codicon codicon-clear-all" aria-hidden="true"></i>
+                  </button>
+               </div>
+               <div id="log"></div>
+            </section>
+            <!--
             No `data-max`: this divider's default is a SHARE of the dock, so any
             fixed ceiling is smaller than the default once the window is wide
             enough, and a divider whose bound sits below where it already is can
             only be dragged one way. The problems panel keeping `data-min` is the
             bound that means something here. See `src/page/splitters.ts`.
          -->
-         <div class="splitter" data-splitter="--dock-split" data-measure="#log-panel" data-axis="x" data-min="240"></div>
-         <!--
+            <div class="splitter" data-splitter="--dock-split" data-measure="#log-panel" data-axis="x" data-min="240"></div>
+            <!--
             NOT filtered to the open documents, and that is the demonstration:
             `orders/audit-leak.domain` exists so a diagnostic is published for a
             file nobody opened. See `src/page/workspace-panel.ts`.
          -->
-         <section class="panel">
-            <div class="panel-head">
-               <i class="codicon codicon-warning" aria-hidden="true"></i>
-               <h2 data-nls="order-flow/page/problems">Problems</h2>
-               <span class="badge" id="problem-list-count" title="diagnostics" data-nls-title="order-flow/page/diagnostics">0</span>
-               <span class="spacer"></span>
-               <span
-                  class="hint-text"
-                  title="click a diagnostic to open its document at the line"
-                  data-nls-title="order-flow/page/click-to-open-hint"
-                  data-nls="order-flow/page/click-to-open"
-                  >click to open</span
-               >
-            </div>
-            <div class="panel-body" id="problem-list"></div>
+            <section class="panel" aria-labelledby="problems-heading">
+               <div class="panel-head">
+                  <i class="codicon codicon-warning" aria-hidden="true"></i>
+                  <h2 id="problems-heading" data-nls="order-flow/page/problems">Problems</h2>
+                  <span class="badge" id="problem-list-count" title="diagnostics" data-nls-title="order-flow/page/diagnostics">0</span>
+                  <span class="spacer"></span>
+                  <span
+                     class="hint-text"
+                     title="click a diagnostic to open its document at the line"
+                     data-nls-title="order-flow/page/click-to-open-hint"
+                     data-nls="order-flow/page/click-to-open"
+                     >click to open</span
+                  >
+               </div>
+               <div class="panel-body" id="problem-list"></div>
+            </section>
          </section>
-      </section>
+      </main>
+
+      <!--
+         The two confirmations, as `<dialog>` rather than `window.confirm`.
+
+         A native dialog brings the modal behaviour with it — focus trapped
+         inside, `Escape` closes, `::backdrop` inert — and it can be painted from
+         the page's own roles, where browser chrome cannot. `confirm` would also
+         put the page's one destructive path behind something a driver DISMISSES
+         by default: the reset would silently not happen and the failure would
+         look nothing like its cause.
+
+         `method="dialog"` is what makes each button close and report itself, so
+         the wiring reads a `returnValue` rather than managing open state.
+      -->
+      <dialog id="reset-dialog" class="dialog" aria-labelledby="reset-dialog-title">
+         <form method="dialog">
+            <h2 id="reset-dialog-title" data-nls="order-flow/page/reset-dialog-title">Discard stored edits?</h2>
+            <p data-nls="order-flow/page/reset-dialog-body">
+               Everything saved into this browser is dropped and the committed fixtures come back. This cannot be undone.
+            </p>
+            <div class="dialog-actions">
+               <button type="submit" value="cancel" class="action" data-nls="order-flow/page/cancel">Cancel</button>
+               <button type="submit" value="confirm" class="action destructive" data-nls="order-flow/page/reset-workspace">
+                  Reset workspace
+               </button>
+            </div>
+         </form>
+      </dialog>
+
+      <!--
+         Asked only when something would be LOST. A language switch reloads, and
+         a reload drops every edit the server still holds in memory — but a
+         confirmation on every switch is one a reader learns to click through,
+         which is how a confirmation stops being one. So it appears when there is
+         unsaved work, and offers the answer that makes it worth appearing:
+         saving is what the reader wanted, not a choice between losing the work
+         and staying put.
+      -->
+      <dialog id="language-dialog" class="dialog" aria-labelledby="language-dialog-title">
+         <form method="dialog">
+            <h2 id="language-dialog-title" data-nls="order-flow/page/language-dialog-title">Switch language?</h2>
+            <p>
+               <span data-nls="order-flow/page/language-dialog-body"
+                  >Switching reloads the page, and unsaved edits do not survive a reload.</span
+               >
+               <span id="language-dialog-documents" class="dialog-detail"></span>
+            </p>
+            <div class="dialog-actions">
+               <button type="submit" value="cancel" class="action" data-nls="order-flow/page/cancel">Cancel</button>
+               <button type="submit" value="discard" class="action destructive" data-nls="order-flow/page/switch-without-saving">
+                  Switch without saving
+               </button>
+               <button type="submit" value="save" class="action primary" data-nls="order-flow/page/save-and-switch">Save and switch</button>
+            </div>
+         </form>
+      </dialog>
 
       <div class="status-area">
          <!--
@@ -1455,42 +1877,58 @@
             kept in step with. `data-pending` is dropped on the first report, so
             a reader watches the heads answer without opening anything.
          -->
-         <dl id="reports">
-            <div class="head">
-               <dt>
-                  <button type="button" class="report-toggle" data-report="status" data-pending>
-                     <i class="codicon codicon-symbol-namespace" aria-hidden="true"></i> LSP
-                  </button>
-               </dt>
-            </div>
-            <div class="head">
-               <dt>
-                  <button type="button" class="report-toggle" data-report="data-head" data-pending>
-                     <i class="codicon codicon-symbol-structure" aria-hidden="true"></i> Data
-                  </button>
-               </dt>
-            </div>
-            <div class="head">
-               <dt>
-                  <button type="button" class="report-toggle" data-report="glsp-head" data-pending>
-                     <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i> GLSP
-                  </button>
-               </dt>
-            </div>
-            <div class="derived">
-               <dt>
-                  <button type="button" class="report-toggle" data-report="layout-head" data-pending>
-                     <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i> Layout
-                  </button>
-               </dt>
-            </div>
-            <div class="derived">
-               <dt>
-                  <button type="button" class="report-toggle" data-report="workspace" data-pending>
-                     <i class="codicon codicon-database" aria-hidden="true"></i> Storage
-                  </button>
-               </dt>
-            </div>
+         <!--
+            A LIST of controls, not a description list. Every entry here is a
+            button that opens its value above the strip, and a `<dl>` whose
+            `<dt>`s have no `<dd>` describes nothing.
+
+            The build stamp names what is RUNNING, where the labels after it name
+            what the heads are doing now, so it reads before the legend rather
+            than appended to it. Leftmost rather than right-aligned because this
+            strip wraps by design, and a `margin-left: auto` item is the first
+            thing a wrap drops to a second row.
+         -->
+         <ul id="reports">
+            <li class="build">
+               <!--
+                  The hash is its OWN span, for the reason the action labels are:
+                  `textContent` on the anchor would take the `<i>` with it and
+                  leave the icon gone. No `data-nls` either — the locale switch
+                  writes `textContent`, so a translated node would replace the
+                  hash.
+
+                  Hidden until a deploy fills the `build-commit` meta in.
+               -->
+               <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
+                  <i class="codicon codicon-git-commit" aria-hidden="true"></i>
+                  <span id="build-commit-hash"></span>
+               </a>
+            </li>
+            <li class="head">
+               <button type="button" class="report-toggle" data-report="status" data-pending>
+                  <i class="codicon codicon-symbol-namespace" aria-hidden="true"></i> LSP
+               </button>
+            </li>
+            <li class="head">
+               <button type="button" class="report-toggle" data-report="data-head" data-pending>
+                  <i class="codicon codicon-symbol-structure" aria-hidden="true"></i> Data
+               </button>
+            </li>
+            <li class="head">
+               <button type="button" class="report-toggle" data-report="glsp-head" data-pending>
+                  <i class="codicon codicon-type-hierarchy" aria-hidden="true"></i> GLSP
+               </button>
+            </li>
+            <li class="derived">
+               <button type="button" class="report-toggle" data-report="layout-head" data-pending>
+                  <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i> Layout
+               </button>
+            </li>
+            <li class="derived">
+               <button type="button" class="report-toggle" data-report="workspace" data-pending>
+                  <i class="codicon codicon-database" aria-hidden="true"></i> Storage
+               </button>
+            </li>
             <!--
                The one category READ rather than published: a poll would put its
                own calls into the window it reports on, so the click IS the read.
@@ -1500,20 +1938,18 @@
                — dimming it until the first click would report the one category
                that is always ready as the only one that is not.
             -->
-            <div class="derived">
-               <dt>
-                  <button
-                     type="button"
-                     class="report-toggle"
-                     data-report="latency"
-                     title="Read RPC latency from the data head"
-                     data-nls-title="order-flow/page/latency-hint"
-                  >
-                     <i class="codicon codicon-pulse" aria-hidden="true"></i> Latency
-                  </button>
-               </dt>
-            </div>
-         </dl>
+            <li class="derived">
+               <button
+                  type="button"
+                  class="report-toggle"
+                  data-report="latency"
+                  title="Read RPC latency from the data head"
+                  data-nls-title="order-flow/page/latency-hint"
+               >
+                  <i class="codicon codicon-pulse" aria-hidden="true"></i> Latency
+               </button>
+            </li>
+         </ul>
       </div>
       <script src="./out/order-flow-page.js"></script>
    </body>

@@ -1,12 +1,11 @@
-// `commerce-core` is the shared library project of this two-project sample
-// workspace. This file carries the `project` header, which is what makes it
-// the folder's project descriptor: `OrderFlowProjectManager` reads the header
-// and every file under `commerce-core/` becomes a member of the project.
+// The shared library project: the `project`
+// header makes this file the folder's
+// descriptor, and every file under
+// `commerce-core/` becomes a member.
 //
-// Every declaration here is marked `public`, so `OrderFlowScopeComputation`
-// emits them at the framework's `public` visibility tier and any project that
-// `requires commerce-core` can reference them by their bare name. Compare
-// `internal.domain`, which deliberately does not.
+// `public` is what lets another project
+// reach these by their bare name.
+// `internal.domain` deliberately omits it.
 
 project commerce-core
 

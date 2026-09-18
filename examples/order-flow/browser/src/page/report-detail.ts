@@ -131,7 +131,25 @@ export class ReportDetail {
       // category's heading above this one's body.
       if (this.shown === key) {
          this.host.hidden = false;
+         this.anchorTo(toggle);
       }
+   }
+
+   /**
+    * Put the region's left edge under the label that opened it, so clicking
+    * along the strip does not send the eye back across the window.
+    *
+    * Measured, because the labels are laid out by content. Clamped at the right,
+    * and measured AFTER showing, since a hidden element has no width.
+    */
+   protected anchorTo(toggle: HTMLElement): void {
+      const area = this.host.offsetParent;
+      if (!(area instanceof HTMLElement)) {
+         return;
+      }
+      const offset = toggle.getBoundingClientRect().left - area.getBoundingClientRect().left;
+      const overflow = offset + this.host.offsetWidth - area.clientWidth;
+      this.host.style.left = `${Math.max(0, overflow > 0 ? offset - overflow : offset)}px`;
    }
 
    close(): void {

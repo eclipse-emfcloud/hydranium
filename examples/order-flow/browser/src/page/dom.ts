@@ -129,11 +129,26 @@ export function requireCheckbox(id: string): HTMLInputElement {
    return element;
 }
 
-/** The language switch, whose `<option>` list is built from script. */
+/** The log level and trace pickers, whose `<option>` lists are built from script. */
 export function requireSelect(id: string): HTMLSelectElement {
    const element = requireElement(id);
    if (!(element instanceof HTMLSelectElement)) {
       throw new Error(`#${id} is not a select`);
+   }
+   return element;
+}
+
+/**
+ * A confirmation dialog.
+ *
+ * Narrowed rather than taken as an `HTMLElement` because `showModal` is what the
+ * callers need and a plain element does not have it: the page would then open
+ * nothing, and the action behind the confirmation would go ahead unguarded.
+ */
+export function requireDialog(id: string): HTMLDialogElement {
+   const element = requireElement(id);
+   if (!(element instanceof HTMLDialogElement)) {
+      throw new Error(`#${id} is not a dialog`);
    }
    return element;
 }

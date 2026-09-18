@@ -79,12 +79,13 @@ import {
    WORKSPACE_ROOT_URI,
    type WorkspaceReadyMessage
 } from '../head-channels.js';
-import { requireButton, requireCheckbox, requireElement, requireSelect } from './dom.js';
+import { requireButton, requireCheckbox, requireDialog, requireElement } from './dom.js';
 import { EditorArea } from './editor-area.js';
 import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
 import { LogPanel } from './log-panel.js';
 import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco-lsp-adapter.js';
-import { applyPageLocale, localeUrl, PAGE_LOCALES } from './page-nls.js';
+import { applyPageLocale, localeUrl, type PageLocale, PAGE_LOCALES, rememberLocale } from './page-nls.js';
+import { rememberPreference, storedPreference } from './preferences.js';
 import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
 import { PROPERTIES_CLIENT_ID, PropertiesPanel } from './properties-panel.js';
 import { publishReport, ReportDetail } from './report-detail.js';
@@ -211,6 +212,69 @@ function setStatus(text: string): void {
 }
 
 /**
+ * The documents the server is holding edits for that nothing has persisted.
+ *
+ * A holder rather than a parameter because its readers are wired at opposite
+ * ends of startup: the language switch and the unload guard are both in place
+ * before there is a head for anything to be dirty against, and have to keep
+ * answering while the truthful answer is "none".
+ */
+let unsavedDocuments: () => readonly string[] = () => [];
+
+/**
+ * Whether the navigation about to happen is one the reader confirmed.
+ *
+ * Without it the two guards fire on the same navigation: the language switch
+ * asks, the reader agrees, and the unload handler then asks again in the
+ * browser's own words for the reload the reader just authorised.
+ */
+let navigationConfirmed = false;
+
+/** Persist every dirty document, exposed for the guards that offer saving. */
+let saveEverything: () => Promise<void> = async () => undefined;
+
+/**
+ * Ask what to do about `unsaved` before a reload drops it.
+ *
+ * Every non-button dismissal resolves to `cancel`: proceeding on a non-answer
+ * is the failure this exists to prevent.
+ */
+async function askAboutUnsaved(unsaved: readonly string[]): Promise<'cancel' | 'discard' | 'save'> {
+   const dialog = requireDialog('language-dialog');
+   requireElement('language-dialog-documents').textContent = unsaved.map(uri => uri.slice(WORKSPACE_ROOT_URI.length + 1)).join(', ');
+   dialog.returnValue = 'cancel';
+   dialog.showModal();
+   await new Promise<void>(resolve => dialog.addEventListener('close', () => resolve(), { once: true }));
+   return dialog.returnValue === 'save' ? 'save' : dialog.returnValue === 'discard' ? 'discard' : 'cancel';
+}
+
+/** Ask before discarding the stored workspace, which nothing can undo. */
+async function confirmReset(): Promise<boolean> {
+   const dialog = requireDialog('reset-dialog');
+   dialog.returnValue = 'cancel';
+   dialog.showModal();
+   await new Promise<void>(resolve => dialog.addEventListener('close', () => resolve(), { once: true }));
+   return dialog.returnValue === 'confirm';
+}
+
+/**
+ * Refuse a reload that would drop unsaved edits.
+ *
+ * The browser supplies the wording and ignores ours, so this only decides
+ * WHETHER to ask. `returnValue` is set as well as `preventDefault` because the
+ * older spelling is still what some browsers consult.
+ */
+function wireUnloadGuard(): void {
+   window.addEventListener('beforeunload', event => {
+      if (navigationConfirmed || unsavedDocuments().length === 0) {
+         return;
+      }
+      event.preventDefault();
+      event.returnValue = '';
+   });
+}
+
+/**
  * Fill the language switch and navigate when it changes.
  *
  * **A reload, and the reason is the SERVER half rather than this one.** The
@@ -227,23 +291,50 @@ function setStatus(text: string): void {
  * English diagnostics.
  */
 function wireLocaleSwitch(current: string | undefined): void {
-   const control = requireSelect('page-locale');
+   const control = requireElement('page-locale');
    for (const locale of PAGE_LOCALES) {
-      const option = document.createElement('option');
-      // The code, or the empty string for the untranslated default — `value` is a
-      // string slot, so the absent code cannot be represented as itself here.
-      // `localeUrl` maps it back, which is why the mapping lives there.
-      option.value = locale.code ?? '';
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'locale-option';
+      // The code, or the empty string for the untranslated default — a dataset
+      // slot is a string, so the absent code cannot be represented as itself
+      // here. `localeUrl` maps it back, which is why the mapping lives there.
+      option.dataset.locale = locale.code ?? '';
       option.textContent = locale.label;
-      option.selected = locale.code === current;
+      option.setAttribute('aria-pressed', String(locale.code === current));
+      option.addEventListener('click', () => {
+         if (locale.code === current) {
+            return;
+         }
+         void switchLocale(locale);
+      });
       control.append(option);
    }
-   control.addEventListener('change', () => {
-      const chosen = PAGE_LOCALES.find(locale => (locale.code ?? '') === control.value);
-      if (chosen !== undefined) {
-         window.location.assign(localeUrl(window.location.href, chosen));
+}
+
+/**
+ * Switch to `locale`, asking first when the reload would drop unsaved work.
+ *
+ * Conditional, and that is what keeps it a guard: one that fires on every
+ * switch is one a reader learns to dismiss unread. The unload guard is disarmed
+ * just before navigating, or both would ask.
+ */
+async function switchLocale(locale: PageLocale): Promise<void> {
+   const unsaved = unsavedDocuments();
+   if (unsaved.length > 0) {
+      const answer = await askAboutUnsaved(unsaved);
+      if (answer === 'cancel') {
+         return;
       }
-   });
+      if (answer === 'save') {
+         await saveEverything();
+      }
+   }
+   // Stored BEFORE the navigation, because the navigation is what ends this
+   // document — anything queued after it is not guaranteed to run.
+   rememberLocale(locale);
+   navigationConfirmed = true;
+   window.location.assign(localeUrl(window.location.href, locale));
 }
 
 /**
@@ -263,31 +354,76 @@ function wireLocaleSwitch(current: string | undefined): void {
  * supplies nothing still renders a legible diagram, and this page exercises that
  * by supplying only the light half.
  */
+/**
+ * Mark the pane holding the focus. The caret cannot say: a diagram has none,
+ * and an editor that lost focus goes on drawing the one it had.
+ *
+ * On the DOCUMENT, because the log, problems and status bar sit outside the
+ * layout — a listener scoped to the panes cannot see focus leave for one of
+ * those. `focusin` bubbles where `focus` does not, and sprotty replaces its
+ * focusable element on every model update.
+ */
+function wireActivePane(): void {
+   const layout = requireElement('layout');
+   document.addEventListener('focusin', event => {
+      const active = event.target instanceof Element ? event.target.closest('.pane') : null;
+      layout.querySelectorAll('.pane').forEach(pane => pane.classList.toggle('is-active', pane === active));
+   });
+}
+
 function applyScheme(scheme: ColourScheme): void {
    document.documentElement.dataset.theme = scheme;
    applyEditorScheme(scheme);
 }
 
 /**
- * The scheme to start in, and the switch that changes it.
+ * The scheme to start in: `?theme=` on the URL, then what the last visit stored,
+ * then `prefers-color-scheme`.
  *
- * `prefers-color-scheme` for the initial value, per the OS, with the checkbox
- * able to overrule it afterwards — which is why the CSS keys off a `data-theme`
- * attribute rather than the media query directly: a query cannot be overridden
- * from script without restating every rule inside it.
+ * The CSS keys off `data-theme` rather than the media query, which script
+ * cannot override without restating every rule inside it.
  *
- * **The choice is deliberately NOT persisted**, unlike the workspace. The
- * workspace's store is asked for its content explicitly, at a point the page
- * controls; a remembered colour scheme would be read during startup, which makes
- * every spec depend on what the previous one left behind. Playwright gives each
- * test its own storage partition, so this is about a reader running the page by
- * hand as much as about the suite.
+ * `?theme=` is CLEARED once the switch disagrees: it outranks the store and the
+ * language switch carries it across a reload, so leaving it would undo the
+ * reader's choice.
+ */
+function schemeToStartIn(): ColourScheme {
+   const requested = new URLSearchParams(window.location.search).get('theme')?.trim();
+   if (requested === 'dark' || requested === 'light') {
+      return requested;
+   }
+   const stored = storedPreference('scheme');
+   if (stored === 'dark' || stored === 'light') {
+      return stored;
+   }
+   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/**
+ * The scheme to start in, and the switch that changes and remembers it.
+ *
+ * Only the SWITCH stores: seeding would freeze whatever the OS said on a first
+ * visit and stop the page following it thereafter.
  */
 function wireSchemeSwitch(): void {
    const control = requireCheckbox('dark-scheme');
-   control.checked = window.matchMedia('(prefers-color-scheme: dark)').matches;
-   control.addEventListener('change', () => applyScheme(control.checked ? 'dark' : 'light'));
-   applyScheme(control.checked ? 'dark' : 'light');
+   const apply = (scheme: ColourScheme): void => {
+      control.checked = scheme === 'dark';
+      applyScheme(scheme);
+      rememberPreference('scheme', scheme);
+      // `replaceState` rather than a navigation: the scheme changed in place and
+      // nothing here needs reloading, so this only stops the address bar naming
+      // a scheme the page has stopped obeying.
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('theme')) {
+         url.searchParams.delete('theme');
+         window.history.replaceState(null, '', url);
+      }
+   };
+   control.addEventListener('change', () => apply(control.checked ? 'dark' : 'light'));
+   const initial = schemeToStartIn();
+   control.checked = initial === 'dark';
+   applyScheme(initial);
 }
 
 /** Everything the page holds after bootstrap: one channel per head, plus the host protocol. */
@@ -612,11 +748,23 @@ function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, ada
    const save = requireButton('save-workspace');
    save.addEventListener('click', () => void saveWorkspace(dataHead, adapter, editors));
    save.disabled = false;
+   // Published for the guards, which offer saving as the answer to a navigation
+   // that would otherwise drop the work.
+   saveEverything = () => saveWorkspace(dataHead, adapter, editors);
 
    const reset = requireButton('reset-workspace');
    reset.addEventListener('click', () => {
-      setWorkspaceReport('clearing stored edits…');
-      channels.resetWorkspace();
+      // Asked UNCONDITIONALLY, unlike the language switch's. That one guards
+      // against losing edits and has nothing to say when there are none; this
+      // one discards the store itself, which is destructive whatever the editors
+      // hold and cannot be undone from the page.
+      void confirmReset().then(confirmed => {
+         if (!confirmed) {
+            return;
+         }
+         setWorkspaceReport('clearing stored edits…');
+         channels.resetWorkspace();
+      });
    });
    reset.disabled = false;
 }
@@ -640,6 +788,8 @@ export async function main(locale: string | undefined): Promise<void> {
    applyPageLocale(locale);
    wireLocaleSwitch(locale);
    wireSchemeSwitch();
+   wireUnloadGuard();
+   wireActivePane();
    // Before anything publishes into the strip: the categories carry a placeholder
    // until their head answers, and a label that does nothing until then reads as
    // a dead control rather than as a value not yet in.
@@ -769,6 +919,7 @@ export async function main(locale: string | undefined): Promise<void> {
       },
       onFocusChanged: path => properties.panel?.showDocument(`${WORKSPACE_ROOT_URI}/${path}`),
       onDirtyChanged: dirty => {
+         unsavedDocuments = () => [...dirty];
          sidebar.panel?.setDirty(dirty);
          sidebar.panel?.render(diagnosticsByUri);
       }

@@ -52,6 +52,7 @@
  */
 
 import germanChrome from './nls/order-flow-page.de.json';
+import { rememberPreference, storedPreference } from './preferences.js';
 
 /**
  * The languages the switch offers, in the order it offers them.
@@ -72,7 +73,8 @@ export interface PageLocale {
 export const PAGE_LOCALES: readonly PageLocale[] = [{ label: 'English' }, { code: 'de', label: 'Deutsch' }];
 
 /**
- * The locale for the whole page, from `?locale=` on the page URL.
+ * The locale for the whole page: `?locale=` on the page URL, or what the last
+ * visit stored.
  *
  * **The URL is the carrier, and not `navigator.language`.** The switch in the
  * title bar writes this parameter rather than holding the choice itself, which
@@ -85,9 +87,12 @@ export const PAGE_LOCALES: readonly PageLocale[] = [{ label: 'English' }, { code
  * back to English, which is the same pass-through an adopter with no entry for a
  * code gets.
  *
- * An empty value is treated as absent: `?locale=` is a URL a reader lands on by
- * deleting the tag, and declaring `''` would be a claim about a language rather
- * than the absence of one.
+ * **A parameter that is PRESENT outranks the store even when it is empty, and
+ * that distinction is the whole reason this reads the parameter rather than its
+ * value.** `?locale=` is a URL a reader reaches by clearing the tag by hand, and
+ * it means English — so treating it as absent would send it to the store and
+ * bring back the language the reader had just cleared. Absent entirely is the
+ * only case the store answers.
  *
  * Read ONCE, by `order-flow-page.ts`, and passed to everything that needs it.
  * Three consumers now read the same value — Monaco's bundle, the chrome
@@ -95,8 +100,26 @@ export const PAGE_LOCALES: readonly PageLocale[] = [{ label: 'English' }, { code
  * end up disagreeing.
  */
 export function requestedLocale(): string | undefined {
-   const requested = new URLSearchParams(window.location.search).get('locale')?.trim();
-   return requested === undefined || requested === '' ? undefined : requested;
+   const parameters = new URLSearchParams(window.location.search);
+   if (parameters.has('locale')) {
+      const requested = parameters.get('locale')?.trim();
+      return requested === undefined || requested === '' ? undefined : requested;
+   }
+   const stored = storedPreference('locale')?.trim();
+   return stored === undefined || stored === '' ? undefined : stored;
+}
+
+/**
+ * Remember `locale` for the next visit, English included.
+ *
+ * English is written as the empty string rather than left unwritten, because
+ * choosing it has to OVERWRITE whatever language was stored before. Skipping the
+ * write would leave the previous code in place, and the next visit — which
+ * carries no parameter, English having none — would read it back and undo the
+ * choice.
+ */
+export function rememberLocale(locale: PageLocale): void {
+   rememberPreference('locale', locale.code ?? '');
 }
 
 /**

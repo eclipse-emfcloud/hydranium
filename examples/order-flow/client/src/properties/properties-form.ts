@@ -38,6 +38,21 @@ export interface PropertiesFormHandlers {
    readonly reportError: (error: unknown, reported: ResolvedMessage) => void;
 }
 
+type HeadingLevel = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+
+/** What a host may say about how the form renders. */
+export interface PropertiesFormOptions {
+   /**
+    * The element the document's title is drawn in.
+    *
+    * A host that mounts this form beneath headings of its own has to pass a
+    * level below theirs, or the page's heading order jumps back up mid-page.
+    * The default suits a host that gives the form a surface to itself, where
+    * this heading is the first one on it.
+    */
+   readonly headingLevel?: HeadingLevel;
+}
+
 /** How each write outcome reads to a user. `applied` is silent on purpose. */
 const OUTCOME_MESSAGES: Record<SetFieldOutcome['status'], string> = {
    applied: '',
@@ -89,9 +104,10 @@ export class PropertiesForm {
 
    constructor(
       root: HTMLElement,
-      protected readonly handlers: PropertiesFormHandlers
+      protected readonly handlers: PropertiesFormHandlers,
+      options: PropertiesFormOptions = {}
    ) {
-      this.heading = this.createElement('h1');
+      this.heading = this.createElement(options.headingLevel ?? 'h1');
       this.fieldsHost = this.createElement('div');
       this.status = this.createElement('div');
       this.status.className = 'status';

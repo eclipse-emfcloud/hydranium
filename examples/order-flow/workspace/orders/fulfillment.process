@@ -1,12 +1,13 @@
-// The behavioural half of the `orders` project. `for Order` and every
-// `writes` / `reads` effect reaches across a GRAMMAR boundary into
-// `orders.domain`, resolved through the same shared index the LSP head serves.
+// The behavioural half of `orders`. `for
+// Order` and every `writes` / `reads`
+// effect reaches across a GRAMMAR boundary
+// into `orders.domain`.
 //
-// `writes Order.status = PAID` is the seam this example exists for: three
-// references, each scoped by the previous one. `status` is only offered
-// because `Order` resolved, and `PAID` is only offered because `status` is
-// typed `OrderStatus`. Rename `OrderStatus.PAID` in `.domain` and this file
-// follows; delete the field and the effect reports at a precise range.
+// `writes Order.status = PAID` is three
+// references, each scoped by the one
+// before it. Rename `OrderStatus.PAID` and
+// this file follows; delete the field and
+// the effect reports at a precise range.
 
 process Fulfillment for Order {
    task Pay writes Order.status = PAID
