@@ -54,6 +54,12 @@ import { DataConnectionWithEvents, describeError, resolve, type DataPort, type R
  * recognise its own `sourceClientId` treats its own write as a concurrent
  * third-party one. Distinct from the framework's sentinels and from the Theia
  * panel's id, both of which can reach the same server.
+ *
+ * **A constant suffices because each webview builds its OWN connection** below,
+ * so this id names one participant on it however many panels the host opens.
+ * Several participants on one connection cannot share an id — `createSession`
+ * throws on the second — and neither can two that a constant would give the
+ * same name on one server.
  */
 const PROPERTIES_WEBVIEW_CLIENT_ID = 'order-flow-properties-webview';
 import { HOST_EXTENSION, type MessageParticipant } from 'vscode-messenger-common';

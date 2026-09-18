@@ -370,7 +370,15 @@ function bootstrapWorker(): WorkerChannels {
  */
 type OrderFlowDataServer = DataServerProtocol<OrderFlowTransferRoot> & DataServerDiagnosticsProtocol;
 
-/** The page's own participant, alongside whatever else takes a session. */
+/**
+ * The page's own participant, alongside whatever else takes a session.
+ *
+ * This and `PROPERTIES_CLIENT_ID` are two participants on ONE connection, and
+ * they are two different strings on purpose: an id names a participant rather
+ * than a wire, so sharing one would collapse both onto a single hold and make
+ * each read the other's writes as its own echo. `createSession` throws on the
+ * second rather than letting either happen quietly.
+ */
 const PAGE_CLIENT_ID = 'order-flow-browser-page';
 
 /**

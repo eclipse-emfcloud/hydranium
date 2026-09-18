@@ -45,8 +45,22 @@ function document(uri: string): unknown {
    return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [] };
 }
 
+/**
+ * Knobs a lifecycle test needs and a plain echo cannot give it.
+ *
+ * `watchGate` holds the WATCH handler open, which is what makes the window
+ * inside `openDocument` — between the open landing and the URI being tracked —
+ * addressable at all; without it the window is microtasks wide and a test of it
+ * would be a timing bet. `failClose` makes a close reject, which is the only way
+ * to observe whether a failed close stays tracked for retry.
+ */
+interface ServerBehaviour {
+   readonly watchGate?: Promise<void>;
+   readonly failClose?: boolean;
+}
+
 /** Bind a server that records the `(method, uri, clientId)` of every call. */
-function recordingServer(connection: MessageConnection): ServerCall[] {
+function recordingServer(connection: MessageConnection, behaviour: ServerBehaviour = {}): ServerCall[] {
    const calls: ServerCall[] = [];
    const record =
       (method: ServerCall['method']) =>
@@ -57,8 +71,17 @@ function recordingServer(connection: MessageConnection): ServerCall[] {
    const target = {
       waitForReady: async (): Promise<void> => undefined,
       openModelDocument: record('open'),
-      watchModelDocument: record('watch'),
-      closeModelDocument: record('close'),
+      watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         await behaviour.watchGate;
+         return record('watch')(args);
+      },
+      closeModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         const result = await record('close')(args);
+         if (behaviour.failClose) {
+            throw new Error('close refused');
+         }
+         return result;
+      },
       updateModelDocument: record('update')
    };
    bindRpcMethods(
@@ -72,9 +95,14 @@ function recordingServer(connection: MessageConnection): ServerCall[] {
    return calls;
 }
 
-function harness(): { connection: DataConnection<ProbeElement>; calls: ServerCall[]; port: FakeDataPort; dispose(): void } {
+function harness(behaviour: ServerBehaviour = {}): {
+   connection: DataConnection<ProbeElement>;
+   calls: ServerCall[];
+   port: FakeDataPort;
+   dispose(): void;
+} {
    const pair = makeDuplexConnectionPair();
-   const calls = recordingServer(pair.left);
+   const calls = recordingServer(pair.left, behaviour);
    const port = makeFakeDataPort({ connect: () => pair.right });
    const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
    return {
@@ -231,6 +259,111 @@ describe('DataConnection sessions', () => {
             expect(() => connection.createSession(reserved)).toThrow(reserved);
          }
          expect(() => connection.createSession('panel')).not.toThrow();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('closes a hold whose open resolved after its session was disposed', async () => {
+      let openTheGate!: () => void;
+      const watchGate = new Promise<void>(resolve => {
+         openTheGate = resolve;
+      });
+      const { connection, calls, dispose } = harness({ watchGate });
+      try {
+         const panel = connection.createSession('panel');
+         // Deliberately NOT awaited: a host firing its open from a synchronous
+         // init is what makes this window reachable at all.
+         const opening = panel.openDocument({ uri: URI_A });
+         await waitFor(() => opens(calls).length === 1);
+
+         panel.dispose();
+         // The hold exists on the server and in no set the session can read, so
+         // dispose has nothing to close. This assertion is the defect: without
+         // the check in openDocument it stays true forever.
+         expect(closes(calls)).toEqual([]);
+
+         openTheGate();
+         await opening;
+         await tick();
+
+         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends no close when that same window ends in detach rather than dispose', async () => {
+      let openTheGate!: () => void;
+      const watchGate = new Promise<void>(resolve => {
+         openTheGate = resolve;
+      });
+      const { connection, calls, dispose } = harness({ watchGate });
+      try {
+         const panel = connection.createSession('panel');
+         const opening = panel.openDocument({ uri: URI_A });
+         await waitFor(() => opens(calls).length === 1);
+
+         // detach() is public and means "send nothing" — the server drains every
+         // hold on a connection it sees close. Honouring that must not depend on
+         // the connection already being dead, which is why this is a separate
+         // flag rather than a close that happens to fail.
+         panel.detach();
+
+         openTheGate();
+         await opening;
+         await tick();
+
+         expect(closes(calls)).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps a failed close tracked, so dispose retries it', async () => {
+      const { connection, calls, dispose } = harness({ failClose: true });
+      try {
+         const panel = connection.createSession('panel');
+         await panel.openDocument({ uri: URI_A });
+
+         await expect(panel.closeDocument({ uri: URI_A })).rejects.toThrow('close refused');
+         expect(closes(calls)).toHaveLength(1);
+
+         // Untracking before the await would have dropped the URI on the way
+         // out, leaving the hold alive on the server with nothing left to
+         // release it.
+         panel.dispose();
+         await tick();
+
+         expect(closes(calls)).toHaveLength(2);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('refuses a clientId a live participant already holds, and frees it again on dispose', () => {
+      const { connection, dispose } = harness();
+      try {
+         const first = connection.createSession('form-editor');
+
+         // Per-document membership is a SET of client ids, so a second
+         // participant under this id would take no second hold: the first close
+         // releases the only one and the survivor stops receiving updates for a
+         // document it is still showing. The id is asserted in the message
+         // because that is the whole diagnostic value — the caller minted it and
+         // has to recognise which one collided.
+         expect(() => connection.createSession('form-editor')).toThrow('form-editor');
+
+         // A neighbouring id is unaffected, which is what separates "rejects a
+         // duplicate" from "rejects a second session".
+         expect(() => connection.createSession('tree')).not.toThrow();
+
+         // The identity belongs to a LIVE participant, not to the connection
+         // forever: a widget closing and reopening under a recycled id must not
+         // be refused. This also pins that dispose releases the session from the
+         // connection, without which the guard would leak ids.
+         first.dispose();
+         expect(() => connection.createSession('form-editor')).not.toThrow();
       } finally {
          dispose();
       }

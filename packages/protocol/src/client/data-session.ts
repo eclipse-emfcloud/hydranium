@@ -93,6 +93,12 @@ export class DataSession<
    /** URIs this session holds open, so {@link dispose} can release exactly those. */
    protected readonly openUris = new Set<string>();
    protected disposed = false;
+   /**
+    * Disposed through {@link detach} rather than {@link dispose}, so nothing may
+    * be sent. Folding it into {@link disposed} costs {@link openDocument} the
+    * distinction, and its close would then go out on a detached session.
+    */
+   protected detached = false;
 
    constructor(
       readonly clientId: string,
@@ -129,11 +135,33 @@ export class DataSession<
     * valid: `open` settles at the integrity landmark, not at validation.
     * Validity arrives asynchronously on `onDocumentUpdated`, or synchronously
     * from `getModelDocument({ includeDiagnostics: true })`.
+    *
+    * A dispose landing between the two awaits is handled here rather than in
+    * {@link dispose}, which cannot release a hold that does not exist yet: it
+    * reads {@link openUris}, and this method fills it only once both calls have
+    * returned. Left to `dispose`, the hold and its watch outlive the participant
+    * and go only when the connection closes.
     */
    async openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       const server = await this.connected();
       const document = await server.openModelDocument({ ...args, clientId: this.clientId });
       await server.watchModelDocument({ uri: args.uri, clientId: this.clientId });
+      if (this.disposed) {
+         // Registering the URI BEFORE the open, so `dispose` could close on
+         // intent, is NOT the same fix and can invert into the leak it is meant
+         // to prevent: the close would then be issued while the open is still in
+         // flight, and a peer that does not serialise the two can complete the
+         // close first, after which the open re-registers the hold. Closing
+         // strictly after the open has resolved is the only ordering with no
+         // losing interleaving.
+         if (!this.detached) {
+            void server.closeModelDocument({ uri: args.uri, clientId: this.clientId }).catch(() => undefined);
+         }
+         // Returned rather than thrown: the caller that reaches this window is
+         // one that never awaited the open, so a rejection here surfaces as an
+         // unhandled one against a participant already gone.
+         return document;
+      }
       this.openUris.add(args.uri);
       return document;
    }
@@ -144,8 +172,13 @@ export class DataSession<
     */
    async closeDocument(args: DataSessionCloseArgs<TTransfer, TServer>): Promise<void> {
       const server = await this.connected();
-      this.openUris.delete(args.uri);
       await server.closeModelDocument({ ...args, clientId: this.clientId });
+      // Untracked only once the close has actually landed. Dropping it first
+      // gives a FAILED close the same effect as a successful one: the hold
+      // survives on the server and `dispose` no longer knows to retry it.
+      // A `dispose` racing this therefore closes the same URI twice, which the
+      // server answers as a no-op for a client that no longer holds it.
+      this.openUris.delete(args.uri);
    }
 
    /** Write `args.model` back as this session. */
@@ -205,6 +238,7 @@ export class DataSession<
     */
    detach(): void {
       this.disposed = true;
+      this.detached = true;
       this.openUris.clear();
    }
 
