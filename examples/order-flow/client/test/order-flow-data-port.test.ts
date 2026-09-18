@@ -217,7 +217,7 @@ describe('order-flow data port', () => {
    });
 
    it('opens a document and returns its transfer root', async () => {
-      const document = await session!.openDocument(uriOf(FULFILLMENT_PROCESS));
+      const document = await session!.openDocument({ uri: uriOf(FULFILLMENT_PROCESS) });
 
       expect(document.uri).toBe(uriOf(FULFILLMENT_PROCESS));
       expect(document.root?.$type).toBe('ProcessModel');
@@ -250,7 +250,7 @@ describe('order-flow data port', () => {
       writeFileSync(workspace!.resolve(coldRelative), 'process Probe for Order {\n   task Only reads Order.id\n}\n');
       const uri = uriOf(coldRelative);
 
-      await session!.openDocument(uri);
+      await session!.openDocument({ uri });
 
       // Let the build the open triggered settle and publish. Asserting
       // immediately would pass for the wrong reason.
@@ -264,7 +264,7 @@ describe('order-flow data port', () => {
       // `openDocument` actually established the watch, and the watch is the
       // half of the open sequence that fails silently when ordered wrongly.
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await session!.openDocument(uri);
+      await session!.openDocument({ uri });
 
       const server = await session!.connected();
       await server.updateModelDocument({
@@ -282,7 +282,7 @@ describe('order-flow data port', () => {
 
    it('recognises its own write as an echo', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await session!.openDocument(uri);
+      await session!.openDocument({ uri });
 
       const server = await session!.connected();
       await server.updateModelDocument({

@@ -201,6 +201,22 @@ export interface DataServerProtocol<
    extends DocumentServerProtocol<TTransfer, TDiagnostic>, ProjectServerProtocol<TProject> {}
 
 /**
+ * The diagnostic shape a server answers with, read back off its own
+ * declaration.
+ *
+ * This is what lets a client tier stay generic over the server alone and still
+ * describe what it hands back. Both parameters must be inferred: naming
+ * {@link TransferElement} for the transfer instead fails to match while that
+ * parameter is still generic, and a default declared against the constraint
+ * then stops satisfying it.
+ */
+export type DiagnosticOf<TServer> =
+   TServer extends DocumentServerProtocol<infer _TTransfer, infer TDiagnostic> ? TDiagnostic : TransferDiagnostic;
+
+/** The project shape a server answers with, read back off its own declaration. */
+export type ProjectOf<TServer> = TServer extends ProjectServerProtocol<infer TProject> ? TProject : Project;
+
+/**
  * Cross-reference / naming slice of the server surface — scope-aware
  * queries that resolve against the language's reference services. NOT part
  * of the {@link DataServerProtocol} composition: a pure data consumer

@@ -7,16 +7,51 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { DataServerProtocol, TransferSaveDocumentArgs, TransferUpdateDocumentArgs } from '../data';
+import type { DataServerProtocol, DiagnosticOf } from '../data';
 import type { RpcProxy } from '../rpc';
 import type { TransferDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 
+/**
+ * What one of `TServer`'s document methods takes, minus the `clientId` a
+ * {@link DataSession} stamps itself.
+ *
+ * Read off the SERVER's signature, not off the framework's own arg type: an
+ * adopter server widens these, and a wrapper declared against the narrow
+ * shape rejects the extra field on a fresh object literal, so that call
+ * cannot go through a session at all.
+ */
+export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Parameters<TMethod>[0], 'clientId'>;
+
+/** Open a document through a session; the session supplies `clientId`. */
+export type DataSessionOpenArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['openModelDocument']>;
+
+/** Close a document through a session; the session supplies `clientId`. */
+export type DataSessionCloseArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['closeModelDocument']>;
+
 /** Update a document through a session; the session supplies `clientId`. */
-export type DataSessionUpdateArgs<TTransfer> = Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>;
+export type DataSessionUpdateArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['updateModelDocument']>;
 
 /** Persist a document through a session; the session supplies `clientId`. */
-export type DataSessionSaveArgs<TTransfer> = Omit<TransferSaveDocumentArgs<TTransfer>, 'clientId'>;
+export type DataSessionSaveArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['saveModelDocument']>;
+
+/** The document a session hands back, carrying its server's diagnostic shape. */
+export type DataSessionDocument<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = TransferDocument<TTransfer, DiagnosticOf<TServer>>;
 
 /**
  * What a {@link DataSession} needs from the connection that minted it.
@@ -24,7 +59,7 @@ export type DataSessionSaveArgs<TTransfer> = Omit<TransferSaveDocumentArgs<TTran
  * Narrower than the connection itself so the dependency points one way:
  * `DataConnection` constructs sessions, and nothing here imports it back.
  */
-export interface DataSessionHost<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer>> {
+export interface DataSessionHost<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>>> {
    connected(): Promise<RpcProxy<TServer>>;
    releaseSession(session: DataSession<TTransfer, TServer>): void;
 }
@@ -43,8 +78,18 @@ export interface DataSessionHost<TTransfer extends TransferElement, TServer exte
  * attribute the write and release the hold accordingly.
  *
  * Generic over the transfer root so this file names no grammar.
+ *
+ * `TServer` is bound to a server answering with ITS OWN diagnostic shape, read
+ * back off the parameter being bound. Simplifying that to
+ * `DataServerProtocol<TTransfer>` compiles and costs the wrappers their
+ * return type: every call through `TServer` would resolve against that looser
+ * bound, so an adopter's diagnostics would come back as the framework's and
+ * the document would have to be cast on the way out.
  */
-export class DataSession<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer> = DataServerProtocol<TTransfer>> {
+export class DataSession<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> {
    /** URIs this session holds open, so {@link dispose} can release exactly those. */
    protected readonly openUris = new Set<string>();
    protected disposed = false;
@@ -68,8 +113,8 @@ export class DataSession<TTransfer extends TransferElement, TServer extends Data
    }
 
    /**
-    * Open `uri` for editing and start watching it, in that order, returning
-    * the opened snapshot.
+    * Open `args.uri` for editing and start watching it, in that order,
+    * returning the opened snapshot.
     *
     * **The order is the whole reason this method exists.**
     * `watchModelDocument` baselines its dedup fingerprint from the *current*
@@ -85,32 +130,32 @@ export class DataSession<TTransfer extends TransferElement, TServer extends Data
     * Validity arrives asynchronously on `onDocumentUpdated`, or synchronously
     * from `getModelDocument({ includeDiagnostics: true })`.
     */
-   async openDocument(uri: string): Promise<TransferDocument<TTransfer>> {
+   async openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       const server = await this.connected();
-      const document = await server.openModelDocument({ uri, clientId: this.clientId });
-      await server.watchModelDocument({ uri, clientId: this.clientId });
-      this.openUris.add(uri);
+      const document = await server.openModelDocument({ ...args, clientId: this.clientId });
+      await server.watchModelDocument({ uri: args.uri, clientId: this.clientId });
+      this.openUris.add(args.uri);
       return document;
    }
 
    /**
-    * Close `uri`. The server unwatches implicitly, so this is the dual of
+    * Close `args.uri`. The server unwatches implicitly, so this is the dual of
     * {@link openDocument} and needs no separate unwatch.
     */
-   async closeDocument(uri: string): Promise<void> {
+   async closeDocument(args: DataSessionCloseArgs<TTransfer, TServer>): Promise<void> {
       const server = await this.connected();
-      this.openUris.delete(uri);
-      await server.closeModelDocument({ uri, clientId: this.clientId });
+      this.openUris.delete(args.uri);
+      await server.closeModelDocument({ ...args, clientId: this.clientId });
    }
 
    /** Write `args.model` back as this session. */
-   async updateDocument(args: DataSessionUpdateArgs<TTransfer>): Promise<TransferDocument<TTransfer>> {
+   async updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       const server = await this.connected();
       return server.updateModelDocument({ ...args, clientId: this.clientId });
    }
 
    /** Persist `args.model` to disk as this session. */
-   async saveDocument(args: DataSessionSaveArgs<TTransfer>): Promise<TransferDocument<TTransfer>> {
+   async saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       const server = await this.connected();
       return server.saveModelDocument({ ...args, clientId: this.clientId });
    }
