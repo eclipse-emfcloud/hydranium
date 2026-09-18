@@ -178,11 +178,37 @@ every change.
    make it pass. A characterization test that comes out **red against unmodified
    code is a latent bug** — investigate it, do not adjust the test to match the
    surprising behaviour.
-4. **Every test must justify its existence** — it should catch a real class of
+4. **Run a control before believing a new test.** Where step 3 does not apply —
+   a test written alongside the fix it guards, or over code that already
+   works — break the code that test covers and confirm THAT test goes red. A
+   test that cannot fail is worse than no test, because it reads as coverage.
+   Name the control and what it broke in the commit body.
+
+   **A control that refuses to redden is a result**, not a nuisance: the test
+   does not reach the path it claims to, and the next move is finding out why
+   rather than rewording the assertion. Some of the ways that happen have
+   nothing to do with the test:
+
+   - **The break stopped the build**, so the task never ran and the green
+     belongs to turbo rather than to the suite.
+   - **A name filter matched nothing.** `-t` / `--testNamePattern` skips every
+     test in every matched file and still exits 0, so the run reports success
+     while asserting nothing. A file pattern is safe here, since no package
+     passes `--passWithNoTests`.
+   - **The break landed on a source the run does not load.** A package's own
+     tests import `src` directly, but an example or end-to-end test resolves
+     `@hydranium/*` to built `lib`, so editing `src` without rebuilding changes
+     nothing the run can see.
+
+   Stryker (`npm run audit:mutation`) asks the same question automatically,
+   over a whole package rather than one test. It finds assertions that were
+   never load-bearing; it does not replace the control on the test in front of
+   you.
+5. **Every test must justify its existence** — it should catch a real class of
    bug. No tautological or vacuous assertions.
-5. **Keep it deterministic.** Fake time with `makeFakeClock` (anything routed
+6. **Keep it deterministic.** Fake time with `makeFakeClock` (anything routed
    through `services.Clock`); await with `waitFor` / `tick`; never a fixed sleep.
-6. **Green means the gate.** Before committing, `npm run check` must pass in
+7. **Green means the gate.** Before committing, `npm run check` must pass in
    full, with **0 lint errors and 0 warnings**. Read the LAST line of the run,
    not turbo's task count: turbo is the first element of a long `&&` chain, so
    `Tasks: N successful` can print while a later clause reddens.
