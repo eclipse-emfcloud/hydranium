@@ -36,9 +36,10 @@
  *
  * The diagnostics here come from three producers, and one binding has to serve
  * all three: an adopter check carrying its own `defineMessage` code, Langium's
- * parser carrying none, and Langium's linker — whose sentence the framework
- * claims as `UNRESOLVED_REFERENCE`, over a CROSS-GRAMMAR reference that exists
- * in no single grammar.
+ * parser — whose mismatch sentence the framework claims as `UNEXPECTED_TOKEN`,
+ * reaching the seam without passing any validation acceptor — and Langium's
+ * linker, whose sentence it claims as `UNRESOLVED_REFERENCE`, over a
+ * CROSS-GRAMMAR reference that exists in no single grammar.
  *
  * `hydranium/core/separator-in-name` appears in none of them: it is the
  * framework's other identity-bearing validation diagnostic and is unreachable
@@ -48,17 +49,24 @@
  *
  * # The locale is a TEST locale
  *
- * `xx-AA` and its catalogue live in this file and nowhere else. The framework
- * ships English only and selects no locale, and this example ships no server
- * catalogue either — a real tag would suggest the framework has an opinion about
- * which languages exist.
+ * `xx-AA` and its catalogue live in this file and nowhere else, so nothing here
+ * asserts against the `de` catalogue the example ships — a suite keyed to a real
+ * tag would redden on a translation reword, which is an editorial change rather
+ * than a behavioural one. The marker strings are deliberately implausible for
+ * the same reason: an assertion has to say which side produced the sentence.
  */
 
 import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { MODEL_UPDATE_EDIT, resolvedFromDiagnostic, DefaultMessageRenderer, UNRESOLVED_REFERENCE } from '@hydranium/core/messages';
+import {
+   MODEL_UPDATE_EDIT,
+   resolvedFromDiagnostic,
+   DefaultMessageRenderer,
+   UNEXPECTED_TOKEN,
+   UNRESOLVED_REFERENCE
+} from '@hydranium/core/messages';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import {
    type LspHarness,
@@ -91,6 +99,7 @@ const TEST_LOCALE = 'xx-AA';
 const TEST_CATALOGUE: Record<string, string> = {
    [SELF_TRANSITION.code]: "RENDERED loop on '{step}'",
    [UNRESOLVED_REFERENCE.code]: "RENDERED unresolved '{refText}'",
+   [UNEXPECTED_TOKEN.code]: "RENDERED expected '{expected}'",
    [MODEL_UPDATE_EDIT.code]: 'RENDERED edit'
 };
 
@@ -244,17 +253,29 @@ describe('order-flow server-side message rendering', () => {
       expect(messages).toEqual([ENGLISH_SELF_TRANSITION]);
    });
 
-   it('routes a PARSER error through the seam, which no validation hook can see', async () => {
+   it('renders a PARSER error, which no validation hook can see', async () => {
       const active = await boot('test');
 
       const messages = await publishedMessages(active, 'parse-error', PARSE_ERROR_SOURCE);
 
       // Langium pushes lexer and parser errors straight onto the document
       // without routing them through `toDiagnostic`, so anything hooked to the
-      // validation acceptor misses them entirely. The mark is what proves a pass
-      // over the FINISHED list sees them.
-      expect(messages.length).toBeGreaterThan(0);
-      expect(messages.every(message => message.startsWith(FOREIGN_MARK))).toBe(true);
+      // validation acceptor misses them entirely. An identity on the published
+      // sentence is what proves a pass over the FINISHED list sees them — and
+      // the absence of the mark proves the identity, since the renderer adds it
+      // to every diagnostic that carries none.
+      expect(messages).toEqual(["RENDERED expected 'ID'"]);
+   });
+
+   it('publishes the English parser sentence with no catalogue — the control above', async () => {
+      const active = await boot('framework');
+
+      const messages = await publishedMessages(active, 'parse-error', PARSE_ERROR_SOURCE);
+
+      // Byte-identical to Langium's own wording, which is the constraint the
+      // declaration carries: claiming the message must not change the text an
+      // adopter without a catalogue sees.
+      expect(messages).toEqual(["Expecting token of type 'ID' but found ``."]);
    });
 
    it('renders a cross-grammar LINKING error from the framework identity', async () => {

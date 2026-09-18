@@ -21,7 +21,13 @@ import { Range } from 'vscode-languageserver-types';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
    HydraniumDocumentValidator,
-   LEXING_ERROR,
+   INVALID_DEDENT,
+   UNEXPECTED_CHARACTER,
+   MISSING_ITERATION,
+   NO_VIABLE_ALTERNATIVE,
+   TRAILING_INPUT,
+   UNEXPECTED_TOKEN,
+   UNPOPPABLE_LEXER_MODE,
    UNRESOLVED_REFERENCE,
    type DocumentValidatorOptions
 } from '../../../src/langium/validation/document-validator.js';
@@ -40,7 +46,12 @@ function makeStubServices(
    logger: Logger,
    // Overridable because `processLinkingErrors` recovers the reference type
    // through it, and one of its arms is the lookup RAISING.
-   getReferenceType: () => string = () => 'Fake'
+   getReferenceType: () => string = () => 'Fake',
+   // The vocabulary `identifyParsingError` searches for its `expected`
+   // parameter. Punctuation entries alongside named ones, because a keyword
+   // token's NAME is the keyword itself and the search must not assume
+   // identifier-shaped names.
+   tokenTypeNames: readonly string[] = ['ID', 'INT', ':', '}']
 ): LangiumCoreServices & { shared: { Tracer: Tracer } } {
    const documentBuilderStub = {
       onUpdate: () => Disposable.EMPTY,
@@ -55,6 +66,8 @@ function makeStubServices(
          AstReflection: { getReferenceType, isSubtype: () => true }
       },
       workspace: { AstNodeLocator: astNodeLocator },
+      // `definition` is a name -> TokenType dictionary; only its KEYS are read.
+      parser: { Lexer: { definition: Object.fromEntries(tokenTypeNames.map(name => [name, { name }])) } },
       // `checksBefore`/`checksAfter` are iterated by Langium's DefaultDocumentValidator;
       // the stub must expose them as empty arrays or the for-of throws
       // "checksBefore is not iterable" (caught + logged by Langium as a validation error).
@@ -454,7 +467,7 @@ describe('HydraniumDocumentValidator', () => {
       /**
        * Byte-identical to chevrotain's
        * `defaultLexerErrorProvider.buildUnexpectedCharactersMessage`, which is
-       * the contract {@link LEXING_ERROR} claims.
+       * the contract {@link UNEXPECTED_CHARACTER} claims.
        */
       const CHEVROTAIN = `unexpected character: ->§<- at offset: ${OFFSET}, skipped 1 characters.`;
 
@@ -490,21 +503,21 @@ describe('HydraniumDocumentValidator', () => {
       it('attaches the identity, with the character and offset a translation needs', () => {
          const diagnostic = runPass(lexingDiagnostic());
 
-         expect(diagnostic.code).toBe(LEXING_ERROR.code);
+         expect(diagnostic.code).toBe(UNEXPECTED_CHARACTER.code);
          // The PARAMS, not just the code: an identity with no character is the
          // half-measure this whole pass exists to avoid, and it would render a
          // German sentence with a literal `{character}` in it.
          expect(diagnostic.data).toMatchObject({
             code: 'lexing-error',
-            hydranium: { code: LEXING_ERROR.code, params: { character: '§', offset: OFFSET, skipped: 1 } }
+            hydranium: { code: UNEXPECTED_CHARACTER.code, params: { character: '§', offset: OFFSET, skipped: 1 } }
          });
       });
 
       it('renders back to chevrotain’s own sentence, so an adopter with no catalogue is unaffected', () => {
          const diagnostic = runPass(lexingDiagnostic());
-         const params = (diagnostic.data as { hydranium: { params: Parameters<typeof LEXING_ERROR.format>[0] } }).hydranium.params;
+         const params = (diagnostic.data as { hydranium: { params: Parameters<typeof UNEXPECTED_CHARACTER.format>[0] } }).hydranium.params;
 
-         expect(LEXING_ERROR.format(params)).toBe(CHEVROTAIN);
+         expect(UNEXPECTED_CHARACTER.format(params)).toBe(CHEVROTAIN);
       });
 
       it('identifies a lexing WARNING too, not only the error severity', () => {
@@ -512,17 +525,61 @@ describe('HydraniumDocumentValidator', () => {
          // downgrades a stray character still produces the same sentence.
          const diagnostic = runPass(lexingDiagnostic({ data: { code: 'lexing-warning' } }));
 
-         expect(diagnostic.code).toBe(LEXING_ERROR.code);
+         expect(diagnostic.code).toBe(UNEXPECTED_CHARACTER.code);
       });
 
       it("declines a custom lexer's own diagnostic, which carries the same code", () => {
-         // The shape a `lexerReport` entry from an indentation-aware lexer has:
-         // Langium's lexing code, arbitrary prose. Labelling it would have a
-         // catalogue render "unexpected character" over an unrelated report.
+         // An adopter token builder's own `lexerReport` entry: Langium's lexing
+         // code, prose nobody here wrote. Labelling it would have a catalogue
+         // render "unexpected character" over an unrelated report.
          const diagnostic = runPass(lexingDiagnostic({ message: 'Inconsistent indentation: expected 3 spaces.' }));
 
          expect(diagnostic.code).toBeUndefined();
          expect(diagnostic.data).not.toHaveProperty('hydranium');
+      });
+
+      it('attaches the mode-pop identity, whose range spans the offending token', () => {
+         const diagnostic = runPass(
+            lexingDiagnostic({ message: 'Unable to pop Lexer Mode after encountering Token ->§<- The Mode Stack is empty' })
+         );
+
+         expect(diagnostic.code).toBe(UNPOPPABLE_LEXER_MODE.code);
+         expect(diagnostic.data).toMatchObject({ hydranium: { params: { image: '§' } } });
+      });
+
+      it('declines a mode-pop sentence naming a token other than the one at the range', () => {
+         // The reconstruction validating itself, which a prefix test on the
+         // opening clause would not: the image is the only parameter, so a
+         // sentence about a different token would be labelled with this
+         // diagnostic's position and render the wrong one under translation.
+         const diagnostic = runPass(
+            lexingDiagnostic({ message: 'Unable to pop Lexer Mode after encountering Token -><-- The Mode Stack is empty' })
+         );
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('attaches the invalid-dedent identity, slicing the two values no field carries', () => {
+         // Langium's own lexing sentence rather than chevrotain's, and the only
+         // one here needing more than one parameter recovered: `offset` anchors
+         // the frame, `level` and `stack` are lexer state reaching no field.
+         const diagnostic = runPass(
+            lexingDiagnostic({ message: `Invalid dedent level 2 at offset: ${OFFSET}. Current indentation stack: 0,4` })
+         );
+
+         expect(diagnostic.code).toBe(INVALID_DEDENT.code);
+         expect(diagnostic.data).toMatchObject({ hydranium: { params: { level: '2', offset: OFFSET, stack: '0,4' } } });
+      });
+
+      it('declines an invalid-dedent sentence whose offset is not the range it sits on', () => {
+         // `offset` is the given that anchors the slice, so a sentence naming a
+         // different one is a report about somewhere else and cannot be labelled
+         // with this diagnostic's position.
+         const diagnostic = runPass(
+            lexingDiagnostic({ message: `Invalid dedent level 2 at offset: ${OFFSET + 5}. Current indentation stack: 0,4` })
+         );
+
+         expect(diagnostic.code).toBeUndefined();
       });
 
       it('declines a non-lexing diagnostic whose message is identical', () => {
@@ -542,6 +599,170 @@ describe('HydraniumDocumentValidator', () => {
          // which is what makes reading the range safe in place of correlating
          // Langium's own error list.
          const diagnostic = runPass(lexingDiagnostic({ range: Range.create(0, 0, 0, 1) }));
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+   });
+
+   describe('identifyParsingError', () => {
+      /**
+       * A source whose second line holds the offending token, so the pass's
+       * range→text read crosses a line break: a single-line fixture would pass
+       * against a pass that read from the start of the document.
+       */
+      const SOURCE = 'element Foo {\n   a\n';
+
+      /** The range Langium computes for the `a` on the second line. */
+      const FOUND_RANGE = Range.create(1, 3, 1, 4);
+
+      /**
+       * Byte-identical to Langium's
+       * `LangiumParserErrorMessageProvider.buildMismatchTokenMessage` and
+       * `buildNotAllInputParsedMessage`, which are the contracts
+       * {@link UNEXPECTED_TOKEN} and {@link TRAILING_INPUT} claim.
+       */
+      const LANGIUM_MISMATCH = "Expecting token of type '}' but found `a`.";
+      const LANGIUM_REDUNDANT = 'Expecting end of file but found `a`.';
+
+      /** Exposes the protected pass, which its caller reaches only through a full validation. */
+      class ParsingProbe extends HydraniumDocumentValidator {
+         run(target: LangiumDocument, diagnostic: Diagnostic): Diagnostic {
+            return this.identifyParsingError(target, diagnostic);
+         }
+      }
+
+      function document(): LangiumDocument {
+         return makeFakeDocument('file:///a.test', makeFakeAstNode({ $type: 'Root' }), {
+            textDocument: TextDocument.create('file:///a.test', 'test', 1, SOURCE)
+         });
+      }
+
+      function runPass(diagnostic: Diagnostic, tokenTypeNames?: readonly string[]): Diagnostic {
+         const services = makeStubServices({ getAstNodePath: () => '/x' }, makeLogger(), () => 'Fake', tokenTypeNames);
+         return new ParsingProbe(services).run(document(), diagnostic);
+      }
+
+      function parsingDiagnostic(overrides: Partial<Diagnostic> = {}): Diagnostic {
+         return { range: FOUND_RANGE, message: LANGIUM_MISMATCH, data: { code: 'parsing-error' }, ...overrides };
+      }
+
+      it('attaches the mismatch identity, with the expected and found tokens a translation needs', () => {
+         const diagnostic = runPass(parsingDiagnostic());
+
+         expect(diagnostic.code).toBe(UNEXPECTED_TOKEN.code);
+         // The PARAMS, not just the code: an identity with no tokens would
+         // render a German sentence with a literal `{expected}` in it.
+         expect(diagnostic.data).toMatchObject({
+            code: 'parsing-error',
+            hydranium: { code: UNEXPECTED_TOKEN.code, params: { expected: '}', found: 'a' } }
+         });
+      });
+
+      it('renders back to Langium’s own sentence, so an adopter with no catalogue is unaffected', () => {
+         const diagnostic = runPass(parsingDiagnostic());
+         const params = (diagnostic.data as { hydranium: { params: Parameters<typeof UNEXPECTED_TOKEN.format>[0] } }).hydranium.params;
+
+         expect(UNEXPECTED_TOKEN.format(params)).toBe(LANGIUM_MISMATCH);
+      });
+
+      it('attaches the redundant-input identity to the other sentence Langium words', () => {
+         const diagnostic = runPass(parsingDiagnostic({ message: LANGIUM_REDUNDANT }));
+
+         expect(diagnostic.code).toBe(TRAILING_INPUT.code);
+         expect(diagnostic.data).toMatchObject({ hydranium: { code: TRAILING_INPUT.code, params: { found: 'a' } } });
+      });
+
+      it('identifies an auto-inserted token, whose zero-width range yields the empty image', () => {
+         // Chevrotain's recovery reports `NaN` offsets for a token it inserted,
+         // and Langium collapses those to a zero-width range at the end of the
+         // previous token. The sentence renders the empty string for it, so the
+         // pass has to reproduce that rather than decline.
+         const diagnostic = runPass(
+            parsingDiagnostic({ range: Range.create(1, 4, 1, 4), message: "Expecting token of type '}' but found ``." })
+         );
+
+         expect(diagnostic.data).toMatchObject({ hydranium: { params: { expected: '}', found: '' } } });
+      });
+
+      it('attaches the no-viable-alternative identity, carrying the generated list whole', () => {
+         const sequences = '  1. [entity]\n  2. [public, entity]';
+         const diagnostic = runPass(
+            parsingDiagnostic({ message: `Expecting: one of these possible Token sequences:\n${sequences}\nbut found: 'a'` })
+         );
+
+         expect(diagnostic.code).toBe(NO_VIABLE_ALTERNATIVE.code);
+         // The list arrives intact, newlines and all: a catalogue translates the
+         // frame and reinserts it, so losing its shape would reflow the message.
+         expect(diagnostic.data).toMatchObject({ hydranium: { params: { sequences, found: 'a' } } });
+      });
+
+      it('attaches the missing-iteration identity, doubled colon and all', () => {
+         const sequences = '[task] ,[gateway]';
+         const diagnostic = runPass(
+            parsingDiagnostic({
+               message:
+                  'Expecting: expecting at least one iteration which starts with one of these possible Token sequences::\n' +
+                  `  <${sequences}>\nbut found: 'a'`
+            })
+         );
+
+         expect(diagnostic.code).toBe(MISSING_ITERATION.code);
+         expect(diagnostic.data).toMatchObject({ hydranium: { params: { sequences, found: 'a' } } });
+      });
+
+      it('renders both chevrotain sentences back byte-identically', () => {
+         const sequences = '  1. [entity]';
+         const message = `Expecting: one of these possible Token sequences:\n${sequences}\nbut found: 'a'`;
+         const diagnostic = runPass(parsingDiagnostic({ message }));
+         const params = (diagnostic.data as { hydranium: { params: Parameters<typeof NO_VIABLE_ALTERNATIVE.format>[0] } }).hydranium.params;
+
+         expect(NO_VIABLE_ALTERNATIVE.format(params)).toBe(message);
+      });
+
+      it('declines a custom CONSUME message, which chevrotain passes through unworded', () => {
+         // `consumeInternalError` uses an `ERR_MSG` option verbatim when a
+         // grammar supplies one, bypassing the message provider entirely — so
+         // the sentence belongs to whoever wrote it and is not ours to claim.
+         const diagnostic = runPass(parsingDiagnostic({ message: 'A closing brace belongs here.' }));
+
+         expect(diagnostic.code).toBeUndefined();
+         expect(diagnostic.data).not.toHaveProperty('hydranium');
+      });
+
+      it('declines a sequence-listing frame whose fixed part differs by one character', () => {
+         // The slice validating itself. The frame is the whole discriminator for
+         // these two, so a reworded one must decline rather than hand a
+         // catalogue a `sequences` value cut at the wrong place.
+         const diagnostic = runPass(
+            parsingDiagnostic({ message: "Expecting: one of those possible Token sequences:\n  1. [entity]\nbut found: 'a'" })
+         );
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('declines an expected token the grammar does not declare', () => {
+         // The search validating itself. Langium words the expected token
+         // several ways, of which the identity claims one, so a vocabulary miss
+         // must decline rather than attach a wrong `expected` to a
+         // right-looking message.
+         const diagnostic = runPass(parsingDiagnostic({ message: "Expecting keyword '}' but found `a`." }));
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('declines when the range does not yield the token the message names', () => {
+         // The reconstruction validating itself, the same way the lexing pass
+         // does: a range over different text renders a different sentence, so a
+         // wrong parameter set can never be attached to a right-looking message.
+         const diagnostic = runPass(parsingDiagnostic({ range: Range.create(0, 0, 0, 7) }));
+
+         expect(diagnostic.code).toBeUndefined();
+      });
+
+      it('declines a non-parsing diagnostic whose message is identical', () => {
+         // The guard the code check exists for: an adopter validator is free to
+         // word a check this way, and nothing but the code separates them.
+         const diagnostic = runPass(parsingDiagnostic({ data: { code: 'validation-error' } }));
 
          expect(diagnostic.code).toBeUndefined();
       });

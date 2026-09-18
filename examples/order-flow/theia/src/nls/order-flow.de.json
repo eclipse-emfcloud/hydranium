@@ -1,5 +1,5 @@
 {
-  "_comment": "German catalogue for the messages THIS FRONTEND renders — see order-flow-localization-backend-module.ts. Codes the SERVER renders live in the server package's own catalogue, and the two key sets are disjoint by design. DELIBERATELY PARTIAL — an untranslated code falls back to its English default. Nested keys are flattened on '/', so these are the hydranium/<package>/<name> codes the framework publishes.",
+  "_comment": "German catalogue for the messages THIS FRONTEND renders — see order-flow-localization-backend-module.ts. Codes the SERVER renders live in the server package's own catalogue, and the two key sets are disjoint by design. COMPLETE over the codes this side renders, together with that one covering every code the barrels declare, and a test asserts it stays that way. An adopter shipping less still works — a code with no entry falls back to its English default. Nested keys are flattened on '/', so these are the hydranium/<package>/<name> codes the framework publishes.",
   "hydranium": {
     "client-theia": {
       "command-dump-server-state": "Serverzustand ausgeben",
@@ -17,12 +17,18 @@
     },
     "protocol": {
       "data-server-connect-failed": "Verbindung zum Datenserver fehlgeschlagen: {detail}",
-      "data-server-not-ready": "Der Datenserver war nicht rechtzeitig bereit: {detail}"
+      "data-server-not-ready": "Der Datenserver war nicht rechtzeitig bereit: {detail}",
+      "relay-replay-failed": "Eine gepufferte Nachricht konnte nicht an den weitergeleiteten Transport gesendet werden: {detail}",
+      "relay-transport-open-failed": "Der weiterzuleitende Transport konnte nicht geöffnet werden: {detail}",
+      "relay-transport-read-failed": "Vom weitergeleiteten Transport konnte nicht gelesen werden: {detail}",
+      "relay-transport-write-failed": "Auf den weitergeleiteten Transport konnte nicht geschrieben werden: {detail}"
     }
   },
   "order-flow": {
     "properties": {
-      "open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}"
+      "open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}",
+      "close-failed": "Order-Flow-Eigenschaften: Das vorherige Dokument konnte nicht geschlossen werden. {detail}",
+      "write-failed": "Order-Flow-Eigenschaften: '{field}' konnte nicht gespeichert werden. {detail}"
     }
   }
 }
