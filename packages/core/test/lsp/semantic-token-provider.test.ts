@@ -25,6 +25,7 @@ interface Accepted {
    readonly property?: string;
    readonly index?: number;
    readonly cst?: CstNode;
+   readonly range?: { start: { line: number; character: number }; end: { line: number; character: number } };
    readonly type: string;
    readonly modifier?: string | string[];
 }
@@ -106,6 +107,27 @@ function makeLeafCst(text: string, grammarSourceType?: string): CstNode {
       text,
       tokenType: { name: text },
       grammarSource: grammarSourceType === undefined ? undefined : { $type: grammarSourceType }
+   } as unknown as CstNode;
+}
+
+/**
+ * A hidden leaf as the parser really produces one: carrying no grammar source
+ * at all, because the CST builder constructs hidden nodes from the token alone.
+ *
+ * Only a COMMENT can be one. The token builder groups a hidden terminal whose
+ * pattern matches whitespace as `Lexer.SKIPPED`, so no whitespace leaf ever
+ * reaches the CST — a fixture containing one would be testing a state the
+ * parser cannot produce.
+ */
+function makeHiddenLeafCst(text: string, tokenName: string, line = 0, character = 0): CstNode {
+   const lines = text.split('\n');
+   const endLine = line + lines.length - 1;
+   const endCharacter = lines.length === 1 ? character + text.length : lines[lines.length - 1].length;
+   return {
+      text,
+      hidden: true,
+      tokenType: { name: tokenName },
+      range: { start: { line, character }, end: { line: endLine, character: endCharacter } }
    } as unknown as CstNode;
 }
 
@@ -223,16 +245,15 @@ describe('AbstractHydraniumSemanticTokenProvider', () => {
     */
    describe('highlightKeywords', () => {
       /**
-       * `TypeOne Element { }`, with a hidden comment and a run of whitespace
-       * among the leaves.
+       * `TypeOne Element { }`, with a hidden comment among the leaves.
        *
-       * The two non-keyword leaves are the discriminating part of the fixture:
-       * a comment leaf carries its terminal rule as its grammar source and a
-       * whitespace leaf may carry none at all, so a pass that emitted for every
-       * leaf — or that guarded on `hidden` instead of on the grammar source —
-       * would colour them and pass a fixture built only of keywords. The nested
-       * composite is there for the same reason at the other axis: a pass that
-       * looked at the root's direct children only would miss `}`.
+       * The comment leaf is the discriminating part of the fixture, and it
+       * carries NO grammar source, which is what the parser really produces:
+       * the CST builder constructs a hidden node from its token alone. So a
+       * pass that emitted for every leaf would colour it and still pass a
+       * fixture built only of keywords. The nested composite is there for the
+       * same reason at the other axis: a pass that looked at the root's direct
+       * children only would miss `}`.
        */
       function makeDocument(): LangiumDocument {
          const root = makeFakeAstNode<AnyNode>({
@@ -240,9 +261,8 @@ describe('AbstractHydraniumSemanticTokenProvider', () => {
             name: 'Element',
             $cstNode: makeCompositeCst([
                makeLeafCst('TypeOne', 'Keyword'),
-               makeLeafCst(' ', undefined),
                makeLeafCst('Element', 'RuleCall'),
-               makeLeafCst('// a note', 'TerminalRule'),
+               makeHiddenLeafCst('// a note', 'SL_COMMENT'),
                makeCompositeCst([makeLeafCst('{', 'Keyword'), makeLeafCst('}', 'Keyword')])
             ])
          });
@@ -300,6 +320,106 @@ describe('AbstractHydraniumSemanticTokenProvider', () => {
          const document = makeFakeDocument('file:///a.x', makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'Element' }));
 
          expect(keywordTexts(await provider.runDocument(document))).toEqual([]);
+      });
+   });
+
+   /**
+    * The comment pass, which shares the keyword pass's walk and nothing else:
+    * a hidden leaf has no grammar source, so it is identified by the name of
+    * the terminal its token came from.
+    */
+   describe('highlightComments', () => {
+      /** `TypeOne Element { }` with one comment leaf, one whitespace leaf, and keywords. */
+      function makeDocument(): LangiumDocument {
+         const root = makeFakeAstNode<AnyNode>({
+            $type: 'TypeOne',
+            name: 'Element',
+            $cstNode: makeCompositeCst([
+               makeLeafCst('TypeOne', 'Keyword'),
+               makeLeafCst('Element', 'RuleCall'),
+               makeHiddenLeafCst('// a note', 'SL_COMMENT', 1, 0),
+               makeCompositeCst([makeLeafCst('{', 'Keyword')])
+            ])
+         });
+         return makeFakeDocument('file:///a.x', root);
+      }
+
+      const keywordTexts = (accepted: readonly Accepted[]): string[] =>
+         accepted.filter(token => token.type === SemanticTokenTypes.keyword).map(token => token.cst?.text ?? '<no cst>');
+
+      /**
+       * Comment tokens as `line:character-character`. Ranges rather than text,
+       * because a comment is emitted by the RANGE form and carries no `cst`.
+       */
+      const commentSpans = (accepted: readonly Accepted[]): string[] =>
+         accepted
+            .filter(token => token.type === SemanticTokenTypes.comment)
+            .map(token =>
+               token.range === undefined
+                  ? '<no range>'
+                  : `${token.range.start.line}:${token.range.start.character}-${token.range.end.character}`
+            );
+
+      it('emits no comment token when the option is absent', async () => {
+         const provider = new TestProvider(makeServices(), { TypeOne: SemanticTokenTypes.class });
+
+         expect(commentSpans(await provider.runDocument(makeDocument()))).toEqual([]);
+      });
+
+      it('emits one comment token per comment leaf, and nothing for a visible one', async () => {
+         const provider = new TestProvider(makeServices(), { TypeOne: SemanticTokenTypes.class }, { highlightComments: true });
+
+         // The keyword and name leaves are in the same walk, so a single span
+         // here is what says `hidden` is being read rather than every leaf
+         // claimed.
+         expect(commentSpans(await provider.runDocument(makeDocument()))).toEqual(['1:0-9']);
+      });
+
+      it('splits a block comment into one token per line', async () => {
+         const root = makeFakeAstNode<AnyNode>({
+            $type: 'TypeOne',
+            name: 'Element',
+            $cstNode: makeCompositeCst([makeHiddenLeafCst('/* and\n   more */', 'ML_COMMENT', 2, 3)])
+         });
+         const provider = new TestProvider(makeServices(), {}, { highlightComments: true });
+
+         // Never one multi-line range: the upstream encoder computes a split
+         // token's first-line length from a document offset minus a column, so
+         // a range crossing lines is mis-encoded for every client that does not
+         // advertise `multilineTokenSupport`, which is all of them here. The
+         // second line starting at 0 rather than at the leaf's column is the
+         // part that says the split is by LINE and not by leaf.
+         expect(commentSpans(await provider.runDocument(makeFakeDocument('file:///a.x', root)))).toEqual(['2:3-9', '3:0-10']);
+      });
+
+      it('leaves keywords alone unless they were asked for too', async () => {
+         const comments = new TestProvider(makeServices(), {}, { highlightComments: true });
+         const both = new TestProvider(makeServices(), {}, { highlightComments: true, highlightKeywords: true });
+
+         // One walk now serves two options, so the pair is what says they are
+         // still independent rather than one switch turning on both passes.
+         expect(keywordTexts(await comments.runDocument(makeDocument()))).toEqual([]);
+         expect(keywordTexts(await both.runDocument(makeDocument()))).toEqual(['TypeOne', '{']);
+         expect(commentSpans(await both.runDocument(makeDocument()))).toEqual(['1:0-9']);
+      });
+
+      it('emits comment tokens by the `range` form, never the `cst` one', async () => {
+         const provider = new TestProvider(makeServices(), {}, { highlightComments: true });
+
+         const comments = (await provider.runDocument(makeDocument())).filter(token => token.type === SemanticTokenTypes.comment);
+         // The absolute count first: `every` over an empty array is true, so a
+         // pass that emitted nothing would satisfy the form assertion below.
+         expect(comments).toHaveLength(1);
+         // A `cst` here would route back to the encoder path this avoids.
+         expect(comments.every(token => token.range !== undefined && token.cst === undefined)).toBe(true);
+      });
+
+      it('leaves the AST pass intact', async () => {
+         const provider = new TestProvider(makeServices(), { TypeOne: SemanticTokenTypes.class }, { highlightComments: true });
+
+         expect(await provider.runDocument(makeDocument())).toContainEqual(
+            expect.objectContaining({ property: 'name', type: SemanticTokenTypes.class })
+         );
       });
    });
 

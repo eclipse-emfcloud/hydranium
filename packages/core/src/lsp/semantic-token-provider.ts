@@ -14,7 +14,9 @@ import {
    CstUtils,
    GrammarAST,
    interruptAndCheck,
+   isLeafCstNode,
    type LangiumDocument,
+   type LeafCstNode,
    type ReferenceInfo
 } from '@hydranium/langium';
 import { AbstractSemanticTokenProvider, type SemanticTokenAcceptor } from '@hydranium/langium/lsp';
@@ -54,6 +56,23 @@ export interface HydraniumSemanticTokenProviderOptions {
     * render in the editor's default foreground.
     */
    readonly highlightKeywords?: boolean;
+
+   /**
+    * Also emit a `comment` token for every comment leaf of the CST.
+    *
+    * OFF by default for the same reason as {@link highlightKeywords}, and the
+    * loss is larger: a TextMate grammar distinguishes `comment.line` from
+    * `comment.block` and scopes the delimiters separately, where a semantic
+    * token carries one flat `comment` that overrides all of them. It exists
+    * for the host that ships no client-side grammar, where a comment otherwise
+    * renders in the editor's default foreground.
+    *
+    * What counts as a comment is every hidden terminal the lexer retains,
+    * which is every hidden terminal whose pattern is not whitespace. A grammar
+    * whose hidden non-whitespace terminal means something other than a comment
+    * is miscoloured, and this option is the place to say no.
+    */
+   readonly highlightComments?: boolean;
 }
 
 /**
@@ -133,7 +152,9 @@ export abstract class AbstractHydraniumSemanticTokenProvider extends AbstractSem
       cancelToken: CancellationToken
    ): Promise<void> {
       await super.computeHighlighting(document, acceptor, cancelToken);
-      if (this.options.highlightKeywords !== true) {
+      const keywords = this.options.highlightKeywords === true;
+      const comments = this.options.highlightComments === true;
+      if (!keywords && !comments) {
          return;
       }
       const root = document.parseResult.value.$cstNode;
@@ -142,14 +163,60 @@ export abstract class AbstractHydraniumSemanticTokenProvider extends AbstractSem
       }
       for (const cst of CstUtils.streamCst(root)) {
          await interruptAndCheck(cancelToken);
-         // The grammar source is the whole filter. A keyword is always a leaf,
-         // and the hidden leaves a comment or a run of whitespace contributes
-         // are sourced from a terminal rule rather than a `Keyword` — so
-         // neither a composite-node check nor a hidden-token check adds
-         // anything here.
-         if (GrammarAST.isKeyword(cst.grammarSource)) {
+         // A keyword is always a leaf with a `Keyword` grammar source, so that
+         // check alone separates it from everything else in the walk.
+         if (keywords && GrammarAST.isKeyword(cst.grammarSource)) {
             acceptor({ cst, type: SemanticTokenTypes.keyword });
          }
+         // A comment leaf cannot be recognised the same way — the CST builder
+         // adds hidden nodes from the token alone, so `grammarSource` is
+         // undefined, which is also why the keyword filter never matches one.
+         //
+         // `hidden` alone IS the comment test, and nothing narrower is needed:
+         // the token builder groups a hidden terminal as `Lexer.SKIPPED` when
+         // its pattern matches whitespace and as `hidden` otherwise, so the
+         // lexer discards whitespace before a CST node is ever built and every
+         // hidden leaf that survives is a comment. Classifying the terminal
+         // again here would be a second guard for the same property, which no
+         // test could then distinguish. An adopter whose token builder RETAINS
+         // whitespace breaks that equivalence and would colour its gaps.
+         if (comments && isLeafCstNode(cst) && cst.hidden) {
+            this.acceptComment(cst, acceptor);
+         }
+      }
+   }
+
+   /**
+    * Emit a comment as ONE TOKEN PER LINE, never as one multi-line range.
+    *
+    * A block comment is the first token this provider emits that can span
+    * lines, and the upstream encoder mishandles that for a client which does
+    * not advertise `multilineTokenSupport` — the split path computes the first
+    * line's length as `nextLineOffset - range.start.character - 1`, subtracting
+    * a COLUMN from a document OFFSET, so the length is right only for a token
+    * starting on line 0 and overruns its line everywhere else. No client in
+    * this repository advertises that capability, so the broken path is the one
+    * taken. Splitting here means every range handed over starts and ends on one
+    * line and the arithmetic is never reached.
+    *
+    * Lines come from the leaf's own text rather than from the document, so
+    * nothing has to re-derive where the comment ends.
+    */
+   protected acceptComment(cst: LeafCstNode, acceptor: SemanticTokenAcceptor): void {
+      const lines = cst.text.split('\n');
+      for (let index = 0; index < lines.length; index++) {
+         // A `\r\n` document leaves the carriage return on the line's end;
+         // colouring it would extend the token past the visible text.
+         const length = lines[index].replace(/\r$/, '').length;
+         const character = index === 0 ? cst.range.start.character : 0;
+         if (length === 0) {
+            continue;
+         }
+         const line = cst.range.start.line + index;
+         acceptor({
+            range: { start: { line, character }, end: { line, character: character + length } },
+            type: SemanticTokenTypes.comment
+         });
       }
    }
 

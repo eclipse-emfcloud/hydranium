@@ -49,8 +49,9 @@ import {
  * the HOST's business. The VS Code and Theia extensions ship
  * `.tmLanguage.json` grammars, so an uncoloured span keeps its TextMate colour
  * there. The browser page ships no grammar at all and passes
- * `highlightKeywords` instead, which is why `process` and `for` are blue on
- * that page and left to TextMate everywhere else.
+ * `highlightKeywords` and `highlightComments` instead, which is why `process`,
+ * `for` and a `//` note are coloured on that page and left to TextMate
+ * everywhere else.
  *
  * `Branch` maps to a kind although its name property is `label`, not `name`: the
  * base reads the property from the `NameProvider` rather than assuming `name`,
@@ -60,7 +61,7 @@ import {
 export class OrderFlowSemanticTokenProvider extends AbstractHydraniumSemanticTokenProvider {
    /**
     * Forwarded verbatim, so the HOST composing this server decides whether
-    * keywords are coloured. Spelled out although TypeScript would inherit the
+    * keywords and comments are coloured. Spelled out although TypeScript would inherit the
     * same signature: it is the seam an adopter copies, and the moment such a
     * subclass acquires a constructor of its own for any other reason, dropping
     * the second parameter here pins every host to the framework default with

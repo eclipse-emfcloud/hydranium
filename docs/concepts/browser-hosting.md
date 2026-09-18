@@ -443,10 +443,16 @@ framework lacks and understates what the app does.
 
 ### The composition choice a page makes and a shell must not
 
-With no TextMate grammar underneath it, the page sets `highlightKeywords` so the
-server colours keywords too. A host that ships a grammar leaves that off:
-semantic tokens override TextMate, and a grammar's keyword scopes are finer than
-the flat `keyword` a legend carries.
+With no TextMate grammar underneath it, the page sets `highlightKeywords` and
+`highlightComments` so the server colours those too. A host that ships a grammar
+leaves both off: semantic tokens override TextMate, and a grammar's scopes are
+finer than the flat `keyword` and `comment` a legend carries — for comments
+markedly so, since a grammar separates line from block and scopes the delimiters
+on their own.
+
+Which hidden terminals count as comments is Langium's `isCommentTerminal`:
+hidden, and not matching whitespace. A grammar with a hidden terminal that is
+neither gets it wrong, which is why the switch is per host rather than always on.
 
 The client is hand-written rather than built on `monaco-languageclient`, whose
 shim stack would cost the bundle its `node:*` neutrality.
