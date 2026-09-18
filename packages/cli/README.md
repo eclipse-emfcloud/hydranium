@@ -106,6 +106,20 @@ plausibly non-zero and cannot be read as the tell.
   declared alongside every other subcommand's, so an unrecognised one is rejected rather than
   ignored.
 
+**Child-process heap ceiling** (`HYDRANIUM_CLI_MAX_OLD_SPACE_MB`)
+
+Subcommands that spawn a child — `analyze-heap`, `measure-memory`, `validate`, `lint-grammar`,
+`reflect`, `model-docs`, `ast-ground-truth` — give it `--max-old-space-size=8192` on a machine with
+no cgroup memory limit, and **no ceiling at all when there is one**. A ceiling above the limit lets
+V8 grow past it without collecting hard, so the kernel kills the container rather than the child
+reporting a heap error.
+
+Under a limit, Node derives its own ceiling from that limit, which is a fraction of it — so a
+roomy container gives a child less than the same machine would unconstrained. Set
+`HYDRANIUM_CLI_MAX_OLD_SPACE_MB` to state a ceiling in MiB; it wins in a container too. `0` means
+"let Node decide". A value below 256, or one carrying a unit suffix, is reported and ignored rather
+than passed on.
+
 **Data-server operations** (`--server "<cmd> [args...]"`)
 
 These spawn a data-server child and talk to it over its protocol. All four also take `--cwd <dir>`

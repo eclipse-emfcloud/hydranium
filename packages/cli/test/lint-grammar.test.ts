@@ -47,7 +47,6 @@ describe('lint-grammar', () => {
          }
       });
       expect(captured).not.toContain('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
       expect(captured.some(arg => arg.endsWith('lint-grammar-driver.js'))).toBe(true);
       expect(captured.slice(-5)).toEqual(['--services', './svc.js', '--name-property', 'id', '--strict']);
    });

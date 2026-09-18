@@ -22,7 +22,13 @@ import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDriverArgs, runMeasureMemory } from '../src/commands/measure-memory.js';
 import { buildGroundTruthDriverArgs, runAstGroundTruth } from '../src/commands/ast-ground-truth.js';
-import { emitReport, type DriverSpawnOptions } from '../src/commands/headless-harness.js';
+import { emitReport, runDriverChild, type DriverSpawnOptions } from '../src/commands/headless-harness.js';
+import { DRIVER_HEAP_MB } from '../src/driver-heap.js';
+import { pinHeapEnvUnset } from './heap-env.js';
+
+/** A machine with no cgroup limit, so the ceiling is the stated default. */
+const DESKTOP = { constrained: 0, total: 64 * 1024 ** 3 };
+const CEILING = `--max-old-space-size=${DRIVER_HEAP_MB}`;
 import { runLintGrammar } from '../src/commands/lint-grammar.js';
 import { runModelDocs } from '../src/commands/model-docs.js';
 import { runReflect } from '../src/commands/reflect.js';
@@ -75,9 +81,13 @@ describe('measure-memory', () => {
             return Promise.resolve(0);
          }
       });
-      expect(captured[0]).toBe('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
-      expect(captured.some(arg => arg.endsWith('measure-memory-driver.js'))).toBe(true);
+      // Before the script path, because node stops reading exec flags there. Not
+      // necessarily FIRST: runDriverChild prepends the heap ceiling, which is
+      // empty or not depending on the machine running this suite.
+      const driverIndex = captured.findIndex(arg => arg.endsWith('measure-memory-driver.js'));
+      expect(driverIndex).toBeGreaterThan(-1);
+      expect(captured.indexOf('--expose-gc')).toBeGreaterThan(-1);
+      expect(captured.indexOf('--expose-gc')).toBeLessThan(driverIndex);
       expect(captured.slice(-5)).toEqual(['--services', './svc.js', '/ws', '--edits', '3']);
    });
 
@@ -113,9 +123,34 @@ describe('ast-ground-truth', () => {
          }
       });
       expect(captured).not.toContain('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
       expect(captured.some(arg => arg.endsWith('ast-ground-truth-driver.js'))).toBe(true);
       expect(captured.slice(-5)).toEqual(['--services', './svc.js', '/ws', '--out-file', '/tmp/gt.json']);
+   });
+});
+
+/**
+ * The heap ceiling reaches every driver child from ONE place, which is why no
+ * subcommand carries a literal. Only that routing is asserted here; what the
+ * ceiling should BE is pinned against stated cgroup readings elsewhere.
+ *
+ * The reading is stated rather than inherited so the assertion means the same
+ * thing everywhere. Read from the machine, it names a flag on a workstation and
+ * an empty array under a memory limit — where it would pass no matter what this
+ * function did.
+ */
+describe('runDriverChild', () => {
+   pinHeapEnvUnset();
+
+   it('prepends the shared heap ceiling ahead of the caller argv', async () => {
+      let captured: string[] = [];
+      await runDriverChild(['/drivers/x.js', '--services', './svc.js'], {
+         __heapReadingForTest: DESKTOP,
+         __spawnForTest: execArgs => {
+            captured = execArgs;
+            return Promise.resolve(0);
+         }
+      });
+      expect(captured).toEqual([CEILING, '/drivers/x.js', '--services', './svc.js']);
    });
 });
 

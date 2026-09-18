@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { fileURLToPath } from 'node:url';
+import { driverHeapArgs, type HeapReading } from '../driver-heap.js';
 import { spawnNodeChild } from './headless-harness.js';
 
 /**
@@ -41,6 +42,8 @@ export interface AnalyzeHeapDeps {
    readonly __spawnForTest?: (execArgs: string[]) => Promise<number>;
    /** Override the memlab-availability check. */
    readonly __memlabInstalledForTest?: () => boolean;
+   /** Decide the heap ceiling from a stated cgroup reading rather than the machine's. */
+   readonly __heapReadingForTest?: HeapReading;
 }
 
 /**
@@ -69,7 +72,7 @@ export async function runAnalyzeHeap(args: string[], deps: AnalyzeHeapDeps = {})
       return;
    }
    const spawnChild = deps.__spawnForTest ?? spawnNodeChild;
-   const code = await spawnChild(['--max-old-space-size=8192', ANALYZER, ...args]);
+   const code = await spawnChild([...driverHeapArgs(deps.__heapReadingForTest), ANALYZER, ...args]);
    if (code) {
       process.exitCode = code;
    }

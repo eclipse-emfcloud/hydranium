@@ -14,6 +14,7 @@ import { statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { driverHeapArgs, type HeapReading } from '../driver-heap.js';
 import { logLevelEnv } from '../log-level.js';
 import { SERVICES_FLAG } from './harness-args.js';
 
@@ -47,9 +48,10 @@ export interface HeadlessContext {
  * ZERO-ARG `createServices(): { shared }`. `hydranium-cli` is language-agnostic
  * and cannot statically import a head's `create<Lang>Services`, so the dynamic
  * import is the seam that keeps the binary head-neutral. Resolving the harness
- * from the head's graph (via `createRequire` rooted at the head module) means the
- * CLI itself needs no `@hydranium/core` dependency — the head always has it — and
- * guarantees the harness runs against the SAME core copy as `createServices`.
+ * from the head's graph (via `createRequire` rooted at the head module) rather
+ * than from the CLI's guarantees it runs against the SAME core copy as
+ * `createServices`, which a second copy of the module would break even where
+ * both resolve.
  *
  * Throws a clear error when the path names no file, and when the export is
  * missing or not a function.
@@ -139,6 +141,13 @@ export interface DriverSpawnOptions {
    readonly logLevel?: LogThreshold;
    /** Test-only: capture the node argv and env instead of spawning the real child. */
    readonly __spawnForTest?: SpawnDriverChild;
+   /**
+    * Test-only: decide the heap ceiling from a stated cgroup reading rather
+    * than the machine's. Without it an argv assertion means one thing on a
+    * workstation and nothing at all under a memory limit, so a suite that
+    * asserts the ceiling is present passes vacuously in a container.
+    */
+   readonly __heapReadingForTest?: HeapReading;
 }
 
 /**
@@ -155,10 +164,19 @@ export interface DriverSpawnOptions {
  * A head that binds a logger of its own decides for itself whether the flag means
  * anything, which is the intended seam: the CLI is language-agnostic and cannot
  * reach past `createServices`.
+ *
+ * **The heap ceiling is prepended HERE rather than passed by each subcommand.**
+ * Every caller wants the same answer to the same question, and the answer is not
+ * a constant — see {@link driverHeapArgs}. A literal at the call site is a place
+ * the container case can be missed, and the caller that misses it takes the whole
+ * cgroup down with it rather than failing on its own.
  */
 export async function runDriverChild(execArgs: string[], options: DriverSpawnOptions): Promise<void> {
    const spawnChild = options.__spawnForTest ?? spawnNodeChild;
-   const code = await spawnChild(execArgs, options.logLevel === undefined ? undefined : logLevelEnv(options.logLevel));
+   const code = await spawnChild(
+      [...driverHeapArgs(options.__heapReadingForTest), ...execArgs],
+      options.logLevel === undefined ? undefined : logLevelEnv(options.logLevel)
+   );
    if (code) {
       process.exitCode = code;
    }

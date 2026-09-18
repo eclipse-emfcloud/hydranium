@@ -9,8 +9,9 @@
 
 /*
  * Spawned child of the `measure-memory` subcommand. Launched by the parent with
- * `node --expose-gc --max-old-space-size=8192 <this> --services <module> <workspace> ...`
- * so the underlying harness gets post-GC readings. It dynamic-imports the head's
+ * `node [heap ceiling] --expose-gc <this> --services <module> <workspace> ...`
+ * so the underlying harness gets post-GC readings. The ceiling is whatever
+ * `driverHeapArgs` decides, which is nothing at all inside a container. It dynamic-imports the head's
  * services module and runs the framework's `measureModelMemory`, streaming the
  * baseline / after-build / churn lines to stdout. Never imported — only spawned.
  */

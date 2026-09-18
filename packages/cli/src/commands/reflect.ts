@@ -47,5 +47,5 @@ export function buildReflectDriverArgs(options: ReflectCommandOptions): string[]
  * the binary language-agnostic.
  */
 export function runReflect(options: ReflectCommandOptions): Promise<void> {
-   return runDriverChild(['--max-old-space-size=8192', DRIVER, ...buildReflectDriverArgs(options)], options);
+   return runDriverChild([DRIVER, ...buildReflectDriverArgs(options)], options);
 }

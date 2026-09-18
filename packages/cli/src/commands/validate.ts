@@ -54,5 +54,5 @@ export function buildValidateDriverArgs(options: ValidateCommandOptions): string
  * The child's exit code propagates to this process so shells and CI see the gate.
  */
 export function runValidate(options: ValidateCommandOptions): Promise<void> {
-   return runDriverChild(['--max-old-space-size=8192', DRIVER, ...buildValidateDriverArgs(options)], options);
+   return runDriverChild([DRIVER, ...buildValidateDriverArgs(options)], options);
 }
