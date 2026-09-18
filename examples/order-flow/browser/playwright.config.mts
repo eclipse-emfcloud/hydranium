@@ -27,12 +27,20 @@
  * builds a new worker and a new Langium store, so a reused server cannot hide a
  * cold-start bug. What it CAN hide is a stale bundle, which is why `out/` is a
  * build input rather than something this config regenerates.
+ *
+ * **It can also hide an entirely DIFFERENT bundle**, which is what an
+ * overridable port is for. Anything already listening is reused, including a
+ * server started from another checkout — and the suite then reports that
+ * checkout's page as this one's failures, at a scale that reads as a real
+ * regression rather than as a wrong target. The tell is that the run prints no
+ * `[WebServer]` output at all, because it started none. Give a concurrent run
+ * its own port rather than racing for this one.
  */
 
 import { defineConfig, devices } from '@playwright/test';
 
-/** Must match `scripts/serve.mjs`'s default port. */
-const PORT = 3002;
+/** Overridable for a concurrent run; the default must match `scripts/serve.mjs`. */
+const PORT = Number(process.env.PORT ?? 3002);
 
 export default defineConfig({
    testDir: './test/e2e',

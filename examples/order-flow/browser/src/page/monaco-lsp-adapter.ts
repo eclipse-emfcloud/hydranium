@@ -169,31 +169,70 @@ const ORDER_FLOW_THEMES: Readonly<Record<ColourScheme, string>> = {
  *
  * The values are the built-in themes' own semantic colours (Light Modern and
  * Dark Modern), so a reader comparing this page against VS Code sees the same
- * hue for the same kind of name.
+ * hue for the same kind of name — except where the built-in value does not
+ * clear 4.5:1 against the editor background below, which is a step off the one
+ * VS Code tunes them against. Those are darkened, and copying a value straight
+ * back from VS Code reintroduces the failure.
  */
 const SEMANTIC_TOKEN_COLOURS: readonly { readonly token: string; readonly light: string; readonly dark: string }[] = [
    // Declarations a field or a reference can name.
-   { token: 'class', light: '267f99', dark: '4ec9b0' },
-   { token: 'enum', light: '267f99', dark: '4ec9b0' },
+   { token: 'class', light: '247a93', dark: '4ec9b0' },
+   { token: 'enum', light: '247a93', dark: '4ec9b0' },
    { token: 'enumMember', light: '0070c1', dark: '4fc1ff' },
    { token: 'property', light: '001080', dark: '9cdcfe' },
    // Flow nodes and the process that contains them.
    { token: 'function', light: '795e26', dark: 'dcdcaa' },
    { token: 'label', light: 'af00db', dark: 'c586c0' },
-   { token: 'namespace', light: '267f99', dark: '4ec9b0' },
-   // Every keyword of all three grammars, from the server's `highlightKeywords`
-   // pass. Unlike its neighbours this row changes nothing on screen, and it is
-   // here anyway: `inherit: true` pulls in `vs` / `vs-dark`, which already carry
-   // a `keyword` rule at these very hex values, so removing the row leaves the
-   // keywords blue — measured, and it is why no test can hold this row in place.
-   // The invariant above is what it serves. A table that covers every type but
-   // one relies on a base theme happening to name that one, and the day it stops
-   // the symptom is a page that looks half-highlighted with nothing here to
-   // suspect.
-   { token: 'keyword', light: '0000ff', dark: '569cd6' }
+   { token: 'namespace', light: '247a93', dark: '4ec9b0' },
+   // The two the FRAMEWORK emits from its own CST pass, driven by
+   // `highlightKeywords` and `highlightComments` rather than by the adopter's
+   // provider. Unlike their neighbours neither row changes anything on screen:
+   // `inherit: true` pulls in `vs` / `vs-dark`, which already carry rules at
+   // these very hex values, so removing either leaves its tokens the colour they
+   // already are — measured, and it is why no test can hold them in place. The
+   // invariant above is what they serve. A table that covers every type but one
+   // relies on a base theme happening to name that one, and the day it stops the
+   // symptom is a page that looks half-highlighted with nothing here to suspect.
+   { token: 'keyword', light: '0000ff', dark: '569cd6' },
+   { token: 'comment', light: '008000', dark: '6a9955' }
 ];
 
+/**
+ * The page's colour roles, per scheme, in the spelling Monaco wants.
+ *
+ * Monaco draws its widgets in its OWN top layer, so no stylesheet here reaches
+ * them: left unset they take a VS Code palette sharing no value with the page.
+ *
+ * Literals rather than reads of the `--order-flow-*` properties: a theme is
+ * registered at module evaluation, before `data-theme` is necessarily set, and
+ * an unset variable registers black on black.
+ *
+ * `rim` is lighter than `border` because a shadow cannot lift a popup on a dark
+ * page — black over near-black does not darken it at any alpha.
+ */
+const EDITOR_SURFACES: Readonly<Record<'light' | 'dark', Readonly<Record<string, string>>>> = {
+   dark: {
+      surface: '#24262b',
+      elevated: '#2d2f34',
+      border: '#393b40',
+      rim: '#4d525c',
+      foreground: '#e6edf3',
+      muted: '#9ba0a3',
+      accent: '#4daafc'
+   },
+   light: {
+      surface: '#f9fbfc',
+      elevated: '#ffffff',
+      border: '#d6d8d9',
+      rim: '#c9cdcf',
+      foreground: '#1e2124',
+      muted: '#545657',
+      accent: '#0757ba'
+   }
+};
+
 for (const scheme of ['light', 'dark'] as const) {
+   const role = EDITOR_SURFACES[scheme];
    monaco.editor.defineTheme(ORDER_FLOW_THEMES[scheme], {
       base: scheme === 'light' ? 'vs' : 'vs-dark',
       // Inherited, so the editor's own colours (selection, line highlight, the
@@ -201,7 +240,40 @@ for (const scheme of ['light', 'dark'] as const) {
       // the rules above.
       inherit: true,
       rules: SEMANTIC_TOKEN_COLOURS.map(colour => ({ token: colour.token, foreground: colour[scheme] })),
-      colors: {}
+      colors: {
+         'editor.background': role.surface,
+         'editor.foreground': role.foreground,
+         'editorLineNumber.foreground': role.muted,
+         'editorLineNumber.activeForeground': role.foreground,
+         'editorGutter.background': role.surface,
+         focusBorder: role.accent,
+         // Every floating surface Monaco owns takes the ELEVATED role, which is
+         // the same one the tool palette and the page's own dialogs sit on.
+         'editorWidget.background': role.elevated,
+         'editorWidget.foreground': role.foreground,
+         'editorWidget.border': role.rim,
+         'editorHoverWidget.background': role.elevated,
+         'editorHoverWidget.foreground': role.foreground,
+         'editorHoverWidget.border': role.rim,
+         'editorSuggestWidget.background': role.elevated,
+         'editorSuggestWidget.foreground': role.foreground,
+         'editorSuggestWidget.border': role.rim,
+         'editorSuggestWidget.selectedBackground': role.border,
+         'editorSuggestWidget.selectedForeground': role.foreground,
+         'editorSuggestWidget.highlightForeground': role.accent,
+         'menu.background': role.elevated,
+         'menu.foreground': role.foreground,
+         'menu.border': role.rim,
+         'menu.selectionBackground': role.border,
+         'menu.selectionForeground': role.foreground,
+         'input.background': role.surface,
+         'input.foreground': role.foreground,
+         'input.border': role.border,
+         'list.hoverBackground': role.border,
+         'list.focusBackground': role.border,
+         'quickInput.background': role.elevated,
+         'quickInput.foreground': role.foreground
+      }
    });
 }
 

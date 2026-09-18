@@ -136,11 +136,22 @@ const SHIP_X_COLUMN = SHIP_ENTRY.indexOf('660') + '660'.length;
 const HIGHLIGHTED_LINE = 'process Fulfillment for Order {';
 /**
  * A comment line of the same document, for the half of the colouring TextMate
- * would own elsewhere. Taken from the line directly above
+ * would own elsewhere. Taken from the END of the block above
  * {@link HIGHLIGHTED_LINE} rather than from the top of the file, because Monaco
  * virtualises and the pane's window does not reach line 1.
  */
-const COMMENT_LINE = '// follows; delete the field';
+const COMMENT_LINE = '// the effect reports at a precise range.';
+
+/**
+ * The document name `PropertiesForm` draws, as a heading element.
+ *
+ * The LEVEL is the assertion, not an incidental selector. The form defaults to
+ * `h1`, which is right for the Theia widget and the VS Code webview, where it
+ * owns its surface — here it is mounted inside a panel the page has already
+ * headed, so a default heading would send the page's heading order back to the
+ * top halfway down the sidebar.
+ */
+const PROPERTIES_HEADING = 'h3';
 
 /**
  * Text typed at the end of the `.process` file to make it unparseable.
@@ -925,6 +936,55 @@ test.describe('order-flow in a web worker', () => {
    });
 
    /**
+    * The landmark and heading structure, which nothing else in this file reads.
+    *
+    * Every property here is invisible on screen and reaches a reader only
+    * through the accessibility tree, which is why it rots without a test: an
+    * unnamed `<section>` is not a landmark at all but a generic box, and an
+    * icon-only button with no name is announced as "button".
+    */
+   test('the page is navigable by landmark and by heading', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
+
+      // One `main`, holding the workbench AND the dock. The problems list is
+      // content rather than chrome, so a `main` around the workbench alone
+      // would leave it in no landmark.
+      await expect(page.locator('main')).toHaveCount(1);
+      await expect(page.locator('main #layout')).toHaveCount(1);
+      await expect(page.locator('main #dock')).toHaveCount(1);
+
+      const structure = await page.evaluate(() => {
+         // The dialogs are excluded: each heads itself with an `h2` that is out
+         // of the tree until it opens, so counting them would report a jump the
+         // page never presents.
+         const headings = Array.from(document.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6'))
+            .filter(heading => heading.closest('dialog') === null)
+            .map(heading => Number(heading.tagName.slice(1)));
+         const panels = Array.from(document.querySelectorAll<HTMLElement>('section.panel')).map(section => ({
+            panel: section.className + (section.id === '' ? '' : `#${section.id}`),
+            name: document.getElementById(section.getAttribute('aria-labelledby') ?? '')?.textContent?.trim() ?? ''
+         }));
+         return { headings, panels, clearLabel: document.getElementById('log-clear')?.getAttribute('aria-label') ?? '' };
+      });
+
+      // One `h1`, first, and no jump of more than a level after it. A SECOND
+      // `h1` is what the properties form produced before its heading level
+      // became an option, and it announces a fresh page starting halfway down
+      // the sidebar.
+      expect(structure.headings[0]).toBe(1);
+      expect(structure.headings.filter(level => level === 1)).toHaveLength(1);
+      expect(
+         structure.headings
+            .map((level, index) => ({ level, previous: structure.headings[index - 1] ?? level }))
+            .filter(step => step.level - step.previous > 1)
+      ).toEqual([]);
+
+      expect(structure.panels.filter(panel => panel.name === '')).toEqual([]);
+      expect(structure.clearLabel).not.toBe('');
+   });
+
+   /**
     * **This test does not discriminate on its own, and that is recorded rather
     * than papered over.** Measured: it stays green with the chrome overlay
     * disabled entirely, because "an unknown code leaves English" is also
@@ -946,15 +1006,71 @@ test.describe('order-flow in a web worker', () => {
    test('the language switch is the URL, so the choice is addressable', async ({ page }) => {
       await page.goto('/?locale=de');
       await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
-      await expect(page.locator('#page-locale')).toHaveValue('de');
+      await expect(page.locator('#page-locale [data-locale="de"]')).toHaveAttribute('aria-pressed', 'true');
 
       // Back to the default, which DELETES the parameter rather than emptying it
       // — a `?locale=` left behind would have the address bar claim a language
       // the page is not using.
-      await page.locator('#page-locale').selectOption('');
+      await page.locator('#page-locale [data-locale=""]').click();
       await expect(page).toHaveURL(/\/$/);
       await expect(page.locator('#document-panel h2')).toHaveText('Workspace');
-      await expect(page.locator('#page-locale')).toHaveValue('');
+      await expect(page.locator('#page-locale [data-locale=""]')).toHaveAttribute('aria-pressed', 'true');
+   });
+
+   /**
+    * The scheme's precedence chain, asserted at the two joints that can invert
+    * it: what was chosen must beat the OS, and a parameter must beat what was
+    * chosen.
+    *
+    * **`colorScheme: 'dark'` is what makes the first half discriminating.**
+    * Without pinning the OS answer, a page that never consulted the store at all
+    * would pass whenever the runner's own preference happened to match the
+    * choice. The emulated preference is therefore the OPPOSITE of what the
+    * switch selects, so only a page that read the store can satisfy it.
+    */
+   test('a remembered scheme outranks the OS, and a parameter outranks both', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.goto('/');
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+      await page.locator('#dark-scheme').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+
+      // Beats `prefers-color-scheme`, which this context still reports as dark.
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+
+      // A link beats it in turn, and does NOT overwrite it — a scheme someone
+      // sent you is for this visit rather than a change to your own preference.
+      await page.goto('/?theme=dark');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+      await page.goto('/');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+   });
+
+   /**
+    * A link that pins a scheme outranks the store, so overruling it has to CLEAR
+    * it — otherwise the next navigation that carries the URL across, which the
+    * language switch does by design, restores the link's scheme and discards the
+    * reader's.
+    *
+    * The language switch is the assertion rather than a reload, because a reload
+    * of the same URL would also fail for a page that merely forgot to store.
+    */
+   test('a pinned scheme stops applying once the switch overrules it', async ({ page }) => {
+      await page.goto('/?theme=dark');
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+      await page.locator('#dark-scheme').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+      // The parameter is gone, so it can no longer outrank what was just chosen.
+      await expect(page).toHaveURL(/\/$/);
+
+      await page.locator('#page-locale [data-locale="de"]').click();
+      await expect(page).toHaveURL(/locale=de/);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
    });
 
    test('the log panel carries all three heads on one channel', async ({ page }) => {
@@ -1104,11 +1220,20 @@ test.describe('order-flow in a web worker', () => {
       await page.locator('#save-workspace').click();
       await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
 
+      // Reset asks first, because it discards the store and nothing on the page
+      // can undo that. Confirming is a click on the dialog's own button rather
+      // than a dialog handler, which is the reason the confirmation is a
+      // `<dialog>`: a `window.confirm` is auto-dismissed by this driver, so the
+      // reset would silently not happen and the assertions below would fail for
+      // a reason that looks nothing like the cause.
+      await page.locator('#reset-workspace').click();
+      await expect(page.locator('#reset-dialog')).toBeVisible();
+      await page.locator('#reset-dialog button[value="confirm"]').click();
+
       // Reset reloads the page itself, once the worker answers that the store is
       // empty — so there is no explicit `page.reload()` here and its absence is
       // the point: a reset that only cleared the store would leave this page
       // showing the edit it just discarded.
-      await page.locator('#reset-workspace').click();
 
       await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', FIRST_VISIT);
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
@@ -1116,6 +1241,65 @@ test.describe('order-flow in a web worker', () => {
          'title',
          `${WORKSPACE_DOCUMENT_COUNT} documents validated, ${WORKSPACE_DIAGNOSTIC_COUNT} diagnostics`
       );
+   });
+
+   /**
+    * Declining the reset has to leave the store ALONE, which is the half the
+    * confirming case cannot cover: a dialog wired to run its action either way
+    * satisfies every assertion about the action happening.
+    *
+    * The saved edit is the observable. Asserting that the page merely stayed put
+    * would pass against a reset that cleared storage and failed to reload.
+    */
+   test('declining the reset leaves the stored workspace untouched', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      await expectLayoutEntry(page, 'Cancel');
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+
+      await page.locator('#reset-workspace').click();
+      await expect(page.locator('#reset-dialog')).toBeVisible();
+      await page.locator('#reset-dialog button[value="cancel"]').click();
+      await expect(page.locator('#reset-dialog')).toBeHidden();
+
+      // The edit is still in storage, which only a reload can show: the page it
+      // was made on would display it either way.
+      await page.reload();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute(
+         'title',
+         'restored 1 file(s) from storage: orders/fulfillment.layout'
+      );
+   });
+
+   /**
+    * The language guard, which is asked for only when a reload would COST
+    * something — so the test has to make something dirty first.
+    *
+    * Cancelling is the assertion, because it is the one answer whose effect is
+    * observable without a navigation: the page stays in English, on the same
+    * URL, with the edit still in the editor.
+    */
+   test('switching language asks before dropping unsaved work, and cancelling stays put', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+
+      // A drag makes the layout document dirty without touching a keyboard.
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      await expectLayoutEntry(page, 'Cancel');
+
+      await page.locator('#page-locale [data-locale="de"]').click();
+      await expect(page.locator('#language-dialog')).toBeVisible();
+      // It names what would be lost, rather than asking in the abstract.
+      await expect(page.locator('#language-dialog-documents')).toContainText('fulfillment.layout');
+
+      await page.locator('#language-dialog button[value="cancel"]').click();
+      await expect(page.locator('#language-dialog')).toBeHidden();
+      await expect(page).toHaveURL(/\/$/);
+      await expect(page.locator('#document-panel h2')).toHaveText('Workspace');
+      await expect(page.locator('#page-locale [data-locale=""]')).toHaveAttribute('aria-pressed', 'true');
    });
 
    test("Monaco's editor worker computes, and not merely gets constructed", async ({ page }) => {
@@ -1418,7 +1602,7 @@ test.describe('order-flow in a web worker', () => {
       const panel = page.locator('#properties-body');
 
       // Opens on the process document, nothing having been focused yet.
-      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+      await expect(panel.locator(PROPERTIES_HEADING)).toHaveText('fulfillment.process');
       await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
       // `subject` is a cross-reference, whose transfer form is its text — which
       // is why it is presented as an ordinary string field.
@@ -1429,12 +1613,12 @@ test.describe('order-flow in a web worker', () => {
       // than avoided: it is the state a reader meets first if they click there,
       // and a panel that went blank instead would read as broken.
       await page.locator('#selected-editor').click();
-      await expect(panel.locator('h1')).toHaveText('orders.domain');
+      await expect(panel.locator(PROPERTIES_HEADING)).toHaveText('orders.domain');
       await expect(panel).toContainText('This document root has no editable text properties.');
 
       // And back, which proves the panel re-opens rather than only ever closing.
       await page.locator('#process-editor').click();
-      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+      await expect(panel.locator(PROPERTIES_HEADING)).toHaveText('fulfillment.process');
       await expect(panel.locator('#field-name')).toHaveValue('Fulfillment');
 
       // The DIAGRAM counts as well, and has to say so itself: it is a view of
@@ -1442,13 +1626,13 @@ test.describe('order-flow in a web worker', () => {
       // Asserted from the `.domain` state, or a panel that simply never moved
       // would pass — `fulfillment.process` is what it shows by default.
       await page.locator('#selected-editor').click();
-      await expect(panel.locator('h1')).toHaveText('orders.domain');
+      await expect(panel.locator(PROPERTIES_HEADING)).toHaveText('orders.domain');
       // A NODE rather than a point on the canvas: the palette and the status
       // overlay cover parts of the mount, so a coordinate is a guess about what
       // is on top, where a rendered node is unambiguously the diagram.
       await expectFramedDiagram(page);
       await nodeLocator('Pay')(page).click();
-      await expect(panel.locator('h1')).toHaveText('fulfillment.process');
+      await expect(panel.locator(PROPERTIES_HEADING)).toHaveText('fulfillment.process');
    });
 
    test('a properties write reaches the document, and its diagnostics come back', async ({ page }) => {
@@ -1737,20 +1921,20 @@ interface PaintedColours {
    readonly armedTool: string;
 }
 
-/** `--order-flow-surface` #1f1f1f, `--order-flow-task-accent` #4a90d9, `namespace` #4ec9b0, focus #0078d4. */
+/** `--order-flow-surface` #24262b, `--order-flow-task-accent` #4a90d9, `namespace` #4ec9b0, focus #4daafc. */
 const DARK_PAINT: PaintedColours = {
-   chrome: 'rgb(31, 31, 31)',
+   chrome: 'rgb(36, 38, 43)',
    diagramNode: 'rgb(74, 144, 217)',
    editorToken: 'rgb(78, 201, 176)',
-   armedTool: 'rgb(0, 120, 212)'
+   armedTool: 'rgb(77, 170, 252)'
 };
 
-/** `--order-flow-surface` #ffffff, `--order-flow-task-accent` #1a7bbe, `namespace` #267f99, focus #005fb8. */
+/** `--order-flow-surface` #f9fbfc, `--order-flow-task-accent` #1a7bbe, `namespace` #247a93, focus #0757ba. */
 const LIGHT_PAINT: PaintedColours = {
-   chrome: 'rgb(255, 255, 255)',
+   chrome: 'rgb(249, 251, 252)',
    diagramNode: 'rgb(26, 123, 190)',
-   editorToken: 'rgb(38, 127, 153)',
-   armedTool: 'rgb(0, 95, 184)'
+   editorToken: 'rgb(36, 122, 147)',
+   armedTool: 'rgb(7, 87, 186)'
 };
 
 /**

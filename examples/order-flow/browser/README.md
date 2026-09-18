@@ -86,10 +86,11 @@ the status-bar reports: they are measurements read against `hydranium-cli
 validate` from Node, which prints English, and a translated count cannot be
 compared with the oracle it exists to be compared with.
 
-**The switch writes the URL rather than holding the choice, and it reloads.** The
-URL keeps the state addressable — you can send someone the link, and the e2e
-tier names a language by navigating — where `navigator.language` would allow
-neither. The reload is the *server* half's requirement, not the chrome's: the
+**The switch writes the URL, and it reloads.** The URL keeps the state
+addressable — you can send someone the link, and the e2e tier names a language by
+navigating — where `navigator.language` would allow neither. It also remembers
+the choice, but the URL is what *carries* it: the store is only consulted when
+the URL says nothing. The reload is the *server* half's requirement, not the chrome's: the
 language reaches the server once, at `initialize`, and the worker holds that
 connection for its lifetime, so changing it live would mean tearing down all
 three heads and the store they share. One switch drives both, so it moves at the
@@ -98,6 +99,15 @@ German chrome around English diagnostics.
 
 Any unknown tag falls back to English on both halves, which is the same
 pass-through an adopter with no entry for a code gets.
+
+**A visit with no tag at all falls back to what the last one chose**, in
+`localStorage` — and a tag that is PRESENT always wins, so a link still names a
+language for whoever opens it whatever their own store holds. The distinction
+that makes this work is between a tag that is absent and one that is empty:
+`?locale=` is the URL the switch lands on when you choose English, so it has to
+mean English rather than "ask the store", or choosing English would bring back
+the language you just left. English is therefore *stored*, as the empty string,
+rather than left unstored.
 
 The page starts the worker, hands each head its own `MessageChannel`, sends LSP
 `initialize` for a workspace it never had on disk, and reports along the bottom:
@@ -114,6 +124,11 @@ value above the strip, and hovering shows the same text as a tooltip. Clicking
 the same label, clicking anywhere else, or pressing `Escape` closes it, and only
 one is open at a time. A label is dimmed until its category has reported, so the
 heads coming up is visible without opening anything.
+
+The strip also leads with the **build stamp**, where a deploy has filled one in.
+It names what is running, the labels after it name what the heads are doing now,
+and a rule separates the categories a head *publishes* from the ones the page
+derives.
 
 The last category, **Latency**, is the one that is read rather than published:
 it asks the data head for `DataServerDiagnosticsProtocol.getLatency`, which
@@ -134,9 +149,11 @@ retention has to be bounded.
 Below the diagram, `orders/fulfillment.process` and `orders/fulfillment.layout`
 open in two Monaco editors over the same LSP channel: type an error and the
 squiggle comes from the server, and the highlighting is the server's semantic
-tokens rather than a client-side grammar. Comments are deliberately uncoloured —
-there is no TextMate or Monarch grammar anywhere in this page, and a comment is a
-hidden lexer token that never reaches the AST the server tokenises.
+tokens rather than a client-side grammar. The comments are coloured from the
+server too, which is not where a comment colour normally comes from: there is no
+TextMate or Monarch grammar anywhere in this page, so the framework's token
+provider walks the comment leaves of the CST — everything else it emits comes
+from the AST, which a comment never reaches.
 
 **That pair is PINNED and a third editor is not.** Every claim this page makes is
 about a relationship between two documents — a drag rewriting one and not the
@@ -146,8 +163,16 @@ under the diagram it is a view of, and the workspace list on the left drives a
 separate lookup editor beside it. The list marks the two states differently: a pin
 for the pair, the accent bar for the selection.
 
-**Under the list is a properties panel, and it is the page's SECOND data-head
-participant.** It takes its own `DataSession` off the one connection rather than
+**Under the list is a properties panel, and it follows the EDITOR FOCUS rather
+than the list above it** — which the panel head says, because sitting under a
+list it would otherwise read as a detail view of the selected row. The field
+data is what decides it: a `.domain` root carries no top-level string property,
+so a panel bound to the selection opens empty on this workspace and stays that
+way, while the two roots that do have editable fields are exactly the pair
+pinned beside the diagram.
+
+**It is also the page's SECOND data-head participant.** It takes its own
+`DataSession` off the one connection rather than
 a connection of its own, so the server holds a separate `(uri, clientId)` hold
 and watch for it and each participant reads its own writes back as echoes. Edit
 `name` there and the `.process` text rewrites; edit `subject` to a name nothing
@@ -249,11 +274,23 @@ This page supplies only the **light** half and lets the shared stylesheet's dark
 defaults stand, so the fallback path is on the normal route rather than untested.
 The page chrome reads the same roles, which is what makes one switch enough.
 
-The initial scheme follows `prefers-color-scheme`; the switch overrules it. The
-choice is deliberately not persisted, unlike the workspace: a stored scheme would
-be read during startup, which makes every run depend on what the last one left
-behind, where the workspace's store is asked for its content at a point the page
-controls.
+**The scheme resolves down one chain: `?theme=`, then what you last chose, then
+`prefers-color-scheme`.** Only the switch writes the store — seeding does not, so
+a reader who never touches the control keeps following their OS instead of being
+pinned to whatever it happened to say on a first visit. `?theme=` is *read* and
+never written, which is the opposite of `?locale=`: a language reloads, so a
+parameter is the only way that choice survives the reload, where a scheme changes
+in place and rewriting the address bar for it would be noise. The parameter still
+exists for the one tier that has no other way to ask — a link that pins a scheme,
+and an e2e case that names one.
+
+Both preferences sit in `localStorage`, where the workspace sits in `IndexedDB`,
+and the split is by what the value *is*: a workspace edit is your work and losing
+it is data loss, so that store reports its failures, while a scheme is a
+convenience the environment can answer for, so a browser that denies storage here
+falls through to `prefers-color-scheme` and says nothing. Both are scoped to the
+origin *and* the browser profile, so two readers of one deployment never see each
+other's choice.
 
 **Press *save workspace* and reload.** The edit is still there — and *without*
 the save it is not, which is the same bargain a Node host offers: an edit lives in
@@ -263,6 +300,22 @@ into `IndexedDB` behind
 and the next load restores them before the heads start; *reset workspace* drops
 them and returns to the committed fixtures, which a page that can save a
 document that no longer parses genuinely needs.
+
+**Three things here can lose work, and each asks in proportion to what it
+costs.** *Reset workspace* always asks: it discards the store itself, which is
+destructive whatever the editors hold and which nothing on the page can undo.
+Switching language asks only when a document is unsaved, because the reload is
+what costs — and it offers *save and switch*, since saving is what the reader
+wanted rather than a choice between losing the work and staying put. A plain
+reload or tab close is caught by the browser's own guard, on the same condition.
+A confirmation on every one of these is one a reader learns to dismiss without
+reading, which is how a confirmation stops being one.
+
+They are `<dialog>` rather than `confirm`, and that is worth copying: a native
+dialog traps focus, closes on `Escape` and can be painted from the page's own
+roles, where browser chrome cannot — and `confirm` is auto-dismissed by test
+drivers, so a guarded destructive action silently would not happen and the
+failure would look nothing like its cause.
 
 Four things this arrangement is worth reading for, because each one is a decision
 a host has to make and none of them is obvious:
@@ -320,7 +373,7 @@ restores the defaults.
 
 **Each editor opens scrolled to its declaration, not to line 1.** Every fixture
 in this workspace opens with a comment block written for a reader of the
-repository, and `fulfillment.layout`'s runs past thirty lines before the `layout`
+repository, and `fulfillment.layout`'s stands between the top and the `layout`
 block a diagram drag rewrites — so an editor left at the top would show nothing
 but prose and a drag would appear to change nothing. The line is derived (the
 first that is neither blank nor `//`), so editing a fixture header cannot leave
@@ -393,8 +446,8 @@ flakiness in the code and is not.
 | Text editors | ✅ three Monaco editors over the same LSP channel — diagnostics as markers, highlighting from semantic tokens, completion and hover |
 | Workspace navigation | ✅ every seeded document with its diagnostic count, and a problems list that opens a document at the line |
 | Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models, so a drag moves the `.layout` editor |
-| Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme; seeded from `prefers-color-scheme` |
-| Localization | ✅ one switch over the page's own chrome *and* the server's diagnostics and palette; the URL carries it, and the reload is the server half's requirement |
+| Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme; `?theme=`, then the last choice, then `prefers-color-scheme` |
+| Localization | ✅ one switch over the page's own chrome *and* the server's diagnostics and palette; the URL carries it and outranks the remembered choice, and the reload is the server half's requirement |
 | Server log | ✅ a dock panel over `window/logMessage`, carrying all three heads on one channel, filterable |
 | Resizable layout | ✅ pointer-event dividers on every area, no UI framework — the shape GLSP's own `workflow-standalone` example uses |
 | Workspace persistence | ✅ a save mirrors into `IndexedDB` and the next load restores it, seed as the baseline; *reset* drops it |

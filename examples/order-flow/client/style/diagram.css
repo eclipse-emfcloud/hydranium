@@ -40,16 +40,23 @@
 
 :root {
    /* Surfaces and text. A shell maps these onto its own editor colours. */
-   --order-flow-surface: #1f1f1f;
-   --order-flow-foreground: #cccccc;
-   --order-flow-muted-foreground: #9d9d9d;
-   --order-flow-panel-background: #202020;
+   --order-flow-surface: #24262b;
+   --order-flow-foreground: #e6edf3;
+   --order-flow-muted-foreground: #9ba0a3;
+   /*
+    * `--order-flow-panel-background` is the ELEVATED surface — a panel that
+    * floats OVER the canvas, which here is the tool palette. On a dark theme
+    * that direction is lighter than the surface, and a shell that reads this as
+    * "some other panel colour" and hands it a receding one leaves the palette
+    * sitting in a hole.
+    */
+   --order-flow-panel-background: #2d2f34;
    --order-flow-panel-foreground: var(--order-flow-foreground);
-   --order-flow-panel-border: #2b2b2b;
-   --order-flow-hover-background: rgb(255 255 255 / 8%);
-   --order-flow-focus-border: #0078d4;
+   --order-flow-panel-border: #393b40;
+   --order-flow-hover-background: rgb(255 255 255 / 7%);
+   --order-flow-focus-border: #4daafc;
    /* Refusals during edge creation; a shell maps it onto its error colour. */
-   --order-flow-invalid: #f14c4c;
+   --order-flow-invalid: #ff7b72;
 
    /*
     * One accent per element kind, and these two are mid-tones on purpose rather
@@ -60,6 +67,11 @@
     * theme-derived palette of its own simply leave them alone. Theia is that
     * shell: it registers no `charts.*` colours, so these values are what its
     * diagram actually uses.
+    *
+    * **These are the roles here that a change reaches Theia through**, and it has to clear 3:1 against a white editor as well as a
+    * dark one. Retuning them for the dark surfaces above is what breaks the
+    * light half — the pair that suits a dark canvas lands near 2.5:1 on a
+    * light one, and nothing in this file would show it.
     */
    --order-flow-task-accent: #4a90d9;
    --order-flow-gateway-accent: #9a6fc4;
@@ -67,6 +79,24 @@
       what separates it from a plain transition. */
    --order-flow-branch-accent: var(--order-flow-gateway-accent);
    --order-flow-edge: var(--order-flow-foreground);
+}
+
+/* sprotty frames its canvas in a hardcoded light grey no host asked for.
+   Whatever bounds a diagram is the shell’s, so the graph draws no edge. */
+.sprotty svg {
+   border: none;
+}
+
+/* sprotty gives the graph a tab stop, so a user agent rings the whole canvas in
+   its own colour. Kept for the keyboard, where nothing else says the diagram has
+   focus; inset, because an outline outside it is clipped by the pane. */
+.sprotty svg:focus {
+   outline: none;
+}
+
+.sprotty svg:focus-visible {
+   outline: 1px solid var(--order-flow-focus-border);
+   outline-offset: -1px;
 }
 
 /*
@@ -96,18 +126,30 @@
    stroke: none;
 }
 
-/* A node's name carries it; the effect lines are supporting detail and take the
-   theme's secondary foreground so they recede without becoming unreadable. */
+/*
+ * A node's name carries it; the effect lines are supporting detail and take the
+ * theme's secondary foreground so they recede without becoming unreadable.
+ *
+ * Both sizes are stated. sprotty sizes a plain label itself, so an `em` here
+ * resolves against the parent rather than that label — which renders a
+ * supporting line LARGER than the name it supports.
+ */
 .sprotty .sprotty-label {
    fill: var(--order-flow-foreground);
    stroke: none;
+   font-size: 1em;
    font-weight: 600;
 }
 
+/*
+ * The muted role is chosen to read against the CANVAS, and this text sits on a
+ * node fill — the canvas tinted 16% towards the accent, and so closer to it.
+ * Lifting towards the foreground corrects that whichever way the theme runs.
+ */
 .sprotty .effect {
-   fill: var(--order-flow-muted-foreground);
+   fill: color-mix(in srgb, var(--order-flow-muted-foreground) 60%, var(--order-flow-foreground));
    font-weight: 400;
-   font-size: 0.9em;
+   font-size: 0.85em;
 }
 
 .sprotty .sprotty-edge {
@@ -182,9 +224,15 @@
    stroke-dasharray: 4 3;
 }
 
+/*
+ * GLSP sets `sans-serif` and `8pt` on every `text`, so labels render in a face
+ * no host chose. The family is taken back; the size is left, so a label added
+ * without one looks wrong rather than inheriting a prose size.
+ */
 .sprotty text {
    stroke: none;
    user-select: none;
+   font-family: inherit;
 }
 
 /*

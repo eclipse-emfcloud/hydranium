@@ -1,6 +1,7 @@
-// A second process over the same domain entity, so the workspace shows that
-// `.domain` declarations are shared by several `.process` files rather than
-// owned by one. Renaming `Order.status` has to update both.
+// A second process over the same entity, so
+// `.domain` declarations are shared rather
+// than owned by one `.process`. Renaming
+// `Order.status` has to update both.
 
 process Returns for Order {
    task Receive reads Order.id

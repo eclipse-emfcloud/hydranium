@@ -47,6 +47,30 @@ These are observable here rather than merely asserted:
   rather than to every flow node in the workspace; `returns.process` has none,
   which is what shows layout is additive rather than required.
 
+## The layout document
+
+`fulfillment.layout` is the one fixture whose shape is a framework
+demonstration rather than a modelling choice, so the reasoning lives here
+rather than in a header the editors have to scroll past.
+
+**Its references cross a document boundary, and that is the point.** A
+`[FlowNode:ID]` reference resolves through the global index, so unnarrowed, an
+entry here could bind to a same-named task in an unrelated process and still
+look correct. `OrderFlowLayoutScopeProvider` restricts the candidates to the
+nodes of the process the header names.
+
+**It is what `repositionable` and `resizable` are backed by.** Dragging a node
+in a diagram rewrites an entry here, and creating one from the canvas writes
+both files in a single operation, semantics first.
+
+**The coordinates are chosen rather than arbitrary.** They run left to right by
+rank — `Pay`, the gateway, then its two exits — and the gateway's branches
+split vertically: `yes` continues down and right to `Pick` and `Ship`, `no`
+leaves up and left. Each branch therefore leaves a different face of the
+diamond, which is what gives `DiamondAnchor` something to be right about.
+`Cancel` carries no entry at all and so lands at the origin, which is the state
+of anything added in text and the reason the entries start well clear of it.
+
 Run the CLI against it:
 
 ```bash
