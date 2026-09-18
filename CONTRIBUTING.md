@@ -142,11 +142,16 @@ mutation and perf audits, see [`docs/contributing/testing.md`](docs/contributing
 
 - Use Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, etc.).
 - One concern per PR. Smaller is better.
-- Add a changeset, or the explicit empty marker if the change needs no
-  release. Nothing in CI enforces this, so a PR without either ships
-  unversioned and absent from every CHANGELOG — see
+- Add a changeset (`npx changeset add`), or the explicit empty marker
+  (`npx changeset add --empty`) when the change needs no release note.
+  Nothing in CI enforces this and nothing stalls without it: every nightly
+  version is derived from the commit count, so a change with no changeset
+  still publishes. What it misses is the CHANGELOG for the stable cut, which
+  is the only thing changesets feed here — see
   [`docs/contributing/releasing.md`](docs/contributing/releasing.md), which is also the runbook for
-  versioning policy, dist-tags and provenance.
+  versioning policy, dist-tags and provenance. If you are unsure which bump
+  a change deserves, leave it out and say so; the packages version in
+  lockstep, so that is a call about the whole published surface.
 - Reference the concept doc under `docs/concepts/` your change follows, if there is one.
 - A test must justify its existence: it should catch a real class of bug.
 
