@@ -400,6 +400,58 @@ describe('order-flow LSP head over the wire', () => {
             expect(decoded.find(token => token.line === 0 && token.char === 19)).toMatchObject({ type: 'class' });
          });
       });
+
+      /**
+       * `highlightComments`, asserted through the same seam and for the same
+       * reason: the option has to reach the adopter's own binding.
+       *
+       * Driven over a source carrying BOTH comment terminals and a keyword,
+       * because a pass that answered for `//` and not for the block form would
+       * pass a single-comment fixture, and the block is also the only shape
+       * that crosses lines.
+       */
+      describe('comments', () => {
+         const COMMENT_SOURCE = '// a note\n/* and\n   another */\nprocess Tokens for Order {\n}\n';
+
+         /** Every `comment` token of {@link COMMENT_SOURCE}, as `line:char:length`. */
+         async function commentSpans(options: OrderFlowOptions): Promise<string[]> {
+            const open = await openWorkspace(options);
+            const target = open.uri('orders/comments.process');
+            open.harness.openDocument(target, COMMENT_SOURCE, ProcessLanguageMetaData.languageId);
+
+            const decoded = decodeSemanticTokens((await open.harness.semanticTokens(target))?.data ?? []);
+            return decoded.filter(token => token.type === 'comment').map(token => `${token.line}:${token.char}:${token.length}`);
+         }
+
+         it('sends none by default, leaving them to the host TextMate grammar', async () => {
+            expect(await commentSpans({})).toEqual([]);
+         });
+
+         it('sends one per comment line, so a block arrives as one token per line', async () => {
+            // Lengths as well as positions, because the block is the case that
+            // matters: it is emitted as TWO tokens, `/* and` then `   another
+            // */`, never as one range crossing lines. A single 1:0:20 here
+            // would mean the provider handed the multi-line range to the
+            // encoder, whose split path mis-computes the first line's length
+            // for any token not starting on line 0.
+            expect(await commentSpans({ highlightComments: true })).toEqual(['0:0:9', '1:0:6', '2:0:13']);
+         });
+
+         it('claims no visible leaf, and leaves keywords to their own option', async () => {
+            const open = await openWorkspace({ highlightComments: true });
+            const target = open.uri('orders/comments.process');
+            open.harness.openDocument(target, COMMENT_SOURCE, ProcessLanguageMetaData.languageId);
+
+            const decoded = decodeSemanticTokens((await open.harness.semanticTokens(target))?.data ?? []);
+            // Three and no more: the keyword and name leaves share this walk,
+            // so a pass claiming every leaf rather than the hidden ones would
+            // run well past this count.
+            expect(decoded.filter(token => token.type === 'comment')).toHaveLength(3);
+            expect(decoded.filter(token => token.type === 'keyword')).toEqual([]);
+            // And the AST pass is untouched: `Tokens` is the root's own name.
+            expect(decoded.find(token => token.line === 3 && token.char === 8)).toMatchObject({ type: 'namespace' });
+         });
+      });
    });
 
    /**

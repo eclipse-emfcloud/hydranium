@@ -134,6 +134,13 @@ const SHIP_X_COLUMN = SHIP_ENTRY.indexOf('660') + '660'.length;
  * against each other rather than against a literal.
  */
 const HIGHLIGHTED_LINE = 'process Fulfillment for Order {';
+/**
+ * A comment line of the same document, for the half of the colouring TextMate
+ * would own elsewhere. Taken from the line directly above
+ * {@link HIGHLIGHTED_LINE} rather than from the top of the file, because Monaco
+ * virtualises and the pane's window does not reach line 1.
+ */
+const COMMENT_LINE = '// follows; delete the field';
 
 /**
  * Text typed at the end of the `.process` file to make it unparseable.
@@ -622,6 +629,19 @@ test.describe('order-flow in a web worker', () => {
       expect(classOf('for')).toBe(classOf('process'));
       expect(classOf('process')).not.toBe(whitespaceClass);
       expect(classOf('process')).not.toBe(classOf('Fulfillment'));
+
+      // The comments, where the CLASS is the only observable there is. A
+      // comment line renders as ONE span in both states — claimed it is a
+      // single token, unclaimed it is a single run of unstyled text — so the
+      // span count says nothing here and the split trick used for keywords has
+      // nothing to work on. The whitespace span above is the default-colour
+      // anchor, and a comment differing from it is the whole assertion.
+      const commentLine = await tokenSpansOnLine(page, PROCESS_EDITOR, COMMENT_LINE);
+      expect(commentLine).not.toHaveLength(0);
+      expect(commentLine[0].tokenClass).not.toBe(whitespaceClass);
+      // And a colour of its own rather than a keyword's, which is what says the
+      // two options claim different leaves rather than one claiming both.
+      expect(commentLine[0].tokenClass).not.toBe(classOf('process'));
    });
 
    test('an edit reaches the server and its diagnostics come back as markers', async ({ page }) => {

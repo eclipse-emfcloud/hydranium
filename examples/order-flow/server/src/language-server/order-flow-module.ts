@@ -290,12 +290,12 @@ const ProcessLanguageModule = (
 /**
  * What a host may vary about this composition.
  *
- * The two members reach the tree by DIFFERENT routes, and the difference is the
+ * The members reach the tree by DIFFERENT routes, and the difference is the
  * lesson: `extraSharedModules` is a module the caller writes, layered in;
- * `highlightKeywords` is a value threaded down to an adopter binding this file
- * owns. The second shape is needed whenever the slot the option must reach is
- * one the adopter already overrides — a layered module cannot win against that,
- * whichever way round they are composed.
+ * `highlightKeywords` and `highlightComments` are values threaded down to an
+ * adopter binding this file owns. The second shape is needed whenever the slot
+ * the option must reach is one the adopter already overrides — a layered module
+ * cannot win against that, whichever way round they are composed.
  */
 export interface OrderFlowOptions {
    /**
@@ -331,6 +331,14 @@ export interface OrderFlowOptions {
     * so it turns this on and is the only host that does.
     */
    readonly highlightKeywords?: boolean;
+
+   /**
+    * Colour comments from the server. Left off for the same hosts and for a
+    * sharper version of the same reason: their grammars scope `comment.line`
+    * and `comment.block` apart and scope the delimiters separately, where a
+    * semantic token carries one flat `comment` that would override all of it.
+    */
+   readonly highlightComments?: boolean;
 }
 
 /**

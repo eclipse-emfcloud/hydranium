@@ -23,15 +23,15 @@
  * unsaved-edit story is the same on both ends: a diagram drag or a keystroke
  * lives in the in-memory text document until something saves it.
  *
- * **One option differs too, and it is not a transport concern:**
- * `highlightKeywords`. The VS Code and Theia hosts ship `.tmLanguage.json`
- * grammars that already colour keywords, with finer scopes than the flat
- * `keyword` a semantic token carries — and semantic tokens override TextMate,
- * so enabling it there would make their editors less coloured. This page ships
- * no client-side grammar at all, deliberately, because "the colours come from
- * the server" is the property it exists to demonstrate. Without the option the
- * demonstration is half-made: names are coloured and every keyword renders in
- * the default foreground.
+ * **Two options differ too, and neither is a transport concern:**
+ * `highlightKeywords` and `highlightComments`. The VS Code and Theia hosts ship
+ * `.tmLanguage.json` grammars that already colour both, with finer scopes than
+ * the flat `keyword` and `comment` a semantic token carries — and semantic
+ * tokens override TextMate, so enabling them there would make those editors
+ * less coloured. This page ships no client-side grammar at all, deliberately,
+ * because "the colours come from the server" is the property it exists to
+ * demonstrate. Without the options the demonstration is half-made: names are
+ * coloured and every keyword and comment renders in the default foreground.
  *
  * Heads bind the ports handed to them at bootstrap and never the worker global.
  */
@@ -123,9 +123,9 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
    );
    const { shared } = createOrderFlowServices(
       { connection, ...fileSystem },
-      // The one option this host sets, for the reason in the module doc: no
+      // The options this host sets, for the reason in the module doc: no
       // client-side grammar means the server is the only source of colour.
-      { highlightKeywords: true }
+      { highlightKeywords: true, highlightComments: true }
    );
    startLanguageServer(shared);
    return shared;
