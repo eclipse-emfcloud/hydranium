@@ -40,7 +40,7 @@ import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-glsp-submission-handler.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
-import { DEFAULT_SAVE_CONFLICT_POLICY, SaveConflictPolicy } from './save-conflict-policy.js';
+import { DEFAULT_SAVE_DELIVERY_POLICY, SaveDeliveryPolicy } from './save-delivery-policy.js';
 
 /**
  * A save action arrived with nowhere to write to. A save action carries no
@@ -141,17 +141,14 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
  *
  * Adopters with richer needs override the seams ({@link isStructurallyBroken},
  * {@link onParseErrorChanged}, {@link onSourceModelSettled}) rather than the
- * whole flow, and select a {@link SaveConflictPolicy} via the bound option to
- * tune how {@link saveSourceModel} reacts to a concurrent edit.
+ * whole flow, and select a {@link SaveDeliveryPolicy} via the bound option to
+ * tune how {@link saveSourceModel} delivers its result.
  *
- * **Default `saveSourceModel` flow.** Delegates to `ModelService.save`, which
- * serialises through the language-specific `Serializer` bound at
- * `services.serializer.Serializer` (resolved per-URI via `ServiceRegistry`),
- * updates the multi-client text-document store, drives a rebuild, and writes the
- * result via the `WritableFileSystemProvider`. The bound
- * {@link SaveConflictPolicy} (default {@link DEFAULT_SAVE_CONFLICT_POLICY},
- * `overwrite`) decides the based-on-version guard, await-vs-fire-and-forget, and
- * failure handling.
+ * **Default `saveSourceModel` flow.** Flushes the stored text of the primary and
+ * every tracked secondary via `AstDocumentManager.save`, with no serializer in
+ * the path — the update path already put the settled text in the store. The
+ * bound {@link SaveDeliveryPolicy} (default {@link DEFAULT_SAVE_DELIVERY_POLICY},
+ * `await`) decides await-vs-fire-and-forget and failure handling.
  *
  * **tempId filter.** GLSP's `DefaultGlobalActionProvider` spins up a
  * throwaway per-diagram-type container with upstream's {@link TEMPORARY_CLIENT_ID}
@@ -188,14 +185,13 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    @inject(ModelValidator) @optional() protected readonly modelValidator?: ModelValidator;
 
    /**
-    * Selected {@link SaveConflictPolicy} for {@link saveSourceModel}. Bind the
-    * {@link SaveConflictPolicy} token in a `DiagramModule` to choose a policy;
-    * left unbound it resolves to {@link DEFAULT_SAVE_CONFLICT_POLICY}
-    * (`overwrite`, last-write-wins). Read via {@link saveConflictPolicy} so the
-    * fallback is applied even when inversify injects `undefined` for an unbound
-    * `@optional()` member.
+    * Selected {@link SaveDeliveryPolicy} for {@link saveSourceModel}. Bind the
+    * {@link SaveDeliveryPolicy} token in a `DiagramModule` to choose a policy;
+    * left unbound it resolves to {@link DEFAULT_SAVE_DELIVERY_POLICY}. Read via
+    * {@link saveDeliveryPolicy} so the fallback is applied even when inversify
+    * injects `undefined` for an unbound `@optional()` member.
     */
-   @inject(SaveConflictPolicy) @optional() protected readonly boundSaveConflictPolicy?: SaveConflictPolicy;
+   @inject(SaveDeliveryPolicy) @optional() protected readonly boundSaveDeliveryPolicy?: SaveDeliveryPolicy;
 
    /** Disposables created during {@link doLoadSourceModel}; drained on session disposal. */
    protected toDispose = new DisposableCollection();
@@ -604,32 +600,47 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       return [];
    }
 
-   /** The effective {@link SaveConflictPolicy}: the bound option, or {@link DEFAULT_SAVE_CONFLICT_POLICY} when unbound. */
-   protected get saveConflictPolicy(): SaveConflictPolicy {
-      return this.boundSaveConflictPolicy ?? DEFAULT_SAVE_CONFLICT_POLICY;
+   /** The effective {@link SaveDeliveryPolicy}: the bound option, or {@link DEFAULT_SAVE_DELIVERY_POLICY} when unbound. */
+   protected get saveDeliveryPolicy(): SaveDeliveryPolicy {
+      return this.boundSaveDeliveryPolicy ?? DEFAULT_SAVE_DELIVERY_POLICY;
    }
 
    /**
-    * Default save flow: route through `ModelService.save`. The framework
-    * serialise-and-persist machinery handles serialisation (via the
-    * language-specific `Serializer` bound at `services.serializer.Serializer`),
-    * the multi-client text-document update, the rebuild, and the eventual
-    * `WritableFileSystemProvider.writeFile`.
+    * Default save flow: persist the store's current text for every document this
+    * diagram owns.
     *
-    * The configured {@link SaveConflictPolicy} (see {@link saveConflictPolicy})
-    * decides how a concurrent edit that advanced the document is handled:
-    * - `overwrite` (default): no based-on guard, await, propagate failures —
-    *   last-write-wins, correct for a single-editor head.
-    * - `reject`: guard on the captured `state.version`, await, surface a
-    *   `ConflictError` (and any other failure) to the GLSP save action.
-    * - `drop-and-log`: guard, fire-and-forget, log + swallow failures — a stale
-    *   diagram save is dropped because a concurrent form/code edit already wrote
-    *   the truth, and GLSP exposes no save-failure back-channel.
+    * **A save persists, it does not author.** Every diagram gesture already
+    * reached the store through `ModelService.update`, so the store holds the
+    * settled text and disk is the only thing behind. Re-serializing from the AST
+    * here cannot improve on that text and can only damage it: a serializer
+    * normalises formatting and carries no comments, so a save would reflow and
+    * strip a document nothing changed — which is what a pure bounds drag does to
+    * the semantic file when only its layout moved.
+    *
+    * **The write set is the primary plus every tracked secondary**
+    * (`AbstractHydraniumGlspState.trackSecondaryDocument`), so a document the
+    * diagram wrote is persisted whether or not it is the one the client named.
+    * The primary is flushed first, then secondaries in tracking order. A
+    * document no client holds open is skipped — there is no stored text to
+    * persist.
+    *
+    * **A save therefore names documents the gesture did not aim at**, which is
+    * why an unchanged one is not rewritten even though the user asked for a
+    * save: the mtime would move on a file they never touched.
+    * `AstDocumentManager.save` decides that per document and announces the save
+    * either way.
+    *
+    * The configured {@link SaveDeliveryPolicy} (see {@link saveDeliveryPolicy})
+    * decides await-vs-fire-and-forget and failure handling. It carries no
+    * based-on guard: the guard exists to stop a stale writer overwriting a newer
+    * document, and a flush persists the store — which already holds every other
+    * client's change, including the one that advanced the version.
     *
     * Returns `MaybePromise<void>` to match upstream `SourceModelStorage`:
-    * resolves with the persist under `overwrite`/`reject`, returns synchronously
-    * under `drop-and-log`. Adopters that bypass `ModelService` (writing through
-    * `WritableFileSystemProvider` directly) still override the whole method.
+    * resolves with the flush under `await`, returns synchronously under
+    * `fire-and-forget`. Adopters that bypass `AstDocumentManager` (writing
+    * through `WritableFileSystemProvider` directly) still override the whole
+    * method.
     */
    saveSourceModel(action: SaveModelAction): MaybePromise<void> {
       // Normalised for the same reason the load path is: `SaveModelAction.fileUri`
@@ -639,24 +650,34 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // the call site rather than inside `getFileUri` so that method's contract —
       // return what the action said — is unchanged for adopters overriding it.
       const uri = this.toSourceModelUri(this.getFileUri(action));
-      const policy = this.saveConflictPolicy;
-      const persisted = this.sharedServices.model.ModelService.save({
-         uri,
-         model: this.state.sourceRoot,
-         clientId: this.state.clientId,
-         baseVersion: policy.kind === 'overwrite' ? undefined : this.state.version
-      }).then(() => undefined);
+      const policy = this.saveDeliveryPolicy;
+      const persisted = this.flushWriteSet(uri);
 
-      if (policy.kind === 'drop-and-log') {
-         // Fire-and-forget: the diagram save lost the race to a concurrent edit
-         // that already persisted the truth, so it must neither block the action
-         // nor surface. Log rather than leave an unhandled rejection.
+      if (policy.kind === 'fire-and-forget') {
+         // Log rather than leave an unhandled rejection: the promise is not
+         // returned, so nothing else will observe a failure.
          persisted.catch(error => this.logger.error(`Save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`));
          return undefined;
       }
-      // overwrite / reject: await; a ConflictError (reject) or any other failure
-      // propagates to GLSP's save-action handler.
+      // Awaited: any failure propagates to GLSP's save-action handler.
       return persisted;
+   }
+
+   /**
+    * Save the stored text of `primaryUri` and every tracked secondary.
+    *
+    * Deduplicated, because a state that tracks its own primary as a secondary
+    * would otherwise save it twice and fire two save notifications for one
+    * save. A document no client holds open is skipped: there is no stored text
+    * to persist, and `AstDocumentManager.save` throws on one.
+    */
+   protected async flushWriteSet(primaryUri: string): Promise<void> {
+      const documents = this.sharedServices.workspace.AstDocumentManager;
+      for (const target of new Set([primaryUri, ...this.state.secondaryUris])) {
+         if (documents.isOpen(target)) {
+            await documents.save(target, this.state.clientId);
+         }
+      }
    }
 
    /**

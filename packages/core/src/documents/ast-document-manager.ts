@@ -446,21 +446,49 @@ export class DefaultAstDocumentManager<TAst extends AstNode, TDiagnostic = unkno
     * callers don't need to pass it — the manager owns content and version
     * sequencing.
     *
+    * **The write is skipped when the file already holds that text; the
+    * notification is not.** A save announces that the content is on disk, which
+    * is true either way — so a subscriber clearing a dirty marker or reacting to
+    * a persist behaves the same, while an mtime is not moved for byte-identical
+    * content that a downstream mtime-keyed build would then read as new work.
+    *
     * Throws if no document is open for `uri`.
     */
    async save(uri: string, clientId: string): Promise<void> {
-      const document = this.textDocuments.get(uri);
+      // Canonical throughout: the write and the read that gates it must address
+      // the same file the store was keyed by, or a divergent spelling compares
+      // one file and writes another.
+      const canonical = this.uriPolicy.canonicalUri(uri);
+      const document = this.textDocuments.get(canonical);
       if (!document) {
          throw new Error(`Document ${uri} hasn't been opened for saving yet`);
       }
       const text = document.getText();
-      await this.tracer.with(uri).time(
-         `Write file (${text.length} bytes, from ${clientId})`,
-         // Async write so a slow disk does not block the event loop for the duration of the fs call.
-         () => this.fileSystemProvider.writeFile(UriUtils.toUri(uri), text),
-         'debug'
-      );
-      this.textDocuments.notifyDidSaveTextDocument({ textDocument: TextDocumentIdentifier.create(uri), text }, clientId);
+      if (!(await this.matchesDisk(canonical, text))) {
+         await this.tracer.with(canonical).time(
+            `Write file (${text.length} bytes, from ${clientId})`,
+            // Async write so a slow disk does not block the event loop for the duration of the fs call.
+            () => this.fileSystemProvider.writeFile(UriUtils.toUri(canonical), text),
+            'debug'
+         );
+      }
+      this.textDocuments.notifyDidSaveTextDocument({ textDocument: TextDocumentIdentifier.create(canonical), text }, clientId);
+   }
+
+   /**
+    * Whether the file at `uri` already holds `text`.
+    *
+    * Compared by CONTENT rather than against a remembered version, so a write
+    * from outside this server is still corrected: a version this manager already
+    * saved says nothing about what is on disk now. `false` when the file cannot
+    * be read at all, which is the answer that writes — a document whose file does
+    * not exist yet is exactly the one a first save has to create.
+    */
+   protected async matchesDisk(uri: string, text: string): Promise<boolean> {
+      return this.fileSystemProvider
+         .readFile(UriUtils.toUri(uri))
+         .then(onDisk => onDisk === text)
+         .catch(() => false);
    }
 
    isOpen(uri: string): boolean {

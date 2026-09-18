@@ -558,6 +558,40 @@ describe('AstDocumentManager save', () => {
       expect(fileSystem.writes).toContainEqual({ uri: URI_A, content: 'persist-me\n' });
       expect(saved).toEqual([URI_A]);
    });
+
+   it('skips the write when the file already holds the stored text, and still announces the save', async () => {
+      // Kills the `matchesDisk` guard in both directions at once: dropping it
+      // writes, and widening it to guard the notification too empties `saved`.
+      const { manager, fileSystem } = makeManagerHarness();
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'already-there\n' });
+      (fileSystem as unknown as { readFile: (uri: URI) => Promise<string> }).readFile = async () => 'already-there\n';
+
+      const saved: string[] = [];
+      manager.onSave(URI_A, event => {
+         saved.push(event.document.uri);
+      });
+
+      await manager.save(URI_A, 'c1');
+      await Promise.resolve();
+
+      expect(fileSystem.writes).toEqual([]);
+      // A save announces that the content is on disk, which it is.
+      expect(saved).toEqual([URI_A]);
+   });
+
+   it('writes when the file cannot be read, which is how a first save creates it', async () => {
+      // Kills the `.catch(() => false)` in matchesDisk: a rejected read that
+      // answered "matches" would leave a new document's file uncreated.
+      const { manager, fileSystem } = makeManagerHarness();
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'brand-new\n' });
+      (fileSystem as unknown as { readFile: (uri: URI) => Promise<string> }).readFile = async () => {
+         throw new Error('ENOENT');
+      };
+
+      await manager.save(URI_A, 'c1');
+
+      expect(fileSystem.writes).toContainEqual({ uri: URI_A, content: 'brand-new\n' });
+   });
 });
 
 describe('AstDocumentManager isOpen / isTriggeringEdit', () => {

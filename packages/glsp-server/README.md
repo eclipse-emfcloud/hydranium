@@ -20,8 +20,8 @@ the diagram model is adopter-side, bound per diagram module.
   over the GModel.
 - **Load / save against the live AST.** `HydraniumGlspStorage` loads a document
   on diagram open and writes user operations back through the shared model
-  coordination layer, with `SaveConflictPolicy` deciding what a concurrent
-  external write means. `HydraniumGlspRecordingCommand` is the operation-handler
+  coordination layer, with `SaveDeliveryPolicy` deciding whether the save action
+  awaits the write. `HydraniumGlspRecordingCommand` is the operation-handler
   seam — the framework provides no base handler class.
 - **A submission and dispatch lifecycle that waits for the model.**
   `HydraniumGlspSubmissionHandler` gates submit on the readiness event,
