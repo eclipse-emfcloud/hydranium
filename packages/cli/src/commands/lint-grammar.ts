@@ -53,5 +53,5 @@ export function buildLintGrammarDriverArgs(options: LintGrammarCommandOptions): 
  * `createServices` module, keeping the binary language-agnostic.
  */
 export function runLintGrammar(options: LintGrammarCommandOptions): Promise<void> {
-   return runDriverChild(['--max-old-space-size=8192', DRIVER, ...buildLintGrammarDriverArgs(options)], options);
+   return runDriverChild([DRIVER, ...buildLintGrammarDriverArgs(options)], options);
 }

@@ -35,6 +35,7 @@ export * from './server-diagnostics.js';
 // entry alongside the default policy.
 export * from './ast-ground-truth.js';
 export * from './event-loop-monitor.js';
+export * from './heap-ceiling.js';
 export * from './latency-from-env.js';
 export * from './measure-memory.js';
 export * from './memory-monitor.js';

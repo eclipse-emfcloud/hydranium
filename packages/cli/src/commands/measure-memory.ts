@@ -139,5 +139,5 @@ export function buildDriverArgs(options: MeasureMemoryCommandOptions): string[] 
  * module and reports the baseline / after-build / churn lines on stdout.
  */
 export function runMeasureMemory(options: MeasureMemoryCommandOptions): Promise<void> {
-   return runDriverChild(['--expose-gc', '--max-old-space-size=8192', DRIVER, ...buildDriverArgs(options)], options);
+   return runDriverChild(['--expose-gc', DRIVER, ...buildDriverArgs(options)], options);
 }

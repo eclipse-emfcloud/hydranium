@@ -49,7 +49,6 @@ describe('reflect', () => {
          }
       });
       expect(captured).not.toContain('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
       expect(captured.some(arg => arg.endsWith('reflect-driver.js'))).toBe(true);
       expect(captured.slice(-3)).toEqual(['--services', './svc.js', '--json']);
    });

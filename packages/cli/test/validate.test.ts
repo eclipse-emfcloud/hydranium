@@ -55,7 +55,6 @@ describe('validate', () => {
          }
       });
       expect(captured).not.toContain('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
       expect(captured.some(arg => arg.endsWith('validate-driver.js'))).toBe(true);
       expect(captured.slice(-4)).toEqual(['--services', './svc.js', '/ws', '--strict']);
    });

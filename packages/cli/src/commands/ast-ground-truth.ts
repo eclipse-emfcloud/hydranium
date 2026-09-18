@@ -45,5 +45,5 @@ export function buildGroundTruthDriverArgs(options: AstGroundTruthCommandOptions
  * `--out-file`). No `--expose-gc` needed — this walks the AST, it does not weigh it.
  */
 export function runAstGroundTruth(options: AstGroundTruthCommandOptions): Promise<void> {
-   return runDriverChild(['--max-old-space-size=8192', DRIVER, ...buildGroundTruthDriverArgs(options)], options);
+   return runDriverChild([DRIVER, ...buildGroundTruthDriverArgs(options)], options);
 }

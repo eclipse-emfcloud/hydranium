@@ -10,8 +10,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runAnalyzeHeapCommand } from '../src/commands/analyze-heap-args.js';
 import { runAnalyzeHeap } from '../src/commands/analyze-heap.js';
+import { DRIVER_HEAP_MB } from '../src/driver-heap.js';
+import { pinHeapEnvUnset } from './heap-env.js';
+
+/** A machine with no cgroup limit, so the ceiling is the stated default. */
+const DESKTOP = { constrained: 0, total: 64 * 1024 ** 3 };
+const CEILING = `--max-old-space-size=${DRIVER_HEAP_MB}`;
 
 describe('runAnalyzeHeap', () => {
+   pinHeapEnvUnset();
    const priorExitCode = process.exitCode;
    afterEach(() => {
       process.exitCode = priorExitCode;
@@ -21,13 +28,14 @@ describe('runAnalyzeHeap', () => {
       const calls: string[][] = [];
       await runAnalyzeHeap(['snapshot.heapsnapshot', '--renderer', '--top-concepts', '5'], {
          __memlabInstalledForTest: () => true,
+         __heapReadingForTest: DESKTOP,
          __spawnForTest: async execArgs => {
             calls.push(execArgs);
             return 0;
          }
       });
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toBe('--max-old-space-size=8192');
+      expect(calls[0][0]).toBe(CEILING);
       expect(calls[0][1]).toMatch(/analyze-heap\.mjs$/); // the bundled analyzer path
       expect(calls[0].slice(2)).toEqual(['snapshot.heapsnapshot', '--renderer', '--top-concepts', '5']);
    });
@@ -61,6 +69,7 @@ describe('runAnalyzeHeap', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       await runAnalyzeHeap(['--diff', 'base.json', 'cur.json'], {
          __memlabInstalledForTest: () => false,
+         __heapReadingForTest: DESKTOP,
          __spawnForTest: async execArgs => {
             calls.push(execArgs);
             return 0;

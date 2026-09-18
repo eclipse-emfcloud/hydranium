@@ -44,5 +44,5 @@ export function buildModelDocsDriverArgs(options: ModelDocsCommandOptions): stri
  * module, keeping the binary language-agnostic.
  */
 export function runModelDocs(options: ModelDocsCommandOptions): Promise<void> {
-   return runDriverChild(['--max-old-space-size=8192', DRIVER, ...buildModelDocsDriverArgs(options)], options);
+   return runDriverChild([DRIVER, ...buildModelDocsDriverArgs(options)], options);
 }

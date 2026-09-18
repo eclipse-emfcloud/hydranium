@@ -41,7 +41,6 @@ describe('model-docs', () => {
          }
       });
       expect(captured).not.toContain('--expose-gc');
-      expect(captured).toContain('--max-old-space-size=8192');
       expect(captured.some(arg => arg.endsWith('model-docs-driver.js'))).toBe(true);
       expect(captured.slice(-2)).toEqual(['--services', './svc.js']);
    });
