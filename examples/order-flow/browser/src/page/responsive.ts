@@ -28,8 +28,35 @@ import { SPLITTER_PROPERTIES, type ResizeListener } from './splitters.js';
  */
 const NARROW_VIEWPORT = '(max-width: 900px)';
 
-/** The panels whose body is worth dropping to reach the subject sooner. */
-const COLLAPSIBLE_PANELS = ['document-panel', 'properties-panel', 'log-panel', 'problem-panel'];
+/**
+ * Whether the single-column layout is in force.
+ *
+ * Exported so the one breakpoint stays in one place: a second module deciding
+ * "are we narrow" by its own number would drift from the stylesheet silently,
+ * and the symptom would be one behaviour switching at a width the layout does
+ * not.
+ */
+export function isNarrowViewport(): boolean {
+   return window.matchMedia(NARROW_VIEWPORT).matches;
+}
+
+/**
+ * Every region worth folding away to reach another one.
+ *
+ * The editors and the canvas are here precisely because they are the tallest
+ * things in the column: a list of panels alone left the four regions a reader
+ * most wants to get past as the four they could not collapse.
+ */
+const COLLAPSIBLE = [
+   'document-panel',
+   'properties-panel',
+   'log-panel',
+   'problem-panel',
+   'selected-pane',
+   'diagram-pane',
+   'process-pane',
+   'layout-pane'
+];
 
 /**
  * Wire the layout to the viewport.
@@ -40,7 +67,7 @@ const COLLAPSIBLE_PANELS = ['document-panel', 'properties-panel', 'log-panel', '
 export function wireResponsiveLayout(onLayoutChange: ResizeListener): void {
    const narrow = window.matchMedia(NARROW_VIEWPORT);
    wireEditorShields();
-   wireCollapsiblePanels();
+   wireCollapsibleRegions();
    apply(narrow.matches, onLayoutChange);
    narrow.addEventListener('change', event => apply(event.matches, onLayoutChange));
 }
@@ -76,11 +103,36 @@ function apply(isNarrow: boolean, onLayoutChange: ResizeListener): void {
          pane.removeAttribute('data-entered');
       }
    }
-   for (const id of COLLAPSIBLE_PANELS) {
-      const panel = document.getElementById(id);
-      panel?.removeAttribute('data-collapsed');
+   for (const id of COLLAPSIBLE) {
+      const region = document.getElementById(id);
+      region?.removeAttribute('data-collapsed');
+      // Left on, a desktop header is a focus stop announced as a button whose
+      // only effect lives inside the media query.
+      if (isNarrow) {
+         region?.setAttribute('data-collapsible', '');
+      } else {
+         region?.removeAttribute('data-collapsible');
+      }
+      const head = headOf(region);
+      if (head === null) {
+         continue;
+      }
+      if (isNarrow) {
+         head.setAttribute('role', 'button');
+         head.setAttribute('tabindex', '0');
+         head.setAttribute('aria-expanded', 'true');
+      } else {
+         head.removeAttribute('role');
+         head.removeAttribute('tabindex');
+         head.removeAttribute('aria-expanded');
+      }
    }
    onLayoutChange();
+}
+
+/** A region's own header, whichever of the two kinds it is. */
+function headOf(region: HTMLElement | null): Element | null {
+   return region?.querySelector(':scope > .panel-head, :scope > .pane-head') ?? null;
 }
 
 /** One tap hands a pane over to Monaco for as long as the column lasts. */
@@ -92,37 +144,43 @@ function wireEditorShields(): void {
    }
 }
 
-/** Collapse from the header itself, whose heading is already its name. */
-function wireCollapsiblePanels(): void {
-   for (const id of COLLAPSIBLE_PANELS) {
-      const panel = requireElement(id);
-      const head = panel.querySelector('.panel-head');
+/**
+ * Collapse from the header itself, whose heading is already its name.
+ *
+ * The HEAD becomes the control rather than gaining one, which is what lets this
+ * add no label: its accessible name is the heading already inside it, so nothing
+ * new has to be written or translated. The cost is that focusability and key
+ * handling are ours, and they are granted with the rest of the affordance when
+ * the column takes over.
+ */
+function wireCollapsibleRegions(): void {
+   for (const id of COLLAPSIBLE) {
+      const region = requireElement(id);
+      const head = headOf(region);
       if (head === null) {
          continue;
       }
-      panel.setAttribute('data-collapsible', '');
-      // The HEAD becomes the control rather than gaining one, which is what lets
-      // this add no label: its accessible name is the heading already inside it,
-      // so nothing new has to be written or translated. The cost is that
-      // focusability and key handling are ours, both of which are below.
-      head.setAttribute('role', 'button');
-      head.setAttribute('tabindex', '0');
-      head.setAttribute('aria-expanded', 'true');
       const toggle = (): void => {
-         const collapsed = panel.hasAttribute('data-collapsed');
-         panel.toggleAttribute('data-collapsed', !collapsed);
+         const collapsed = region.hasAttribute('data-collapsed');
+         region.toggleAttribute('data-collapsed', !collapsed);
          head.setAttribute('aria-expanded', String(collapsed));
       };
       head.addEventListener('click', event => {
+         // Wired once and gated here rather than bound and unbound on every
+         // crossing: a listener that outlives its affordance would collapse a
+         // desktop region whose rules cannot show the result.
+         if (!isNarrowViewport()) {
+            return;
+         }
          // A control inside the header — the log's filter box, its clear button —
-         // is not a request to collapse the panel it sits in.
+         // is not a request to collapse the region it sits in.
          if (event.target instanceof Element && event.target.closest('button, input, select, a') !== null) {
             return;
          }
          toggle();
       });
       head.addEventListener('keydown', event => {
-         if (!(event instanceof KeyboardEvent) || (event.key !== 'Enter' && event.key !== ' ')) {
+         if (!isNarrowViewport() || !(event instanceof KeyboardEvent) || (event.key !== 'Enter' && event.key !== ' ')) {
             return;
          }
          event.preventDefault();

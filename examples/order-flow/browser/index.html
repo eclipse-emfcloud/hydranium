@@ -327,6 +327,17 @@
             display: block;
             flex: none;
          }
+         /* The anchor takes the mark's place in the row; the `flex: none` above
+            governs the image, which is no longer the flex item. */
+         .titlebar .app-mark-link {
+            display: block;
+            flex: none;
+            border-radius: 4px;
+         }
+         .titlebar .app-mark-link:focus-visible {
+            outline: 1px solid var(--order-flow-focus-border);
+            outline-offset: 2px;
+         }
          .actions {
             display: flex;
             align-items: center;
@@ -1533,17 +1544,19 @@
                here and a `min-height: 0` flex column collapses to nothing. Sized
                so the diagram and the two documents it is a view of stay legible
                rather than equal.
+
+               **Selected by CLASS: an id here outranks the `[data-collapsed]`
+               rule below**, so a region sized by id kept its box on collapse
+               while its dock neighbour folded properly. `:where()` is how the
+               one container named by id contributes no specificity.
             */
-            #document-panel {
+            .sidebar > .panel {
                height: 220px;
             }
-            #properties-panel {
-               height: 240px;
-            }
-            #selected-pane {
+            :where(#layout) > .pane {
                height: 280px;
             }
-            #diagram-pane {
+            .subject > .pane {
                height: 320px;
             }
             .fixed-editors > .pane {
@@ -1584,7 +1597,10 @@
             .editor-shield {
                position: absolute;
                inset: 0;
-               z-index: 3;
+               /* Above GLSP's UI extensions, which sit at 1000: the palette is
+                  inside the mount, so a lower shield leaves it tappable on a pane
+                  the reader has not entered. */
+               z-index: 1001;
                display: flex;
                align-items: flex-end;
                justify-content: center;
@@ -1652,10 +1668,12 @@
                one, so no new label has to be invented or translated: its
                accessible name is the heading already in it.
             */
-            .panel[data-collapsible] > .panel-head {
+            .panel[data-collapsible] > .panel-head,
+            .pane[data-collapsible] > .pane-head {
                cursor: pointer;
             }
-            .panel[data-collapsible] > .panel-head::after {
+            .panel[data-collapsible] > .panel-head::after,
+            .pane[data-collapsible] > .pane-head::after {
                content: '';
                width: 0;
                height: 0;
@@ -1664,14 +1682,13 @@
                border-bottom: 4px solid transparent;
                transform: rotate(90deg);
             }
-            .panel[data-collapsed] > .panel-head::after {
+            .panel[data-collapsed] > .panel-head::after,
+            .pane[data-collapsed] > .pane-head::after {
                transform: none;
             }
-            .panel[data-collapsed] {
+            .panel[data-collapsed],
+            .pane[data-collapsed] {
                height: auto;
-            }
-            .panel[data-collapsed] > .panel-body {
-               display: none;
             }
 
             /*
@@ -1690,7 +1707,19 @@
                clip-path: inset(50%);
                white-space: nowrap;
             }
-            .titlebar h1 .subtitle {
+            /*
+               `:not(<header>)` rather than a list of body classes: the regions
+               spell their content differently — a `.panel-body`, a bare `#log`,
+               an `.editor`, a diagram mount — so a rule naming them stops
+               covering whichever is added next. The log was exactly that, its
+               height folding while its lines stayed.
+            */
+            .panel[data-collapsed] > :not(.panel-head),
+            .pane[data-collapsed] > :not(.pane-head) {
+               display: none;
+            }
+            /* A hint describes the rows, so it says nothing while they are gone. */
+            .panel[data-collapsed] .hint-text {
                display: none;
             }
          }
@@ -1709,15 +1738,29 @@
             names the application, so a described image would have a screen
             reader announce the name twice.
          -->
-         <img class="app-mark" src="./out/hydranium-mark.svg" alt="" width="20" height="20" />
+         <!--
+            The mark LINKS to the framework. `alt=""` stays and the anchor
+            carries the name, so the mark is described once and as the thing the
+            link leads to rather than as the page it sits on.
+         -->
+         <a
+            class="app-mark-link"
+            href="https://github.com/eclipse-emfcloud/hydranium"
+            target="_blank"
+            rel="noopener"
+            title="Hydranium on GitHub"
+            data-nls-title="order-flow/page/hydranium-link"
+            aria-label="Hydranium on GitHub"
+            data-nls-aria-label="order-flow/page/hydranium-link"
+         >
+            <img class="app-mark" src="./out/hydranium-mark.svg" alt="" width="20" height="20" />
+         </a>
          <!--
             `Order Flow` carries no `data-nls`, and that is a decision: a product
             name is not i18n, so routing it through a catalogue would ask a
             translator to render a name. The tagline beside it is prose.
          -->
-         <h1>
-            Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">three heads, one language server, one web worker</span>
-         </h1>
+         <h1>Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">text, diagram and forms in a web worker</span></h1>
          <span class="spacer"></span>
          <div class="actions">
             <!--
@@ -1929,6 +1972,19 @@
                      <span class="hint" data-nls="order-flow/page/diagram-hint">drag a node; the layout editor follows</span>
                   </div>
                   <div id="order-flow-process-diagram"></div>
+                  <!--
+                     The canvas takes a drag the same way an editor does, and for
+                     the same reason needs the same shield; see the rule that
+                     carries it.
+                  -->
+                  <button
+                     type="button"
+                     class="editor-shield"
+                     title="Tap to use the diagram; drag to scroll the page"
+                     data-nls-title="order-flow/page/enter-diagram-hint"
+                  >
+                     <span data-nls="order-flow/page/enter-diagram">Tap to use the diagram</span>
+                  </button>
                </section>
                <!-- `--diagram-split` defaults to a percentage, so no absolute ceiling. -->
                <div class="splitter" data-splitter="--diagram-split" data-measure="#diagram-pane" data-axis="y" data-min="120"></div>
@@ -1954,7 +2010,7 @@
                   </section>
                   <!-- `--fixed-split` defaults to a percentage, so no absolute ceiling. -->
                   <div class="splitter" data-splitter="--fixed-split" data-measure="#process-pane" data-axis="x" data-min="180"></div>
-                  <section class="pane">
+                  <section class="pane" id="layout-pane">
                      <div class="pane-head">
                         <i class="codicon codicon-symbol-ruler" aria-hidden="true"></i>
                         <span class="pane-title" id="layout-editor-title">…</span>
@@ -2175,6 +2231,24 @@
                <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
                   <i class="codicon codicon-git-commit" aria-hidden="true"></i>
                   <span id="build-commit-hash"></span>
+               </a>
+            </li>
+            <!--
+               The framework this page is built on. `build` so it shares the
+               commit's group and the boundary rule after it, and unlike the
+               commit it is never hidden: the name is true on a checkout too.
+            -->
+            <li class="build">
+               <a
+                  class="build-commit"
+                  href="https://github.com/eclipse-emfcloud/hydranium"
+                  target="_blank"
+                  rel="noopener"
+                  title="Hydranium on GitHub"
+                  data-nls-title="order-flow/page/hydranium-link"
+               >
+                  <i class="codicon codicon-github" aria-hidden="true"></i>
+                  <span>Hydranium</span>
                </a>
             </li>
             <li class="head">

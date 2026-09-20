@@ -57,6 +57,11 @@ test.describe('the page on a phone', () => {
       await page.locator('#diagram-pane').scrollIntoViewIfNeeded();
       await expect(page.locator(NODE)).not.toHaveAttribute('transform', /translate\(/);
 
+      // The shield first: the canvas takes a drag, so in one column it is a
+      // region the page cannot scroll past until the reader asks for it.
+      await page.locator('#diagram-pane .editor-shield').tap();
+      await expect(page.locator('#diagram-pane .editor-shield')).toBeHidden();
+
       await touchDragNode(page, { x: 60, y: 70 });
 
       await expect(page.locator(NODE)).toHaveAttribute('transform', /translate\(/);

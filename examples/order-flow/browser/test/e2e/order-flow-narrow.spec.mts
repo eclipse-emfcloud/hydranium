@@ -90,6 +90,27 @@ test.describe('the workbench in one column', () => {
       await expect(page.locator('#document-list')).toBeHidden();
    });
 
+   test('opening a workspace file scrolls to its editor without taking the caret', async ({ page }) => {
+      // **Focus is what opens the on-screen keyboard**, and in one column the
+      // pane a selection opens is well down the page — so focusing it covers an
+      // unseen document with a keyboard nobody asked for. Reported from a real
+      // device; no tier clicked a workspace entry in this layout at all, which
+      // is why it shipped.
+      const entry = page.locator('#document-list .row').first();
+      const path = (await entry.textContent())?.trim() ?? '';
+      await entry.tap();
+
+      const editor = page.locator('#selected-editor');
+      await expect(editor).toBeInViewport();
+      // The caret stayed where the reader put it. Asserted on the document
+      // rather than on the editor, because "no editor has focus" is the claim.
+      const focusInsideEditor = await page.evaluate(
+         () => document.activeElement?.closest('.editor') !== null && document.activeElement?.closest('.editor') !== undefined
+      );
+      expect(focusInsideEditor).toBe(false);
+      expect(path.length).toBeGreaterThan(0);
+   });
+
    test('the title bar keeps its controls named without their labels', async ({ page }) => {
       // Clipped rather than `display: none`, so the accessible name survives —
       // five unlabelled icons is what the cheap rule would have produced.

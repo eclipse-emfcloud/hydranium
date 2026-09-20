@@ -1,6 +1,6 @@
 {
   "_comment": "German catalogue for the CHROME OF THIS PAGE — the panel titles, buttons, hints and tooltips written in index.html. See src/page/page-nls.ts. Flat keys, and English is deliberately absent: the English IS index.html, so this file is a partial overlay and any key missing here falls back to the document. Disjoint from the server package's catalogue, which holds the codes the language server renders and reaches this page as diagnostic text rather than as chrome. The status-bar category labels and every report VALUE the page computes are deliberately not keys here — see page-nls.ts. Terminology follows VS Code's German UI where it has a word for the same thing (Arbeitsbereich, Probleme, Dunkel), and keeps the established English term where German developers do (Language Server, Layout) rather than inventing a calque.",
-  "order-flow/page/tagline": "drei Köpfe, ein Language Server, ein Web Worker",
+  "order-flow/page/tagline": "Text, Diagramm und Formulare in einem Web Worker",
   "order-flow/page/language": "Sprache",
   "order-flow/page/save-workspace": "Arbeitsbereich speichern",
   "order-flow/page/reset-workspace": "Arbeitsbereich zurücksetzen",
@@ -25,6 +25,9 @@
   "order-flow/page/semantics": "Semantik",
   "order-flow/page/coordinates": "Koordinaten",
   "order-flow/page/enter-editor": "Zum Bearbeiten tippen",
+  "order-flow/page/hydranium-link": "Hydranium auf GitHub",
+  "order-flow/page/enter-diagram": "Zum Bedienen des Diagramms tippen",
+  "order-flow/page/enter-diagram-hint": "Zum Bedienen des Diagramms tippen; zum Scrollen der Seite ziehen",
   "order-flow/page/enter-editor-hint": "Zum Bearbeiten tippen; zum Scrollen der Seite ziehen",
   "order-flow/page/server-log": "Serverprotokoll",
   "order-flow/page/lines-received": "Empfangene Zeilen",
