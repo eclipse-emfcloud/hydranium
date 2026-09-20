@@ -117,6 +117,81 @@ converter would be a second, weaker implementation of scope resolution.
 The asymmetry follows from transfer being lossy with respect to `$container`,
 `$cstNode` and `Reference<T>` resolution.
 
+## The two transfer modes, and why `'grammar'` is the one you diff
+
+`TransferEncoder.toTransfer` emits one of two shapes, and the choice is a
+correctness decision rather than a filter.
+
+| Mode | Contains | For |
+| --- | --- | --- |
+| `'full'` (default) | every own property, including computed scalars and synthetic child mirrors | the wire shape clients consume |
+| `'grammar'` | only the grammar-declared properties, each carrying the node's own authored value | the baseline a write diffs and a serializer round-trips |
+
+**`'grammar'` is defined by what it guarantees, not by what it omits.** It is the
+*authored state* — what the document actually declares — which is what makes it
+safe to diff two of them and persist the result. Two mechanisms deliver that, and
+both matter: the key set comes from the reflection allowlist, so no computed
+*key* appears; and the walk reads each value straight off the node rather than
+through the `resolvePropertyValue` hook, so no computed *value* appears under a
+declared key either.
+
+That second half is the one worth knowing about if you extend the encoder.
+`resolvePropertyValue` exists to substitute derived values — an
+inheritance-resolved field, a preference-dependent label — and it is called in
+`'full'` mode only. An override that also applied to `'grammar'` would leave that
+shape diffable and acyclic but no longer authored, and the two consequences are
+both silent: a property inherited from elsewhere diffs as a local edit whenever
+its source moves, and a forward-write reconcile measures the user's intent
+against a baseline the document never contained. The framework scopes the hook
+for you; the thing to remember is *why* it is scoped, because the same reasoning
+applies to any extension that reaches the grammar shape.
+
+## Choosing a capture instant
+
+A based-on version is only meaningful relative to the moment the content was
+read. Two write styles are in play, and they read at different moments:
+
+- **Snapshot-diff** — project the model, edit the projection, write the result.
+  The capture instant is when the projection was taken, because that is the state
+  the edit is expressed against. `ReconcilingMultiDocumentGlspState` works this
+  way: it captures a baseline at `setSourceRoot` and diffs against it.
+- **Live-AST** — resolve a node, mutate it in place, write the document it
+  belongs to. The capture instant is when the document was *read*, immediately
+  before mutating, because that is the content the mutation assumed.
+
+The rule for both: **read the version at the same instant you read the content,
+and hold it.** Getting this wrong has one dominant failure shape, and it does not
+announce itself.
+
+<!-- snippet-skip: contrasting fragments shown outside any enclosing method -->
+
+```ts
+// Wrong: `document.textDocument` IS the live store object the gate reads, so a
+// version taken here is compared against itself and the gate never fires.
+mutate(document.parseResult.value);
+await modelService.save({ uri, model: document.parseResult.value, clientId, baseVersion: document.textDocument.version });
+
+// Right: read the version into a local before mutating, then pass that local.
+const baseVersion = document.textDocument.version;
+mutate(document.parseResult.value);
+await modelService.save({ uri, model: document.parseResult.value, clientId, baseVersion });
+```
+
+The two differ by one line and by everything else. `document.textDocument` is
+the server's own live object, not a copy taken when you read — so a version
+pulled off it at write time is whatever the server is at *now*, which is the
+number the gate is about to compare against. It matches by construction. The
+local, captured next to the read, cannot drift.
+
+Nothing in the type system distinguishes the two, because both are a `number`
+off the same expression. Reviewing for it means asking *when* the read happened,
+not whether a version was passed.
+
+A gate that never fires looks identical to a gate that found no conflict: the
+write succeeds, nothing is logged, and the concurrent edit it overwrote is simply
+gone. Test it by advancing the document between the capture and the write and
+asserting a `ConflictError`, not by observing that ordinary writes succeed.
+
 ## A transfer write does not preserve comments or formatting
 
 Follow the table one more step. A form editor's field edit reaches the server as

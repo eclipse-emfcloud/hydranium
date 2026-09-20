@@ -70,9 +70,10 @@ export interface MultiDocumentSourceModel<TPrimary extends TransferElement = Tra
  * a based-on version, so a concurrent foreign edit to one is overwritten rather
  * than reconciled. Gating them too would need a per-document reconcile whose
  * outcomes can disagree (merge one, conflict another) with no way to un-write the
- * merged one — the atomicity problem again, one layer up. The captured versions
- * ARE available via {@link AbstractHydraniumGlspState.capturedVersionOf}, so an
- * adopter that wants a coarser check can compare before writing.
+ * merged one — the atomicity problem again, one layer up. An adopter that wants
+ * a coarser check overrides {@link secondaryBaseVersion} to return the version
+ * {@link AbstractHydraniumGlspState.capturedVersionOf} already holds, and takes
+ * on the partial-write window named there.
  */
 @injectable()
 export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary extends TransferElement = TransferElement>
@@ -205,12 +206,38 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    }
 
    /**
-    * Write one secondary document. Ungated by design (see the class doc); override
-    * alongside {@link persistPrimary} when the round-trip differs per document
-    * role — a layout file and a semantic file need not share a serializer.
+    * Write one secondary document, gated on whatever {@link secondaryBaseVersion}
+    * returns. Override alongside {@link persistPrimary} when the round-trip
+    * differs per document role — a layout file and a semantic file need not
+    * share a serializer.
     */
    protected async persistSecondary(uri: string, model: TransferElement): Promise<void> {
-      await this.sharedServices.model.ModelService.update({ uri, model, clientId: this.clientId });
+      await this.sharedServices.model.ModelService.update({
+         uri,
+         model,
+         clientId: this.clientId,
+         baseVersion: this.secondaryBaseVersion(uri)
+      });
+   }
+
+   /**
+    * Based-on version for a secondary write. Default `undefined` — ungated, for
+    * the reason given under the conflict-gate note on the class doc.
+    *
+    * **The hook exists so that opting in is an override rather than a
+    * reimplementation.** The state already captures what such a check needs
+    * ({@link AbstractHydraniumGlspState.capturedVersionOf}), and returning that
+    * value here is the whole opt-in; without it the only place to put the
+    * comparison is a copy of {@link persistSecondary}, which then has to be kept
+    * in step with the framework's write call.
+    *
+    * **Opting in buys a conflict report and costs atomicity.** A gated secondary
+    * throws mid-set, after earlier secondaries have already been written, and if
+    * the reconcile then drops the edit those writes stay. Weigh that against the
+    * default, which lets a foreign edit to a secondary be overwritten silently.
+    */
+   protected secondaryBaseVersion(_uri: string): number | undefined {
+      return undefined;
    }
 
    /**
