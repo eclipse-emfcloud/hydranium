@@ -11,7 +11,7 @@ import { MarkerKind } from '@eclipse-glsp/protocol';
 import { describe, expect, it } from 'vitest';
 import type { AstNode } from '@hydranium/langium';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
-import type { TransferLspDiagnostic } from '@hydranium/core';
+import type { AstDiagnostic } from '@hydranium/core';
 import { makeFakeAstNode } from '@hydranium/core/testing';
 import { type DiagnosticMarkerLookups, diagnosticsToMarkers } from '../src/validation/diagnostic-markers.js';
 
@@ -22,7 +22,7 @@ function node(type: string, container?: AstNode): AstNode {
 
 // `element` stays required here though optional on the type: a fixture that
 // omits it would exercise the no-element path instead of the case it names.
-function diagnostic(overrides: Partial<TransferLspDiagnostic> & Required<Pick<TransferLspDiagnostic, 'element'>>): TransferLspDiagnostic {
+function diagnostic(overrides: Partial<AstDiagnostic> & Required<Pick<AstDiagnostic, 'element'>>): AstDiagnostic {
    return {
       message: 'boom',
       range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },

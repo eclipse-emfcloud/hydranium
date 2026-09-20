@@ -20,7 +20,7 @@ import {
    type TransferEnvelopeSource,
    type TransferMode
 } from '../../../src/langium/transfer/transfer-encoder.js';
-import type { TransferLspDiagnostic } from '../../../src/langium/validation/document-validator.js';
+import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { defineMessage, messageData, renderFrameworkMessage, TransferDiagnostic } from '@hydranium/protocol';
 import type { TransferDocument, TransferElement, TransferTypeFor } from '@hydranium/protocol';
 
@@ -213,19 +213,19 @@ describe('TransferEncoder.toTransfer', () => {
 });
 
 describe('TransferEncoder.toTransferDiagnostic', () => {
-   function diag(overrides: Partial<TransferLspDiagnostic> = {}): TransferLspDiagnostic {
+   function diag(overrides: Partial<AstDiagnostic> = {}): AstDiagnostic {
       return {
          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
          message: 'boom',
          element: 'el',
          severity: DiagnosticSeverity.Error,
          ...overrides
-      } as TransferLspDiagnostic;
+      } as AstDiagnostic;
    }
 
    it("maps data.code 'lexing-error' to type 'lexing-error'", () => {
       const encoder = buildEncoder(makeFakeReflection({}));
-      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic));
+      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'lexing-error' } } as unknown as AstDiagnostic));
       expect(result.type).toBe('lexing-error');
       // code falls back to langiumCode when diagnostic.code is absent
       expect(result.code).toBe('lexing-error');
@@ -233,14 +233,14 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
 
    it("maps data.code 'parsing-error' to type 'parsing-error'", () => {
       const encoder = buildEncoder(makeFakeReflection({}));
-      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'parsing-error' } } as unknown as TransferLspDiagnostic));
+      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'parsing-error' } } as unknown as AstDiagnostic));
       expect(result.type).toBe('parsing-error');
    });
 
    it("maps an unknown / absent data.code to type 'validation-error'", () => {
       const encoder = buildEncoder(makeFakeReflection({}));
       expect(encoder.toTransferDiagnostic(diag()).type).toBe('validation-error');
-      expect(encoder.toTransferDiagnostic(diag({ data: { code: 'something-else' } } as unknown as TransferLspDiagnostic)).type).toBe(
+      expect(encoder.toTransferDiagnostic(diag({ data: { code: 'something-else' } } as unknown as AstDiagnostic)).type).toBe(
          'validation-error'
       );
    });
@@ -277,15 +277,13 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
 
    it('prefers a numeric diagnostic.code over the langiumCode fallback', () => {
       const encoder = buildEncoder(makeFakeReflection({}));
-      const result = encoder.toTransferDiagnostic(diag({ code: 42, data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic));
+      const result = encoder.toTransferDiagnostic(diag({ code: 42, data: { code: 'lexing-error' } } as unknown as AstDiagnostic));
       expect(result.code).toBe(42);
    });
 
    it('prefers a string diagnostic.code over the langiumCode fallback', () => {
       const encoder = buildEncoder(makeFakeReflection({}));
-      const result = encoder.toTransferDiagnostic(
-         diag({ code: 'E123', data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic)
-      );
+      const result = encoder.toTransferDiagnostic(diag({ code: 'E123', data: { code: 'lexing-error' } } as unknown as AstDiagnostic));
       expect(result.code).toBe('E123');
    });
 
@@ -298,7 +296,7 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
             code: message.code,
             message: message.format({ name: 'A.B', separator: '.' }),
             data: messageData(message, { name: 'A.B', separator: '.' })
-         } as unknown as TransferLspDiagnostic)
+         } as unknown as AstDiagnostic)
       );
 
       // The point of the field: a foreign template renders complete rather than
@@ -313,7 +311,7 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
 
       // Langium's own `data.code` shape, which is the same field but not an
       // identity — the discrimination `resolved` exists to make.
-      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'lexing-error' } } as unknown as TransferLspDiagnostic));
+      const result = encoder.toTransferDiagnostic(diag({ data: { code: 'lexing-error' } } as unknown as AstDiagnostic));
 
       expect(result.params).toBeUndefined();
       expect(TransferDiagnostic.resolved(result)).toBeUndefined();
@@ -324,7 +322,7 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
       const message = defineMessage('test/one/flat', 'Nothing to substitute.');
 
       const result = encoder.toTransferDiagnostic(
-         diag({ code: message.code, message: message.text, data: messageData(message) } as unknown as TransferLspDiagnostic)
+         diag({ code: message.code, message: message.text, data: messageData(message) } as unknown as AstDiagnostic)
       );
 
       expect(result.params).toEqual({});

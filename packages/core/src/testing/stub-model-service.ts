@@ -7,7 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { TransferDiagnostic, TransferElement } from '@hydranium/protocol';
+import type { TransferElement } from '@hydranium/protocol';
+import type { AstDiagnostic } from '../langium/validation/document-validator.js';
 import type { AstNode } from '@hydranium/langium';
 import { DefaultModelService, type ModelService, type ModelServiceOptions } from '../langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../langium/module.js';
@@ -21,7 +22,7 @@ import type { ServerSharedServices } from '../langium/module.js';
  */
 class StubModelServiceImpl<
    TAst extends AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement
 > extends DefaultModelService<TAst, TDiagnostic, TTransfer> {
    constructor(
@@ -40,7 +41,7 @@ class StubModelServiceImpl<
 /** The type of the model-service test double produced by {@link makeStubModelService}. */
 export type StubModelService<
    TAst extends AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement
 > = ModelService<TAst, TDiagnostic, TTransfer>;
 
@@ -61,7 +62,7 @@ export type StubModelService<
  */
 export function makeStubModelService<
    TAst extends AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement
 >(
    services: ServerSharedServices,

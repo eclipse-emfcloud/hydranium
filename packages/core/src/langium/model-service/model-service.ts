@@ -17,7 +17,6 @@ import {
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
-   type TransferDiagnostic,
    type TransferElement,
    type OpenModelArgs,
    type Tracer,
@@ -25,6 +24,7 @@ import {
    type TransferUpdateArgs
 } from '@hydranium/protocol';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock } from '../workspace/write-lock-scope.js';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
@@ -195,8 +195,12 @@ export interface ModelServiceOptions extends LogNameOptions {
  * **Generic parameters.**
  * - `TAst` — the AST root type each consumer expects on the returned
  *   {@link AstDocument}. Constrained to {@link AstNode}.
- * - `TDiagnostic` — wire diagnostic shape used by the injected
- *   `TransferEncoder`. Defaults to {@link TransferDiagnostic}.
+ * - `TDiagnostic` — the AST-layer diagnostic: whatever the build left on
+ *   `LangiumDocument.diagnostics`, carried through on the returned
+ *   {@link AstDocument}. Defaults to {@link AstDiagnostic}.
+ *   **Not the `TransferEncoder`'s parameter of the same name**, which is
+ *   that encoder's OUTPUT and so names the wire shape. This one names its
+ *   input, and an adopter binds the two to different types.
  * - `TTransfer` — transfer-model root accepted by `update` / `save`
  *   args. Constrained to {@link TransferElement}. Defaults to the
  *   structural base.
@@ -229,7 +233,7 @@ export interface ModelServiceOptions extends LogNameOptions {
  * member taking a phase as a PARAMETER cannot judge statically and so returns
  * `TDiagnostic`, leaving the choice to the caller.
  */
-export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagnostic, TTransfer extends TransferElement = TransferElement> {
+export interface ModelService<TAst extends AstNode, TDiagnostic = AstDiagnostic, TTransfer extends TransferElement = TransferElement> {
    /**
     * Resolves once the workspace has been initialised and its first build has
     * completed — the gate every read should wait behind, since a document
@@ -271,7 +275,7 @@ export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagno
 
 export class DefaultModelService<
    TAst extends AstNode,
-   TDiagnostic = TransferDiagnostic,
+   TDiagnostic = AstDiagnostic,
    /**
     * Structured payload accepted by `update` / `save`. Constrained to
     * {@link TransferElement} — the minimal `{ readonly $type: string }`

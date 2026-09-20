@@ -46,9 +46,15 @@ import { isSyntheticNode } from '../workspace/synthetic.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 
 /**
- * Diagnostic read off a `LangiumDocument`: an LSP {@link Diagnostic} that MAY
- * carry the protocol-level `element` path and `property` name from
- * {@link TransferDiagnostic}.
+ * The AST-layer diagnostic: what the build left on `LangiumDocument`, and what
+ * an `AstDocument` carries. An LSP {@link Diagnostic} that MAY also carry the
+ * `element` path and `property` name from {@link TransferDiagnostic}.
+ *
+ * **Not interchangeable with {@link TransferDiagnostic}, which is the other end
+ * of the same conversion.** They disagree on field types as well as on which
+ * fields exist — `severity` is LSP's numeric enum here and a string union there
+ * — so a slot typed with the wrong one still accepts the value and then reads
+ * `undefined`, or compares equal to nothing.
  *
  * `element` is optional because a document's diagnostics do not all come from
  * this validator. {@link HydraniumDocumentValidator.toDiagnostic} always sets
@@ -63,7 +69,7 @@ import { isVirtualUri } from '../workspace/virtual-document.js';
  * condition. Consumers therefore cast at the read, and the cast is sound only
  * because this field is optional.
  */
-export interface TransferLspDiagnostic extends Diagnostic {
+export interface AstDiagnostic extends Diagnostic {
    element?: string;
    property?: string;
 }
@@ -277,7 +283,7 @@ export interface DocumentValidatorOptions extends LogNameOptions {
  * - **Skip-validation hook** via the virtual {@link shouldSkipValidation}
  *   predicate, which adopters override to compose additional skip reasons.
  * - **Diagnostic mapping** to {@link TransferDiagnostic}-shaped
- *   {@link TransferLspDiagnostic}: every emitted diagnostic carries the AST
+ *   {@link AstDiagnostic}: every emitted diagnostic carries the AST
  *   node's path (built via Langium's `AstNodeLocator`) plus the optional
  *   offending property name.
  * - **Optional timing wrap** on `validateDocument`, on by default.
@@ -668,7 +674,7 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
       severity: ValidationSeverity,
       message: string,
       info: DiagnosticInfo<N, string>
-   ): TransferLspDiagnostic {
+   ): AstDiagnostic {
       const base = super.toDiagnostic(severity, message, info);
       const node = info.node;
       if (!node) {

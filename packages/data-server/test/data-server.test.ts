@@ -38,8 +38,10 @@ import {
    type DocumentUriPolicy,
    type HydraniumLanguageServices,
    type ServerLanguageServices,
-   type ServerSharedServices
+   type ServerSharedServices,
+   type AstDiagnostic
 } from '@hydranium/core';
+import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import {
    makeFakeAstNode,
    makeStubServiceRegistry,
@@ -65,12 +67,18 @@ interface FakeRoot {
 }
 
 /**
- * Test diagnostic shape — we use the framework's `TransferDiagnostic` directly
- * so the encoder's default projection (LSP diagnostic → TransferDiagnostic)
- * satisfies the type constraint without a custom encoder. Tests only
- * assert on diagnostic-array LENGTH, not contents.
+ * Wire diagnostic — what the encoder produces and what the data head serves.
+ * The framework's own shape, so the default projection satisfies it with no
+ * custom encoder. Tests only assert on diagnostic-array LENGTH, not contents.
  */
 type FakeDiagnostic = TransferDiagnostic;
+
+/**
+ * AST-layer diagnostic — what the build left on the document, and the encoder's
+ * INPUT. Separate from {@link FakeDiagnostic} because one alias for both types
+ * the LSP value as the wire shape, which every assertion here would still pass.
+ */
+type FakeAstDiagnostic = AstDiagnostic;
 
 // ============================================================
 // Stub bundle — the framework testing subpath composes the
@@ -79,10 +87,10 @@ type FakeDiagnostic = TransferDiagnostic;
 // concrete generic params for this test suite.
 // ============================================================
 
-type Bundle = TestServicesBundle<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>;
+type Bundle = TestServicesBundle<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>;
 
 function buildBundle(): Bundle {
-   return makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+   return makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
       serialize: (_uri, root) => `name:${root.name}`
    });
 }
@@ -379,7 +387,7 @@ describe('DataServer', () => {
             canonicalUri: uri => UriUtils.normalize(toText(uri) === LINK ? REAL : toText(uri)) as CanonicalUri,
             loadUri: uri => UriUtils.toUri(toText(uri) === LINK ? REAL : toText(uri))
          };
-         const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+         const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
             serialize: (_uri, root) => `name:${root.name}`,
             documentUriPolicy: linkAware
          });
@@ -720,8 +728,14 @@ describe('DataServer', () => {
                { $type: 'FakeRoot', name: 'A' },
                {
                   diagnostics: [
-                     { type: 'validation-error', element: 'FakeRoot', message: 'broken', severity: 'error', code: 'unresolved-ref' }
-                  ] as FakeDiagnostic[]
+                     {
+                        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                        message: 'broken',
+                        severity: DiagnosticSeverity.Error,
+                        code: 'unresolved-ref',
+                        element: 'FakeRoot'
+                     }
+                  ] satisfies FakeAstDiagnostic[]
                }
             );
             bundle.documentBuilder.firePhase(DocumentState.Validated, docWithDiag);
@@ -1291,7 +1305,7 @@ describe('DataServer', () => {
          }
 
          it('renders an identity-bearing rejection in the installed locale', async () => {
-            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
                serialize: (_uri, root) => `name:${root.name}`,
                locale: 'xx-AA',
                messageRenderer: services => new ProfileCatalogueRenderer(services)
@@ -1303,7 +1317,7 @@ describe('DataServer', () => {
          it('sends the English when no catalogue matches — the control on the row above', async () => {
             // Same renderer, different locale: a default-English assertion would
             // otherwise pass with the render never happening at all.
-            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
                serialize: (_uri, root) => `name:${root.name}`,
                locale: 'zz-ZZ',
                messageRenderer: services => new ProfileCatalogueRenderer(services)
@@ -1313,7 +1327,7 @@ describe('DataServer', () => {
          });
 
          it('keeps the numeric code and the identity envelope, which the render must not consume', async () => {
-            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
                serialize: (_uri, root) => `name:${root.name}`,
                locale: 'xx-AA',
                messageRenderer: services => new ProfileCatalogueRenderer(services)
@@ -1353,7 +1367,7 @@ describe('DataServer', () => {
                   return super.renderError(error);
                }
             }
-            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
                serialize: (_uri, root) => `name:${root.name}`,
                messageRenderer: services => new RecordingRenderer(services)
             });
@@ -1390,7 +1404,7 @@ describe('DataServer', () => {
                   return super.renderError(error);
                }
             }
-            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+            const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
                serialize: (_uri, root) => `name:${root.name}`,
                messageRenderer: services => new RecordingRenderer(services)
             });
@@ -1997,7 +2011,7 @@ describe('DataServer — findNextName routing', () => {
       // it awaits `ensureDocumentState` and passes the root as the container to
       // the document-scoped `NameProvider.findNextName`. The other two answer from
       // the type and project alone.
-      const bundle = makeTestServices<FakeRoot & { $type: string }, FakeDiagnostic, FakeRoot>({
+      const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
          serialize: (_uri, root) => `name:${root.name}`,
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot & { $type: string }>({ $type: 'FakeRoot', name: 'root' }) }]
       });

@@ -16,9 +16,9 @@ import {
    isConflictError,
    Logger,
    type OpenModelArgs,
-   type Tracer,
-   type TransferDiagnostic
+   type Tracer
 } from '@hydranium/protocol';
+import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hydranium/langium';
 import { type Disposable } from 'vscode-languageserver';
@@ -838,7 +838,7 @@ describe('ModelService LSP-client sync', () => {
  * the chain empty (the test harness binds no `updateRewrite` slot, so
  * `rewriteModel` degrades to identity), isolating the serialize-gating contract.
  */
-class RecordingModelService extends DefaultModelService<FakeRoot, TransferDiagnostic, FakeRoot> {
+class RecordingModelService extends DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot> {
    constructor(
       services: ServerSharedServices,
       readonly order: string[]
@@ -858,7 +858,7 @@ describe('ModelService modelToText serialize gating', () => {
       order: string[];
    } {
       const order: string[] = [];
-      const bundle = makeTestServices<FakeRoot, TransferDiagnostic, FakeRoot>({
+      const bundle = makeTestServices<FakeRoot, AstDiagnostic, FakeRoot>({
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
          modelService: services => new RecordingModelService(services, order)
       });
