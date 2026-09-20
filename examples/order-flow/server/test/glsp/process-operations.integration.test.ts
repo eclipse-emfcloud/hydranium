@@ -42,6 +42,7 @@ import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
@@ -83,9 +84,15 @@ interface OpenDiagram {
 let open: OpenDiagram | undefined;
 let scratch: ScratchWorkspace | undefined;
 
-/** Boot the real GLSP container over a scratch workspace and open the diagram. */
-async function openDiagram(): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+/**
+ * Boot the real GLSP container over a scratch workspace and open the diagram.
+ *
+ * `prepare` authors the copy before the workspace is initialized, for a test
+ * whose subject is an operation against content the committed workspace does
+ * not hold.
+ */
+async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
+   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
    scratch = workspace;
    const sourceUri = workspace.resolve(PROCESS_FILE);
    const harness = makeGlspHarness<OrderFlowGlspState>({
@@ -217,6 +224,29 @@ describe('order-flow .process operations', () => {
       expect(gateways).toContain('NewGateway');
       expect(gateways).toContain('NewGateway1');
       expect(new Set(gateways).size).toBe(gateways.length);
+   });
+
+   it('proposes a name free across both flow-node kinds, not just the one being created', async () => {
+      // A transition targets `FlowNode`, so tasks and gateways share one name
+      // space and the palette asks about the supertype. Asked about `Task`
+      // alone, the gateway below is not a collision and the proposal comes back
+      // as `NewTask` — which the duplicate-flow-node integrity rule then has to
+      // repair, on a node the user just created.
+      const diagram = await openDiagram(workspace =>
+         workspace.write(
+            PROCESS_FILE,
+            readFileSync(workspace.resolve(PROCESS_FILE), 'utf8').replace(
+               '   transition Pay -> PaymentOk',
+               '   gateway NewTask\n   transition Pay -> PaymentOk'
+            )
+         )
+      );
+
+      await diagram.apply(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE));
+
+      const names = flowNodeNames(diagram.root());
+      expect(names).toContain('NewTask1');
+      expect(names.filter(name => name === 'NewTask')).toHaveLength(1);
    });
 
    it('creates a transition between two existing flow nodes', async () => {

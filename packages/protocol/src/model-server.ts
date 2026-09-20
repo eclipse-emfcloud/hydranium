@@ -457,9 +457,10 @@ export interface FindNextNameArgs {
     */
    uri: string;
    /**
-    * The AST `$type` of the element being named. Collisions are only looked for
-    * among elements of that same type, so the returned name may still be taken
-    * by an element of another type.
+    * The AST `$type` of the element being named. Collisions are looked for
+    * among elements of that type and of any subtype of it, so a supertype
+    * names a uniqueness scope its concrete types share; the returned name may
+    * still be taken by an element outside that hierarchy.
     */
    type: string;
    /**
