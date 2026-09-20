@@ -357,6 +357,34 @@ host the console is the only log there is — the worker posts its failures ther
 and the language server's lines arrive over the LSP channel. Binding the no-op
 explicitly says the same thing without training the reader to skim.
 
+**A touchscreen needs a sixth thing, and its absence is silent.** sprotty's
+`MouseTool` binds `mousedown` / `mousemove` / `mouseup` and registers no pointer
+or touch listener, and a browser synthesizes mouse events for a TAP and not for
+a drag. A finger therefore reaches the canvas as a complete pointer stream that
+moves nothing, with a clean console and a fully populated model — which reads as
+a dead canvas rather than as an input gap. Two rules carry it:
+
+- **`touch-action: none` on the mount**, without which the browser claims the
+  drag as a pan and cancels the pointer stream after the first move.
+- **Re-emit the gesture as the bound family.** A pointer listener on the mount
+  dispatching `MouseEvent`s is enough, and needs nothing from the model, the
+  tools or the DI container. It must skip `pointerType === 'mouse'`, or every
+  desktop gesture runs twice.
+
+The non-obvious part is an extra `mousemove` **before** the `mousedown`.
+`MousePositionTracker` is the only writer of the origin GLSP's change-bounds
+tracker reads when it starts tracking, and it writes on `mousemove` alone — a
+pointer that never hovered leaves it unset. The operation still goes out, at the
+element's unmoved position, so the file is written at `0,0` and the defect
+presents as a broken write path rather than as missing input.
+
+A page that also stacks its panes on a narrow viewport meets one more: Monaco
+keeps a vertical touch drag, so an editor inside a scrolling column is a region
+the reader cannot scroll past. Sizing the editor to its content does not release
+the gesture, and neither does `touch-action` — a listener calling
+`preventDefault` is not what that property governs. An inert layer over the pane,
+removed on tap, is what gives the page its gesture back.
+
 ## Accommodation 5 — a browser host has no output channel
 
 Theia and VS Code hand a language server an output channel for free. A plain page

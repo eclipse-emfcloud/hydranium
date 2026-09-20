@@ -21,6 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes('--watch');
+// OPT-IN, and the default stays readable on purpose — see `minify` below. This
+// is for serving the page over a network someone is paying for by the megabyte,
+// which is the phone case; it is not what a contributor builds.
+const minify = process.argv.includes('--minify');
 
 // Both bundles' locations, declared once. Every other reference to them is
 // DERIVED from these two — the page's `new Worker(...)` through a `define`
@@ -83,9 +87,12 @@ const common = {
    format: 'iife',
    target: 'es2022',
    sourcemap: true,
-   // Readable in devtools, the only place a worker-hosted language server can be
-   // debugged at all.
-   minify: false,
+   // Readable in devtools by DEFAULT, which is the only place a worker-hosted
+   // language server can be debugged at all — so `--minify` is opt-in rather
+   // than the default being flipped for a deployment nobody here runs. The map
+   // is emitted either way, so a host serving this over a metered network has
+   // to withhold it separately.
+   minify,
    logLevel: 'info'
 };
 

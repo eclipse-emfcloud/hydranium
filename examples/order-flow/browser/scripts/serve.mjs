@@ -17,6 +17,7 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
+import { createGzip } from 'node:zlib';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,8 +52,29 @@ createServer((request, response) => {
       response.end(`Not found: ${requestPath}`);
       return;
    }
-   response.writeHead(200, { 'content-type': CONTENT_TYPES[extname(target)] ?? 'application/octet-stream' });
-   createReadStream(target).pipe(response);
+   // Compressed when the client offers it, because the bundles are megabytes of
+   // highly repetitive JavaScript and this page's whole point is that a reader
+   // can open it — including over a phone connection, where the uncompressed
+   // transfer is the difference between a demo and a timeout. `gzip` rather than
+   // brotli: both ship in `node:zlib`, and gzip is the one no client can refuse.
+   //
+   // Per request rather than to a cache, which is affordable only because this
+   // serves a handful of files to one reader; a real host compresses once.
+   const encoding = /\bgzip\b/.test(request.headers['accept-encoding'] ?? '') ? 'gzip' : undefined;
+   response.writeHead(200, {
+      'content-type': CONTENT_TYPES[extname(target)] ?? 'application/octet-stream',
+      // `vary` even though the choice is the client's own header: a proxy that
+      // cached one encoding would otherwise hand it to a client that asked for
+      // the other.
+      vary: 'accept-encoding',
+      ...(encoding === undefined ? {} : { 'content-encoding': encoding })
+   });
+   const file = createReadStream(target);
+   if (encoding === undefined) {
+      file.pipe(response);
+   } else {
+      file.pipe(createGzip()).pipe(response);
+   }
 }).listen(port, () => {
    console.log(`Order Flow browser app: http://localhost:${port}/`);
    console.log('Oracle: npx hydranium-cli validate --services examples/order-flow/server/lib/services.js examples/order-flow/workspace');

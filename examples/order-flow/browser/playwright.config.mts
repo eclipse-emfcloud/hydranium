@@ -86,6 +86,11 @@ export default defineConfig({
    projects: [
       {
          name: 'chromium',
+         // The touch tier is EXCLUDED by name rather than left to run here. This
+         // project declares no `testMatch`, so without the ignore it would pick
+         // the touch spec up and run it with no touch emulation — every case
+         // failing for a reason that has nothing to do with what it asserts.
+         testIgnore: [/touch\.spec\.mts$/, /narrow\.spec\.mts$/, /device\.spec\.mts$/],
          // A real Chromium, and headless still counts: `document.visibilityState`
          // is `visible` in headless, so `requestAnimationFrame` fires and
          // sprotty's render loop runs. A HIDDEN tab is what does not work — see
@@ -107,6 +112,48 @@ export default defineConfig({
          // no pointer can reach it. Both were measured. A suite run at a size no
          // reader would use tests the cramping rather than the behaviour.
          use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 } }
+      },
+      {
+         // The diagram under a FINGER. Separate from the tier above because the
+         // gap it covers is in which event family reaches the canvas, and that is
+         // invisible to a mouse: sprotty binds mouse events only, so a touch
+         // gesture arrives as a complete pointer stream that moves nothing.
+         //
+         // The SAME workbench viewport as the desktop tier, deliberately. This
+         // project isolates the input path, and running it at a phone size would
+         // measure the cramped layout at the same time — so a failure could not
+         // be attributed to either. The narrow-viewport work has its own tier.
+         name: 'chromium-touch',
+         testMatch: /touch\.spec\.mts$/,
+         use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 }, hasTouch: true }
+      },
+      {
+         // The single-column layout, at a phone size below the 900px breakpoint.
+         //
+         // `isMobile` is deliberately OFF. It emulates the mobile LAYOUT viewport,
+         // which scales the page and reports `innerHeight` as the full content
+         // height — so the document is never taller than the window and nothing
+         // can scroll, which is the property most of this tier asserts on. The
+         // viewport meta tag is what a real phone needs; this tier needs a narrow
+         // window and a touchscreen.
+         name: 'chromium-narrow',
+         testMatch: /narrow\.spec\.mts$/,
+         use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, hasTouch: true }
+      },
+      {
+         // A real device descriptor, `isMobile` and all — which is what makes it
+         // the ONLY tier that exercises the viewport meta tag. Every other
+         // project emulates a desktop window that happens to be narrow, where
+         // that tag does nothing; a phone depends on it entirely.
+         //
+         // The NARROWEST device on offer, deliberately. A page whose content
+         // will not fit the device width does not clip or scroll sideways — the
+         // browser widens the layout viewport and scales the whole page down, so
+         // the symptom is a correct layout rendered too small to read, and the
+         // narrower the device the smaller the floor it takes to cause it.
+         name: 'chromium-device',
+         testMatch: /device\.spec\.mts$/,
+         use: { ...devices['Galaxy S9+'] }
       }
    ],
    webServer: {
