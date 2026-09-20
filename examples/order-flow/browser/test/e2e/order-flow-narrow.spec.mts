@@ -90,6 +90,34 @@ test.describe('the workbench in one column', () => {
       await expect(page.locator('#document-list')).toBeHidden();
    });
 
+   test('an editor header collapses its pane rather than entering it', async ({ page }) => {
+      // The shield covers the CONTENT, not the whole pane. Covering the header
+      // too made the first tap on it enter the editor, so the one control that
+      // folds a pane away could not be used until the pane had been entered.
+      const pane = page.locator(PROCESS_PANE);
+      const head = pane.locator('.pane-head');
+      await head.scrollIntoViewIfNeeded();
+
+      await head.tap();
+
+      await expect(pane).toHaveAttribute('data-collapsed', '');
+      await expect(pane).not.toHaveAttribute('data-entered', '');
+   });
+
+   test('the status strip stays at the foot with every region collapsed', async ({ page }) => {
+      for (const head of await page.locator('[data-collapsible] > .panel-head, [data-collapsible] > .pane-head').all()) {
+         await head.tap();
+      }
+
+      // Collapsed, the content no longer fills the screen — so a strip that just
+      // follows the content leaves the page background below it, which reads as
+      // the document having been cut short.
+      const gap = await page.evaluate(
+         () => document.documentElement.clientHeight - (document.querySelector('.status-area')?.getBoundingClientRect().bottom ?? 0)
+      );
+      expect(Math.round(gap)).toBe(0);
+   });
+
    test('opening a workspace file scrolls to its editor without taking the caret', async ({ page }) => {
       // **Focus is what opens the on-screen keyboard**, and in one column the
       // pane a selection opens is well down the page — so focusing it covers an
