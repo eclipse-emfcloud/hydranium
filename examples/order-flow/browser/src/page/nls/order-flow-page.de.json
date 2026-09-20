@@ -24,6 +24,8 @@
   "order-flow/page/diagram-hint": "Knoten ziehen – der Layout-Editor folgt",
   "order-flow/page/semantics": "Semantik",
   "order-flow/page/coordinates": "Koordinaten",
+  "order-flow/page/enter-editor": "Zum Bearbeiten tippen",
+  "order-flow/page/enter-editor-hint": "Zum Bearbeiten tippen; zum Scrollen der Seite ziehen",
   "order-flow/page/server-log": "Serverprotokoll",
   "order-flow/page/lines-received": "Empfangene Zeilen",
   "order-flow/page/log-errors": "Mindestens ein Fehler ist unter den gehaltenen Zeilen",

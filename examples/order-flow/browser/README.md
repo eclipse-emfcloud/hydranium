@@ -458,6 +458,8 @@ flakiness in the code and is not.
 | Localization | ✅ one switch over the page's own chrome *and* the server's diagnostics and palette; the URL carries it and outranks the remembered choice, and the reload is the server half's requirement |
 | Server log | ✅ a dock panel over `window/logMessage`, carrying all three heads on one channel, filterable |
 | Resizable layout | ✅ pointer-event dividers on every area, no UI framework — the shape GLSP's own `workflow-standalone` example uses |
+| Touch input | ✅ a node drag under a finger, which the diagram client does not offer on its own: it binds mouse events, and a browser synthesizes those for a tap and not for a drag |
+| Narrow viewport | ✅ one scrolling column below 900px, so the canvas and the two documents it is a view of stay in one frame; each editor is shielded until tapped, because Monaco keeps a vertical touch drag |
 | Workspace persistence | ✅ a save mirrors into `IndexedDB` and the next load restores it, seed as the baseline; *reset* drops it |
 | Creating / deleting / renaming files | ❌ the filesystem takes all three and a deletion is durable, the page has no UI to ask for any of them |
 

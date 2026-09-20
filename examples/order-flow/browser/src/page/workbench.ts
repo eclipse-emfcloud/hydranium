@@ -89,6 +89,7 @@ import { rememberPreference, storedPreference } from './preferences.js';
 import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
 import { PROPERTIES_CLIENT_ID, PropertiesPanel } from './properties-panel.js';
 import { publishReport, ReportDetail } from './report-detail.js';
+import { wireResponsiveLayout } from './responsive.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
 import { WorkspacePanel } from './workspace-panel.js';
 import { WorkerDataPort } from './worker-data-port.js';
@@ -949,6 +950,9 @@ export async function main(locale: string | undefined): Promise<void> {
    const relayout = (): void => editors.layout();
    wireSplitters(relayout);
    wireLayoutReset(relayout);
+   // The same listener, because crossing the breakpoint resizes every pane for
+   // the same reason dragging a divider resizes two.
+   wireResponsiveLayout(relayout);
 
    setStatus('validating workspace…');
 

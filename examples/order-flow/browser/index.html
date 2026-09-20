@@ -2,6 +2,14 @@
 <html lang="en">
    <head>
       <meta charset="utf-8" />
+      <!--
+         Without this a phone lays the page out at its ~980px fallback viewport
+         and scales the result down, so the narrow rules below never match and
+         the workbench arrives as an unreadable miniature of the desktop one.
+         The two halves only work together: this tag alone hands a 390px window
+         a layout whose declared column minimums need about 800.
+      -->
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>Order Flow — language server in a web worker</title>
       <!--
          EMPTY here and filled in the SERVED copy by the deploy. Through the
@@ -1229,6 +1237,14 @@
             /* Clipped, so the palette's slide-out animation cannot push a
                scrollbar onto the pane. */
             overflow: hidden;
+            /*
+               Without this the browser CLAIMS a touch drag as a pan: the canvas
+               receives one `pointermove` and then `pointercancel`, so the
+               gesture reaches the diagram as nothing at all. Necessary but not
+               sufficient — see `src/page/touch-input.ts` for the half that
+               carries the gesture to a canvas binding mouse events.
+            */
+            touch-action: none;
          }
          /*
             **This rule is load-bearing and its absence is silent.** sprotty sets
@@ -1267,6 +1283,16 @@
          .editor {
             flex: 1 1 auto;
             min-height: 0;
+         }
+         /*
+            The scroll shield belongs to the stacked column alone — the rule that
+            sizes and places it says why. Hidden here rather than only shown
+            there, because a `<button>` with no rule at all is not absent: it
+            renders in the pane's flow, under the editor, as a control that reads
+            as part of the page.
+         */
+         .editor-shield {
+            display: none;
          }
          /*
             Monaco's own theme paints its background, and a standalone theme's
@@ -1453,6 +1479,220 @@
          .panel-body::-webkit-scrollbar-corner,
          #log::-webkit-scrollbar-corner {
             background: transparent;
+         }
+
+         /* ---- narrow viewport ------------------------------------------- */
+
+         /*
+            ONE SCROLLING COLUMN, not a tab strip, and the choice is the page's
+            argument rather than a preference: the claim this page exists to make
+            is that a diagram drag lands in `.layout` and not in `.process`, and
+            a reader can only check that if the canvas and both documents are in
+            one frame. Tabs show them one after another, which turns the claim
+            into a matter of remembering the previous screen.
+
+            **900px is DERIVED, not chosen.** The dividers declare their own
+            minimums in the markup — read them with `grep data-min index.html` —
+            and their sum floors the workbench near 800. This sits above that
+            with room for the scrollbar, and moves when those minimums do.
+
+            The diagram needs nothing here: `trackCanvasSize` re-measures on a
+            size change from any cause and skips a zero box, so a region that
+            shrinks or collapses keeps correct canvas bounds instead of culling
+            its model.
+         */
+         @media (max-width: 900px) {
+            /* The document scrolls, so no region may be a fixed-height track. */
+            html,
+            body {
+               height: auto;
+            }
+            body,
+            main,
+            #layout,
+            .sidebar,
+            .subject,
+            .fixed-editors,
+            .dock {
+               display: block;
+            }
+            /* `hidden` clips the column to the viewport, leaving the page
+               unscrollable below the first screen. */
+            #layout {
+               overflow: visible;
+            }
+            /*
+               The dividers have no job in one column — there is no neighbour to
+               trade width with — and 5px is no touch target.
+            */
+            .splitter {
+               display: none;
+            }
+            /*
+               Each region states a height, because no grid track supplies one
+               here and a `min-height: 0` flex column collapses to nothing. Sized
+               so the diagram and the two documents it is a view of stay legible
+               rather than equal.
+            */
+            #document-panel {
+               height: 220px;
+            }
+            #properties-panel {
+               height: 240px;
+            }
+            #selected-pane {
+               height: 280px;
+            }
+            #diagram-pane {
+               height: 320px;
+            }
+            .fixed-editors > .pane {
+               height: 260px;
+            }
+            .dock > .panel {
+               height: 240px;
+            }
+            /* A rule between stacked regions, which the dividers used to draw. */
+            #selected-pane,
+            .subject,
+            .fixed-editors > .pane + .pane,
+            .dock > .panel,
+            #properties-panel {
+               border-top: 1px solid var(--order-flow-panel-border);
+            }
+
+            /*
+               The scroll SHIELD, and it is what makes a stacked column usable at
+               all: Monaco consumes a vertical touch drag, so a finger on an
+               editor moves the page not one pixel, and in one column an editor
+               is a region a reader cannot scroll past. An inert layer takes the
+               gesture instead; one tap hands the pane over until the column goes
+               away. Sizing the editor to its content does NOT release the drag,
+               and neither does `touch-action` — a listener calling
+               `preventDefault` is not what that property governs.
+
+               `position: absolute` over the whole pane, so it cannot alter what
+               Monaco measures: the editor is sized by its container and an
+               out-of-flow sibling is not part of it.
+
+               Absent above the breakpoint, where a wheel and a scrollbar already
+               separate the two intentions.
+            */
+            .pane {
+               position: relative;
+            }
+            .editor-shield {
+               position: absolute;
+               inset: 0;
+               z-index: 3;
+               display: flex;
+               align-items: flex-end;
+               justify-content: center;
+               padding: var(--space-md);
+               font: inherit;
+               color: var(--order-flow-secondary-foreground);
+               background: transparent;
+               border: 0;
+               cursor: pointer;
+            }
+            /* Gone for good once the pane is entered, until the layout changes
+               back — see `src/page/responsive.ts`. */
+            .pane[data-entered] > .editor-shield {
+               display: none;
+            }
+            .editor-shield > span {
+               padding: var(--space-xs) var(--space-md);
+               border: 1px solid var(--order-flow-panel-border);
+               border-radius: 999px;
+               background: var(--order-flow-chrome-background);
+               font-size: var(--font-sm);
+            }
+
+            /*
+               **The page's own MINIMUM WIDTH, which decides whether any of the
+               above is seen at the size it was written for.** A flex row's
+               default `min-width: auto` refuses to shrink below its content, so
+               one unwrappable header floors the whole document — and a layout
+               viewport wider than the device makes the browser scale the page
+               down to fit, which is the unreadable miniature the viewport meta
+               exists to prevent. Measured on a 320px device: a header carrying a
+               heading, a badge, a filter and a button held the floor at 565.
+
+               The two that overflow are named rather than every row, because a
+               blanket `flex-wrap` on chrome that fits would let a long value
+               reflow a bar the diagram is measured against.
+            */
+            .panel-head,
+            .titlebar,
+            .actions {
+               flex-wrap: wrap;
+               min-width: 0;
+            }
+            /* Allowed to SHRINK, which `min-width: 0` alone does not grant: the
+               strip is `flex: 0 0 auto` so a divider would never narrow it, and a
+               row that cannot narrow never reaches the width that wraps it. Safe
+               here only because the heading beside it wraps too. */
+            .actions {
+               flex: 1 1 auto;
+            }
+            .titlebar h1 {
+               min-width: 0;
+               white-space: normal;
+            }
+            /* A fixed `ch` width cannot participate in the wrap; the box is
+               already bounded by the header it sits in. */
+            .filter-box input {
+               width: auto;
+               min-width: 0;
+            }
+
+            /*
+               Collapsible panels, which is what keeps the column short enough to
+               reach the subject. The head becomes the control rather than gaining
+               one, so no new label has to be invented or translated: its
+               accessible name is the heading already in it.
+            */
+            .panel[data-collapsible] > .panel-head {
+               cursor: pointer;
+            }
+            .panel[data-collapsible] > .panel-head::after {
+               content: '';
+               width: 0;
+               height: 0;
+               border-left: 4px solid currentcolor;
+               border-top: 4px solid transparent;
+               border-bottom: 4px solid transparent;
+               transform: rotate(90deg);
+            }
+            .panel[data-collapsed] > .panel-head::after {
+               transform: none;
+            }
+            .panel[data-collapsed] {
+               height: auto;
+            }
+            .panel[data-collapsed] > .panel-body {
+               display: none;
+            }
+
+            /*
+               Labels give up their width and keep their accessible name: clipped
+               rather than `display: none`, which would take the name with it and
+               leave five unlabelled icons.
+            */
+            .titlebar .action > span[data-nls] {
+               position: absolute;
+               width: 1px;
+               height: 1px;
+               margin: -1px;
+               padding: 0;
+               border: 0;
+               overflow: hidden;
+               clip-path: inset(50%);
+               white-space: nowrap;
+            }
+            .titlebar h1 .subtitle {
+               display: none;
+            }
          }
       </style>
    </head>
@@ -1657,6 +1897,17 @@
                   <span class="hint" data-nls="order-flow/page/selected">selected</span>
                </div>
                <div id="selected-editor" class="editor"></div>
+               <!--
+                  The scroll shield; the rule that carries it states why.
+               -->
+               <button
+                  type="button"
+                  class="editor-shield"
+                  title="Tap to edit; drag to scroll the page"
+                  data-nls-title="order-flow/page/enter-editor-hint"
+               >
+                  <span data-nls="order-flow/page/enter-editor">Tap to edit</span>
+               </button>
             </section>
 
             <!-- `--selected-width` defaults to a fraction, so no absolute ceiling. -->
@@ -1689,6 +1940,17 @@
                         <span class="hint" data-nls="order-flow/page/semantics">semantics</span>
                      </div>
                      <div id="process-editor" class="editor"></div>
+                     <!--
+                        The scroll shield; the rule that carries it states why.
+                     -->
+                     <button
+                        type="button"
+                        class="editor-shield"
+                        title="Tap to edit; drag to scroll the page"
+                        data-nls-title="order-flow/page/enter-editor-hint"
+                     >
+                        <span data-nls="order-flow/page/enter-editor">Tap to edit</span>
+                     </button>
                   </section>
                   <!-- `--fixed-split` defaults to a percentage, so no absolute ceiling. -->
                   <div class="splitter" data-splitter="--fixed-split" data-measure="#process-pane" data-axis="x" data-min="180"></div>
@@ -1699,6 +1961,17 @@
                         <span class="hint" data-nls="order-flow/page/coordinates">coordinates</span>
                      </div>
                      <div id="layout-editor" class="editor"></div>
+                     <!--
+                        The scroll shield; the rule that carries it states why.
+                     -->
+                     <button
+                        type="button"
+                        class="editor-shield"
+                        title="Tap to edit; drag to scroll the page"
+                        data-nls-title="order-flow/page/enter-editor-hint"
+                     >
+                        <span data-nls="order-flow/page/enter-editor">Tap to edit</span>
+                     </button>
                   </section>
                </div>
             </div>
@@ -1773,7 +2046,7 @@
             `orders/audit-leak.domain` exists so a diagnostic is published for a
             file nobody opened. See `src/page/workspace-panel.ts`.
          -->
-            <section class="panel" aria-labelledby="problems-heading">
+            <section class="panel" id="problem-panel" aria-labelledby="problems-heading">
                <div class="panel-head">
                   <i class="codicon codicon-warning" aria-hidden="true"></i>
                   <h2 id="problems-heading" data-nls="order-flow/page/problems">Problems</h2>

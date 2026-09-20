@@ -50,6 +50,7 @@ import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-o
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
 import { BrowserMessageReader, BrowserMessageWriter, createMessageConnection } from 'vscode-jsonrpc/browser';
+import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
 // on equal specificity — the same ordering the VS Code diagram bundle depends
 // on. The sheet is the diagram's own, shared with every host; the page supplies
@@ -234,6 +235,10 @@ function trackCanvasSize(container: Container): void {
    if (mount === null) {
       return;
    }
+   // Beside the canvas-bounds observer rather than in the page's own wiring:
+   // both are accommodations the diagram client needs from whatever hosts it,
+   // and a host that forgets either gets a canvas that silently ignores input.
+   enableTouchDragging(mount);
    const dispatcher = container.get<GLSPActionDispatcher>(TYPES.IActionDispatcher);
    // Skipped for a zero box, which is what an element hidden by a divider dragged
    // to its limit reports: a canvas of zero culls the whole model, and the next
