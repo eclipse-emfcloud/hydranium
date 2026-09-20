@@ -495,7 +495,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
 
    it('is the chokepoint for the AstDocument snapshot path too', () => {
       const encoder = buildTaggingEncoder();
-      const astDocument = AstDocument.create<AstNode, TransferDiagnostic>('file:///snap.a', 7, makeFakeAstNode({ $type: 'Root', id: 'r' }));
+      const astDocument = AstDocument.create<AstNode>('file:///snap.a', 7, makeFakeAstNode({ $type: 'Root', id: 'r' }));
 
       const result = encoder.astDocumentToTransferDocument(astDocument);
       // Guards the two-path split: were this path to build the envelope inline
@@ -596,11 +596,7 @@ describe('TransferEncoder extension hooks', () => {
          workspace: { DocumentBuilder: makeStubDocumentBuilder() }
       });
       const encoder = new HookedEncoder(services);
-      const astDocument = AstDocument.create<AstNode, TransferDiagnostic>(
-         'file:///ctx.a',
-         1,
-         makeFakeAstNode({ $type: 'Root', name: 'a' })
-      );
+      const astDocument = AstDocument.create<AstNode>('file:///ctx.a', 1, makeFakeAstNode({ $type: 'Root', name: 'a' }));
       const result = encoder.astDocumentToTransferDocument(astDocument);
       expect((result.root as unknown as Record<string, unknown>)._decorated).toBe('@file:///ctx.a');
    });

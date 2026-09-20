@@ -233,7 +233,11 @@ export interface ModelServiceOptions extends LogNameOptions {
  * member taking a phase as a PARAMETER cannot judge statically and so returns
  * `TDiagnostic`, leaving the choice to the caller.
  */
-export interface ModelService<TAst extends AstNode, TDiagnostic = AstDiagnostic, TTransfer extends TransferElement = TransferElement> {
+export interface ModelService<
+   TAst extends AstNode,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
+   TTransfer extends TransferElement = TransferElement
+> {
    /**
     * Resolves once the workspace has been initialised and its first build has
     * completed — the gate every read should wait behind, since a document
@@ -275,7 +279,7 @@ export interface ModelService<TAst extends AstNode, TDiagnostic = AstDiagnostic,
 
 export class DefaultModelService<
    TAst extends AstNode,
-   TDiagnostic = AstDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    /**
     * Structured payload accepted by `update` / `save`. Constrained to
     * {@link TransferElement} — the minimal `{ readonly $type: string }`

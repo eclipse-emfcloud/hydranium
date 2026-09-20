@@ -108,7 +108,7 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
    toTransfer<T extends AstNode>(ast: T, mode?: TransferMode): TransferElement;
    toTransferDocument(langiumDocument: LangiumDocument): TransferDocument<TransferElement, TDiagnostic>;
    astDocumentToTransferDocument<TAst extends AstNode>(
-      document: AstDocument<TAst, TDiagnostic | AstDiagnostic>
+      document: AstDocument<TAst, AstDiagnostic>
    ): TransferDocument<TransferElement, TDiagnostic>;
    toTransferDiagnostic(diagnostic: AstDiagnostic): TDiagnostic;
 }
@@ -421,7 +421,7 @@ export class DefaultTransferEncoder<
     * assembly seam rather than duplicating it.
     */
    astDocumentToTransferDocument<TAst extends AstNode>(
-      document: AstDocument<TAst, TDiagnostic | AstDiagnostic>
+      document: AstDocument<TAst, AstDiagnostic>
    ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
       const root = this.encodeNode(document.root, this.createEncodeContext('full', document.uri)) as TransferTypeFor<TAst, TTransferMap>;
       return this.assembleTransferDocument<TAst>(document, root);

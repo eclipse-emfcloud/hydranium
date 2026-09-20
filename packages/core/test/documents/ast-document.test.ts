@@ -10,6 +10,10 @@
 import { describe, expect, it } from 'vitest';
 import { type AstNode, type LangiumDocument } from '@hydranium/langium';
 import { AstDocument } from '../../src/documents/ast-document-manager.js';
+import { type AstDiagnostic } from '../../src/langium/validation/document-validator.js';
+
+/** Any range; the envelope copies diagnostics through without reading into them. */
+const RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
 
 interface FakeAst extends AstNode {
    readonly $type: 'FakeAst';
@@ -30,13 +34,8 @@ describe('AstDocument.create', () => {
    });
 
    it('accepts an explicit diagnostics array', () => {
-      const diags = [{ severity: 1, message: 'boom' }];
-      const doc = AstDocument.create<FakeAst, { severity: number; message: string }>(
-         'file:///A.fake',
-         1,
-         { $type: 'FakeAst', name: 'a' } as FakeAst,
-         diags
-      );
+      const diags: AstDiagnostic[] = [{ range: RANGE, severity: 1, message: 'boom' }];
+      const doc = AstDocument.create<FakeAst>('file:///A.fake', 1, { $type: 'FakeAst', name: 'a' } as FakeAst, diags);
       expect(doc.diagnostics).toBe(diags);
    });
 });

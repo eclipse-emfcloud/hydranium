@@ -141,11 +141,15 @@ const SNIPPET_TARGETS = [
       host: 'examples/order-flow/server',
       preamble: [
          "import type { AstNode } from 'langium';",
-         "import type { AstDocument } from '@hydranium/core';",
-         "import type { TransferDocument, TransferElement } from '@hydranium/protocol';",
+         "import type { AstDiagnostic, AstDocument } from '@hydranium/core';",
+         "import type { TransferDiagnostic, TransferDocument, TransferElement } from '@hydranium/protocol';",
          'type MyRoot = AstNode;',
          'type MyTransferRoot = TransferElement;',
-         'declare class MyDiagnostic {}'
+         // Two, because the layers constrain their diagnostic differently — the
+         // snippet showing one alias on both is the error this preamble must be
+         // able to catch.
+         'interface MyAstDiagnostic extends AstDiagnostic { ruleId: string }',
+         'interface MyTransferDiagnostic extends TransferDiagnostic { ruleId: string }'
       ].join('\n')
    },
    {

@@ -9,6 +9,7 @@
 
 import { type AstNode, type LangiumDocument, type LangiumDocuments, stream, type URI } from '@hydranium/langium';
 import { makeFakeAstNode, makeFakeDocument, type FakeDocumentOptions } from './fake-document.js';
+import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 
 /**
  * Map-backed stub for Langium's {@link LangiumDocuments} registry. Implements
@@ -31,7 +32,7 @@ import { makeFakeAstNode, makeFakeDocument, type FakeDocumentOptions } from './f
  * production code reads the slot value through the `LangiumDocuments`
  * interface and a narrowing cast bridges the stub at the binding site.
  */
-export interface StubLangiumDocuments<TAst extends AstNode = AstNode, TDiagnostic = unknown> extends Pick<
+export interface StubLangiumDocuments<TAst extends AstNode = AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> extends Pick<
    LangiumDocuments,
    'getDocument' | 'hasDocument' | 'getOrCreateDocument' | 'all'
 > {
@@ -51,7 +52,7 @@ export interface StubLangiumDocuments<TAst extends AstNode = AstNode, TDiagnosti
  * Build a {@link StubLangiumDocuments}. Seed entries via the optional
  * `seeds` parameter so simple tests don't need a separate `set` call.
  */
-export function makeStubLangiumDocuments<TAst extends AstNode = AstNode, TDiagnostic = unknown>(
+export function makeStubLangiumDocuments<TAst extends AstNode = AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
    seeds: ReadonlyArray<{ uri: string | URI; root: TAst; options?: FakeDocumentOptions<TAst, TDiagnostic> }> = []
 ): StubLangiumDocuments<TAst, TDiagnostic> {
    const docs = new Map<string, LangiumDocument<TAst>>();

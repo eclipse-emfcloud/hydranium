@@ -30,7 +30,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { DefaultLangiumDocuments, DocumentState, URI, type AstNode, type LangiumDocument } from '@hydranium/langium';
-import type { TransferDiagnostic } from '@hydranium/protocol';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import { makeFakeAstNode, makeFakeDocument, makeNoopSharedServices, makeStubLangiumDocuments } from '../../src/testing/index.js';
 
@@ -150,7 +149,7 @@ describe('makeStubLangiumDocuments — the seeding surface it declares itself', 
    });
 
    it('returns the inserted document from set, so a caller can chain without a lookup', () => {
-      const stub = makeStubLangiumDocuments<FakeRoot, TransferDiagnostic>();
+      const stub = makeStubLangiumDocuments<FakeRoot>();
       const inserted = stub.set(URI_B, fakeRoot('b'), { state: DocumentState.IndexedReferences, version: 7 });
 
       expect(inserted).toBe(stub.getDocument(URI.parse(URI_B)));

@@ -8,10 +8,13 @@
  ********************************************************************************/
 
 import { DocumentState, URI, type AstNode } from '@hydranium/langium';
-import type { TransferDiagnostic } from '@hydranium/protocol';
+import { type AstDiagnostic } from '../../src/langium/validation/document-validator.js';
 import { describe, expect, it } from 'vitest';
 import { makeFakeAstNode, makeFakeDocument } from '../../src/testing/fake-document.js';
 import { makeFakeReflection } from '../../src/testing/fake-reflection.js';
+
+/** Any range; these fixtures never read into a diagnostic. */
+const RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
 
 interface FakeRoot extends AstNode {
    readonly $type: 'FakeRoot';
@@ -80,11 +83,11 @@ describe('makeFakeDocument', () => {
    });
 
    it('honours overrides for text, version, state, and diagnostics', () => {
-      const document = makeFakeDocument<FakeRoot, TransferDiagnostic>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), {
+      const document = makeFakeDocument<FakeRoot, AstDiagnostic>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), {
          text: 'name:a',
          version: 7,
          state: DocumentState.IndexedReferences,
-         diagnostics: [{ id: 'd', message: 'msg' } as unknown as TransferDiagnostic]
+         diagnostics: [{ range: RANGE, message: 'msg' }]
       });
       expect(document.textDocument.getText()).toBe('name:a');
       expect(document.textDocument.version).toBe(7);

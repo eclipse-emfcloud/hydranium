@@ -236,16 +236,24 @@ Both envelopes are plain generic interfaces, so an alias is all that is
 needed:
 
 ```ts
-type MyAstDocument = AstDocument<MyRoot, MyDiagnostic>;
-type MyTransferDocument = TransferDocument<MyTransferRoot, MyDiagnostic>;
+type MyAstDocument = AstDocument<MyRoot, MyAstDiagnostic>;
+type MyTransferDocument = TransferDocument<MyTransferRoot, MyTransferDiagnostic>;
 ```
 
-Two rules keep aliases from re-creating the confusion this doc removes:
+Three rules keep aliases from re-creating the confusion this doc removes:
 
 1. **Alias each layer separately.** One alias covering "the document" pushes
    the AST-vs-transfer decision back to the call site.
 2. **Keep the layer in the name.** An alias called `MyDocument` reads as
    whichever layer the reader last had in mind.
+3. **The diagnostic is per layer too.** `AstDocument` carries what the build
+   left on the `LangiumDocument` — an `AstDiagnostic`, which is an LSP
+   `Diagnostic` — while `TransferDocument` carries what
+   `TransferEncoder.toTransferDiagnostic` produced. They share no field types:
+   `severity` is LSP's numeric enum on one and a string union on the other, and
+   `message` needs `Diagnostic.getMessageString` on the first and is plain text
+   on the second. One alias for both is the mistake the two parameters exist to
+   prevent, and `AstDocument`'s constraint now rejects it.
 
 ## Vocabulary
 

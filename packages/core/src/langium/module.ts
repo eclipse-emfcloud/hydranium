@@ -216,7 +216,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
        * that need to narrow the diagnostic type or override lifecycle
        * behaviour rebind this slot with a subclass.
        */
-      AstDocumentManager: AstDocumentManager<AstNode, unknown>;
+      AstDocumentManager: AstDocumentManager<AstNode>;
       /**
        * Wires the framework's build-time features (integrity, AST
        * enrichment) into Langium's build pipeline: owns the build-phase
@@ -272,7 +272,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     */
    model: {
       TransferEncoder: TransferEncoder;
-      ModelService: ModelService<AstNode, unknown>;
+      ModelService: ModelService<AstNode>;
    };
    /**
     * Shared contribution group for batch-level build-phase passes (see

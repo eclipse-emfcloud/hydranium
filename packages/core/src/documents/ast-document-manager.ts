@@ -26,6 +26,7 @@ import {
    UriUtils
 } from '@hydranium/langium';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
+import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 
 /**
  * File-system provider extension that supports writes. Langium's standard
@@ -104,7 +105,7 @@ export interface UpdateInfo {
  * twins; the type-system distinction is the generic constraint, and the
  * conversion seam between them is the framework `TransferEncoder`.
  */
-export interface AstDocument<TAst extends AstNode, TDiagnostic> {
+export interface AstDocument<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> {
    root: TAst;
    diagnostics: TDiagnostic[];
    uri: string;
@@ -126,7 +127,7 @@ export namespace AstDocument {
     * don't need to repeat the empty array at every call site. Mirrors
     * `TransferDocument.create` on the wire side.
     */
-   export function create<TAst extends AstNode, TDiagnostic = unknown>(
+   export function create<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
       uri: string,
       version: number,
       root: TAst,
@@ -148,22 +149,33 @@ export namespace AstDocument {
     * carry that identity, not the subscriber's (possibly non-canonical) URI:
     * a subscriber already knows the URI it subscribed with, so the useful
     * thing to surface is the canonical one every other layer keys by.
+    *
+    * Narrowing `TDiagnostic` below the constraint asserts that the validators
+    * in play produce that shape, and nothing here checks it: the build fills the
+    * array, so a document carrying a diagnostic from elsewhere — a lexer error,
+    * another validator — satisfies the declared type and not the narrowed one.
     */
-   export function from<TAst extends AstNode, TDiagnostic = unknown>(document: LangiumDocument): AstDocument<TAst, TDiagnostic> {
+   export function from<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
+      document: LangiumDocument
+   ): AstDocument<TAst, TDiagnostic> {
       return create<TAst, TDiagnostic>(
          document.textDocument.uri,
          document.textDocument.version,
          document.parseResult.value as TAst,
-         (document.diagnostics ?? []) as unknown as TDiagnostic[]
+         (document.diagnostics ?? []) as TDiagnostic[]
       );
    }
 }
 
 /** Update event delivered by {@link AstDocumentManager.onUpdate} — typed alias over the generic event wrapper. */
-export type AstDocumentUpdatedEvent<TAst extends AstNode, TDiagnostic> = TransferUpdatedEvent<AstDocument<TAst, TDiagnostic>>;
+export type AstDocumentUpdatedEvent<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = TransferUpdatedEvent<
+   AstDocument<TAst, TDiagnostic>
+>;
 
 /** Save event delivered by {@link AstDocumentManager.onSave} — typed alias over the generic event wrapper. */
-export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic> = TransferSavedEvent<AstDocument<TAst, TDiagnostic>>;
+export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = TransferSavedEvent<
+   AstDocument<TAst, TDiagnostic>
+>;
 
 /** Construction options for {@link AstDocumentManager}. */
 export type AstDocumentManagerOptions = LogNameOptions;
@@ -182,7 +194,7 @@ export type AstDocumentManagerOptions = LogNameOptions;
  * through the {@link DocumentUriPolicy}, so a caller never has to canonicalize
  * first and an implementation may not require it.
  */
-export interface AstDocumentManager<TAst extends AstNode, TDiagnostic = unknown> {
+export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> {
    open(args: OpenModelArgs): Promise<Disposable>;
    close(args: CloseModelArgs): Promise<void>;
    isOpen(uri: string): boolean;
@@ -233,7 +245,10 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic = unknown>
  * resolution (the egress `applyEditToLanguageClient`) stay on
  * {@link HydraniumTextDocuments}, their owner.
  */
-export class DefaultAstDocumentManager<TAst extends AstNode, TDiagnostic = unknown> implements AstDocumentManager<TAst, TDiagnostic> {
+export class DefaultAstDocumentManager<
+   TAst extends AstNode,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic
+> implements AstDocumentManager<TAst, TDiagnostic> {
    protected lastUpdate?: UpdateInfo;
 
    protected readonly textDocuments: HydraniumTextDocuments<TextDocument>;
