@@ -1518,7 +1518,6 @@
             body {
                height: auto;
             }
-            body,
             main,
             #layout,
             .sidebar,
@@ -1526,6 +1525,24 @@
             .fixed-editors,
             .dock {
                display: block;
+            }
+            /*
+               A column at least the height of the window, with the strip pushed
+               to the foot of it. Collapse every region and the content no longer
+               fills the screen — the status bar then sits wherever the content
+               ended, with the page background below it, which reads as the page
+               having been cut off.
+            */
+            body {
+               display: flex;
+               flex-direction: column;
+               min-height: 100vh;
+            }
+            main {
+               flex: 1 0 auto;
+            }
+            .status-area {
+               margin-top: auto;
             }
             /* `hidden` clips the column to the viewport, leaving the page
                unscrollable below the first screen. */
@@ -1584,19 +1601,37 @@
                and neither does `touch-action` — a listener calling
                `preventDefault` is not what that property governs.
 
-               `position: absolute` over the whole pane, so it cannot alter what
-               Monaco measures: the editor is sized by its container and an
-               out-of-flow sibling is not part of it.
+               **It covers the CONTENT and not the header.** Over the whole pane
+               it also covered the header, which is the control that collapses
+               the pane — so the first tap on an editor's header entered the
+               editor instead of folding it. A grid row shared with the content
+               is what bounds it, since the header's height is not a number this
+               stylesheet knows.
 
                Absent above the breakpoint, where a wheel and a scrollbar already
                separate the two intentions.
             */
             .pane {
-               position: relative;
+               display: grid;
+               /* The COLUMN has to be stated. An implicit one is `auto`, which
+                  sizes to max-content — and Monaco reports the longest line, so
+                  the pane floors the document wider than the device and the
+                  browser scales the whole page down. */
+               grid-template-columns: minmax(0, 1fr);
+               grid-template-rows: auto minmax(0, 1fr);
+            }
+            .pane > .pane-head {
+               grid-area: 1 / 1;
+            }
+            .pane > :not(.pane-head) {
+               grid-area: 2 / 1;
+               min-width: 0;
             }
             .editor-shield {
-               position: absolute;
-               inset: 0;
+               /* Positioned so the z-index applies; the grid cell already sizes
+                  it, so it neither stretches the row nor alters what Monaco
+                  measures. */
+               position: relative;
                /* Above GLSP's UI extensions, which sit at 1000: the palette is
                   inside the mount, so a lower shield leaves it tappable on a pane
                   the reader has not entered. */
@@ -1722,6 +1757,18 @@
             .panel[data-collapsed] .hint-text {
                display: none;
             }
+            /*
+               The log's header carries a filter, a level picker and a trace
+               switch — measured at 620px of content in a 412px row, so it wrapped
+               and left the collapse arrow stranded mid-header. The heading, the
+               count and the clear button stay; the three that do not fit are the
+               ones a reader reaches for least on a phone, and all three remain at
+               the width the page was designed for.
+            */
+            #log-panel > .panel-head > .filter-box,
+            #log-panel > .panel-head > .scheme-switch {
+               display: none;
+            }
          }
       </style>
    </head>
@@ -1760,7 +1807,7 @@
             name is not i18n, so routing it through a catalogue would ask a
             translator to render a name. The tagline beside it is prose.
          -->
-         <h1>Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">text, diagram and forms in a web worker</span></h1>
+         <h1>Order Flow<span class="subtitle" data-nls="order-flow/page/tagline">text, diagram and forms</span></h1>
          <span class="spacer"></span>
          <div class="actions">
             <!--
@@ -2218,21 +2265,6 @@
             thing a wrap drops to a second row.
          -->
          <ul id="reports">
-            <li class="build">
-               <!--
-                  The hash is its OWN span, for the reason the action labels are:
-                  `textContent` on the anchor would take the `<i>` with it and
-                  leave the icon gone. No `data-nls` either — the locale switch
-                  writes `textContent`, so a translated node would replace the
-                  hash.
-
-                  Hidden until a deploy fills the `build-commit` meta in.
-               -->
-               <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
-                  <i class="codicon codicon-git-commit" aria-hidden="true"></i>
-                  <span id="build-commit-hash"></span>
-               </a>
-            </li>
             <!--
                The framework this page is built on. `build` so it shares the
                commit's group and the boundary rule after it, and unlike the
@@ -2249,6 +2281,21 @@
                >
                   <i class="codicon codicon-github" aria-hidden="true"></i>
                   <span>Hydranium</span>
+               </a>
+            </li>
+            <li class="build">
+               <!--
+                  The hash is its OWN span, for the reason the action labels are:
+                  `textContent` on the anchor would take the `<i>` with it and
+                  leave the icon gone. No `data-nls` either — the locale switch
+                  writes `textContent`, so a translated node would replace the
+                  hash.
+
+                  Hidden until a deploy fills the `build-commit` meta in.
+               -->
+               <a id="build-commit" class="build-commit" hidden target="_blank" rel="noopener">
+                  <i class="codicon codicon-git-commit" aria-hidden="true"></i>
+                  <span id="build-commit-hash"></span>
                </a>
             </li>
             <li class="head">
