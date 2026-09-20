@@ -934,6 +934,13 @@ export async function main(locale: string | undefined): Promise<void> {
       }
    });
 
+   // Ctrl+click on a reference lands in whichever editor holds its declaration,
+   // which for the reference this page is built around is a DIFFERENT GRAMMAR's
+   // document — `for Order` in `.process` declares nothing, and `entity Order`
+   // lives in a `.domain` file the selection editor has to go and get. Registered
+   // once the editors exist, because the opener is what shows the target.
+   adapter.registerEditorOpener((uri, position) => editors.revealUri(uri, position));
+
    sidebar.panel = new WorkspacePanel(Object.keys(ready.files), WORKSPACE_ROOT_URI, {
       onOpenDocument: path => editors.show(path),
       onOpenDiagnostic: target => editors.reveal(target.uri.slice(WORKSPACE_ROOT_URI.length + 1), target.line),

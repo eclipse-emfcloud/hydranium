@@ -205,6 +205,30 @@ const FIELD_COLUMN = EFFECT_LINE.indexOf('status');
 const LITERAL_COLUMN = EFFECT_LINE.indexOf('PAID');
 
 /**
+ * INSIDE the enum literal rather than at its start, so the word at the caret is
+ * unambiguously `PAID`. The start of a word is a boundary, and a highlight
+ * request asked there is a claim about how Monaco resolves boundaries rather
+ * than about what the server returns.
+ */
+const LITERAL_WORD_COLUMN = LITERAL_COLUMN + 2;
+
+/**
+ * The comment line of `orders/fulfillment.process` that spells `PAID` inside a
+ * qualified name.
+ *
+ * **Load-bearing for the highlight case, and the reason it can fail at all.**
+ * Monaco registers a textual document-highlight provider for every language,
+ * which whole-word-matches the model including its comments — so `PAID` has two
+ * textual occurrences in the rendered region and one real one. A highlight
+ * assertion that cannot see this line is satisfied by that fallback and proves
+ * nothing about the server.
+ */
+const COMMENT_LINE_NAMING_PAID = '// before it. Rename `OrderStatus.PAID` and';
+
+/** Monaco's decoration class for a `Text`-kind document highlight. */
+const HIGHLIGHT = '.wordHighlightText';
+
+/**
  * A commit for {@link stampBuildCommit} to write, full length because the page
  * abbreviates it and the assertions check both forms.
  */
@@ -807,6 +831,85 @@ test.describe('order-flow in a web worker', () => {
       // The field list, so this is the resolved DECLARATION and not an echo of
       // the reference text under the cursor.
       await expect(hover).toContainText('id, status, total, shipTo, lines');
+   });
+
+   test('Ctrl+click follows a cross-grammar reference to the document that declares it', async ({ page }) => {
+      await page.goto('/');
+
+      // **The selection editor is moved OFF the target first**, so the jump has
+      // to OPEN a document rather than reveal a line in one already on screen.
+      // `orders.domain` is what that editor opens on, so without this step the
+      // title below is already right and the assertion passes on a page that
+      // navigated nowhere.
+      await page.locator('#document-list .document-row').filter({ hasText: 'audit-leak' }).click();
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/audit-leak.domain');
+
+      // The same wait and the same target as the hover case above: before the
+      // semantic tokens arrive the line is a single span, so a click anywhere in
+      // it lands on `process` — which resolves, and resolves somewhere else.
+      await expect
+         .poll(async () => (await tokenSpansOnLine(page, PROCESS_EDITOR, HIGHLIGHTED_LINE)).map(span => span.text.trim()))
+         .toContain('Order');
+      await page
+         .locator(`${PROCESS_EDITOR} .view-line`)
+         .filter({ hasText: HIGHLIGHTED_LINE })
+         .locator('span[class^="mtk"]', { hasText: 'Order' })
+         .first()
+         .click({ modifiers: ['ControlOrMeta'] });
+
+      // `for Order` is a `.process` reference and `entity Order` a `.domain`
+      // declaration, so this jump crossed a GRAMMAR boundary — the claim a
+      // single-grammar example cannot make, because there the target is always
+      // the language the click was in. It also crossed a DOCUMENT, which is the
+      // half Monaco's standalone editor service declines to perform.
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/orders.domain');
+
+      // The pinned pair is untouched. The diagram is a view of those two, so a
+      // jump that displaced either would leave the canvas drawing a document
+      // that is no longer on screen.
+      await expect(page.locator('#process-editor-title')).toHaveText('orders/fulfillment.process');
+      await expect(page.locator('#layout-editor-title')).toHaveText('orders/fulfillment.layout');
+
+      // **The caret landed on the NAME, proved by TYPING at it.** The result
+      // carries the declaration's full extent and the name inside it as separate
+      // ranges, and a client that navigates by the first lands on the `entity`
+      // keyword instead. Both are on screen whatever the reveal did — this
+      // document fits the pane whole — so where a keystroke goes is the only
+      // thing that tells the two apart.
+      await page.keyboard.type('X');
+      await expect(page.locator('#selected-editor .view-line').filter({ hasText: 'entity XOrder {' })).toHaveCount(1);
+   });
+
+   test('occurrence highlighting comes from the server, so a comment is not an occurrence', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(EFFECT_LINE.trim());
+
+      // **The precondition that makes the assertions below discriminating**, so
+      // it is asserted rather than assumed: this comment line spells `PAID`, and
+      // Monaco's built-in textual provider would highlight it. If the pane ever
+      // stops rendering the line, the two answers converge and the case would go
+      // on passing while proving nothing — failing here says so.
+      const commentLine = page.locator(`${PROCESS_EDITOR} .view-line`).filter({ hasText: COMMENT_LINE_NAMING_PAID });
+      await expect(commentLine).toHaveCount(1);
+
+      await putCaret(page, PROCESS_EDITOR, EFFECT_LINE, LITERAL_WORD_COLUMN);
+
+      // The enum literal is one reference in this document, so exactly one
+      // occurrence is highlighted. Textual matching finds three — the literal
+      // plus two comments that merely spell it — and two of those are on screen.
+      //
+      // A COUNT rather than a claim about which line carries the mark: Monaco
+      // renders a `className` decoration into its overlay layer as an absolutely
+      // positioned box, not into the `.view-line` it sits over, so there is no
+      // containment to assert and relating the two means comparing geometry.
+      await expect(page.locator(`${PROCESS_EDITOR} ${HIGHLIGHT}`)).toHaveCount(1);
+
+      // A name that DOES reach across the file, so the case is not satisfied by
+      // a server answering one occurrence to everything — which is the shape the
+      // assertion above would otherwise accept. `status` is declared in another
+      // grammar and used three times here.
+      await putCaret(page, PROCESS_EDITOR, EFFECT_LINE, FIELD_COLUMN + 2);
+      await expect(page.locator(`${PROCESS_EDITOR} ${HIGHLIGHT}`)).toHaveCount(3);
    });
 
    test('the workspace list reaches the documents the diagnostics report names', async ({ page }) => {

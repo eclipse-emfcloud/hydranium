@@ -457,7 +457,7 @@ one Langium store, no Node runtime, no backend process, no socket.
 | Data head in a worker | a second `MessageChannel`, sharing the LSP head's Langium store |
 | GLSP head in a worker | a third `MessageChannel`, same store, via `@hydranium/glsp-server/browser`. A `.process` diagram renders from the host-agnostic client module the Theia and VS Code shells also mount |
 | Diagram editing in a worker | a drag and a palette create, including the multi-document write path where a create touches both the primary document and its layout secondary. An operation goes through `ModelService.update`, so nothing reaches the filesystem: the change lives in the in-memory text document until an explicit save |
-| A full text-editor LSP client in the page | Monaco driven over the same transferred `MessagePort` the diagnostics arrive on: `didOpen` / `didChange` out, `publishDiagnostics` to markers, completion, hover, and highlighting from the server's semantic-token provider rather than any client-side grammar. A page is a full LSP client, not only a viewer — with [one composition choice](#the-composition-choice-a-page-makes-and-a-shell-must-not) attached |
+| A full text-editor LSP client in the page | Monaco driven over the same transferred `MessagePort` the diagnostics arrive on: `didOpen` / `didChange` out, `publishDiagnostics` to markers, completion, hover, go-to-definition, occurrence highlighting, and highlighting from the server's semantic-token provider rather than any client-side grammar. A page is a full LSP client, not only a viewer — with [one composition choice](#the-composition-choice-a-page-makes-and-a-shell-must-not) and [one extra registration](#navigating-to-a-definition-takes-a-second-registration) attached |
 | `workspace/applyEdit` inbound — the diagram→text direction | a diagram drag moves the `.layout` editor. The page resolves every target before writing any, then applies through `pushEditOperations` so the edit joins Monaco's undo stack. Accepting these carries [two obligations](#two-obligations-on-a-host-that-accepts-workspaceapplyedit) |
 | Workspace persistence across a reload | `PersistentFileSystemProvider` mirrors every write into a host-supplied `FileSystemStore`, and `persistentFileSystem` restores it before the services exist; the example supplies `IndexedDB`. Persistence is tied to an explicit save rather than to autosave — a reload without one returns the seed. See "Making it survive a reload" above |
 
@@ -484,6 +484,62 @@ neither gets it wrong, which is why the switch is per host rather than always on
 
 The client is hand-written rather than built on `monaco-languageclient`, whose
 shim stack would cost the bundle its `node:*` neutrality.
+
+### Navigating to a definition takes a second registration
+
+A `DefinitionProvider` answers *where* the declaration is. Going there is the
+host's job, and in a plain page nothing is doing it: Monaco's standalone editor
+service resolves the target resource against the editor that was clicked in
+alone, finds a different model, and returns. No message, no marker, nothing on
+the console — the same observable as a server that resolved no reference, which
+is what makes it worth stating rather than discovering.
+
+`monaco.editor.registerEditorOpener` is the seam. The handler receives the target
+resource and a position and answers whether it showed it; a `false` falls through
+to Monaco's own handler, which is the better one for a target inside the source
+editor's own model, since it selects the declaration's range and records the
+navigation.
+
+**For a multi-grammar server the cross-document case is the ordinary one, not the
+edge.** A reference in one grammar's document resolves into another grammar's,
+because that is what the grammars are separated for — so a host that only
+navigates within a model has go-to-definition working for the references that
+need it least. Reading it as an edge case is how it ships half-built.
+
+Two details decide whether the caret lands anywhere useful:
+
+- **Accept both response shapes.** A server may answer a `Location`, an array of
+  them, or an array of `LocationLink`s, and Langium answers with links even to a
+  client that declared no `linkSupport` — so `linkSupport` cannot be relied on to
+  narrow it. The two spell the target under different keys, and a client reading
+  the wrong one parses a URI out of nothing, addresses no model, and navigates
+  nowhere without raising anything.
+- **Navigate by `targetSelectionRange`, not `targetRange`.** The first is the
+  declaration's name and the second its whole body, so a client that uses the
+  body puts the caret on the keyword in front of the name — or, for a long
+  declaration, wherever the body happens to start.
+
+**Occurrence highlighting is the one neighbouring capability that is just a
+registration — and the one where a missing registration is invisible.** Monaco
+registers a textual whole-word document-highlight provider for language `*`, so
+a page that registers nothing still marks occurrences; a language-specific
+provider outscores it and replaces its answer rather than merging. The two agree
+on any name used consistently, which is most of them, and diverge exactly where
+the server knows something textual matching cannot — a name spelled in a comment
+or a string. A test written against a name where they agree cannot fail, and
+reads as coverage.
+
+Its kinds need mapping rather than passing through: LSP numbers `Text`/`Read`/
+`Write` from 1 and Monaco from 0, so a pass-through renders every read as a text
+occurrence and pushes a write outside Monaco's enum. The decoration differs per
+kind, so the result is wrong colours rather than an error.
+
+A page also has to answer for a target it holds no text for. A workspace can
+contain documents backed by no file — an in-code contribution on a `virtual:`
+scheme is one — and a reference resolving into one is a jump that cannot be made.
+Reporting that and leaving the reader where they are is the honest outcome;
+opening an editor over invented text is not, because a `didOpen` carrying it
+overwrites the server's copy.
 
 ### Two obligations on a host that accepts `workspace/applyEdit`
 
