@@ -60,6 +60,26 @@ describe('order-flow integrity rules — bound, and running in the build', () =>
       // `FlowNode` — so the collision is across both kinds, not within one.
       expect(model.nodes.map(node => node.name)).toEqual(['Pay', 'Pay__1', 'Pay__2']);
    });
+
+   it('settles a duplicate beside an already-repaired name in one build', async () => {
+      const harness = await makeWorkspaceHarness();
+      const model = (await loadFixture<ProcessModel>(harness, 'duplicate-nodes-after-repair.process')).parseResult.value;
+
+      // A rule gets one pass per build, so a repair that re-mints a suffix the
+      // document already carries stays broken until the next edit drives a
+      // further build — which is what an editor shows as a duplicate line that
+      // only settles on save.
+      expect(model.nodes.map(node => node.name)).toEqual(['Pay', 'Pay__1', 'Pay__2']);
+   });
+
+   it('counts up from the stem when the copied line is itself a repair', async () => {
+      const harness = await makeWorkspaceHarness();
+      const model = (await loadFixture<ProcessModel>(harness, 'duplicate-nodes-repaired-copy.process')).parseResult.value;
+
+      // Renaming from the name as found would nest (`Pay__1__1`) and grow a
+      // segment for every further copy.
+      expect(model.nodes.map(node => node.name)).toEqual(['Pay', 'Pay__1', 'Pay__2']);
+   });
 });
 
 describe('order-flow AST extensions — a cross-grammar computed property', () => {

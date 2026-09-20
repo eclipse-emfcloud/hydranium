@@ -1,0 +1,12 @@
+// Test-only fixture. The state an editor reaches by duplicating `task Pay` a
+// second time: the first duplicate was renamed `Pay__1` and written back, and
+// the fresh one is still called `Pay`. The repair has to step over the taken
+// suffix instead of minting it again, in this one build.
+//
+// Loaded through a temp-directory copy — see `duplicate-names.domain`.
+
+process Reduplicated for Order {
+   task Pay
+   task Pay__1
+   task Pay
+}

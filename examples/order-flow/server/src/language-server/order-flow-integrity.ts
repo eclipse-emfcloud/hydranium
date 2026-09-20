@@ -9,8 +9,54 @@
 
 import { IntegrityPhase, type IntegrityRule, type IntegrityRuleContribution, type IntegrityRuleRegistry } from '@hydranium/core';
 import type { Logger } from '@hydranium/protocol';
-import type { LangiumDocument } from '@hydranium/langium';
+import type { LangiumDocument, NamedAstNode } from '@hydranium/langium';
 import { type DomainModel, type ProcessModel, isDomainModel, isProcessModel } from './ast.js';
+
+/** A `__n` this rule appended, stripped back off so repairs count up instead of nesting. */
+const REPAIR_SUFFIX = /__\d+$/;
+
+/**
+ * Rename every entry that repeats a name an earlier one holds, to the lowest
+ * `__n` free across the whole list. Returns `true` if anything was renamed.
+ *
+ * **A rule gets one pass per build**: the integrity tier re-serialises and
+ * re-parses a repair, but does not re-run the rules against the result. So a
+ * repair must not mint a name the document already carries — the collision it
+ * would leave behind survives until some later edit drives the next build,
+ * which an editor shows as a duplicated line that only settles on save. Hence a
+ * taken set seeded before the first rename, rather than a per-name occurrence
+ * count: the latter hands the third entry of `Pay`, `Pay__1`, `Pay` the name
+ * `Pay__1` a second time, and that list is what duplicating a line beside its
+ * own earlier repair produces.
+ *
+ * **The stem is stripped of a trailing `__n` before counting**, so duplicating
+ * an already-repaired line yields `Pay__2` rather than a `Pay__1__1` that grows
+ * a segment per copy. The cost is that a name ending in `__n` in the source is
+ * read as a stem plus a suffix, and a duplicate of it is renamed from the stem.
+ */
+function deduplicateNames(named: readonly NamedAstNode[], kind: string, logger: Logger): boolean {
+   const taken = new Set(named.map(entry => entry.name));
+   const seen = new Set<string>();
+   let mutated = false;
+   for (const entry of named) {
+      if (!seen.has(entry.name)) {
+         seen.add(entry.name);
+         continue;
+      }
+      const stem = entry.name.replace(REPAIR_SUFFIX, '');
+      let suffix = 1;
+      while (taken.has(`${stem}__${suffix}`)) {
+         suffix++;
+      }
+      const renamed = `${stem}__${suffix}`;
+      logger.info(`Renaming duplicate ${kind} '${entry.name}' to '${renamed}'`);
+      entry.name = renamed;
+      taken.add(renamed);
+      seen.add(renamed);
+      mutated = true;
+   }
+   return mutated;
+}
 
 /**
  * Deduplicate declaration names within a `.domain` document.
@@ -36,19 +82,7 @@ export class UniqueDeclarationNamesRule implements IntegrityRule<DomainModel> {
       if (!isDomainModel(node)) {
          return false;
       }
-      const seen = new Map<string, number>();
-      let mutated = false;
-      for (const declaration of node.declarations) {
-         const occurrence = seen.get(declaration.name) ?? 0;
-         seen.set(declaration.name, occurrence + 1);
-         if (occurrence > 0) {
-            const suffixed = `${declaration.name}__${occurrence}`;
-            logger.info(`Renaming duplicate declaration '${declaration.name}' to '${suffixed}'`);
-            declaration.name = suffixed;
-            mutated = true;
-         }
-      }
-      return mutated;
+      return deduplicateNames(node.declarations, 'declaration', logger);
    }
 }
 
@@ -72,19 +106,7 @@ export class UniqueFlowNodeNamesRule implements IntegrityRule<ProcessModel> {
       if (!isProcessModel(node)) {
          return false;
       }
-      const seen = new Map<string, number>();
-      let mutated = false;
-      for (const flowNode of node.nodes) {
-         const occurrence = seen.get(flowNode.name) ?? 0;
-         seen.set(flowNode.name, occurrence + 1);
-         if (occurrence > 0) {
-            const suffixed = `${flowNode.name}__${occurrence}`;
-            logger.info(`Renaming duplicate flow node '${flowNode.name}' to '${suffixed}'`);
-            flowNode.name = suffixed;
-            mutated = true;
-         }
-      }
-      return mutated;
+      return deduplicateNames(node.nodes, 'flow node', logger);
    }
 }
 
