@@ -83,6 +83,7 @@ import type {
    ClientTextDocumentChangeEvent,
    HydraniumLanguageServices,
    LogNameOptions,
+   AstDiagnostic,
    ModelService,
    ProjectChangeEvent,
    ServerSharedServices,
@@ -459,7 +460,7 @@ export class DataServer<
     * `astDocumentToTransferDocument` accepts both shapes (wire-shape or LSP-shape) and projects
     * to wire shape on the return — see `TransferEncoder.astDocumentToTransferDocument`.
     */
-   protected readonly modelService: ModelService<AstNode, unknown, TTransfer>;
+   protected readonly modelService: ModelService<AstNode, AstDiagnostic, TTransfer>;
 
    constructor(
       protected readonly connection: MessageConnection,
@@ -479,7 +480,7 @@ export class DataServer<
          );
       }
       this.encoder = encoder as TransferEncoder<TDiagnostic>;
-      this.modelService = modelService as ModelService<AstNode, unknown, TTransfer>;
+      this.modelService = modelService as ModelService<AstNode, AstDiagnostic, TTransfer>;
       const excluded = new Set<string>(this.options.excludedMethods);
       const registeredMethods = [
          ...DATA_SERVER_PROTOCOL_METHODS,

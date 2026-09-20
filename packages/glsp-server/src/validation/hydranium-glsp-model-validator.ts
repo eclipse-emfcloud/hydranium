@@ -12,7 +12,7 @@ import { type GModelElement, ModelState, type ModelValidator } from '@eclipse-gl
 import { inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { type ServerSharedServices, type TransferLspDiagnostic } from '@hydranium/core';
+import { type ServerSharedServices, type AstDiagnostic } from '@hydranium/core';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { type DiagnosticMarkerLookups, diagnosticsToMarkers } from './diagnostic-markers.js';
@@ -75,9 +75,9 @@ export class HydraniumGlspModelValidator<TRoot extends AstNode = AstNode> implem
             continue;
          }
          // Diagnostics are produced by the framework's `HydraniumDocumentValidator`,
-         // which emits `TransferLspDiagnostic` (LSP `Diagnostic` + `element` path).
+         // which emits `AstDiagnostic` (LSP `Diagnostic` + `element` path).
          // Parser/lexer diagnostics carry no `element`; the lookup drops them.
-         const diagnostics = document.diagnostics as TransferLspDiagnostic[] | undefined;
+         const diagnostics = document.diagnostics as AstDiagnostic[] | undefined;
          if (!diagnostics || diagnostics.length === 0) {
             continue;
          }

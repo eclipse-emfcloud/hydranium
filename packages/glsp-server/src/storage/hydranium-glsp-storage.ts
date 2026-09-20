@@ -225,7 +225,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected resubmitDebouncer!: Debouncer;
 
    /** Latest event document awaiting the debounced resubmit; read by {@link flushResubmit} (last write wins). */
-   protected pendingResubmitDocument?: AstDocument<AstNode, unknown>;
+   protected pendingResubmitDocument?: AstDocument<AstNode>;
 
    @postConstruct()
    protected init(): void {
@@ -376,7 +376,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * drag this client authors — the guard above gates the resubmit, not the
     * markers.
     */
-   protected handleSecondaryUpdated(uri: string, event: AstDocumentUpdatedEvent<AstNode, unknown>): void {
+   protected handleSecondaryUpdated(uri: string, event: AstDocumentUpdatedEvent<AstNode>): void {
       if (this.disposeIfStale(uri)) {
          return;
       }
@@ -402,7 +402,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * arrives pre-validation with an empty array — and diagnostics are the reason
     * {@link doUpdateAndSubmit} takes a separate event document at all.
     */
-   protected currentPrimaryDocument(): AstDocument<AstNode, unknown> | undefined {
+   protected currentPrimaryDocument(): AstDocument<AstNode> | undefined {
       const document = this.sharedServices.model.ModelService.getDocument(this.state.sourceUri);
       return document ? AstDocument.from(document) : undefined;
    }
@@ -415,7 +415,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * diagnostic markers for every update — including own edits, which skip
     * the resubmit but can still change diagnostics.
     */
-   protected async handleModelUpdated(rootUri: string, event: AstDocumentUpdatedEvent<AstNode, unknown>): Promise<void> {
+   protected async handleModelUpdated(rootUri: string, event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
       if (this.disposeIfStale(rootUri)) {
          return;
       }
@@ -447,7 +447,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * {@link resubmitDebouncer}, so a burst of rebuilds runs
     * {@link doUpdateAndSubmit} once with the most recent document.
     */
-   protected scheduleUpdateAndSubmit(document: AstDocument<AstNode, unknown>): void {
+   protected scheduleUpdateAndSubmit(document: AstDocument<AstNode>): void {
       this.pendingResubmitDocument = document;
       this.resubmitDebouncer.schedule();
    }
@@ -474,7 +474,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * mark our stack clean so the editor doesn't prompt to re-save identical
     * content. Our own saves already settle the stack through the save flow.
     */
-   protected handleModelSaved(event: AstDocumentSavedEvent<AstNode, unknown>): void {
+   protected handleModelSaved(event: AstDocumentSavedEvent<AstNode>): void {
       if (this.state.clientId !== event.sourceClientId) {
          this.commandStack.saveIsDone();
       }
@@ -488,7 +488,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * pre-validation, and this path re-settles precisely to escape a transient
     * mid-rebuild snapshot.
     */
-   protected async doUpdateAndSubmit(rootUri: string, eventDocument: AstDocument<AstNode, unknown>): Promise<Action[]> {
+   protected async doUpdateAndSubmit(rootUri: string, eventDocument: AstDocument<AstNode>): Promise<Action[]> {
       // Settle-gate the capture: never setSourceRoot off the event's possibly-transient
       // snapshot — the event can arrive while a re-entered document is mid-rebuild.
       const document = await this.sharedServices.model.ModelService.settled(rootUri);
@@ -526,7 +526,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * flip {@link AbstractHydraniumGlspState.editMode}, and — only on a transition —
     * return the {@link onParseErrorChanged} actions. No transition → no actions.
     */
-   protected refreshEditMode(document: AstDocument<AstNode, unknown>): Action[] {
+   protected refreshEditMode(document: AstDocument<AstNode>): Action[] {
       const broken = this.isStructurallyBroken(document);
       const previousEditMode = this.state.editMode;
       this.state.editMode = broken ? EditMode.READONLY : EditMode.EDITABLE;
@@ -543,7 +543,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * carrying a Langium `lexing-error` / `parsing-error` code. Adopters override
     * to compose additional break reasons.
     */
-   protected isStructurallyBroken(document: AstDocument<AstNode, unknown>): boolean {
+   protected isStructurallyBroken(document: AstDocument<AstNode>): boolean {
       return document.diagnostics.some(diagnostic => isStructuralDiagnostic(diagnostic));
    }
 
@@ -577,7 +577,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * the validation clear a moment later. Measured on a browser host, polling the
     * overlay: no element, empty, the sentence, empty again.
     */
-   protected onParseErrorChanged(_document: AstDocument<AstNode, unknown>, broken: boolean): Action[] {
+   protected onParseErrorChanged(_document: AstDocument<AstNode>, broken: boolean): Action[] {
       return [
          SetEditModeAction.create(broken ? EditMode.READONLY : EditMode.EDITABLE),
          broken

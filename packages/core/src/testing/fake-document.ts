@@ -9,6 +9,7 @@
 
 import { DocumentState, type AstNode, type AstReflection, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
 import { buildAstNode } from '../langium/ast-extension/ast-node-builder.js';
+import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 
 /**
  * Build a typed AST-node fixture for unit tests.
@@ -104,7 +105,7 @@ function stringifyFakeRoot(root: unknown): string {
  * staging. Override via `options.state` for tests that gate on earlier
  * phases.
  */
-export function makeFakeDocument<TAst extends AstNode = AstNode, TDiagnostic = unknown>(
+export function makeFakeDocument<TAst extends AstNode = AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
    uri: string | URI,
    root: TAst,
    options: FakeDocumentOptions<TAst, TDiagnostic> = {}

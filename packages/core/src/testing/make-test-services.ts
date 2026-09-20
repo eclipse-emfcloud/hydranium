@@ -24,6 +24,7 @@ import type { Harness } from '@hydranium/protocol/testing';
 import { type AstNode, type AstNodeDescription, type WorkspaceLock } from '@hydranium/langium';
 import type { ModelService, ModelServiceOptions } from '../langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../langium/module.js';
+import type { AstDiagnostic } from '../langium/validation/document-validator.js';
 import { DefaultTransferEncoder, type TransferEncoder } from '../langium/transfer/transfer-encoder.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
@@ -48,12 +49,21 @@ import { makeStubWritableFileSystem, type StubWritableFileSystem } from './stub-
  * to `ServerSharedServices` in {@link makeTestServices} is therefore the
  * single named place where the "stub stands in for the full service tree"
  * assertion happens.
+ *
+ * **`TDiagnostic` and `TTransferDiagnostic` are the two ends of a conversion
+ * and must stay separate.** The first is what the build left on
+ * `LangiumDocument.diagnostics` and what `ModelService` hands back on an
+ * `AstDocument`; the second is what `TransferEncoder.toTransferDiagnostic`
+ * produces for the wire. One parameter serving both makes the tree
+ * unbindable for an adopter who extends either shape, since extending one
+ * says nothing about the other.
  */
 export interface TestSharedServices<
    TAst extends AstNode = AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TTransferDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > {
    readonly Clock: Clock;
    readonly Logger: Logger;
@@ -92,7 +102,7 @@ export interface TestSharedServices<
       WorkspaceLock: WorkspaceLock;
    };
    readonly model: {
-      TransferEncoder: TransferEncoder<TDiagnostic>;
+      TransferEncoder: TransferEncoder<TTransferDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
    };
    /**
@@ -109,9 +119,10 @@ export interface TestSharedServices<
 /** Optional configuration for {@link makeTestServices}. */
 export interface MakeTestServicesOptions<
    TAst extends AstNode = AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TTransferDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > {
    /**
     * Serialiser used by the bundled `StubModelService`. The stub tree
@@ -206,7 +217,7 @@ export interface MakeTestServicesOptions<
     * Override the {@link TransferEncoder} factory. Default: framework
     * {@link TransferEncoder} with no overrides.
     */
-   transferEncoder?: (services: ServerSharedServices<TProject>) => TransferEncoder<TDiagnostic>;
+   transferEncoder?: (services: ServerSharedServices<TProject>) => TransferEncoder<TTransferDiagnostic>;
 }
 
 /**
@@ -224,9 +235,10 @@ export interface MakeTestServicesOptions<
  */
 export interface TestServicesBundle<
    TAst extends AstNode = AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TTransferDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > extends Harness {
    readonly services: ServerSharedServices<TProject>;
    readonly documents: StubLangiumDocuments<TAst, TDiagnostic>;
@@ -248,7 +260,7 @@ export interface TestServicesBundle<
     */
    readonly indexManager: StubIndexManager | undefined;
    readonly modelService: ModelService<TAst, TDiagnostic, TTransfer>;
-   readonly transferEncoder: TransferEncoder<TDiagnostic>;
+   readonly transferEncoder: TransferEncoder<TTransferDiagnostic>;
    readonly logger: Logger;
    /** The clock bound on the `Clock` slot — a `makeFakeClock()` if one was passed. */
    readonly clock: Clock;
@@ -274,12 +286,13 @@ export interface TestServicesBundle<
  */
 export function makeTestServices<
    TAst extends AstNode = AstNode,
-   TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    TTransfer extends TransferElement = TransferElement,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TTransferDiagnostic extends TransferDiagnostic = TransferDiagnostic
 >(
-   options: MakeTestServicesOptions<TAst, TDiagnostic, TTransfer, TProject> = {}
-): TestServicesBundle<TAst, TDiagnostic, TTransfer, TProject> {
+   options: MakeTestServicesOptions<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic> = {}
+): TestServicesBundle<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic> {
    const documents = makeStubLangiumDocuments<TAst, TDiagnostic>(options.seedDocuments);
    const textDocuments = makeStubHydraniumTextDocuments();
    const documentBuilder = makeStubDocumentBuilder();
@@ -316,7 +329,7 @@ export function makeTestServices<
    // (after the factories run); the literal uses unsafe casts to
    // partially-built objects to satisfy TestSharedServices, then patches
    // them in.
-   const services: TestSharedServices<TAst, TDiagnostic, TTransfer, TProject> = {
+   const services: TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic> = {
       Clock: clock,
       Logger: logger,
       Tracer: tracer,
@@ -338,7 +351,7 @@ export function makeTestServices<
          ...(indexManager ? { IndexManager: indexManager } : {}),
          WorkspaceLock: new HydraniumWorkspaceLock()
       },
-      model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject>['model'],
+      model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic>['model'],
       ServerLocale: {} as ServerLocale,
       MessageRenderer: {} as DefaultMessageRenderer
    };
@@ -358,13 +371,13 @@ export function makeTestServices<
    const serialize = options.serialize ?? ((_uri: string, root: TTransfer) => JSON.stringify(root));
    const transferEncoder = options.transferEncoder
       ? options.transferEncoder(sharedServices)
-      : new DefaultTransferEncoder<unknown, TDiagnostic>(sharedServices);
+      : new DefaultTransferEncoder<unknown, TTransferDiagnostic>(sharedServices);
    const modelService = options.modelService
       ? options.modelService(sharedServices)
       : makeStubModelService<TAst, TDiagnostic, TTransfer>(sharedServices, serialize, options.modelServiceOptions);
 
    const mutableModel = services.model as {
-      TransferEncoder: TransferEncoder<TDiagnostic>;
+      TransferEncoder: TransferEncoder<TTransferDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
    };
    mutableModel.TransferEncoder = transferEncoder;

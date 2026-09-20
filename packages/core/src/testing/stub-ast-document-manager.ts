@@ -9,6 +9,7 @@
 
 import { type AstNode, type LangiumDocument, UriUtils } from '@hydranium/langium';
 import { Disposable } from 'vscode-languageserver';
+import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 import {
    AstDocument,
    type AstDocumentManager,
@@ -44,7 +45,7 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  * are still picked so signature drift on them produces a compile
  * error rather than silent divergence.
  */
-export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic = unknown> extends Pick<
+export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> extends Pick<
    AstDocumentManager<TAst, TDiagnostic>,
    | 'open'
    | 'close'
@@ -102,7 +103,7 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic = unkn
    updateSubscriptions(uri?: string): number;
 }
 
-export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic = unknown>(
+export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
    textDocuments: StubHydraniumTextDocuments,
    fileSystem: Pick<WritableFileSystemProvider, 'writeFile'>,
    documents?: StubLangiumDocuments<TAst, TDiagnostic>

@@ -17,7 +17,6 @@ import {
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
-   type TransferDiagnostic,
    type TransferElement,
    type OpenModelArgs,
    type Tracer,
@@ -25,6 +24,7 @@ import {
    type TransferUpdateArgs
 } from '@hydranium/protocol';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock } from '../workspace/write-lock-scope.js';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
@@ -195,8 +195,12 @@ export interface ModelServiceOptions extends LogNameOptions {
  * **Generic parameters.**
  * - `TAst` — the AST root type each consumer expects on the returned
  *   {@link AstDocument}. Constrained to {@link AstNode}.
- * - `TDiagnostic` — wire diagnostic shape used by the injected
- *   `TransferEncoder`. Defaults to {@link TransferDiagnostic}.
+ * - `TDiagnostic` — the AST-layer diagnostic: whatever the build left on
+ *   `LangiumDocument.diagnostics`, carried through on the returned
+ *   {@link AstDocument}. Defaults to {@link AstDiagnostic}.
+ *   **Not the `TransferEncoder`'s parameter of the same name**, which is
+ *   that encoder's OUTPUT and so names the wire shape. This one names its
+ *   input, and an adopter binds the two to different types.
  * - `TTransfer` — transfer-model root accepted by `update` / `save`
  *   args. Constrained to {@link TransferElement}. Defaults to the
  *   structural base.
@@ -229,7 +233,11 @@ export interface ModelServiceOptions extends LogNameOptions {
  * member taking a phase as a PARAMETER cannot judge statically and so returns
  * `TDiagnostic`, leaving the choice to the caller.
  */
-export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagnostic, TTransfer extends TransferElement = TransferElement> {
+export interface ModelService<
+   TAst extends AstNode,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
+   TTransfer extends TransferElement = TransferElement
+> {
    /**
     * Resolves once the workspace has been initialised and its first build has
     * completed — the gate every read should wait behind, since a document
@@ -261,7 +269,7 @@ export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagno
    open(args: OpenModelArgs): Promise<Disposable>;
    close(args: CloseModelArgs): Promise<void>;
    isOpen(uri: string): boolean;
-   snapshot(uri: string): AstDocument<TAst, never> | undefined;
+   snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined;
    getDocument(uri: string): LangiumDocument | undefined;
 
    onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
@@ -271,7 +279,7 @@ export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagno
 
 export class DefaultModelService<
    TAst extends AstNode,
-   TDiagnostic = TransferDiagnostic,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
    /**
     * Structured payload accepted by `update` / `save`. Constrained to
     * {@link TransferElement} — the minimal `{ readonly $type: string }`
@@ -580,16 +588,13 @@ export class DefaultModelService<
     * - `validated` returns `AstDocument<TAst, TDiagnostic>` — diagnostics
     *   are populated.
     *
-    * **The `never` is a claim about the PHASE, not a guarantee about the
-    * instance, and the gap is reachable rather than theoretical.** The wait
-    * underneath resolves at or ABOVE the requested state, so a document
-    * something else already carried past `Validated` comes back from
-    * `settled()` with a populated diagnostics array typed `never`. Nothing
-    * strips it — the envelope copies the live document's array verbatim — and
-    * any host that validates its workspace before a consumer asks produces
-    * exactly that. So read an empty array as "none were computed, or there are
-    * none", never as "this document is clean", and call {@link validated} when
-    * the answer has to mean the second.
+    * **The `never` is enforced, not merely declared.** The wait underneath
+    * resolves at or ABOVE the requested state, so a document something else
+    * already carried past `Validated` would otherwise come back from
+    * `settled()` carrying a full diagnostics array typed `never`; these four
+    * strip it. An empty array here therefore means "this read does not report
+    * diagnostics", never "this document is clean" — call {@link validated}
+    * when the answer has to mean the second.
     *
     * `settled` is the integrity-overlay name for "all integrity rules
     * have fired"; it maps to {@link IntegrityService.SettledState} (which
@@ -598,19 +603,19 @@ export class DefaultModelService<
     * ever moves.
     */
    async parsed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
-      return this.ensureDocumentState(uri, DocumentState.Parsed, cancelToken) as Promise<AstDocument<TAst, never>>;
+      return this.withoutDiagnostics(await this.ensureDocumentState(uri, DocumentState.Parsed, cancelToken));
    }
 
    async linked(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
-      return this.ensureDocumentState(uri, DocumentState.Linked, cancelToken) as Promise<AstDocument<TAst, never>>;
+      return this.withoutDiagnostics(await this.ensureDocumentState(uri, DocumentState.Linked, cancelToken));
    }
 
    async settled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
-      return this.ensureDocumentState(uri, IntegrityService.SettledState, cancelToken) as Promise<AstDocument<TAst, never>>;
+      return this.withoutDiagnostics(await this.ensureDocumentState(uri, IntegrityService.SettledState, cancelToken));
    }
 
    async indexed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
-      return this.ensureDocumentState(uri, DocumentState.IndexedReferences, cancelToken) as Promise<AstDocument<TAst, never>>;
+      return this.withoutDiagnostics(await this.ensureDocumentState(uri, DocumentState.IndexedReferences, cancelToken));
    }
 
    async validated(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
@@ -855,14 +860,19 @@ export class DefaultModelService<
     * whatever the server is at *now*, which is the number an optimistic gate is
     * about to compare it against.
     *
-    * Diagnostics are `never` because this read names no phase and cannot wait
-    * for one: mid-build the array is either uncomputed or still the previous
-    * build's, and nothing here can tell those apart. A caller that needs them
-    * asks for {@link validated}.
+    * Diagnostics only from a document that has reached `Validated`, and an
+    * empty array otherwise. Unlike the phase reads this one names no phase, so
+    * the state it finds is the only thing that can say whether the array
+    * describes the content being handed back or whatever an earlier build left.
+    * A caller that needs them unconditionally waits, via {@link validated}.
     */
-   snapshot(uri: string): AstDocument<TAst, never> | undefined {
+   snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined {
       const document = this.getDocument(uri);
-      return document && (AstDocument.from<TAst, never>(document) as AstDocument<TAst, never>);
+      if (!document) {
+         return undefined;
+      }
+      const envelope = AstDocument.from<TAst, TDiagnostic>(document);
+      return document.state >= DocumentState.Validated ? envelope : this.withoutDiagnostics(envelope);
    }
 
    /**
@@ -1199,5 +1209,24 @@ export class DefaultModelService<
       return document
          ? AstDocument.from<TAst, TDiagnostic>(document)
          : AstDocument.create<TAst, TDiagnostic>(uri.toString(), 0, undefined as unknown as TAst, []);
+   }
+
+   /**
+    * The same envelope with no diagnostics, for a read that names a phase below
+    * `Validated`.
+    *
+    * Langium fills `LangiumDocument.diagnostics` from inside `validateDocument`
+    * and from nowhere else, so below that phase the array holds whatever an
+    * EARLIER build left — a verdict about text the document may no longer have.
+    * The wait underneath resolves at or above the phase asked for, so a document
+    * something else carried past `Validated` would otherwise hand a full array
+    * back from `parsed()`.
+    *
+    * A copy rather than a clear: the envelope is freshly built here, but
+    * {@link toAstDocument} is overridable and an adopter's version may return
+    * one it also keeps.
+    */
+   protected withoutDiagnostics(document: AstDocument<TAst, TDiagnostic>): AstDocument<TAst, never> {
+      return { ...document, diagnostics: [] };
    }
 }

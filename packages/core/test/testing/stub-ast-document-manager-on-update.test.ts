@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { asSnapshotVersion } from '@hydranium/protocol';
-import type { TransferDiagnostic } from '@hydranium/protocol';
+import type { AstDiagnostic } from '../../src/langium/validation/document-validator.js';
 import type { AstNode } from '@hydranium/langium';
 import type { AstDocumentUpdatedEvent } from '../../src/documents/ast-document-manager.js';
 import { makeTestServices } from '../../src/testing/make-test-services.js';
@@ -34,7 +34,7 @@ const URI_ONE = 'file:///a.x';
 const URI_TWO = 'file:///b.x';
 
 /** An update event with the minimum a subscriber reads. */
-function event(uri: string, sourceClientId: string): AstDocumentUpdatedEvent<AstNode, TransferDiagnostic> {
+function event(uri: string, sourceClientId: string): AstDocumentUpdatedEvent<AstNode, AstDiagnostic> {
    return {
       document: { uri, version: asSnapshotVersion(1), root: { $type: 'TypeOne' } as AstNode, diagnostics: [] },
       sourceClientId,

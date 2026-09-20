@@ -20,7 +20,7 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { type AstDocument } from '../../documents/ast-document-manager.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
-import { type TransferLspDiagnostic } from '../validation/document-validator.js';
+import { type AstDiagnostic } from '../validation/document-validator.js';
 
 /**
  * Which set of properties {@link TransferEncoder.toTransfer} emits.
@@ -108,9 +108,9 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
    toTransfer<T extends AstNode>(ast: T, mode?: TransferMode): TransferElement;
    toTransferDocument(langiumDocument: LangiumDocument): TransferDocument<TransferElement, TDiagnostic>;
    astDocumentToTransferDocument<TAst extends AstNode>(
-      document: AstDocument<TAst, TDiagnostic | TransferLspDiagnostic>
+      document: AstDocument<TAst, AstDiagnostic>
    ): TransferDocument<TransferElement, TDiagnostic>;
-   toTransferDiagnostic(diagnostic: TransferLspDiagnostic): TDiagnostic;
+   toTransferDiagnostic(diagnostic: AstDiagnostic): TDiagnostic;
 }
 
 /**
@@ -155,7 +155,7 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
  * - {@link toTransferDocument} — bundle root + diagnostics into the wire
  *   {@link TransferDocument} envelope. Override to filter / merge
  *   diagnostics from auxiliary sources or to project a synthesised root.
- * - {@link toTransferDiagnostic} — project a {@link TransferLspDiagnostic}
+ * - {@link toTransferDiagnostic} — project a {@link AstDiagnostic}
  *   (the framework validator's output) to {@link TDiagnostic}.
  */
 export class DefaultTransferEncoder<
@@ -395,7 +395,7 @@ export class DefaultTransferEncoder<
          source.uri,
          source.version,
          root,
-         source.diagnostics.map(diagnostic => this.toTransferDiagnostic(diagnostic as TransferLspDiagnostic))
+         source.diagnostics.map(diagnostic => this.toTransferDiagnostic(diagnostic as AstDiagnostic))
       );
    }
 
@@ -410,7 +410,7 @@ export class DefaultTransferEncoder<
     * second `LangiumDocuments.getDocument` lookup.
     *
     * The `diagnostic` projection assumes the snapshot's diagnostics carry
-    * the `TransferLspDiagnostic` shape ({@link Diagnostic} plus the
+    * the `AstDiagnostic` shape ({@link Diagnostic} plus the
     * framework validator's `element` / `property` decoration). Snapshots
     * built from raw Langium diagnostics structurally satisfy this — the
     * extra fields are optional in the projection.
@@ -421,7 +421,7 @@ export class DefaultTransferEncoder<
     * assembly seam rather than duplicating it.
     */
    astDocumentToTransferDocument<TAst extends AstNode>(
-      document: AstDocument<TAst, TDiagnostic | TransferLspDiagnostic>
+      document: AstDocument<TAst, AstDiagnostic>
    ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
       const root = this.encodeNode(document.root, this.createEncodeContext('full', document.uri)) as TransferTypeFor<TAst, TTransferMap>;
       return this.assembleTransferDocument<TAst>(document, root);
@@ -429,7 +429,7 @@ export class DefaultTransferEncoder<
 
    /**
     * Project an LSP-shaped diagnostic (typically a
-    * {@link TransferLspDiagnostic} produced by
+    * {@link AstDiagnostic} produced by
     * `HydraniumDocumentValidator` — adds `element` + optional `property`
     * to the standard {@link Diagnostic} shape) to the wire-diagnostic
     * shape.
@@ -448,7 +448,7 @@ export class DefaultTransferEncoder<
     * Override only if the wire-diagnostic shape needs fields beyond
     * what {@link TransferDiagnostic} carries.
     */
-   toTransferDiagnostic(diagnostic: TransferLspDiagnostic): TDiagnostic {
+   toTransferDiagnostic(diagnostic: AstDiagnostic): TDiagnostic {
       const langiumCode = (diagnostic.data as { code?: string } | undefined)?.code;
       // The same `data` the Langium code comes out of also carries the framework
       // message identity, under its own key so the two conventions co-exist.

@@ -10,7 +10,7 @@
 import { type Marker, MarkerKind } from '@eclipse-glsp/protocol';
 import { type AstNode } from '@hydranium/langium';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-types';
-import { type TransferLspDiagnostic } from '@hydranium/core';
+import { type AstDiagnostic } from '@hydranium/core';
 
 /**
  * The model-shaped lookups the diagnostic→marker translation needs, injected so
@@ -48,7 +48,7 @@ export interface DiagnosticMarkerLookups {
  * `MarkersReason` so a fresh `SetMarkersAction` replaces the previous markers
  * (an empty result clears them when all errors are fixed).
  */
-export function diagnosticsToMarkers(diagnostics: readonly TransferLspDiagnostic[], lookups: DiagnosticMarkerLookups): Marker[] {
+export function diagnosticsToMarkers(diagnostics: readonly AstDiagnostic[], lookups: DiagnosticMarkerLookups): Marker[] {
    const markers: Marker[] = [];
    for (const diagnostic of diagnostics) {
       const kind = markerKind(diagnostic.severity);

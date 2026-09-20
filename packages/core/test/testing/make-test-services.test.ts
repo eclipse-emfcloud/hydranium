@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { TransferDiagnostic } from '@hydranium/protocol';
+import type { AstDiagnostic } from '../../src/langium/validation/document-validator.js';
 import { URI, type AstNode } from '@hydranium/langium';
 import { makeFakeAstNode, makeFakeDescription, makeTestServices } from '../../src/testing/index.js';
 
@@ -33,7 +33,7 @@ const URI_A = 'file:///A.fake';
 
 describe('makeTestServices', () => {
    it('wires every slot of ServerSharedServices the framework reads from', () => {
-      const bundle = makeTestServices<FakeRoot, TransferDiagnostic, FakeRoot>({
+      const bundle = makeTestServices<FakeRoot, AstDiagnostic, FakeRoot>({
          serialize: (_uri, root) => `name:${root.name}`,
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
          seedProjects: [{ id: 'p1', referenceName: 'p1' }]
