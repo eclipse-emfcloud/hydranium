@@ -26,10 +26,19 @@ type AnyNode = AstNode & Record<string, unknown>;
  * fixture never traverses to a document root never reach the former, so it
  * may report no owning project. The `findNext*` fixtures need
  * `IndexManager` and `DocumentUriPolicy` on top and build their own stub.
+ *
+ * The reflection stub carries a two-member hierarchy, since
+ * {@link DefaultNameProvider.findNextName} resolves its type argument through
+ * `isSubtype`: an identity-only stub would pass every case here while leaving
+ * the subtype behaviour unexercised.
  */
 function makeServices(projectFor: (uri: URI) => Project | undefined = () => undefined): HydraniumLanguageServices {
    return {
       shared: {
+         AstReflection: {
+            isSubtype: (subtype: string, supertype: string) =>
+               subtype === supertype || (supertype === 'BaseType' && (subtype === 'TypeOne' || subtype === 'TypeTwo'))
+         },
          workspace: {
             ProjectManager: {
                getProject: (uri: URI | string) => projectFor(typeof uri === 'string' ? URI.parse(uri) : uri)
@@ -403,8 +412,21 @@ describe('DefaultNameProvider', () => {
          expect(provider.findNextName('TypeOne', 'NodeA', container)).toBe('NodeA1');
       });
 
+      it('counts every subtype of the requested type, so a supertype names a shared scope', () => {
+         // A name space several concrete types share is named by their supertype and by
+         // no concrete type, so an exact-match filter reports no collision and hands back
+         // the proposal — indistinguishable from a name that was free.
+         const provider = new DefaultNameProvider(makeServices());
+         const container = makeFakeAstNode<AnyNode>({ $type: 'BaseType' });
+         (container as AnyNode & { children?: AnyNode[] }).children = [
+            makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: container, name: 'NodeA' }),
+            makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: container, name: 'NodeA1' })
+         ];
+         expect(provider.findNextName('BaseType', 'NodeA', container)).toBe('NodeA2');
+      });
+
       it('excludes other-typed siblings from the known-name set so they do not shift the suffix', () => {
-         // Kills the type filter `node => node.$type === type` mutated to `node => true`:
+         // Kills the type filter `isSubtype(node.$type, type)` mutated to `node => true`:
          // a TypeTwo node named 'NodeA1' must NOT count as a used TypeOne name. Correct:
          // known = ['NodeA'] -> 'NodeA1'. Mutant (all types count): known = ['NodeA','NodeA1']
          // -> 'NodeA2'.

@@ -1,0 +1,11 @@
+// Test-only fixture. The line that was copied is the REPAIRED one, so the
+// duplicate already carries a suffix: renaming from the name as found would
+// nest a second one and grow a segment per copy.
+//
+// Loaded through a temp-directory copy — see `duplicate-names.domain`.
+
+process Recopied for Order {
+   task Pay
+   task Pay__1
+   task Pay__1
+}

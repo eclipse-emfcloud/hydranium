@@ -254,10 +254,21 @@ export interface NameProvider extends LangiumNameProvider {
    /**
     * Find a unique name for a new node within `container`, using `base`
     * as a stem. Walks the AST subtree rooted at `container` and avoids
-    * names already used by `$type === type` nodes there. Default
-    * generates `${base}1`, `${base}2`, ... until an unused value is
-    * found. Used by create-element operation handlers when the
-    * uniqueness scope is one AST subtree.
+    * names already held there by nodes of `type` or of any subtype of it,
+    * as `AstReflection.isSubtype` reports. Default generates `${base}1`,
+    * `${base}2`, ... until an unused value is found. Used by create-element
+    * operation handlers when the uniqueness scope is one AST subtree.
+    *
+    * Subtype-closed rather than `$type`-exact, because a name space shared by
+    * several concrete types is named by their common supertype and by no
+    * concrete type at all — the shape a cross-reference whose target type is
+    * that supertype produces. An exact filter finds no collisions for such a
+    * call and returns the proposal unchanged, which a caller cannot tell from
+    * a name that was genuinely free.
+    * {@link NameProvider.findNextDocumentQualifiedName} and
+    * {@link NameProvider.findNextProjectQualifiedName} resolve `type` the same
+    * way, through `IndexManager.allElements`, so one type argument does not
+    * mean different sets at different tiers.
     */
    findNextName(type: string, base: string, container: AstNode): string;
 
@@ -496,8 +507,9 @@ export class DefaultNameProvider implements NameProvider {
 
    findNextName(type: string, base: string, container: AstNode): string {
       const proposal = base.replaceAll(this.nameSeparator, '_');
+      const reflection = this.services.shared.AstReflection;
       const knownNames = AstUtils.streamAst(container)
-         .filter(node => node.$type === type)
+         .filter(node => reflection.isSubtype(node.$type, type))
          .map(node => this.getOwnName(node))
          .nonNullable()
          .toArray();

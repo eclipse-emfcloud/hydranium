@@ -19,9 +19,8 @@ import {
    type MaybePromise,
    SelectAction
 } from '@eclipse-glsp/server';
-import { findNextUnique } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
-import { DiagramNode, type FlowNode, Gateway, Task } from '../../language-server/generated/ast.js';
+import { DiagramNode, FlowNode, Gateway, Task } from '../../language-server/generated/ast.js';
 import { layoutNode, processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
@@ -147,18 +146,22 @@ export abstract class OrderFlowCreateFlowNodeOperationHandler extends JsonCreate
    /**
     * A name unique across **both** flow-node kinds.
     *
-    * `NameProvider.findNextName` cannot be used here: it filters candidates by
-    * a single `$type`, so asked about `Task` it would happily propose a name a
-    * `Gateway` already holds. Tasks and gateways share one name space, because
-    * a `Transition` targets `FlowNode` — the duplicate-flow-node integrity
-    * rule exists precisely because that collision is reachable, and proposing
-    * a name that immediately trips it would be a poor first impression of the
-    * palette. Living on the BASE rather than in each subclass is what keeps
-    * that one name space from quietly becoming two.
+    * Asked about `FlowNode` rather than the concrete `$type` the handler
+    * creates: tasks and gateways share one name space, because a `Transition`
+    * targets `FlowNode` — the duplicate-flow-node integrity rule exists
+    * precisely because that collision is reachable, and proposing a name that
+    * immediately trips it would be a poor first impression of the palette.
+    * `findNextName` resolves its type argument through the type hierarchy, so
+    * the supertype is what names that shared space; either concrete type names
+    * half of it. Living on the BASE rather than in each subclass is what keeps
+    * the one name space from quietly becoming two.
+    *
+    * A root that routes to no language falls back to the bare stem, and the
+    * integrity rule repairs the duplicate that may follow.
     */
    protected proposeName(stem: string): string {
-      const taken = this.modelState.sourceRoot.nodes.map(node => node.name);
-      return findNextUnique(stem, taken);
+      const root = this.modelState.sourceRoot;
+      return this.modelState.nameProviderFor(root)?.findNextName(FlowNode.$type, stem, root) ?? stem;
    }
 }
 
