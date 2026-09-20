@@ -29,11 +29,13 @@ import { type TransferLspDiagnostic } from '../validation/document-validator.js'
  *   including AST-extension-derived computed scalars and synthetic child
  *   mirrors. This is the wire shape clients consume, and the default.
  * - `'grammar'` — only the grammar-declared properties, per
- *   `AstReflection.getTypeMetaData($type).properties`. Excludes every
- *   computed / synthetic property by construction (no naming convention,
- *   no registration). Yields the authored state a serializer round-trips —
- *   a diffable, acyclic baseline for field-level recording / forward-write
- *   reconcile.
+ *   `AstReflection.getTypeMetaData($type).properties`, each carrying the
+ *   node's own authored value. Excludes every computed / synthetic property
+ *   by construction (no naming convention, no registration) and bypasses the
+ *   `resolvePropertyValue` substitution hook, so neither a computed KEY nor a
+ *   computed VALUE can reach this shape. Yields the authored state a
+ *   serializer round-trips — a diffable, acyclic baseline for field-level
+ *   recording / forward-write reconcile.
  */
 export type TransferMode = 'full' | 'grammar';
 
@@ -144,7 +146,8 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
  * - {@link propertyKeys} — which property names the walk visits.
  * - {@link shouldEmitProperty} — per-key filter on top of the default
  *   `$`-internals strip.
- * - {@link resolvePropertyValue} — value substitution per property.
+ * - {@link resolvePropertyValue} — value substitution per property, `'full'`
+ *   mode only (see there for why `'grammar'` bypasses it).
  * - {@link finalizeTransferNode} — post-decoration per encoded node.
  * - {@link toTransferValue} — recursion seam per property value. Override
  *   to special-case reference encoding or to drop specific value shapes.
@@ -258,7 +261,14 @@ export class DefaultTransferEncoder<
          if (!this.shouldEmitProperty(ast, key, context)) {
             continue;
          }
-         const value = this.resolvePropertyValue(ast, key, context);
+         // `'grammar'` reads the authored value straight off the node rather than
+         // through `resolvePropertyValue`. The mode promises a shape the serializer
+         // round-trips, and a value-substitution hook cannot honour that: what it
+         // returns is by construction not what the document declared. Scoping the
+         // hook to `'full'` is what makes that guarantee structural instead of a
+         // rule every override has to remember.
+         const value =
+            context.mode === 'grammar' ? (ast as unknown as Record<string, unknown>)[key] : this.resolvePropertyValue(ast, key, context);
          // `'grammar'` lists every declared property, including those absent on
          // this node; skip the absent ones. (`'full'` enumerates only own
          // properties, so absent properties never surface there.) Part of the
@@ -299,8 +309,17 @@ export class DefaultTransferEncoder<
    }
 
    /**
-    * Which value the walk emits under `key`. Default: the node's own value.
-    * Override to substitute a derived value under a grammar property name.
+    * Which value the walk emits under `key`, in `'full'` mode ONLY. Default:
+    * the node's own value.
+    *
+    * Override to substitute a derived value under a grammar property name — an
+    * inheritance-resolved field, a preference-dependent label. `'grammar'`
+    * bypasses this hook and reads the node directly: that mode's contract is
+    * the authored state a serializer round-trips, and a substituted value is by
+    * construction not the one the document declared. An override that applied
+    * in both modes would leave the grammar shape carrying derived values under
+    * declared property names — diffable and acyclic still, but no longer
+    * authored, which is the property every consumer of that mode relies on.
     */
    protected resolvePropertyValue(ast: AstNode, key: string, _context: EncodeContext): unknown {
       return (ast as unknown as Record<string, unknown>)[key];

@@ -32,6 +32,96 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
+## The lint rule banning direct `langium` imports never fires
+
+You added a rule to keep imports on the `@hydranium/langium` chokepoint — the
+prevention for the entry above — lint is green, and direct `langium` imports go
+on landing. No error, no warning, no report that a rule was dropped.
+
+ESLint **replaces** a rule's configuration per scope rather than merging it. Two
+configurations naming the same rule id do not combine: the later one wins
+outright. So a chokepoint rule placed before a shared config that already owns
+`no-restricted-imports` is discarded entirely, and ESLint says nothing — a
+discarded rule is indistinguishable from a rule with nothing to report.
+
+The base `no-restricted-imports` and `@typescript-eslint/no-restricted-imports`
+are **separate rule ids**. Using the typescript-eslint one side-steps a shared
+config that owns the base one, and it is the right id anyway: it can distinguish
+type-only from value imports. (This framework's own config uses both, for
+exactly that independence.)
+
+**Remedy:** use the typescript-eslint id, and exempt generated output —
+`langium-cli` rewrites those files on every build, so a violation there is not
+fixable in your tree.
+
+```js
+{
+   files: ['src/**/*.ts'],
+   ignores: ['**/generated/**'],
+   rules: {
+      '@typescript-eslint/no-restricted-imports': ['error', {
+         paths: [
+            { name: 'langium', message: 'Import Langium via @hydranium/langium, not the upstream package.' },
+            { name: 'langium/lsp', message: 'Import via @hydranium/langium/lsp.' },
+            { name: 'langium/node', message: 'Import via @hydranium/langium/node.' },
+            { name: 'langium/test', message: 'Import via @hydranium/langium/test.' },
+            { name: 'vscode-uri', message: 'Import URI via @hydranium/langium, which re-exports it.' }
+         ]
+      }]
+   }
+}
+```
+
+Confirm the rule survived rather than assuming it did — resolve the config for a
+file it should cover and check the rule is present with your paths:
+
+```bash
+npx eslint --print-config src/some-file.ts
+```
+
+`langium` stays a declared dependency regardless: the generated files import it
+directly, which is why they are exempt rather than fixed.
+
+## A framework fix disappears after you rebind a service
+
+Completion stops inserting correctly, a scope stops resolving something it used
+to, a diagnostic stops appearing — and it starts the moment you bind your own
+implementation of that service. Your class looks right and compiles cleanly.
+
+You extended the **upstream** base class rather than the framework's. For
+several Langium and GLSP services the framework binds its own subclass, which
+carries fixes on top of the upstream default. A slot's declared type is the
+upstream interface, so both satisfy it and nothing complains — but subclassing
+`DefaultCompletionProvider` instead of `HydraniumCompletionProvider` silently
+gives up everything the framework added.
+
+Nothing reports this. There is no error and no warning; the behaviour simply
+reverts to upstream.
+
+**Remedy:** before rebinding any service, check whether the framework already
+specialises it, and extend that class instead. Two ways to find out:
+
+- The module declares its overrides explicitly. In
+  `packages/core/src/lsp/language-module.ts` the slot is marked
+  `/* override */ CompletionProvider: HydraniumCompletionProvider;` — an
+  `/* override */` on a slot means the framework has a specialisation there.
+- The naming convention answers it directly. A `Hydranium*` class is by
+  definition the framework's version of an upstream Langium/GLSP/Theia class;
+  the prefix exists to keep it distinct from the upstream `Default*` an adopter
+  also imports. So `HydraniumScopeProvider`, `HydraniumDocumentBuilder`,
+  `HydraniumCompletionProvider` and their siblings are each a "use this one"
+  signal.
+
+To list every specialisation the framework ships:
+
+```bash
+grep -rE '^export (abstract )?class Hydranium\w+ extends ' node_modules/@hydranium/*/src
+```
+
+Rebinding to a class that does *not* derive from the framework's is supported —
+sometimes it is what you want. The point is that it should be a decision rather
+than an accident.
+
 ## `Unknown parameter structure auto`
 
 Thrown while a server head initializes — the GLSP head is where it usually

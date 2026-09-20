@@ -563,6 +563,19 @@ describe('TransferEncoder extension hooks', () => {
       expect(result.other).toBe(1);
    });
 
+   it("resolvePropertyValue stays out of the 'grammar' shape", () => {
+      // `HookedEncoder` substitutes unconditionally — the shape an adopter writes
+      // when it wants a derived value on the wire and never considers modes. The
+      // grammar shape has to ignore it regardless: it is the baseline a
+      // forward-write reconcile diffs and the text a serializer round-trips, so a
+      // substituted value would diff as a foreign edit and persist as though the
+      // document had declared it.
+      const encoder = buildHookedEncoder();
+      const node = makeFakeAstNode({ $type: 'Root', name: 'a' });
+      const result = encoder.toTransfer(node, 'grammar') as unknown as Record<string, unknown>;
+      expect(result.name).toBe('a');
+   });
+
    it("finalizeTransferNode decorates every encoded node in 'full' mode, including nested ones", () => {
       const encoder = buildHookedEncoder();
       const node = makeFakeAstNode({ $type: 'Root', name: 'a', child: { $type: 'Root', name: 'c' } });

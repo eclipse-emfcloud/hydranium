@@ -1148,6 +1148,61 @@ instrumentation formatters, computation steps, config fields, internal helpers
 Widening `private` → `protected` is non-breaking (it only adds reach), so err
 toward `protected` when unsure; tighten later only with a documented reason.
 
+## Override points — policy or wiring, not both
+
+A `protected` member is an invitation, and the previous section says to extend
+those invitations freely. This one bounds what a single invitation should
+contain: **an override point holds policy or wiring, never both.**
+
+Policy is the decision — *whether* to act, *what* to render, *which* value to
+use. Wiring is the orchestration that carries the decision out: the
+subscription, the both-arms error handling, the ordering against `super`, the
+teardown that must still run when the happy path doesn't. Policy is what an
+adopter legitimately wants to change. Wiring is where the invariants live.
+
+**When one method holds both, opening it for the policy hands over the wiring
+too** — and an adopter overriding it has no way to keep the half they did not
+mean to touch, short of copying it. They copy it once, correctly, against the
+contract as it stands; the framework later tightens that contract, and the copy
+is now a silent divergence in someone else's repository. This is worse than an
+ordinary breaking change, because nothing in either tree points at it.
+
+The test to apply to a `protected` member: *if an adopter overrides this to
+change one thing, what else do they have to reimplement to stay correct?* If the
+answer is anything, split it.
+
+`HydraniumGlspDiagramWidget.showLoadingOverlay` is the shape to study. It decides
+whether an overlay is warranted (already shown? no loader? load already
+settled?), and it also subscribes the teardown:
+
+<!-- snippet-skip: illustrative method bodies shown outside their class -->
+
+```ts
+// Both concerns in one overridable method — the opt-out documented on the class
+// is "override this to a no-op", which also discards the subscription below.
+protected showLoadingOverlay(): void {
+   if (this.loadingOverlay || !this.hydraniumDiagramLoader) {
+      return; // policy
+   }
+   this.loadingOverlay = this.createLoadingOverlay(); // already split out — good
+   loader.onceLoadSettled().then(
+      outcome => this.onLoadSettled(outcome),
+      () => this.hideLoadingOverlay() // wiring: the arm that must not be lost
+   );
+}
+```
+
+The rendering half is already split correctly — `createLoadingOverlay` and
+`loadingLabel` are separate seams, so changing what the overlay *looks like*
+never touches the subscription. The remaining coupling is the opt-out: a
+`protected shouldShowLoadingOverlay(): boolean` would let an adopter decline the
+overlay without owning the teardown, leaving the two-arm `onceLoadSettled`
+handling closed.
+
+Where the split is genuinely awkward, say so at the declaration — name the
+invariant the wiring protects, so an overriding adopter at least knows what they
+have taken on.
+
 ## Comments — constraints, not examples
 
 A comment earns its place by telling a reader something the code cannot:

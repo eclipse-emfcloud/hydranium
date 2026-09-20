@@ -93,6 +93,14 @@ class FailingSecondaryState extends TestMultiState {
    }
 }
 
+/** Opts secondary writes into the conflict gate — the coarser check the class doc describes. */
+@injectable()
+class GatedSecondaryState extends TestMultiState {
+   protected override secondaryBaseVersion(uri: string): number | undefined {
+      return this.capturedVersionOf(uri);
+   }
+}
+
 function makeHarness(): Harness {
    return {
       warns: [],
@@ -278,6 +286,28 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          expect(harness.updateCalls[0].baseVersion).toBeUndefined();
          expect(harness.updateCalls[1].baseVersion).toBe(4);
          expect(harness.updateCalls[1].model).toEqual({ $type: 'TestRoot', label: 'edited' });
+      });
+
+      it('gates a secondary write when secondaryBaseVersion opts in', async () => {
+         // The hook IS the opt-in: the version was already captured at
+         // trackSecondaryDocument, so the coarser check the class doc describes is
+         // one override rather than a reimplementation of the write call.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         seed(harness, SEMANTIC_URI, 'semantic', 9);
+         const state = createState(harness, GatedSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'edited' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'edited-semantic' } as TestPrimary }
+            },
+            4
+         );
+
+         expect(harness.updateCalls.find(call => call.uri === SEMANTIC_URI)?.baseVersion).toBe(9);
       });
 
       it('captures the primary root the write returned', async () => {
