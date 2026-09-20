@@ -41,7 +41,6 @@ import {
    type ServerSharedServices,
    type AstDiagnostic
 } from '@hydranium/core';
-import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import {
    makeFakeAstNode,
    makeStubServiceRegistry,
@@ -731,7 +730,6 @@ describe('DataServer', () => {
                      {
                         range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
                         message: 'broken',
-                        severity: DiagnosticSeverity.Error,
                         code: 'unresolved-ref',
                         element: 'FakeRoot'
                      }

@@ -23,6 +23,7 @@ import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hydranium/langium';
 import { type Disposable } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
 import { DefaultModelService, type ModelService } from '../../../src/langium/model-service/model-service.js';
 import { type ServerSharedServices } from '../../../src/langium/module.js';
@@ -338,6 +339,81 @@ describe('ModelService AST envelopes', () => {
       const doc = await service.waitForDocumentState(URI_A, DocumentState.Validated);
       expect(doc.version).toBe(7);
       void bundle; // bundle currently unused beyond seeding
+   });
+});
+
+describe('ModelService diagnostics per read', () => {
+   /** A document already carried to `Validated`, with the diagnostics that phase produced. */
+   function validatedBundle(): ReturnType<typeof makeTestServices<FakeRoot>> {
+      return makeTestServices<FakeRoot>({
+         seedDocuments: [
+            {
+               uri: URI_A,
+               root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }),
+               options: {
+                  state: DocumentState.Validated,
+                  diagnostics: [
+                     {
+                        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                        message: 'broken',
+                        severity: DiagnosticSeverity.Error
+                     }
+                  ]
+               }
+            }
+         ]
+      });
+   }
+
+   it('settled() reports none even when the document was already carried past Validated', async () => {
+      // The gap the `never` used to only claim: the wait resolves at or ABOVE
+      // the phase asked for, so this document satisfies a settled() wait while
+      // holding a full array. Any host that validates its workspace before a
+      // consumer asks produces exactly this state.
+      const bundle = validatedBundle();
+
+      const document = await bundle.modelService.settled(URI_A);
+
+      expect(document.diagnostics).toEqual([]);
+   });
+
+   it('validated() reports them, so the empty array above is the read and not the fixture', async () => {
+      // Without this, the assertion above is equally satisfied by diagnostics
+      // that never arrived — the same observation for the opposite reason.
+      const bundle = validatedBundle();
+
+      const document = await bundle.modelService.validated(URI_A);
+
+      expect(document.diagnostics).toHaveLength(1);
+   });
+
+   it('snapshot() reports them for a validated document', () => {
+      const bundle = validatedBundle();
+
+      expect(bundle.modelService.snapshot(URI_A)?.diagnostics).toHaveLength(1);
+   });
+
+   it('snapshot() reports none below Validated, where the array is from an earlier build', () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [
+            {
+               uri: URI_A,
+               root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }),
+               options: {
+                  state: DocumentState.IndexedReferences,
+                  diagnostics: [
+                     {
+                        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                        message: 'stale',
+                        severity: DiagnosticSeverity.Error
+                     }
+                  ]
+               }
+            }
+         ]
+      });
+
+      expect(bundle.modelService.snapshot(URI_A)?.diagnostics).toEqual([]);
    });
 });
 
