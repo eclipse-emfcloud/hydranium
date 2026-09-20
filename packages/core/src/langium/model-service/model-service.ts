@@ -11,6 +11,7 @@ import {
    type CanonicalUri,
    type CloseModelArgs,
    ConflictError,
+   isSnapshotVersion,
    defineMessage,
    Logger,
    type MaybeObservableValue,
@@ -260,6 +261,7 @@ export interface ModelService<TAst extends AstNode, TDiagnostic = TransferDiagno
    open(args: OpenModelArgs): Promise<Disposable>;
    close(args: CloseModelArgs): Promise<void>;
    isOpen(uri: string): boolean;
+   snapshot(uri: string): AstDocument<TAst, never> | undefined;
    getDocument(uri: string): LangiumDocument | undefined;
 
    onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
@@ -706,7 +708,7 @@ export class DefaultModelService<
       // no client holds open, the open assigns the shared version from the
       // INCOMING text, so a version read afterwards has already absorbed the
       // caller's own write. Gating on it rejected every modifying write to a
-      // closed document, having compared the caller's `baseVersion` against a
+      // closed document, having compared the caller's `basedOn` against a
       // number the caller itself produced — and a serialised round-trip that is
       // not byte-identical to the stored text was enough to trigger it. Reading
       // first keeps both cases the gate exists for: an unknown URI answers 0, so
@@ -716,11 +718,11 @@ export class DefaultModelService<
       const currentVersion = this.services.workspace.TextDocuments.version(uri);
       const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
       await run('open', () => this.open({ uri, clientId: args.clientId, text }));
-      if (args.baseVersion !== undefined && currentVersion !== args.baseVersion) {
+      if (isSnapshotVersion(args.basedOn) && currentVersion !== args.basedOn) {
          // Distinct from the post-build "superseded" debug line below: this is a
          // based-on-stale rejection (the write never applies), not two writes racing.
-         this.tracer.debug(`Conflict on ${uri}: based-on v${args.baseVersion} stale, server at v${currentVersion}`);
-         throw new ConflictError(uri, args.baseVersion, currentVersion);
+         this.tracer.debug(`Conflict on ${uri}: based-on v${args.basedOn} stale, server at v${currentVersion}`);
+         throw new ConflictError(uri, args.basedOn, currentVersion);
       }
       const appliedVersion = await run('apply', () => this.services.workspace.AstDocumentManager.update(uri, text, args.clientId));
       // Dispatch through the public `rebuild` (which re-canonicalizes the already-
@@ -844,6 +846,26 @@ export class DefaultModelService<
    }
 
    /**
+    * Snapshot of `uri` as it stands RIGHT NOW — the synchronous sibling of the
+    * phase reads, which all wait. `undefined` when no document is registered.
+    *
+    * **This is what a writer wants, and {@link getDocument} is not.** The
+    * envelope's `version` is copied by value at projection time, so it cannot
+    * move afterwards; a version read off the live document at write time is
+    * whatever the server is at *now*, which is the number an optimistic gate is
+    * about to compare it against.
+    *
+    * Diagnostics are `never` because this read names no phase and cannot wait
+    * for one: mid-build the array is either uncomputed or still the previous
+    * build's, and nothing here can tell those apart. A caller that needs them
+    * asks for {@link validated}.
+    */
+   snapshot(uri: string): AstDocument<TAst, never> | undefined {
+      const document = this.getDocument(uri);
+      return document && (AstDocument.from<TAst, never>(document) as AstDocument<TAst, never>);
+   }
+
+   /**
     * The built {@link LangiumDocument} for `uri`, looked up by canonical identity —
     * the synchronous, phase-agnostic sibling of {@link ensureDocumentState} /
     * {@link waitForDocumentState} (which await a build state). The single
@@ -851,6 +873,13 @@ export class DefaultModelService<
     * into `LangiumDocuments` directly: a symlinked / `..` / case-divergent URI
     * still resolves to the one document the build keys by its real path. Returns
     * `undefined` if no document is registered for `uri`.
+    *
+    * **Live, so do not take a based-on version off it.** `textDocument` is the
+    * store's own object rather than a copy, so `.version` read here answers for
+    * the moment of the READ, not the moment of the earlier content — pass it to
+    * a write and the server compares its current version against itself, the
+    * gate passes unconditionally, and a concurrent edit is overwritten with
+    * nothing logged. Use {@link snapshot} for that, or a phase read.
     */
    getDocument(uri: string): LangiumDocument | undefined {
       return this.services.workspace.AstDocumentManager.getDocument(uri);

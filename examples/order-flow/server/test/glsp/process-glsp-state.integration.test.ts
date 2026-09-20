@@ -130,7 +130,7 @@ async function openDiagram(): Promise<OpenDiagram> {
       layoutText: () => documents.getDocument(URI.parse(harness.state.layoutUri))?.textDocument.getText(),
       documentVersion: () => processDocument().textDocument.version,
       foreignWrite: async text => {
-         await services.shared.model.ModelService.update({ uri: rootUri, model: text, clientId: 'text-editor' });
+         await services.shared.model.ModelService.update({ uri: rootUri, model: text, clientId: 'text-editor', basedOn: 'anything' });
       },
       apply: async action => {
          const before = harness.actions.length;

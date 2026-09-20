@@ -10,7 +10,7 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type TransferElement } from '@hydranium/protocol';
+import { type BasedOn, type TransferElement } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -71,8 +71,8 @@ export interface MultiDocumentSourceModel<TPrimary extends TransferElement = Tra
  * than reconciled. Gating them too would need a per-document reconcile whose
  * outcomes can disagree (merge one, conflict another) with no way to un-write the
  * merged one — the atomicity problem again, one layer up. An adopter that wants
- * a coarser check overrides {@link secondaryBaseVersion} to return the version
- * {@link AbstractHydraniumGlspState.capturedVersionOf} already holds, and takes
+ * a coarser check overrides {@link secondaryBasedOn} to return the version
+ * {@link AbstractHydraniumGlspState.snapshotVersionOf} already holds, and takes
  * on the partial-write window named there.
  */
 @injectable()
@@ -140,10 +140,10 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * `ConflictError` from the primary, reconcile via the injected policy exactly
     * as the single-document state does — the orchestration is shared.
     */
-   async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, version?: number): Promise<void> {
-      return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, version, {
-         persist: async (candidate, baseVersion) => {
-            const { root } = await this.persist(candidate, baseVersion);
+   async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn = this.basedOn): Promise<void> {
+      return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, basedOn, {
+         persist: async (candidate, candidateBasedOn) => {
+            const { root } = await this.persist(candidate, candidateBasedOn);
             this.setSourceRoot(this._sourceUri, root);
          },
          refetch: () => this.refetch(),
@@ -156,11 +156,11 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
 
    /**
     * Write hook — secondaries first (ungated), primary last (gated on
-    * `baseVersion`). The order is the failure-mode choice documented on the
+    * `basedOn`). The order is the failure-mode choice documented on the
     * class, not incidental: override this when the primary is the document the
     * others REFERENCE, since then this order writes the references first.
     */
-   protected async persist(model: MultiDocumentSourceModel<TPrimary>, baseVersion?: number): Promise<{ root: TRoot }> {
+   protected async persist(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn): Promise<{ root: TRoot }> {
       for (const [uri, secondary] of Object.entries(model.secondaries)) {
          if (this.hasChanged(this.baseline?.secondaries[uri], secondary)) {
             await this.persistSecondary(uri, secondary);
@@ -171,7 +171,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
          // captured rather than round-tripping the document for no reason.
          return { root: this._sourceRoot };
       }
-      return this.persistPrimary(model.primary, baseVersion);
+      return this.persistPrimary(model.primary, basedOn);
    }
 
    /**
@@ -194,19 +194,19 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       return baseline === undefined || JSON.stringify(baseline) !== JSON.stringify(candidate);
    }
 
-   /** Write the primary document, opting into the conflict gate when `baseVersion` is given. */
-   protected async persistPrimary(model: TPrimary, baseVersion?: number): Promise<{ root: TRoot }> {
+   /** Write the primary document, opting into the conflict gate unless `basedOn` is `'anything'`. */
+   protected async persistPrimary(model: TPrimary, basedOn: BasedOn): Promise<{ root: TRoot }> {
       const document = await this.sharedServices.model.ModelService.update({
          uri: this._sourceUri,
          model,
          clientId: this.clientId,
-         baseVersion
+         basedOn
       });
       return document as unknown as { root: TRoot };
    }
 
    /**
-    * Write one secondary document, gated on whatever {@link secondaryBaseVersion}
+    * Write one secondary document, gated on whatever {@link secondaryBasedOn}
     * returns. Override alongside {@link persistPrimary} when the round-trip
     * differs per document role — a layout file and a semantic file need not
     * share a serializer.
@@ -216,17 +216,18 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
          uri,
          model,
          clientId: this.clientId,
-         baseVersion: this.secondaryBaseVersion(uri)
+         basedOn: this.secondaryBasedOn(uri)
       });
    }
 
    /**
-    * Based-on version for a secondary write. Default `undefined` — ungated, for
-    * the reason given under the conflict-gate note on the class doc.
+    * What a secondary write declares it was based on. Default `'anything'` —
+    * ungated, because gating the whole set needs a per-document reconcile whose
+    * outcomes can disagree, with no way to un-write an already-merged sibling.
     *
     * **The hook exists so that opting in is an override rather than a
-    * reimplementation.** The state already captures what such a check needs
-    * ({@link AbstractHydraniumGlspState.capturedVersionOf}), and returning that
+    * reimplementation.** The state already holds what such a check needs
+    * ({@link AbstractHydraniumGlspState.snapshotVersionOf}), and returning that
     * value here is the whole opt-in; without it the only place to put the
     * comparison is a copy of {@link persistSecondary}, which then has to be kept
     * in step with the framework's write call.
@@ -236,8 +237,8 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * the reconcile then drops the edit those writes stay. Weigh that against the
     * default, which lets a foreign edit to a secondary be overwritten silently.
     */
-   protected secondaryBaseVersion(_uri: string): number | undefined {
-      return undefined;
+   protected secondaryBasedOn(_uri: string): BasedOn {
+      return 'anything';
    }
 
    /**

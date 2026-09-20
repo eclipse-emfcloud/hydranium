@@ -152,7 +152,12 @@ async function openDiagram({ preValidate = true }: { preValidate?: boolean } = {
          // that follows reports "content unchanged", never rebuilds, and emits no
          // event — a fixture that cannot exercise the subscription at all.
          await services.shared.model.ModelService.open({ uri: harness.state.layoutUri, clientId: 'text-editor' });
-         await services.shared.model.ModelService.update({ uri: harness.state.layoutUri, model: text, clientId: 'text-editor' });
+         await services.shared.model.ModelService.update({
+            uri: harness.state.layoutUri,
+            model: text,
+            clientId: 'text-editor',
+            basedOn: 'anything'
+         });
       },
       apply: async action => {
          const before = harness.actions.length;

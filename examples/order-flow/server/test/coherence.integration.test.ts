@@ -263,7 +263,8 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       const edited = await data.proxy.updateModelDocument({
          uri: processUri,
          clientId: 'coherence-data',
-         model: EDITED_PROCESS_TEXT
+         model: EDITED_PROCESS_TEXT,
+         basedOn: 'anything'
       });
       expect(edited.diagnostics).toEqual([]);
 
@@ -306,7 +307,8 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          await data.proxy.updateModelDocument({
             uri: domainUri,
             clientId: 'coherence-data',
-            model: DOMAIN_TEXT_WITH_EXTRA_FIELD
+            model: DOMAIN_TEXT_WITH_EXTRA_FIELD,
+            basedOn: 'anything'
          });
          await waitFor(() => publishedFor(lsp, processUri, beforeCleanEdit).length > 0, {
             timeoutMs: CASCADE_TIMEOUT_MS,
@@ -320,7 +322,8 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          const edited = await data.proxy.updateModelDocument({
             uri: domainUri,
             clientId: 'coherence-data',
-            model: DOMAIN_TEXT_WITHOUT_STATUS
+            model: DOMAIN_TEXT_WITHOUT_STATUS,
+            basedOn: 'anything'
          });
          expect(edited.uri).toBe(domainUri);
          // The edited document itself stays clean — the enum is merely unused. So

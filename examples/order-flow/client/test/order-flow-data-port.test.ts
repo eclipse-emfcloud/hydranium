@@ -270,7 +270,8 @@ describe('order-flow data port', () => {
       await server.updateModelDocument({
          uri,
          clientId: THIRD_PARTY,
-         model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Pay ', 'task Pay2 ')
+         model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Pay ', 'task Pay2 '),
+         basedOn: 'anything'
       });
 
       await waitFor(() => updates.length >= 1, { message: `no onDocumentUpdated for ${uri}` });
@@ -288,7 +289,8 @@ describe('order-flow data port', () => {
       await server.updateModelDocument({
          uri,
          clientId: session!.clientId,
-         model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Ship ', 'task Ship2 ')
+         model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Ship ', 'task Ship2 '),
+         basedOn: 'anything'
       });
 
       await waitFor(() => updates.length >= 1, { message: `no onDocumentUpdated for ${uri}` });

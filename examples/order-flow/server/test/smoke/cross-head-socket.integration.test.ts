@@ -257,7 +257,8 @@ describe('order-flow cross-head write smoke (data socket in, LSP wire out)', () 
          await proxy.updateModelDocument({
             uri: domainUri,
             clientId: 'cross-head-l4',
-            model: DOMAIN_TEXT_WITHOUT_STATUS
+            model: DOMAIN_TEXT_WITHOUT_STATUS,
+            basedOn: 'anything'
          });
 
          // Deliberately NOT asserted on the write response: the cascade is

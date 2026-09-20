@@ -179,7 +179,7 @@ describe('DataConnection sessions', () => {
       const { connection, calls, dispose } = harness();
       try {
          const tree = connection.createSession('tree');
-         await tree.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' } });
+         await tree.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: 'anything' });
 
          expect(calls.filter(call => call.method === 'update')).toEqual([{ method: 'update', uri: URI_A, clientId: 'tree' }]);
       } finally {

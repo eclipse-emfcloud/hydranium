@@ -10,6 +10,7 @@
 import { type AnyObject, type JsonModelState, JsonRecordingCommand, type MaybePromise } from '@eclipse-glsp/server';
 import { type AstNode } from '@hydranium/langium';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
+import { type BasedOn } from '@hydranium/protocol';
 
 /**
  * Source-model state shape consumed by {@link HydraniumGlspRecordingCommand}.
@@ -46,25 +47,25 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  *
  * **postChange semantics.** GLSP's `JsonRecordingCommand.postChange` calls
  * `modelState.updateSourceModel(newModel)` with the model only. The
- * framework lift overrides `postChange` so it also threads the based-on
- * version captured at command start — letting the downstream
+ * framework lift overrides `postChange` so it also threads the snapshot
+ * version taken at command start — letting the downstream
  * `ModelService.update` opt into the `ConflictError` gate. Undo / redo
- * postChange calls run with version `undefined` (no gating): the user
- * authored against the recorded patch, not against a specific server
- * version, so re-applying it should succeed regardless of intervening
- * edits. The recorded patch itself encodes the semantic intent.
+ * postChange calls pass `'anything'`: the user authored against the recorded
+ * patch, not against a specific server version, so re-applying it should
+ * succeed regardless of intervening edits. The recorded patch itself encodes
+ * the semantic intent.
  */
 export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> extends JsonRecordingCommand<TSourceModel> {
    declare protected modelState: HydraniumGlspRecordingState<TSourceModel>;
 
    /**
-    * Based-on version captured at {@link execute} start; threaded into
-    * {@link postChange} so {@link AbstractHydraniumGlspState.updateSourceModel}
-    * sees the version the user authored against. Cleared after `execute`
-    * returns so undo / redo paths fall through to `updateSourceModel`
-    * without a version (no gating).
+    * What the command was authored against, taken at {@link execute} start and
+    * threaded into {@link postChange} so
+    * {@link AbstractHydraniumGlspState.updateSourceModel} gates on it. Reset to
+    * `'anything'` after `execute` returns so undo / redo paths fall through
+    * ungated.
     */
-   protected activeVersion?: number;
+   protected activeBasedOn: BasedOn = 'anything';
 
    /**
     * Source-model snapshots captured at {@link execute} — the state the
@@ -98,20 +99,19 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
     * via {@link AbstractHydraniumGlspState.updateSourceModel}). The label combines
     * the operation name with the source-uri-stamped logger.
     *
-    * Captures {@link AbstractHydraniumGlspState.version} at start so {@link postChange}
-    * can thread the based-on version into `updateSourceModel`. The capture
-    * is `try`/`finally`-scoped so undo / redo paths invoked later do not
-    * see a stale captured version.
+    * Takes {@link AbstractHydraniumGlspState.basedOn} at start so {@link postChange}
+    * can thread it into `updateSourceModel`. Scoped with `try`/`finally` so undo
+    * / redo paths invoked later do not see a stale value.
     */
    override async execute(): Promise<void> {
       const logger = this.modelState.logger.for('HydraniumGlspRecordingCommand');
-      this.activeVersion = this.modelState.version;
-      logger.debug(`Executing '${this.label}' (based-on doc.version=v${this.activeVersion})`);
+      this.activeBasedOn = this.modelState.basedOn;
+      logger.debug(`Executing '${this.label}' (based-on doc.version=v${this.modelState.version})`);
       this.beforeSnapshot = this.deepClone(await this.getJsonObject());
       try {
          await this.modelState.tracer.for('HydraniumGlspRecordingCommand').time(`Execute command '${this.label}'`, () => super.execute());
       } finally {
-         this.activeVersion = undefined;
+         this.activeBasedOn = 'anything';
       }
       this.afterSnapshot = this.deepClone(await this.getJsonObject());
    }
@@ -119,15 +119,15 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
    /**
     * Override of GLSP's {@link JsonRecordingCommand.postChange} so the
     * call to {@link AbstractHydraniumGlspState.updateSourceModel} threads the
-    * captured based-on version alongside the new model.
+    * based-on version alongside the new model.
     *
-    * During {@link execute} the version is the snapshot captured at
-    * command start; during {@link undo} / {@link redo} it is `undefined`
-    * — replaying a recorded patch does not author against a specific
-    * server version, so no gate applies.
+    * During {@link execute} it is the snapshot version taken at command start;
+    * during {@link undo} / {@link redo} it is `'anything'` — replaying a
+    * recorded patch does not author against a specific server version, so no
+    * gate applies.
     */
    protected override postChange(newModel: TSourceModel): MaybePromise<void> {
-      return this.modelState.updateSourceModel(newModel, this.activeVersion);
+      return this.modelState.updateSourceModel(newModel, this.activeBasedOn);
    }
 
    /**

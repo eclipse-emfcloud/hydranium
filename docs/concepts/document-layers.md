@@ -60,8 +60,11 @@ went with it" needs a snapshot, and needs the version so it can later say
 which state its edit was based on.
 
 That version field is load-bearing rather than informational: an in-process
-caller passes it back as `TransferUpdateArgs.baseVersion` / `TransferSaveArgs.baseVersion`
-to opt into the conflict gate. It is a server-owned counter that advances iff
+caller sends it straight back as `TransferUpdateArgs.basedOn` /
+`TransferSaveArgs.basedOn` to arm the conflict gate. Its type is
+`SnapshotVersion`, a branded `number`, so the field a write declares itself
+based on can only be filled from a read. It is a server-owned counter that
+advances iff
 the content changes, which is what makes the gate sound — and an integrity
 repair is one of those changes, so a snapshot taken before a repair is
 genuinely stale rather than merely older.
@@ -146,50 +149,55 @@ against a baseline the document never contained. The framework scopes the hook
 for you; the thing to remember is *why* it is scoped, because the same reasoning
 applies to any extension that reaches the grammar shape.
 
-## Choosing a capture instant
+## What a write says it was based on
 
 A based-on version is only meaningful relative to the moment the content was
 read. Two write styles are in play, and they read at different moments:
 
 - **Snapshot-diff** — project the model, edit the projection, write the result.
-  The capture instant is when the projection was taken, because that is the state
-  the edit is expressed against. `ReconcilingMultiDocumentGlspState` works this
-  way: it captures a baseline at `setSourceRoot` and diffs against it.
+  The version to declare is the one the projection carried, because that is the
+  state the edit is expressed against. `ReconcilingMultiDocumentGlspState` works
+  this way: it takes a baseline at `setSourceRoot` and diffs against it.
 - **Live-AST** — resolve a node, mutate it in place, write the document it
-  belongs to. The capture instant is when the document was *read*, immediately
+  belongs to. The version to declare is the one the *read* returned, immediately
   before mutating, because that is the content the mutation assumed.
 
-The rule for both: **read the version at the same instant you read the content,
-and hold it.** Getting this wrong has one dominant failure shape, and it does not
-announce itself.
+The rule for both: **a write declares the version its read returned.** `basedOn`
+enforces it in two steps.
+
+Its type is `SnapshotVersion` — a `number`, branded so the compiler can tell a
+version that came out of a read apart from one read off a live handle. Only the
+envelope constructors mint it, so every snapshot read hands back a version that
+already fits the field and every live handle hands back one that does not.
+Writing the correct thing is therefore writing less:
 
 <!-- snippet-skip: contrasting fragments shown outside any enclosing method -->
 
 ```ts
-// Wrong: `document.textDocument` IS the live store object the gate reads, so a
-// version taken here is compared against itself and the gate never fires.
+// Right: the version is the one the read returned, next to the read.
+const snapshot = await modelService.validated(uri);
 mutate(document.parseResult.value);
-await modelService.save({ uri, model: document.parseResult.value, clientId, baseVersion: document.textDocument.version });
+await modelService.save({ uri, model: document.parseResult.value, clientId, basedOn: snapshot.version });
 
-// Right: read the version into a local before mutating, then pass that local.
-const baseVersion = document.textDocument.version;
-mutate(document.parseResult.value);
-await modelService.save({ uri, model: document.parseResult.value, clientId, baseVersion });
+// Explicitly ungated, for a write with no reader behind it.
+await modelService.save({ uri, model, clientId, basedOn: 'anything' });
 ```
 
-The two differ by one line and by everything else. `document.textDocument` is
-the server's own live object, not a copy taken when you read — so a version
-pulled off it at write time is whatever the server is at *now*, which is the
-number the gate is about to compare against. It matches by construction. The
-local, captured next to the read, cannot drift.
+`document.textDocument.version` does not compile in that field. It is a plain
+`number` read off the live store, so at write time it answers with the version
+the gate is about to compare it against — the gate passes unconditionally and
+the concurrent edit is gone with nothing logged. `asSnapshotVersion` will still
+force it through, which is deliberate: the escape hatch stays, it just has to be
+typed out where a reviewer can see it.
 
-Nothing in the type system distinguishes the two, because both are a `number`
-off the same expression. Reviewing for it means asking *when* the read happened,
-not whether a version was passed.
+And `basedOn` is **required**. An omitted gate is an absence, so no type-level
+discriminator can see it — a file of twenty writes hides the one that lost the
+field, and it reads exactly like the other nineteen. Requiring it turns the
+omission into a compile error and the opt-out into a word someone chose.
 
 A gate that never fires looks identical to a gate that found no conflict: the
 write succeeds, nothing is logged, and the concurrent edit it overwrote is simply
-gone. Test it by advancing the document between the capture and the write and
+gone. Test it by advancing the document between the read and the write and
 asserting a `ConflictError`, not by observing that ordinary writes succeed.
 
 ## A transfer write does not preserve comments or formatting

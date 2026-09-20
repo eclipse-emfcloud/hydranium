@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type ConflictResolver, type Logger, isConflictError } from '@hydranium/protocol';
+import { type BasedOn, type ConflictResolver, type Logger, isConflictError } from '@hydranium/protocol';
 
 /**
  * The I/O and policy a {@link reconcileSourceModelWrite} call needs. Deliberately
@@ -18,11 +18,12 @@ import { type ConflictResolver, type Logger, isConflictError } from '@hydranium/
  */
 export interface SourceModelWriteHooks<TModel> {
    /**
-    * Write `model` and capture the resulting state. Called with a `baseVersion`
-    * on the first attempt (opting into the `ConflictError` gate) and without one
-    * on the merged / forced retries, where the point is to land the write.
+    * Write `model` and record the resulting state. Called with the caller's own
+    * `basedOn` on the first attempt (opting into the `ConflictError` gate) and
+    * with `'anything'` on the merged / forced retries, where the reconcile has
+    * already decided to win and the point is to land the write.
     */
-   persist(model: TModel, baseVersion?: number): Promise<void>;
+   persist(model: TModel, basedOn: BasedOn): Promise<void>;
    /** Current server-side projection, or `undefined` when unavailable. */
    refetch(): Promise<TModel | undefined>;
    /** Last in-sync projection the user's intent is measured against. */
@@ -44,11 +45,11 @@ export interface SourceModelWriteHooks<TModel> {
  */
 export async function reconcileSourceModelWrite<TModel extends object>(
    model: TModel,
-   version: number | undefined,
+   basedOn: BasedOn,
    hooks: SourceModelWriteHooks<TModel>
 ): Promise<void> {
    try {
-      await hooks.persist(model, version);
+      await hooks.persist(model, basedOn);
    } catch (err) {
       if (!isConflictError(err)) {
          throw err;
@@ -56,7 +57,7 @@ export async function reconcileSourceModelWrite<TModel extends object>(
       const outcome = await hooks.conflictResolver.resolve(hooks.baseline ?? model, model, () => hooks.refetch());
       switch (outcome.status) {
          case 'merged':
-            await hooks.persist(outcome.merged);
+            await hooks.persist(outcome.merged, 'anything');
             return;
          case 'no-op':
             hooks.logger.debug(`updateSourceModel no-op (v${err.expectedVersion} → v${err.actualVersion}); already in sync`);
@@ -72,7 +73,7 @@ export async function reconcileSourceModelWrite<TModel extends object>(
             hooks.logger.warn(
                `updateSourceModel refetch unavailable (v${err.expectedVersion} → v${err.actualVersion}); forcing without version`
             );
-            await hooks.persist(model);
+            await hooks.persist(model, 'anything');
             return;
       }
    }

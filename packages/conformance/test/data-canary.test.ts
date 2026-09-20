@@ -36,6 +36,7 @@ const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
+const CONFLICT_GATE = 'updateModelDocument arms the conflict gate on a based-on snapshot version';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -90,12 +91,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({})).toEqual([]);
    });
 
-   it('plans exactly the ten checks the must-fail cases below name', () => {
+   it('plans exactly the eleven checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(10);
+      expect(titles).toHaveLength(11);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -104,11 +105,12 @@ describe('the /data battery discriminates', () => {
          INVALID_DIAGNOSTICS,
          DIAGNOSTIC_PARAMS,
          EDIT_REFLECTED,
+         CONFLICT_GATE,
          SUBSCRIPTION,
          CASCADE,
          FOLDER_CANDIDATES
       ];
-      expect(matching(titles, covered)).toHaveLength(10);
+      expect(matching(titles, covered)).toHaveLength(11);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -120,7 +122,13 @@ describe('the /data battery discriminates', () => {
       { label: 'no projects at all, with projects expected', defects: { noProjects: true }, expected: [PROJECT_NON_EMPTY] },
       { label: 'a readiness call that rejects', defects: { readyRejects: true }, expected: [READY] },
       { label: 'a transfer root with a blank $type', defects: { blankRootType: true }, expected: [VALID_ENVELOPE] },
-      { label: 'a non-integer envelope version', defects: { fractionalVersion: true }, expected: [VALID_ENVELOPE] },
+      {
+         // Also the gate: it compares the version the envelope reported, so a
+         // head that cannot report a whole one cannot be based on it either.
+         label: 'a non-integer envelope version',
+         defects: { fractionalVersion: true },
+         expected: [VALID_ENVELOPE, CONFLICT_GATE]
+      },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       { label: 'an invalid model reported clean', defects: { cleanInvalid: true }, expected: [INVALID_DIAGNOSTICS] },
       {
@@ -128,7 +136,14 @@ describe('the /data battery discriminates', () => {
          defects: { diagnosticParamsDropped: true },
          expected: [DIAGNOSTIC_PARAMS]
       },
-      { label: 'an edit acknowledged but not stored', defects: { ignoreEdits: true }, expected: [EDIT_REFLECTED] },
+      {
+         // Also the gate, and necessarily: a head that stores no edit never
+         // advances a version, so nothing a caller holds can go stale.
+         label: 'an edit acknowledged but not stored',
+         defects: { ignoreEdits: true },
+         expected: [EDIT_REFLECTED, CONFLICT_GATE]
+      },
+      { label: 'a write accepted whatever version it claims', defects: { ungatedWrites: true }, expected: [CONFLICT_GATE] },
       { label: 'a subscription that registers nothing', defects: { silentSubscriptions: true }, expected: [SUBSCRIPTION] },
       { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] },
       { label: 'a cascade rebuild reported to nobody', defects: { silentCascade: true }, expected: [CASCADE] },

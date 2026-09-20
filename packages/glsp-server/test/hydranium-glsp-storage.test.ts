@@ -163,6 +163,7 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
             // Read by the state's version capture on every registration; no
             // document exists here, and `undefined` is the same answer a real
             // service gives for an unopened URI.
+            snapshot: () => undefined,
             getDocument: () => undefined,
             onModelUpdated(uri: string) {
                log.subscribed.push(uri);

@@ -12,7 +12,9 @@ import {
    type Tracer,
    type TransferSavedEvent,
    type TransferUpdatedEvent,
-   type OpenModelArgs
+   type OpenModelArgs,
+   asSnapshotVersion,
+   type SnapshotVersion
 } from '@hydranium/protocol';
 import {
    type AstNode,
@@ -109,12 +111,12 @@ export interface AstDocument<TAst extends AstNode, TDiagnostic> {
    /**
     * Text-document version this snapshot was taken at — read from
     * `LangiumDocument.textDocument.version`. Symmetric with
-    * `TransferDocument.version` on the wire side: in-process callers
-    * that hold an `AstDocument` and mutate it pass this value back as
-    * `TransferUpdateArgs.baseVersion` / `TransferSaveArgs.baseVersion` to opt
-    * into the conflict gate.
+    * `TransferDocument.version` on the wire side: an in-process caller that
+    * holds an `AstDocument` and mutates it sends this straight back as
+    * `TransferUpdateArgs.basedOn` / `TransferSaveArgs.basedOn`, and the
+    * conflict gate arms on it.
     */
-   version: number;
+   version: SnapshotVersion;
 }
 
 export namespace AstDocument {
@@ -130,7 +132,7 @@ export namespace AstDocument {
       root: TAst,
       diagnostics: TDiagnostic[] = []
    ): AstDocument<TAst, TDiagnostic> {
-      return { uri, version, root, diagnostics };
+      return { uri, version: asSnapshotVersion(version), root, diagnostics };
    }
 
    /**

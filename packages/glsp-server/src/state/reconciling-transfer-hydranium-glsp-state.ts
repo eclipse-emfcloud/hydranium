@@ -10,7 +10,7 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type TransferElement } from '@hydranium/protocol';
+import { type BasedOn, type TransferElement } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -84,13 +84,13 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * (force = last-writer-wins, reconciling = field-level merge) shared with
     * undo / redo.
     */
-   async updateSourceModel(model: TSourceModel, version?: number): Promise<void> {
+   async updateSourceModel(model: TSourceModel, basedOn: BasedOn = this.basedOn): Promise<void> {
       // Orchestration lives in `reconcileSourceModelWrite` so the multi-document
       // state gets the identical conflict handling; this method supplies only
       // the single-document meaning of persist / project.
-      return reconcileSourceModelWrite<TSourceModel>(model, version, {
-         persist: async (candidate, baseVersion) => {
-            const { root } = await this.persist(candidate, baseVersion);
+      return reconcileSourceModelWrite<TSourceModel>(model, basedOn, {
+         persist: async (candidate, candidateBasedOn) => {
+            const { root } = await this.persist(candidate, candidateBasedOn);
             this.setSourceRoot(this._sourceUri, root);
          },
          refetch: () => this.refetch(),
@@ -108,12 +108,12 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * round-trip differs override this; the orchestration in
     * {@link updateSourceModel} is unchanged.
     */
-   protected async persist(model: TSourceModel, baseVersion?: number): Promise<{ root: TRoot }> {
+   protected async persist(model: TSourceModel, basedOn: BasedOn): Promise<{ root: TRoot }> {
       const document = await this.sharedServices.model.ModelService.update({
          uri: this._sourceUri,
          model,
          clientId: this.clientId,
-         baseVersion
+         basedOn
       });
       return document as unknown as { root: TRoot };
    }

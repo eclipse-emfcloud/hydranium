@@ -11,7 +11,7 @@
  * The document-scoped properties model, against a real data server.
  *
  * This suite drives the data head the way a form does: read a root, mutate a
- * field, write the whole root back under a `baseVersion`, and reconcile when
+ * field, write the whole root back under a `basedOn` version, and reconcile when
  * that gate fires. Two paths are reachable only from a client of this shape.
  *
  * - **The typed transfer write.** A form holds a root and not text, so it takes
@@ -156,7 +156,7 @@ function pinnedModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
 /** Write `root` as a third party, ungated, so it always lands. */
 async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promise<void> {
    const server = await session!.connected();
-   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root });
+   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root, basedOn: 'anything' });
 }
 
 describe('order-flow properties model', () => {

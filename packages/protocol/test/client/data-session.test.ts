@@ -123,9 +123,11 @@ describe('DataSession over a widened server', () => {
       try {
          const panel = connection.createSession('panel');
 
-         await panel.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field' });
+         await panel.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' });
 
-         expect(received.save).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, extra: 'save-field' }]);
+         expect(received.save).toEqual([
+            { uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' }
+         ]);
       } finally {
          dispose();
       }
@@ -150,9 +152,9 @@ describe('DataSession over a widened server', () => {
       try {
          const panel = connection.createSession('panel');
 
-         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' } });
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: 'anything' });
 
-         expect(received.update).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' } }]);
+         expect(received.update).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, basedOn: 'anything' }]);
       } finally {
          dispose();
       }

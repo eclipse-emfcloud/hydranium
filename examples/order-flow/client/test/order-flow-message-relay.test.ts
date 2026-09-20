@@ -217,7 +217,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
 
       const server = await session!.connected();
       const foreign = (await server.getModelDocument({ uri })).root as ProcessModel;
-      await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: { ...foreign, name: 'RenamedByOther' } });
+      await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: { ...foreign, name: 'RenamedByOther' }, basedOn: 'anything' });
 
       await waitFor(() => model!.fields.find(field => field.name === 'name')?.value === 'RenamedByOther', {
          message: 'no server-initiated update crossed the relay'

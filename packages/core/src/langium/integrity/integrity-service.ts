@@ -360,7 +360,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       // during the re-parse saw the text on disk, which in `'editor'` sync mode
       // is the PRE-repair text. Leave the sequence describing that and the next
       // open hashes the repair, finds a mismatch and steps the version again, so
-      // every `baseVersion` taken from this build is stale before it is used.
+      // every based-on version taken from this build is stale before it is used.
       // Falls back to the pre-re-parse number for a URI the store never tracked,
       // where there is no sequence to advance; an OPEN document answers
       // `undefined` and keeps the store's own version, which is not this

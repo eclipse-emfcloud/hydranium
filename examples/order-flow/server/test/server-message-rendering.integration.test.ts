@@ -478,7 +478,7 @@ describe('rendering across a racing rebuild', () => {
       booted.openDocument(uri, text, 'order-flow-domain');
 
       const before = booted.diagnostics.length;
-      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'render-race' });
+      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'render-race', basedOn: 'anything' });
       await booted.nextDiagnostics(uri);
       // Let any FOLLOWING publish from the second build land too, or the tail
       // holds only the first payload and an unrendered append escapes.
@@ -558,7 +558,7 @@ describe('the applyEdit undo label', () => {
       booted.openDocument(uri, text, ProcessLanguageMetaData.languageId);
 
       const pending = booted.nextAppliedEdit(uri);
-      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'edit-label' });
+      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'edit-label', basedOn: 'anything' });
       return (await pending).params.label;
    }
 

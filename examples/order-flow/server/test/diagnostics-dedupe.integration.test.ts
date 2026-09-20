@@ -233,7 +233,7 @@ async function publishedAfterWrite(serializeBuilds: boolean): Promise<Payload[]>
    booted.openDocument(uri, text, 'order-flow-domain');
 
    const before = booted.diagnostics.length;
-   await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'dedupe-test' });
+   await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'dedupe-test', basedOn: 'anything' });
    await booted.nextDiagnostics(uri);
    // Let any FOLLOWING publish from the second, racing build land too. Without
    // this the tail holds only the first payload and the duplicated one escapes.

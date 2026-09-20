@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type MultiDocumentSourceModel, ReconcilingMultiDocumentGlspState } from '@hydranium/glsp-server';
-import { type TransferElement } from '@hydranium/protocol';
+import { type BasedOn, type TransferElement } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
@@ -142,9 +142,9 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     * dropping every comment in the file. A move must not touch the semantics at
     * all, which is the whole reason layout was split out.
     */
-   protected override async persist(model: OrderFlowSourceModel, baseVersion?: number): Promise<{ root: ProcessModel }> {
+   protected override async persist(model: OrderFlowSourceModel, basedOn: BasedOn): Promise<{ root: ProcessModel }> {
       const result = this.hasChanged(this.baseline?.primary, model.primary)
-         ? await this.persistPrimary(model.primary, baseVersion)
+         ? await this.persistPrimary(model.primary, basedOn)
          : { root: this.sourceRoot };
       for (const [uri, secondary] of Object.entries(model.secondaries)) {
          if (this.hasChanged(this.baseline?.secondaries[uri], secondary)) {

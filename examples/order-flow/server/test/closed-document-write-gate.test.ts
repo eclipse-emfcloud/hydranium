@@ -8,12 +8,12 @@
  ********************************************************************************/
 
 /**
- * Whether the optimistic `baseVersion` gate accepts a write to a document no
+ * Whether the optimistic based-on gate accepts a write to a document no
  * client holds open.
  *
  * `update` is an upsert, so it opens the document before applying — and for a
  * closed URI that open assigns the shared version from the INCOMING text. A gate
- * reading the version after it therefore compares the caller's `baseVersion`
+ * reading the version after it therefore compares the caller's `basedOn`
  * against a number the caller's own write produced, and rejects every modifying
  * write to a closed document.
  *
@@ -27,7 +27,7 @@
  * version must still be refused.
  */
 
-import { isConflictError } from '@hydranium/protocol';
+import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
 import { DocumentState, URI } from '@hydranium/langium';
 import { writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -88,7 +88,7 @@ async function closedWithSequence(): Promise<{ harness: ScratchOrderFlowHarness[
    return { harness, uri, version };
 }
 
-describe('the baseVersion gate on a document no client holds open', () => {
+describe('the based-on gate on a document no client holds open', () => {
    it('accepts a modifying write based on the version the store reports', async () => {
       const { harness, uri, version } = await closedWithSequence();
 
@@ -99,7 +99,7 @@ describe('the baseVersion gate on a document no client holds open', () => {
          uri: uri.toString(),
          clientId: 'form-editor',
          model: WRITTEN_BACK,
-         baseVersion: version
+         basedOn: asSnapshotVersion(version)
       }).catch((err: unknown) => {
          rejection = String(err);
          return undefined;
@@ -129,7 +129,7 @@ describe('the baseVersion gate on a document no client holds open', () => {
             uri: uri.toString(),
             clientId: 'form-editor',
             model: WRITTEN_BACK,
-            baseVersion: stale
+            basedOn: asSnapshotVersion(stale)
          })
       ).rejects.toSatisfy(isConflictError);
    });

@@ -12,8 +12,8 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } f
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import type { ServerSharedServices } from '@hydranium/core';
-import { ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
+import { AstDocument, type ServerSharedServices } from '@hydranium/core';
+import { type BasedOn, asSnapshotVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
@@ -40,11 +40,20 @@ interface FakeDocument {
    textDocument?: { version: number };
 }
 
+/**
+ * Project a fake document into the envelope `ModelService.snapshot` returns.
+ * Only `version` is read by the state, but the shape stays faithful so a stub
+ * cannot pass a test the real service would fail.
+ */
+function toSnapshot(uri: string, document: FakeDocument | undefined): AstDocument<AstNode, never> | undefined {
+   return document && AstDocument.create(uri, document.textDocument?.version ?? 0, document.parseResult.value);
+}
+
 interface UpdateCall {
    uri: string;
    model: TestSourceModel;
    clientId: string;
-   baseVersion?: number;
+   basedOn: BasedOn;
 }
 
 interface Harness {
@@ -112,6 +121,7 @@ function createState(harness: Harness): TestReconcilingState {
             }
          },
          ModelService: {
+            snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
             waitForDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
             async update(args: UpdateCall): Promise<{ root: TestRoot }> {
@@ -174,21 +184,41 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('persists via ModelService.update with uri/model/clientId/baseVersion and captures the returned root', async () => {
+      it('persists via ModelService.update with uri/model/clientId/basedOn and captures the returned root', async () => {
          const harness = makeHarness();
          harness.nextUpdatedRoot = makeRoot('persisted');
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(harness.updateCalls).toEqual([
-            { uri: 'file:///a.a', model: { $type: 'TestRoot', label: 'edited' }, clientId: 'test-client', baseVersion: 5 }
+            { uri: 'file:///a.a', model: { $type: 'TestRoot', label: 'edited' }, clientId: 'test-client', basedOn: asSnapshotVersion(5) }
          ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
       });
 
-      it('on a ConflictError with a merged outcome, re-persists the merged model without a baseVersion', async () => {
+      it('defaults basedOn to the state snapshot version when the caller passes none', async () => {
+         const harness = makeHarness();
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: makeRoot('before') },
+            textDocument: { version: 7 }
+         });
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' });
+
+         // v7 and not `'anything'`: the parameter is optional only because GLSP's
+         // one-argument `JsonModelState.updateSourceModel` has to stay satisfiable,
+         // so the default is what decides whether an ungated write is the easy one.
+         expect(harness.updateCalls).toHaveLength(1);
+         expect(harness.updateCalls[0].basedOn).toBe(asSnapshotVersion(7));
+      });
+
+      it('on a ConflictError with a merged outcome, re-persists the merged model based on anything', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.nextUpdatedRoot = makeRoot('merged-root');
@@ -196,15 +226,15 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(harness.updateCalls).toHaveLength(2);
-         expect(harness.updateCalls[0].baseVersion).toBe(5);
+         expect(harness.updateCalls[0].basedOn).toBe(5);
          expect(harness.updateCalls[1]).toEqual({
             uri: 'file:///a.a',
             model: { $type: 'TestRoot', label: 'merged' },
             clientId: 'test-client',
-            baseVersion: undefined
+            basedOn: 'anything'
          });
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
       });
@@ -217,7 +247,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const before = makeRoot('before');
          state.setSourceRoot('file:///a.a', before);
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(harness.updateCalls).toHaveLength(1);
          expect(state.sourceRoot).toBe(before);
@@ -237,14 +267,14 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(harness.updateCalls).toHaveLength(1);
          expect(state.sourceRoot).toBe(refreshed);
          expect(harness.warns.some(msg => msg.includes('conflict'))).toBe(true);
       });
 
-      it('on an unavailable outcome, force-persists without a baseVersion and warns', async () => {
+      it('on an unavailable outcome, force-persists based on anything and warns', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.nextUpdatedRoot = makeRoot('forced');
@@ -252,10 +282,10 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(harness.updateCalls).toHaveLength(2);
-         expect(harness.updateCalls[1].baseVersion).toBeUndefined();
+         expect(harness.updateCalls[1].basedOn).toBe('anything');
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
          expect(harness.warns.some(msg => msg.includes('unavailable') || msg.includes('forcing'))).toBe(true);
       });
@@ -289,7 +319,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('baseline-label'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, 5);
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
          expect(seenBaseline).toEqual({ $type: 'TestRoot', label: 'baseline-label' });
          expect(seenRefetch).toEqual({ $type: 'TestRoot', label: 'server-current' });

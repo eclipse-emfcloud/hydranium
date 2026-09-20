@@ -167,7 +167,12 @@ describe.each(BARRIER_PHASES)('a write that lands during workspace initializatio
          // Issuing the write cancels the suspended initial build synchronously,
          // inside this call. Deliberately not awaited before the release below:
          // the write queues on the very lock the init still holds.
-         const write = modelService.update({ uri: domainUri, clientId: 'init-race', model: DOMAIN_TEXT_WITHOUT_STATUS });
+         const write = modelService.update({
+            uri: domainUri,
+            clientId: 'init-race',
+            model: DOMAIN_TEXT_WITHOUT_STATUS,
+            basedOn: 'anything'
+         });
          releaseInit.resolve();
 
          await initialization;

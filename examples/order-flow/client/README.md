@@ -182,7 +182,7 @@ any other string, because its transfer form *is* its reference text.
 `setField` sends the **whole root**, because `TransferUpdateArgs.model` is the
 document root and there is no path-scoped variant — the encoder is AST→transfer
 only and the parser is the decoder. So a field edit is read-modify-write, and
-what keeps it from clobbering a concurrent writer is `baseVersion` plus
+what keeps it from clobbering a concurrent writer is `basedOn` plus
 `reconcileByPatchReplay`. A host renders each outcome differently, which is why
 `setField` returns a status rather than `void`:
 

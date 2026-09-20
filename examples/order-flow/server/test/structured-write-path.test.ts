@@ -76,7 +76,7 @@ describe('order-flow structured write path — ModelService.update with a transf
 
       // Round-trip the projection unchanged: any difference in the resulting text
       // is the write path corrupting it, not the edit.
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer });
+      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       expect(after).toBe(
@@ -107,7 +107,7 @@ describe('order-flow structured write path — ModelService.update with a transf
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
 
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer });
+      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
 
       // The layout survives the TRANSFER round-trip, where `LayoutModel.process`
       // and `DiagramNode.flowNode` are plain strings rather than Langium
@@ -139,7 +139,7 @@ describe('order-flow structured write path — ModelService.update with a transf
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
 
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer });
+      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       expect(after).toContain('public valuetype Money {');
@@ -159,7 +159,7 @@ describe('order-flow structured write path — ModelService.update with a transf
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer });
+      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
 
       expect(readFileSync(URI.parse(uri).fsPath, 'utf8')).toBe(onDisk);
    });

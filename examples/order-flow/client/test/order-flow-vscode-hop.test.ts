@@ -191,7 +191,7 @@ function mountHop(webview: Participant = 'webview'): void {
 /** Write `root` as a third party, ungated, so it always lands. */
 async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promise<void> {
    const server = await session!.connected();
-   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root });
+   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root, basedOn: 'anything' });
 }
 
 describe('order-flow properties panel data path (socket → relay → messenger hop)', () => {

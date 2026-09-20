@@ -176,7 +176,8 @@ describe('order-flow data head', () => {
       const updated = await head.harness.proxy.updateModelDocument({
          uri: head.uri(path),
          clientId: CLIENT_ID,
-         model: renamed
+         model: renamed,
+         basedOn: 'anything'
       });
 
       // `model` is `T | string`, and this drives the T branch — the one that
@@ -213,7 +214,8 @@ describe('order-flow data head', () => {
       await head.harness.proxy.updateModelDocument({
          uri,
          clientId: CLIENT_ID,
-         model: 'process Fulfillment for Order {\n   task Pay\n}'
+         model: 'process Fulfillment for Order {\n   task Pay\n}',
+         basedOn: 'anything'
       });
 
       expect(head.harness.events.length).toBeGreaterThan(before);
@@ -237,7 +239,8 @@ describe('order-flow data head', () => {
       await head.harness.proxy.updateModelDocument({
          uri,
          clientId: CLIENT_ID,
-         model: 'process Fulfillment for Order {\n   task Pay\n}'
+         model: 'process Fulfillment for Order {\n   task Pay\n}',
+         basedOn: 'anything'
       });
       const afterUpdate = head.harness.events.length;
       expect(afterUpdate).toBeGreaterThan(0);
@@ -324,13 +327,14 @@ describe('order-flow data head', () => {
       const updated = await head.harness.proxy.updateModelDocument({
          uri,
          clientId: CLIENT_ID,
-         model: 'process Fulfillment for Order {\n   task Settle\n}'
+         model: 'process Fulfillment for Order {\n   task Settle\n}',
+         basedOn: 'anything'
       });
       // Control: update alone is in-memory, so disk must still hold the original.
       expect(head.diskText(path)).toContain('task Pay');
 
       const updatedRoot = TransferDocument.assertLoaded(updated).root;
-      await head.harness.proxy.saveModelDocument({ uri, clientId: CLIENT_ID, model: updatedRoot });
+      await head.harness.proxy.saveModelDocument({ uri, clientId: CLIENT_ID, model: updatedRoot, basedOn: 'anything' });
 
       expect(head.diskText(path)).toContain('task Settle');
       expect(head.harness.saves.map(save => save.document.uri)).toContain(uri);
@@ -368,7 +372,8 @@ describe('order-flow data head', () => {
       await head.harness.proxy.updateModelDocument({
          uri,
          clientId: CLIENT_ID,
-         model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}'
+         model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}',
+         basedOn: 'anything'
       });
 
       const fired = head.harness.events.slice(before);
@@ -388,7 +393,8 @@ describe('order-flow data head', () => {
       await head.harness.proxy.updateModelDocument({
          uri,
          clientId: CLIENT_ID,
-         model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}'
+         model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}',
+         basedOn: 'anything'
       });
 
       const fired = head.harness.events.slice(before);

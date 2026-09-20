@@ -378,7 +378,7 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
    bench('text edit on a .domain document rebuilds and republishes to the LSP head', async () => {
       const republished = warm.lsp.nextDiagnostics(editedDocUri);
       const model = editToggle++ % 2 === 0 ? editVariantA : editVariantB;
-      await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model });
+      await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model, basedOn: 'anything' });
       await republished;
    });
 

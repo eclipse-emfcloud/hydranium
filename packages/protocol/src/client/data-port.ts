@@ -26,7 +26,7 @@ import type { ResolvedMessage } from '../messages/primitives';
  * `DataServerProtocol` surface, so wrapping it would re-derive the framework's
  * pass-throughs in a second place and lose the `as const satisfies keyof`
  * method allowlists, which cannot drift. Everything a form or a tree actually
- * does — the wire contract, the open/watch/update/close sequence, `baseVersion`
+ * does — the wire contract, the open/watch/update/close sequence, `basedOn`
  * conflict handling, echo filtering by `sourceClientId` — is host-invariant and
  * lives above this interface. What varies between hosts is exactly the four
  * members below.

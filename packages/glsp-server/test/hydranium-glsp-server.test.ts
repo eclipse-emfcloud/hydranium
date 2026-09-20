@@ -194,7 +194,7 @@ function stubSharedServices(): ServerSharedServices {
    return {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: { LangiumDocuments: { getDocument: () => undefined } },
-      model: { ModelService: { waitForDocumentState: () => Promise.resolve(), getDocument: () => undefined } }
+      model: { ModelService: { waitForDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
 }
 
