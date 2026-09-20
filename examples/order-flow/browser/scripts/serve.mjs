@@ -67,6 +67,11 @@ createServer((request, response) => {
       // cached one encoding would otherwise hand it to a client that asked for
       // the other.
       vary: 'accept-encoding',
+      // With no cache header a browser applies its own heuristic, and keeps a
+      // multi-megabyte script keenly — so a rebuilt page serves the previous
+      // one. Worst on a phone, where there is no devtools to disable it and the
+      // symptom is a fix that appears not to work.
+      'cache-control': 'no-store',
       ...(encoding === undefined ? {} : { 'content-encoding': encoding })
    });
    const file = createReadStream(target);

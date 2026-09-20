@@ -36,6 +36,7 @@
 
 import type * as monaco from 'monaco-editor-core';
 import { requireElement } from './dom.js';
+import { isNarrowViewport } from './responsive.js';
 import type { VisibleDocuments } from './workspace-panel.js';
 import type { MonacoLspAdapter } from './monaco-lsp-adapter.js';
 
@@ -136,7 +137,7 @@ export class EditorArea {
    show(path: string): void {
       const fixed = this.fixed.find(pane => pane.path === path);
       if (fixed !== undefined) {
-         fixed.editor.focus();
+         this.present(fixed);
          // Announced here as well as from the focus listener: focusing an editor
          // that already HAS focus fires no event, so a reader re-selecting the
          // document they are already in would leave a consumer on whatever was
@@ -148,8 +149,28 @@ export class EditorArea {
          this.load(this.selected, path);
          this.announce();
       }
-      this.selected.editor.focus();
+      this.present(this.selected);
       this.options.onFocusChanged?.(path);
+   }
+
+   /**
+    * Put `pane` where the reader can see it, and give it the caret only where
+    * taking the caret costs nothing.
+    *
+    * **Focus opens the on-screen keyboard.** In one column the pane a list
+    * selection opens is well down a scrolling page, so focusing it covers a
+    * document the reader has not been shown yet with a keyboard they did not
+    * ask for — and the list they were reading is gone behind it. Scrolling to
+    * the pane says the same thing and leaves the input where they put it.
+    */
+   private present(pane: Pane): void {
+      if (isNarrowViewport()) {
+         // The whole pane rather than the editor: its header names the document,
+         // which is the part that says the selection was honoured.
+         pane.editor.getContainerDomNode().closest('.pane')?.scrollIntoView({ block: 'start' });
+         return;
+      }
+      pane.editor.focus();
    }
 
    /**
@@ -164,7 +185,7 @@ export class EditorArea {
       const pane = this.fixed.find(candidate => candidate.path === path) ?? this.selected;
       pane.editor.setPosition({ lineNumber: line, column: 1 });
       pane.editor.revealLineInCenter(line);
-      pane.editor.focus();
+      this.present(pane);
    }
 
    /** What each kind of editor is showing, so the document list can mark them apart. */

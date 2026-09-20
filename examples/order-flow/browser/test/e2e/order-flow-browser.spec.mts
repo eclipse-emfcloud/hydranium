@@ -295,11 +295,10 @@ test.describe('order-flow in a web worker', () => {
 
    test('the narrow layout leaves no control behind on a workbench viewport', async ({ page }) => {
       await page.goto('/');
-      // The scroll shields belong to the stacked column. An element styled only
-      // inside a media query is not absent outside it — a `<button>` with no rule
-      // renders in the pane's flow — so the desktop page grew three captioned
-      // buttons under its editors and every assertion here still passed.
-      await expect(page.locator('.editor-shield')).toHaveCount(3);
+      // An element styled only inside a media query is not absent outside it: a
+      // `<button>` with no rule renders in the pane's flow. The count guards the
+      // selector, which would otherwise pass by matching nothing.
+      await expect(page.locator('.editor-shield')).toHaveCount(4);
       for (const shield of await page.locator('.editor-shield').all()) {
          await expect(shield).toBeHidden();
       }
