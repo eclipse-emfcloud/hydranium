@@ -251,6 +251,33 @@ it is where the three-level scope provider becomes visible. Hovering any of the
 three names renders the declaration it resolves to, which for `Order` lives in a
 different grammar and a file the page never opened.
 
+**Ctrl+click `Order` on the line above it** — `process Fulfillment for Order` —
+and the selection editor opens `orders/orders.domain` with the caret on `entity
+Order`. The reference is in a `.process` document and the declaration is in a
+`.domain` one, so the jump crosses a *grammar* boundary and not only a file
+boundary: two of the three order-flow languages cannot reach each other any other
+way, and a single-grammar example cannot show this at all, because there the
+target is always the language the click was in.
+
+**Leave the caret on a name** and its declaration and every use in that document
+are marked. That one is document-scoped by the protocol, so unlike the jump above
+it says nothing across grammars — it answers what a name does in the file you are
+reading. It is worth knowing that Monaco would do *something* here regardless: it
+registers a textual whole-word matcher for every language, which also marks the
+name where a comment merely spells it. Putting the caret in `= PAID` shows the
+difference — one mark from the server, two from textual matching, because the
+comment block above says `OrderStatus.PAID`.
+
+Registering the LSP definition provider is only half of it, and the missing half
+is silent. Monaco's standalone editor service looks the target up on the editor
+that was clicked in, finds a different model, and returns — no message, no
+marker, nothing on the console, which is indistinguishable from a server that
+resolved no reference. The page supplies the other half through
+`monaco.editor.registerEditorOpener`, which routes the target to the same
+selection editor the problems list opens a document in. A host with a workbench
+behind it does this for you; this page is where you can see what it costs when
+nothing does.
+
 One caveat, and it is the server's rather than the page's: **asking at a
 truncated reference (`writes Order.` and then Ctrl+Space) makes the request
 hang** — the document never reaches a state the completion handler answers at.
@@ -451,7 +478,9 @@ flakiness in the code and is not.
 | Data head | ✅ on its own channel, same worker, same Langium store |
 | GLSP head | ✅ on a third channel, via `@hydranium/glsp-server/browser` |
 | Diagram editing | ✅ a drag and a palette create, both read back through the data head |
-| Text editors | ✅ three Monaco editors over the same LSP channel — diagnostics as markers, highlighting from semantic tokens, completion and hover |
+| Text editors | ✅ three Monaco editors over the same LSP channel — diagnostics as markers, highlighting from semantic tokens, completion, hover, go-to-definition and occurrence highlighting |
+| Go to definition | ✅ Ctrl+click a reference and the editor opens the document that declares it, across a grammar boundary; the cross-document half is the page's own `registerEditorOpener`, which Monaco's standalone service does not do |
+| Occurrence highlighting | ✅ the caret on a name marks its declaration and every use *in that document*, from the server rather than from Monaco's built-in textual matcher — so a name merely spelled in a comment is not an occurrence |
 | Workspace navigation | ✅ every seeded document with its diagnostic count, and a problems list that opens a document at the line |
 | Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models, so a drag moves the `.layout` editor |
 | Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme; `?theme=`, then the last choice, then `prefers-color-scheme` |

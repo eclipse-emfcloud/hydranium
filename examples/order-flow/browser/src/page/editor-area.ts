@@ -174,18 +174,48 @@ export class EditorArea {
    }
 
    /**
-    * Show `path` and put the cursor on `line`.
+    * Show `path` and put the cursor on `line`, at `column` where one is given.
     *
     * `revealLineInCenter` rather than the top-anchored scroll the initial reveal
     * uses: a diagnostic is a POINT the reader wants context around, where a
     * declaration is the start of a region they want all of.
+    *
+    * The column defaults to the start of the line because a diagnostic's own
+    * column is already inside the range it underlines, so the marker says where
+    * on the line the problem is. A reference followed to its declaration has no
+    * such second marker, and landing at column 1 of `entity Order` leaves the
+    * caret on the keyword rather than on the name that was clicked.
     */
-   reveal(path: string, line: number): void {
+   reveal(path: string, line: number, column = 1): void {
       this.show(path);
       const pane = this.fixed.find(candidate => candidate.path === path) ?? this.selected;
-      pane.editor.setPosition({ lineNumber: line, column: 1 });
+      pane.editor.setPosition({ lineNumber: line, column });
       pane.editor.revealLineInCenter(line);
       this.present(pane);
+   }
+
+   /**
+    * Show the document `uri` addresses at `position`, and report whether this
+    * page had a document to show.
+    *
+    * `false` rather than a throw for a URI with no seeded file behind it, and
+    * that case is REACHABLE rather than defensive: this workspace validates an
+    * in-code contribution on the `virtual:` scheme, which has no file and no
+    * text to open an editor over. A resolved reference into one is a jump the
+    * page genuinely cannot make, and saying so lets the caller leave the reader
+    * where they are instead of moving them to an editor built on invented text.
+    */
+   revealUri(uri: string, position: monaco.IPosition): boolean {
+      const prefix = `${this.options.rootUri}/`;
+      if (!uri.startsWith(prefix)) {
+         return false;
+      }
+      const path = uri.slice(prefix.length);
+      if (this.options.files[path] === undefined) {
+         return false;
+      }
+      this.reveal(path, position.lineNumber, position.column);
+      return true;
    }
 
    /** What each kind of editor is showing, so the document list can mark them apart. */

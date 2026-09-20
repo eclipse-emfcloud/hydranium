@@ -64,14 +64,19 @@ import {
    type CompletionItem,
    CompletionItemKind,
    CompletionRequest,
+   DefinitionRequest,
    DidChangeTextDocumentNotification,
    DidOpenTextDocumentNotification,
+   DocumentHighlightKind,
+   DocumentHighlightRequest,
    type PublishDiagnosticsParams,
    type Diagnostic,
    DiagnosticSeverity,
    type Hover,
    HoverRequest,
    InsertTextFormat,
+   type Location,
+   LocationLink,
    type MarkupContent,
    type Position as LspPosition,
    type Range as LspRange,
@@ -376,6 +381,25 @@ const COMPLETION_KINDS: Readonly<Record<CompletionItemKind, monaco.languages.Com
    [CompletionItemKind.TypeParameter]: monaco.languages.CompletionItemKind.TypeParameter
 };
 
+/**
+ * LSP document-highlight kinds to Monaco's.
+ *
+ * **The same three names over two number spaces, offset by one.** LSP counts
+ * from 1 and Monaco from 0, so a pass-through renders every `Read` as a `Text`
+ * and every `Write` as a `Read` — and `Write`, LSP's 3, is outside Monaco's enum
+ * entirely. The decoration differs per kind, so the result is a file highlighted
+ * in the wrong colours rather than an error.
+ *
+ * This head sends no kind at all, which LSP defines as `Text`, so nothing here
+ * currently distinguishes the three. The map is what keeps that a property of
+ * the server rather than an assumption baked into the client.
+ */
+const HIGHLIGHT_KINDS: Readonly<Record<DocumentHighlightKind, monaco.languages.DocumentHighlightKind>> = {
+   [DocumentHighlightKind.Text]: monaco.languages.DocumentHighlightKind.Text,
+   [DocumentHighlightKind.Read]: monaco.languages.DocumentHighlightKind.Read,
+   [DocumentHighlightKind.Write]: monaco.languages.DocumentHighlightKind.Write
+};
+
 /** LSP 0-based line/character to Monaco 1-based line/column. */
 function toMonacoRange(range: LspRange): monaco.IRange {
    return {
@@ -433,8 +457,63 @@ function toLspPosition(position: monaco.IPosition): LspPosition {
    return { line: position.lineNumber - 1, character: position.column - 1 };
 }
 
+/**
+ * Where an editor-opener request wants the caret.
+ *
+ * Monaco hands the opener a RANGE where it has one and a bare position where it
+ * does not, and the two spell their line under different names — so a reader of
+ * `lineNumber` alone gets `undefined` for every navigation that carried a range,
+ * which is all of the ones a definition result produces: Monaco collapses a
+ * target to its start before it reaches here.
+ *
+ * Line 1, column 1 for a request naming no position at all, which a request to
+ * open a document merely by URI is. The top of the file is that request's own
+ * answer rather than a fallback.
+ */
+function toEditorPosition(selectionOrPosition: monaco.IRange | monaco.IPosition | undefined): monaco.IPosition {
+   if (selectionOrPosition === undefined) {
+      return { lineNumber: 1, column: 1 };
+   }
+   return 'startLineNumber' in selectionOrPosition
+      ? { lineNumber: selectionOrPosition.startLineNumber, column: selectionOrPosition.startColumn }
+      : { lineNumber: selectionOrPosition.lineNumber, column: selectionOrPosition.column };
+}
+
 function isMarkupContent(value: unknown): value is MarkupContent {
    return typeof value === 'object' && value !== null && 'kind' in value && 'value' in value;
+}
+
+/**
+ * A `textDocument/definition` result as Monaco location links.
+ *
+ * **Both wire shapes are live, and reading only one of them fails quietly.** The
+ * response is a `Location`, an array of them, or an array of `LocationLink`s,
+ * and the last is what this head answers with — measured, to a client that
+ * declared no capabilities at all, so `linkSupport` cannot be relied on to
+ * narrow it. The two spell the target under different keys, so a client that
+ * reads a link's `uri` parses a URI out of nothing, which addresses no model and
+ * navigates nowhere without raising anything.
+ *
+ * The link form is the richer one and is kept whole rather than flattened to a
+ * bare location. `targetRange` is the declaration's full extent and
+ * `targetSelectionRange` the name inside it, which is what puts the caret on
+ * `Order` rather than on the `entity` keyword in front of it.
+ * `originSelectionRange` is the span underlined under the Ctrl key, and dropping
+ * it leaves Monaco underlining its own word-at-position instead — a guess about
+ * where the reference the server resolved actually begins.
+ */
+function toDefinitionLinks(result: Location | Location[] | LocationLink[]): monaco.languages.LocationLink[] {
+   const entries: readonly (Location | LocationLink)[] = Array.isArray(result) ? result : [result];
+   return entries.map(entry =>
+      LocationLink.is(entry)
+         ? {
+              uri: monaco.Uri.parse(entry.targetUri),
+              range: toMonacoRange(entry.targetRange),
+              targetSelectionRange: toMonacoRange(entry.targetSelectionRange),
+              originSelectionRange: entry.originSelectionRange === undefined ? undefined : toMonacoRange(entry.originSelectionRange)
+           }
+         : { uri: monaco.Uri.parse(entry.uri), range: toMonacoRange(entry.range) }
+   );
 }
 
 /**
@@ -603,6 +682,8 @@ export class MonacoLspAdapter {
       this.registerSemanticTokens(capabilities);
       this.registerCompletion(capabilities);
       this.registerHover();
+      this.registerDefinition();
+      this.registerDocumentHighlight();
       this.registerApplyEdit();
    }
 
@@ -1080,6 +1161,100 @@ export class MonacoLspAdapter {
                   contents: toMarkdown(hover.contents),
                   range: hover.range === undefined ? undefined : toMonacoRange(hover.range)
                };
+            }
+         });
+      }
+   }
+
+   /**
+    * Route a definition target in ANOTHER document to `open`, which answers
+    * whether it could show it.
+    *
+    * **Monaco's standalone editor service can only navigate within the editor
+    * that was clicked in**, and it declines the rest by doing nothing: it looks
+    * the target resource up on the source editor alone, finds a different model,
+    * and returns — no message, no marker, no console line. That is the same
+    * observable as a server that resolved no reference, which is what makes the
+    * seam worth stating rather than discovering. A host with a workbench behind
+    * it supplies this step; a plain page supplies it by hand.
+    *
+    * `false` from `open` leaves the reader where they are, and that is the
+    * honest answer for a target this page holds no text for rather than a
+    * failure: a `virtual:` in-code contribution is a document to the server and
+    * no file to anyone.
+    *
+    * **A target in the SOURCE editor's own model is deliberately NOT routed
+    * here.** Monaco calls the last-registered opener first and falls through to
+    * its own on a `false`, and its own is better for that case: it selects the
+    * declaration's whole range where this seam could only place a caret, and it
+    * is the path the editor's navigation history is recorded on.
+    */
+   registerEditorOpener(open: (uri: string, position: monaco.IPosition) => boolean): monaco.IDisposable {
+      return monaco.editor.registerEditorOpener({
+         openCodeEditor: (source, resource, selectionOrPosition) => {
+            if (source.getModel()?.uri.toString() === resource.toString()) {
+               return false;
+            }
+            return open(resource.toString(), toEditorPosition(selectionOrPosition));
+         }
+      });
+   }
+
+   /**
+    * Register one `DefinitionProvider` per language.
+    *
+    * **This is half of go-to-definition, and on its own it moves nothing for any
+    * jump this page is interesting for.** A provider answers where the
+    * declaration is; going there is the host's job, and every target here is in
+    * another document — two of the three order-flow grammars cannot reach each
+    * other any other way. {@link registerEditorOpener} is the other half.
+    *
+    * Registered unconditionally, for the reason {@link registerHover} states.
+    */
+   protected registerDefinition(): void {
+      for (const language of ORDER_FLOW_LANGUAGES) {
+         monaco.languages.registerDefinitionProvider(language.id, {
+            provideDefinition: async (model, position) => {
+               const result = await this.connection.sendRequest(DefinitionRequest.type, {
+                  textDocument: { uri: model.uri.toString() },
+                  position: toLspPosition(position)
+               });
+               return result === null ? null : toDefinitionLinks(result);
+            }
+         });
+      }
+   }
+
+   /**
+    * Register one `DocumentHighlightProvider` per language.
+    *
+    * **Document-scoped by the protocol, unlike every other reference-following
+    * request here**, so it answers what a name does in the file being read
+    * rather than where it comes from — the declaration and its uses in one view,
+    * with no jump and nothing opened. A reference resolving into another grammar
+    * contributes nothing to this result, which is why it complements
+    * {@link registerDefinition} rather than overlapping it.
+    *
+    * Registered unconditionally, for the reason {@link registerHover} states.
+    */
+   protected registerDocumentHighlight(): void {
+      for (const language of ORDER_FLOW_LANGUAGES) {
+         monaco.languages.registerDocumentHighlightProvider(language.id, {
+            provideDocumentHighlights: async (model, position) => {
+               const highlights = await this.connection.sendRequest(DocumentHighlightRequest.type, {
+                  textDocument: { uri: model.uri.toString() },
+                  position: toLspPosition(position)
+               });
+               if (highlights === null) {
+                  return null;
+               }
+               // An absent kind is `Text` by the protocol, which is also what
+               // Monaco assumes for an absent one — stated rather than left off,
+               // so the default is this client's and not a coincidence.
+               return highlights.map(highlight => ({
+                  range: toMonacoRange(highlight.range),
+                  kind: HIGHLIGHT_KINDS[highlight.kind ?? DocumentHighlightKind.Text]
+               }));
             }
          });
       }
