@@ -673,7 +673,11 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, edit
    setWorkspaceReport(`saving ${documents.length} document(s)…`);
    try {
       for (const document of documents) {
-         await dataHead.session.saveDocument({ uri: document.uri, model: document.text });
+         // `'anything'`, and `EditorDocument.version` must NOT be dressed up as
+         // a snapshot version: it is Monaco's alternative-version id for the local
+         // buffer, which counts keystrokes in this page and has no relation to
+         // the server's text-document counter the gate compares against.
+         await dataHead.session.saveDocument({ uri: document.uri, model: document.text, basedOn: 'anything' });
          // Marked one at a time, so a failure part-way through leaves the
          // documents it never reached dirty and a second press retries exactly
          // those.

@@ -46,7 +46,7 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
    const model = await resolveContent(options.content, options.__readFileForTest);
 
    if (options.__proxyForTest) {
-      const doc = await options.__proxyForTest.saveModelDocument({ uri: options.uri, clientId, model });
+      const doc = await options.__proxyForTest.saveModelDocument({ uri: options.uri, clientId, model, basedOn: 'anything' });
       write(`${JSON.stringify(doc)}\n`);
       return;
    }
@@ -59,7 +59,7 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
          env: options.logLevel ? logLevelEnv(options.logLevel) : undefined
       },
       async server => {
-         const doc = await server.saveModelDocument({ uri: options.uri, clientId, model });
+         const doc = await server.saveModelDocument({ uri: options.uri, clientId, model, basedOn: 'anything' });
          write(`${JSON.stringify(doc)}\n`);
       }
    );

@@ -25,6 +25,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { TransferDocument } from '@hydranium/protocol';
 import { createRpcProxy, type Project, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
@@ -78,11 +79,11 @@ class FakeServer {
 }
 
 function updated(uri: string): TransferDocumentUpdatedEvent<FakeTransfer, TransferDiagnostic> {
-   return { document: { uri, version: 1, root: ROOT, diagnostics: [] }, reason: 'changed', sourceClientId: 'client-a' };
+   return { document: TransferDocument.create(uri, 1, ROOT), reason: 'changed', sourceClientId: 'client-a' };
 }
 
 function saved(uri: string): TransferDocumentSavedEvent<FakeTransfer, TransferDiagnostic> {
-   return { document: { uri, version: 1, root: ROOT, diagnostics: [] }, sourceClientId: 'client-a' };
+   return { document: TransferDocument.create(uri, 1, ROOT), sourceClientId: 'client-a' };
 }
 
 function projectsChanged(): ProjectsChangedEvent<Project> {

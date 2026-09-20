@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
    type CanonicalUri,
+   asSnapshotVersion,
    ConflictError,
    Disposable as HydraniumDisposable,
    isConflictError,
@@ -100,7 +101,7 @@ function buildService(slowUpdateWarnMs?: number): {
 // (which reads from `services.ServiceRegistry`, absent from the test
 // bundle) — the slow-warn test only needs the update path to run, not
 // to actually serialise.
-const updateArgs = { uri: URI_A, clientId: 'test-client', model: 'name: a\n' };
+const updateArgs = { uri: URI_A, clientId: 'test-client', model: 'name: a\n', basedOn: 'anything' as const };
 
 describe('ModelService readiness gate', () => {
    /**
@@ -264,9 +265,9 @@ function buildConflictBundle(currentVersion = 1): {
 }
 
 describe('ModelService conflict gating', () => {
-   it('throws ConflictError when args.baseVersion is stale relative to the current text-document version', async () => {
+   it('throws ConflictError when args.basedOn is stale relative to the current text-document version', async () => {
       const { service } = buildConflictBundle(3);
-      const staleArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', baseVersion: 2 };
+      const staleArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: asSnapshotVersion(2) };
       let captured: unknown;
       try {
          await service.update(staleArgs);
@@ -288,7 +289,7 @@ describe('ModelService conflict gating', () => {
       // its version: a cold URI answers 0 before the upsert's open and 0 after
       // it, which is why moving that read left this behaviour intact.
       const { service } = buildConflictBundle(3);
-      const coldArgs = { uri: 'file:///never-seen.fake', clientId: 'editor-1', model: 'name:cold\n', baseVersion: 5 };
+      const coldArgs = { uri: 'file:///never-seen.fake', clientId: 'editor-1', model: 'name:cold\n', basedOn: asSnapshotVersion(5) };
       let captured: unknown;
       try {
          await service.update(coldArgs);
@@ -299,17 +300,17 @@ describe('ModelService conflict gating', () => {
       expect((captured as ConflictError).actualVersion).toBe(0);
    });
 
-   it('does not gate when args.baseVersion is omitted', async () => {
+   it("does not gate when args.basedOn is 'anything'", async () => {
       const { bundle, service } = buildConflictBundle(3);
-      const noVersionArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n' };
-      await service.update(noVersionArgs);
+      const forcedArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: 'anything' as const };
+      await service.update(forcedArgs);
       // The update applied — text-document changes recorded.
       expect(bundle.textDocuments.changes.find(change => change.text === 'name:newer\n')).toBeDefined();
    });
 
-   it('proceeds when args.baseVersion matches the current text-document version, returning the post-build AST envelope', async () => {
+   it('proceeds when args.basedOn matches the current text-document version, returning the post-build AST envelope', async () => {
       const { bundle, service } = buildConflictBundle(3);
-      const matchingArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:matched\n', baseVersion: 3 };
+      const matchingArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:matched\n', basedOn: asSnapshotVersion(3) };
       const doc = await service.update(matchingArgs);
       // Text-document store records the bumped version (3 → 4) — the stub
       // `AstDocumentManager.update` increments by one. The returned AST
@@ -324,7 +325,7 @@ describe('ModelService conflict gating', () => {
 
    it('save() gates on the same based-on version (delegates to update)', async () => {
       const { service } = buildConflictBundle(3);
-      const staleSave = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', baseVersion: 1 };
+      const staleSave = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: asSnapshotVersion(1) };
       await expect(service.save(staleSave)).rejects.toBeInstanceOf(ConflictError);
    });
 });
@@ -528,7 +529,7 @@ describe('ModelService update supersession', () => {
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 1 } }]
       });
       const service = new DefaultModelService<FakeRoot>(bundle.services);
-      // Current text-doc version = 1, matching `args.baseVersion: 1` so the
+      // Current text-doc version = 1, matching `args.basedOn` at v1 so the
       // conflict gate stays inert; `AstDocumentManager.update` then bumps
       // to v2, making `appliedVersion = 2`.
       bundle.textDocuments.seedOpen(URI_A, 'v1', 'editor-1');
@@ -542,7 +543,7 @@ describe('ModelService update supersession', () => {
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
       try {
-         await service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', baseVersion: 1 });
+         await service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', basedOn: asSnapshotVersion(1) });
          const ready = supersessionLines(lines);
          expect(ready).toHaveLength(1);
          expect(ready[0].message).toMatch(/Update to v\d+ ready$/);
@@ -560,7 +561,7 @@ describe('ModelService update supersession', () => {
          // Hold the NEXT waitUntil — update #1's rebuild — so a concurrent
          // writer can overtake the version before update #1 settles.
          const gate = bundle.documentBuilder.gateNextWaitUntil();
-         const inFlight = service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', baseVersion: 1 });
+         const inFlight = service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', basedOn: asSnapshotVersion(1) });
          // Spin the microtask queue until update #1 has driven its await chain
          // (open → apply text → rebuild's DocumentBuilder.update → Logger.time)
          // all the way to the gated `waitUntil`. A fixed tick count is fragile —
@@ -622,7 +623,7 @@ describe('ModelService rebuild and save', () => {
       bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
       // Pass `model` as a string to bypass the rewrite + serialize path; no
       // `version` so the conflict gate is inert (covered elsewhere).
-      await bundle.modelService.save({ uri: URI_A, clientId: 'editor-1', model: 'name: saved\n' });
+      await bundle.modelService.save({ uri: URI_A, clientId: 'editor-1', model: 'name: saved\n', basedOn: 'anything' });
       // update applied the new text...
       const change = bundle.textDocuments.changes.find(entry => entry.text === 'name: saved\n');
       expect(change).toBeDefined();
@@ -869,13 +870,13 @@ describe('ModelService modelToText serialize gating', () => {
       const { service, order } = buildRecordingService();
       // No `version` → conflict gate inert; the structured root drives the
       // `serialize(uri, rewriteModel(model))` branch of `modelToText`.
-      await service.update({ uri: URI_A, clientId: 'editor-1', model: { $type: 'FakeRoot', name: 'x' } });
+      await service.update({ uri: URI_A, clientId: 'editor-1', model: { $type: 'FakeRoot', name: 'x' }, basedOn: 'anything' });
       expect(order).toEqual(['serialize']);
    });
 
    it('bypasses serialize for a pre-serialised string payload', async () => {
       const { service, order } = buildRecordingService();
-      await service.update({ uri: URI_A, clientId: 'editor-1', model: 'name: x\n' });
+      await service.update({ uri: URI_A, clientId: 'editor-1', model: 'name: x\n', basedOn: 'anything' });
       expect(order).toEqual([]);
    });
 });
@@ -999,7 +1000,7 @@ describe('ModelService update open() arguments', () => {
       // materialises the synced document — seed it so the downstream content
       // apply finds an open document.
       bundle.textDocuments.seedOpen(URI_A, '', 'test-client');
-      await service.update({ uri: URI_A, clientId: 'test-client', model: 'name: payload\n' });
+      await service.update({ uri: URI_A, clientId: 'test-client', model: 'name: payload\n', basedOn: 'anything' });
       expect(service.openArgs).toHaveLength(1);
       expect(service.openArgs[0]).toEqual({ uri: URI_A, clientId: 'test-client', text: 'name: payload\n' });
    });

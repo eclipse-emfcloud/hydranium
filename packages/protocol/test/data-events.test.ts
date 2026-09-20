@@ -28,6 +28,7 @@ import type { Project } from '../src/project';
 import type { TransferDiagnostic } from '../src/transfer-diagnostic';
 import type { TransferElement } from '../src/transfer-element';
 import { describe, expect, it } from 'vitest';
+import { TransferDocument } from '../src/transfer-document';
 
 /** A minimal adopter root. */
 interface WidgetRoot extends TransferElement {
@@ -80,7 +81,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDidUpdateDocument(event => seen.push([...event.document.diagnostics]));
 
       events.onDocumentUpdated({
-         document: { uri: 'file:///widgets/gauge.widget', version: 3, root: WIDGET, diagnostics: [auditedDiagnostic()] },
+         document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, [auditedDiagnostic()]),
          sourceClientId: 'widget-form',
          reason: 'changed'
       });
@@ -110,7 +111,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDidSaveDocument(event => saved.push(event.document.uri));
 
       events.onDocumentSaved({
-         document: { uri: 'file:///widgets/gauge.widget', version: 4, root: WIDGET, diagnostics: [] },
+         document: TransferDocument.create('file:///widgets/gauge.widget', 4, WIDGET, []),
          sourceClientId: 'widget-form'
       });
 
@@ -154,7 +155,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.dispose();
 
       events.onDocumentUpdated({
-         document: { uri: 'file:///widgets/gauge.widget', version: 5, root: WIDGET, diagnostics: [] },
+         document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, []),
          sourceClientId: 'widget-form',
          reason: 'changed'
       });

@@ -72,7 +72,7 @@ same holds in the other direction — an update notification carries the whole
 document, not a delta.
 
 This is a throughput ceiling on very large models, not a correctness problem.
-Conflict detection is version-based (`baseVersion`), so concurrent whole-model
+Conflict detection is version-based (`basedOn`), so concurrent whole-model
 updates are rejected rather than silently merged.
 
 ### Langium is pinned to one exact version

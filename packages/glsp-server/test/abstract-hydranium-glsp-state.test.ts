@@ -12,7 +12,7 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } f
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import type { ElementKeyProvider, ServerSharedServices } from '@hydranium/core';
+import { AstDocument, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
@@ -38,6 +38,15 @@ interface FakeDocument {
    state: DocumentState;
    parseResult: { value: AstNode };
    textDocument?: { version: number };
+}
+
+/**
+ * Project a fake document into the envelope `ModelService.snapshot` returns.
+ * Only `version` is read by the state, but the shape stays faithful so a stub
+ * cannot pass a test the real service would fail.
+ */
+function toSnapshot(uri: string, document: FakeDocument | undefined): AstDocument<AstNode, never> | undefined {
+   return document && AstDocument.create(uri, document.textDocument?.version ?? 0, document.parseResult.value);
 }
 
 interface StateHarness {
@@ -150,6 +159,7 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
       },
       model: {
          ModelService: {
+            snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
             waitForDocumentState(_uri: string, _state: DocumentState): Promise<void> {
                return harness.waitForDocumentStatePromise();
             },

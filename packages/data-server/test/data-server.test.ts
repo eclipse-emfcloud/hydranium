@@ -234,7 +234,8 @@ describe('DataServer', () => {
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
-               model: { $type: 'FakeRoot', name: 'updated' }
+               model: { $type: 'FakeRoot', name: 'updated' },
+               basedOn: 'anything'
             });
             // Simulate the post-update document by updating the test registry.
             bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'updated' });
@@ -256,7 +257,8 @@ describe('DataServer', () => {
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
-               model: 'name:from-string'
+               model: 'name:from-string',
+               basedOn: 'anything'
             });
             expect(bundle.textDocuments.changes[0]?.text).toBe('name:from-string');
          } finally {
@@ -273,7 +275,8 @@ describe('DataServer', () => {
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'data-server-tools',
-               model: { $type: 'FakeRoot', name: 'attributed' }
+               model: { $type: 'FakeRoot', name: 'attributed' },
+               basedOn: 'anything'
             });
             expect(bundle.textDocuments.getAuthor(URI_A)).toBe('data-server-tools');
          } finally {
@@ -292,7 +295,8 @@ describe('DataServer', () => {
             await proxy.saveModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
-               model: { $type: 'FakeRoot', name: 'persisted' }
+               model: { $type: 'FakeRoot', name: 'persisted' },
+               basedOn: 'anything'
             });
             expect(bundle.fileSystem.writes).toHaveLength(1);
             expect(bundle.fileSystem.writes[0]?.content).toBe('name:persisted');
@@ -340,7 +344,8 @@ describe('DataServer', () => {
             await proxy.saveModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
-               model: { $type: 'FakeRoot', name: 'one' }
+               model: { $type: 'FakeRoot', name: 'one' },
+               basedOn: 'anything'
             });
             await tick(); // give a (wrongly) fired save event a chance, then assert none arrived
             expect(savedEvents).toHaveLength(0);
@@ -350,7 +355,8 @@ describe('DataServer', () => {
             await proxy.saveModelDocument({
                uri: URI_A,
                clientId: 'editor-2',
-               model: { $type: 'FakeRoot', name: 'two' }
+               model: { $type: 'FakeRoot', name: 'two' },
+               basedOn: 'anything'
             });
             await waitFor(() => savedEvents.length === 1);
             expect(savedEvents).toEqual([{ uri: URI_A, sourceClientId: 'editor-2' }]);
@@ -410,7 +416,12 @@ describe('DataServer', () => {
          );
          try {
             await proxy.watchModelDocument({ uri: LINK, clientId: 'sub-1' });
-            await proxy.saveModelDocument({ uri: LINK, clientId: 'editor-2', model: { $type: 'FakeRoot', name: 'two' } });
+            await proxy.saveModelDocument({
+               uri: LINK,
+               clientId: 'editor-2',
+               model: { $type: 'FakeRoot', name: 'two' },
+               basedOn: 'anything'
+            });
             await waitFor(() => savedEvents.length === 1);
             expect(savedEvents[0]?.sourceClientId).toBe('editor-2');
             // Envelope resolved against the canonical doc (non-empty content).

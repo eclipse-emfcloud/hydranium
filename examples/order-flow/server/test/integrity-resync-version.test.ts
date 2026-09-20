@@ -14,7 +14,7 @@
  * content rather than whatever was on disk when the store last reconciled. The
  * two come apart: restoring the pre-re-parse number satisfies the first and
  * leaves the second wrong, at which point the next open steps the version again
- * and every `baseVersion` taken from this build is stale before it is used.
+ * and every based-on version taken from this build is stale before it is used.
  *
  * Every layer has to be the real one for the question to exist: the renumbering
  * this pins is Langium's document factory re-reading a closed document into a
@@ -147,7 +147,7 @@ describe('an integrity repair of a closed document lands on the store version se
       // And the sequence has to describe the REPAIRED text, not the text that was
       // on disk when the store last reconciled. Otherwise the next open hashes
       // the repair, finds a mismatch, steps the version again, and every
-      // `baseVersion` taken from this build is stale before anyone can use it.
+      // based-on version taken from this build is stale before anyone can use it.
       // Reconciling is idempotent when the content already matches, so the same
       // version coming back IS the assertion.
       const repaired = await harness.domain.serializer.Serializer.serializeAst(root);

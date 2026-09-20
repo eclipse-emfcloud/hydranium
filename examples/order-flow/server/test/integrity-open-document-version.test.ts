@@ -16,7 +16,7 @@
  * default. An open document is the opposite case: the factory hands back the
  * store's OWN text-document instance, whose version the store assigns and which
  * this path must not move — a bump here would advance a counter every
- * `baseVersion` holder is gating on, mid-build, for a write nobody made.
+ * based-on holder is gating on, mid-build, for a write nobody made.
  *
  * The real store is required. The guard rests on `reconcileExternalContent`
  * answering `undefined` for anything currently synced, and the framework's own

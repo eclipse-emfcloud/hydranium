@@ -10,7 +10,7 @@
 import { type AstNode, type LangiumDocument, UriUtils } from '@hydranium/langium';
 import { Disposable } from 'vscode-languageserver';
 import {
-   type AstDocument,
+   AstDocument,
    type AstDocumentManager,
    type AstDocumentUpdatedEvent,
    type WritableFileSystemProvider
@@ -191,7 +191,7 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic = u
                return;
             }
             listener({
-               document: { uri, version: textDocuments.version(uri), root: undefined as unknown as TAst, diagnostics: [] as TDiagnostic[] },
+               document: AstDocument.create<TAst, TDiagnostic>(uri, textDocuments.version(uri), undefined as unknown as TAst),
                sourceClientId: event.clientId
             });
          });

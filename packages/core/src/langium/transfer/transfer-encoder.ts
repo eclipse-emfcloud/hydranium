@@ -12,7 +12,7 @@ import {
    type Tracer,
    type TransferDiagnostic,
    type TransferElement,
-   type TransferDocument,
+   TransferDocument,
    type TransferTypeFor
 } from '@hydranium/protocol';
 import { AstUtils, type AstNode, DocumentCache, DocumentState, isAstNode, isReference, type LangiumDocument } from '@hydranium/langium';
@@ -391,12 +391,12 @@ export class DefaultTransferEncoder<
       source: TransferEnvelopeSource<TDiagnostic>,
       root: TransferTypeFor<TAst, TTransferMap>
    ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
-      return {
-         uri: source.uri,
-         version: source.version,
+      return TransferDocument.create(
+         source.uri,
+         source.version,
          root,
-         diagnostics: source.diagnostics.map(diagnostic => this.toTransferDiagnostic(diagnostic as TransferLspDiagnostic))
-      };
+         source.diagnostics.map(diagnostic => this.toTransferDiagnostic(diagnostic as TransferLspDiagnostic))
+      );
    }
 
    /**

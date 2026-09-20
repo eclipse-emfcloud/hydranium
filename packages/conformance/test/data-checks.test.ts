@@ -27,9 +27,9 @@ const connect = (): DataConformanceDriver<TransferElement> => {
 };
 
 describe('buildDataChecks', () => {
-   it('plans three server-level checks plus seven grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(10);
-      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(17);
+   it('plans three server-level checks plus eight grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(11);
+      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(19);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -37,17 +37,18 @@ describe('buildDataChecks', () => {
       expect(checks.every(check => typeof check.body === 'function')).toBe(true);
    });
 
-   it('plans the same checks without an edit, but skips the two that need one', () => {
+   it('plans the same checks without an edit, but skips the four that need one', () => {
       // The checks are still PLANNED — reported as skipped with a reason —
       // rather than silently absent, which is what distinguishes an opt-out
       // from lost coverage.
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(10);
+      expect(checks).toHaveLength(11);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
+         expect.stringContaining('updateModelDocument arms the conflict gate'),
          expect.stringContaining('editing a document reports its unwatched dependent as built'),
          expect.stringContaining('subscribe + update delivers an onDocumentUpdated event')
       ]);
@@ -61,7 +62,7 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(10);
+      expect(checks).toHaveLength(11);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')

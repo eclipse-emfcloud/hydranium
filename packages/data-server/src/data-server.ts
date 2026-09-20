@@ -31,8 +31,9 @@ import {
    type ReferenceTarget,
    type Tracer,
    type TransferDiagnostic,
-   type TransferDocument,
-   type TransferElement
+   TransferDocument,
+   type TransferElement,
+   asSnapshotVersion
 } from '@hydranium/protocol';
 import {
    DATA_SERVER_DIAGNOSTICS_METHODS,
@@ -581,11 +582,11 @@ export class DataServer<
       // multi-client synced version whenever the open seeded the synced document
       // with a caller-supplied version id — and the synced version is what
       // `ModelService.update`'s optimistic-concurrency gate compares
-      // `baseVersion` against, so reporting the snapshot's would make the
+      // `basedOn` against, so reporting the snapshot's would make the
       // caller's first tagged write self-conflict. A genuine concurrent edit
       // still trips the gate and is reconciled by the caller's replay rather
       // than predicted here.
-      return { ...document, version: this.services.workspace.TextDocuments.version(args.uri) };
+      return { ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(args.uri)) };
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
@@ -979,12 +980,7 @@ export class DataServer<
          // decides policy at its own layer; `root` is optional on the envelope
          // so the compiler forces that decision. Adopters preferring to throw
          // override `envelope`.
-         return {
-            uri: uri.toString(),
-            version: 0,
-            root: undefined,
-            diagnostics: [] as TDiagnostic[]
-         };
+         return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
       return this.encoder.toTransferDocument(document) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }

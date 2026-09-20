@@ -19,6 +19,8 @@
  * resolves.
  */
 
+import type { BasedOn } from './based-on';
+
 /** Identifies a client-document binding. Every facade operation carries these fields. */
 export interface TransferClientArgs {
    /** Document URI. */
@@ -39,15 +41,16 @@ export interface TransferUpdateArgs<T> extends TransferClientArgs {
    /** Structured model root or its serialised textual form. */
    model: T | string;
    /**
-    * Optional based-on version: the text-document version this update
-    * was authored against. When set, the server compares against its
-    * current text-document version for `uri` and throws
-    * `ConflictError` on mismatch. Omit to opt out of the gate — mirrors
-    * LSP's `OptionalVersionedTextDocumentIdentifier` posture, intended
-    * for headless / CLI / batch tooling without a meaningful based-on
-    * version.
+    * What this update was authored against. A `SnapshotVersion` is compared
+    * against the server's current text-document version for `uri` and throws
+    * `ConflictError` on mismatch; `'anything'` writes unconditionally.
+    *
+    * **Required so that an ungated write is a decision rather than an
+    * omission.** An optional gate is indistinguishable from a forgotten one at
+    * the call site, and a file of twenty writes hides the one that lost the
+    * field. Nothing else here can see that, since the defect is an absence.
     */
-   baseVersion?: number;
+   basedOn: BasedOn;
 }
 
 /**
@@ -58,10 +61,9 @@ export interface TransferSaveArgs<T> extends TransferClientArgs {
    /** Structured model root or its serialised textual form. */
    model: T | string;
    /**
-    * Optional based-on version — same semantics as
-    * {@link TransferUpdateArgs.baseVersion}. `save` delegates the gating
-    * check to its inner `update`, so this field threads through to the
-    * same `ConflictError` site.
+    * Same semantics and same requirement as {@link TransferUpdateArgs.basedOn}.
+    * `save` delegates the gating check to its inner `update`, so this field
+    * threads through to the same `ConflictError` site.
     */
-   baseVersion?: number;
+   basedOn: BasedOn;
 }

@@ -1039,7 +1039,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
    // that advances exactly when the synced content changes — and never resets
    // while the server lives. Client-declared version ids (Monaco's model
    // versions) only feed the per-client staleness guard; they never leak into
-   // the shared sequence. This is what makes a `baseVersion` optimistic gate
+   // the shared sequence. This is what makes a based-on optimistic gate
    // sound: version unchanged ⇔ content unchanged.
 
    it('accepts a language-client edit whose version id lags the shared sequence', () => {
@@ -1091,7 +1091,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
 
    it('resumes the same version when the document reopens with identical content', () => {
       // Close/reopen with unchanged content is NOT an observable change: the
-      // sequence continues where it left off, so a watcher's `baseVersion`
+      // sequence continues where it left off, so a watcher's based-on
       // pointer from before the close stays valid (no false conflict).
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'x\n');
@@ -1342,7 +1342,7 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
       // Byte-identical to the authored text: the echo told us the client caught
       // up, and told us nothing else.
       expect(docs.get(URI)?.getText()).toBe(TWO_NODES);
-      // No version minted, so an optimistic `baseVersion` holder is not
+      // No version minted, so an optimistic based-on holder is not
       // false-conflicted by the client agreeing with us.
       expect(docs.version(URI)).toBe(2);
       expect(fires).toHaveLength(0);

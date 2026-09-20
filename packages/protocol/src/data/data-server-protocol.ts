@@ -51,7 +51,7 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * (so concurrent editors share one built document) and returns the
     * document at the server's configured target phase — the same shape
     * {@link getModelDocument} returns, except that `version` is taken from
-    * the text-document store so the caller's first `baseVersion` write
+    * the text-document store so the caller's first `basedOn` write
     * cannot self-conflict. Idempotent in registration terms: opening an
     * already-open document refreshes the client registration. Note it does
     * NOT avoid a rebuild — a second client attaching triggers

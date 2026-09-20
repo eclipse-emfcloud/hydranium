@@ -13,7 +13,7 @@ import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { ReconcilingConflictResolver } from '@hydranium/protocol';
+import { type BasedOn, asSnapshotVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
@@ -33,10 +33,17 @@ interface UpdateCall {
    uri: string;
    model: unknown;
    clientId: string;
+   basedOn: BasedOn;
 }
 
 interface Harness {
    readonly updateCalls: UpdateCall[];
+   /**
+    * Version the fake document store reports, so a based-on assertion can
+    * distinguish the CAPTURED version from any other number. With every
+    * document at v0 an armed gate and a dropped one differ only by type.
+    */
+   documentVersion: number;
    serialize: (root: TestRoot) => string | Promise<string>;
    nextUpdatedRoot: TestRoot;
    /**
@@ -55,6 +62,7 @@ class TestFullTextState extends FullTextHydraniumGlspState<TestRoot> {}
 function makeHarness(): Harness {
    return {
       updateCalls: [],
+      documentVersion: 0,
       serialize: root => `serialized:${root.label}`,
       nextUpdatedRoot: makeRoot('persisted')
    };
@@ -99,7 +107,8 @@ function createState(harness: Harness): TestFullTextState {
                harness.onUpdate?.(args.model as string);
                return { root: harness.nextUpdatedRoot };
             },
-            getDocument: () => undefined
+            snapshot: (uri: string) => ({ uri, version: harness.documentVersion, root: undefined, diagnostics: [] }),
+            getDocument: () => ({ textDocument: { version: harness.documentVersion }, diagnostics: [] })
          }
       }
    };
@@ -142,7 +151,12 @@ describe('FullTextHydraniumGlspState', () => {
 
          await state.updateSourceModel({ text: 'new document text' });
 
-         expect(harness.updateCalls).toEqual([{ uri: 'file:///a.a', model: 'new document text', clientId: 'test-client' }]);
+         // No explicit `basedOn`, so the parameter default applies — and it is the
+         // state's own snapshot version rather than `'anything'`, which is what makes the
+         // gate the thing a caller gets by typing less.
+         expect(harness.updateCalls).toEqual([
+            { uri: 'file:///a.a', model: 'new document text', clientId: 'test-client', basedOn: asSnapshotVersion(0) }
+         ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
       });
    });
@@ -214,20 +228,33 @@ describe('FullTextHydraniumGlspState', () => {
          expect(harness.updateCalls.map(call => call.model)).toEqual(['element After {}', 'element Before {}', 'element After {}']);
       });
 
-      it('drops the based-on version, so the full-text path never arms the conflict gate', async () => {
+      it('arms the conflict gate with the version taken at execute start', async () => {
          const { harness, setText } = makeTextHarness('element Before {}');
+         harness.documentVersion = 7;
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
+         // Advanced AFTER the read. The write must still claim v7, so an
+         // assertion on the number cannot be satisfied by a late read.
+         harness.documentVersion = 9;
 
          await recordOver(state, 'Rename element', () => setText('element After {}')).execute();
 
-         // `AbstractHydraniumGlspState.updateSourceModel` is `(model, version?)`
-         // and the command threads the version captured at execute start — but
-         // this state overrides with a one-parameter signature, so the version is
-         // dropped and `ModelService.update` is called without one. The
-         // consequence is the class's stated design: no `ConflictError` gate, so
-         // concurrent edits degrade to drop-on-divergence rather than merging.
-         expect(harness.updateCalls).toEqual([{ uri: 'file:///a.a', model: 'element After {}', clientId: 'test-client' }]);
+         expect(harness.updateCalls).toEqual([
+            { uri: 'file:///a.a', model: 'element After {}', clientId: 'test-client', basedOn: asSnapshotVersion(7) }
+         ]);
+      });
+
+      it('replays an undo ungated, since a recorded patch is authored against no server version', async () => {
+         const { harness, setText } = makeTextHarness('element Before {}');
+         harness.documentVersion = 7;
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         const command = recordOver(state, 'Rename element', () => setText('element After {}'));
+         await command.execute();
+         await command.undo();
+
+         expect(harness.updateCalls.map(call => call.basedOn)).toEqual([7, 'anything']);
       });
    });
 });

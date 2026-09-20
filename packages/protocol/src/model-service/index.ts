@@ -13,4 +13,5 @@
 // protocol can structurally agree on the lifecycle shape.
 
 export * from './args';
+export * from './based-on';
 export * from './reference-candidate';

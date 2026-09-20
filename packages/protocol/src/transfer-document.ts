@@ -9,6 +9,7 @@
 
 import type { TransferDiagnostic } from './transfer-diagnostic';
 import type { TransferElement } from './transfer-element';
+import { asSnapshotVersion, type SnapshotVersion } from './model-service/based-on';
 
 /**
  * Wire envelope exchanged between the model-server's data-server head and
@@ -27,14 +28,14 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
    uri: string;
    /**
     * The document version this snapshot was taken at — sourced from the
-    * server's text-document version counter. Callers that mutate the
-    * document subsequently pass this value back as `TransferUpdateArgs.baseVersion`
-    * (or `TransferSaveArgs.baseVersion`) so the server can detect stale-based
-    * updates and reject them with `ConflictError`.
+    * server's text-document version counter. A caller that mutates the document
+    * subsequently sends this straight back as `TransferUpdateArgs.basedOn` (or
+    * `TransferSaveArgs.basedOn`), and the server rejects a stale-based update
+    * with `ConflictError`.
     *
     * See `@hydranium/protocol#errors` for the conflict-detection contract.
     */
-   version: number;
+   version: SnapshotVersion;
    /**
     * Absent when the document does not exist — the server answers an unknown URI
     * with a shaped envelope rather than an error, so absence is an ordinary
@@ -83,6 +84,21 @@ export namespace TransferDocument {
    }
 
    /**
+    * The envelope for a document the server does not have — `root` absent, and
+    * the version a read of a URI the store never saw reports.
+    *
+    * Exists so the absent branch is built the same way the present one is: both
+    * doors mark the version as coming from a read, and neither asks a caller to
+    * do it.
+    */
+   export function absent<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic>(
+      uri: string,
+      diagnostics: TDiagnostic[] = []
+   ): TransferDocument<TTransfer, TDiagnostic> {
+      return { uri, version: asSnapshotVersion(0), root: undefined, diagnostics };
+   }
+
+   /**
     * Construct a {@link TransferDocument} envelope. `diagnostics` defaults
     * to `[]` so test fixtures, fake protocol implementations, and the
     * "no diagnostics yet" code paths don't need to repeat the empty array
@@ -94,6 +110,6 @@ export namespace TransferDocument {
       root: TTransfer,
       diagnostics: TDiagnostic[] = []
    ): TransferDocument<TTransfer, TDiagnostic> {
-      return { uri, version, root, diagnostics };
+      return { uri, version: asSnapshotVersion(version), root, diagnostics };
    }
 }

@@ -237,7 +237,7 @@ function contentHash(text: string): string {
  *     per-client staleness guard and never leak into the shared sequence —
  *     the two are different things (an editor's edit-operation counter vs the
  *     document's content-revision number), and splicing them lets versions drift
- *     silently past `baseVersion` gate holders.
+ *     silently past based-on gate holders.
  *   - Version-author history so each edit is attributable to its originating client.
  *   - Pending-content staging used by the integrity service to thread corrections
  *     through `workspace/applyEdit` cycles for currently-closed documents.
@@ -264,7 +264,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * that record is deleted on last close, while the version sequence must
     * survive it — the shared version is a server-owned, monotonic,
     * advances-iff-content-changes counter that never resets while the server
-    * lives. That invariant is what makes an optimistic `baseVersion` gate
+    * lives. That invariant is what makes an optimistic based-on gate
     * sound: "version unchanged ⇔ content unchanged", with no false conflicts
     * from close/reopen version resets and no false passes from a reopened
     * sequence coincidentally landing on a stale writer's number.
@@ -506,7 +506,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          }
 
          // The SHARED version advances iff the content actually changes — the
-         // invariant optimistic `baseVersion` gates rely on. The new text is
+         // invariant optimistic based-on gates rely on. The new text is
          // only known after applying the (possibly incremental) changes, so
          // apply at a tentative +1 and roll the version back on an identical
          // result (an empty-changes update only re-stamps the version).
@@ -557,7 +557,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * A content-identical write still fires the change event (rebuild): the
     * authored write's server-side rebuild is correctness-bearing, it just
     * mints no new version — nothing observable changed, so watchers'
-    * `baseVersion` pointers stay valid.
+    * based-on versions stay valid.
     *
     * Returns the resulting shared version. Throws when the document is not
     * open — callers (`AstDocumentManager.update`) open first.
@@ -694,7 +694,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          const source = pendingText ? ', source=pending' : '';
          // The SHARED version is server-assigned: continue the persisted
          // sequence — same version when the content is unchanged since the
-         // last close (so watchers' `baseVersion` pointers stay valid), one
+         // last close (so watchers' based-on versions stay valid), one
          // step when it changed (so no stale pointer can coincidentally pass
          // the optimistic gate). Only a first-ever open adopts the client's
          // declared id as the sequence seed.
@@ -860,7 +860,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * `0` for a URI this store has never seen. The shared sequence is
     * server-owned and monotonic across close/reopen cycles, and advances
     * exactly when the synced content changes — which is what makes it a sound
-    * optimistic-concurrency token (`baseVersion` gates): version unchanged ⇔
+    * optimistic-concurrency token (based-on gates): version unchanged ⇔
     * content unchanged.
     */
    version(uri: DocumentUri): number {

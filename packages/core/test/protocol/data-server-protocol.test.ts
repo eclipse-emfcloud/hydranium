@@ -112,12 +112,14 @@ describe('DataServerProtocol — type contract', () => {
       const fromString = await protocol.updateModelDocument({
          uri: 'fake://doc',
          clientId: 'test',
-         model: 'serialised'
+         model: 'serialised',
+         basedOn: 'anything'
       });
       const fromStruct = await protocol.updateModelDocument({
          uri: 'fake://doc',
          clientId: 'test',
-         model: FakeRoot.make('structured')
+         model: FakeRoot.make('structured'),
+         basedOn: 'anything'
       });
       expect(fromString.root?.name).toBe('serialised');
       expect(fromStruct.root?.name).toBe('structured');

@@ -16,7 +16,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { ReferenceSource, SyntheticStep, TransferDocument, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
+import {
+   isConflictError,
+   ReferenceSource,
+   SyntheticStep,
+   TransferDocument,
+   type TransferDiagnostic,
+   type TransferElement
+} from '@hydranium/protocol';
 import type {
    DataServerProtocol,
    ReferenceServerProtocol,
@@ -205,7 +212,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // Resolved AFTER `connect`, which is the whole point of allowing a
                // thunk: the fixture may name a workspace `connect` just created.
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
                // `includeDiagnostics` for the same reason the invalid check
                // passes it: a synchronous read settles at the integrity-settled
                // phase, so an empty array without it can mean "validation has
@@ -240,7 +247,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(invalid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
                // Diagnostics are a validation-phase product; a synchronous read settles at the
                // integrity-settled phase by default, so request validation explicitly here.
                // Safe despite `includeDiagnostics` waiting rather than forcing a build: the
@@ -259,7 +266,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(invalid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
                const document = await driver.proxy.getModelDocument({ uri: model.uri, includeDiagnostics: true });
 
                // Conditional rather than fixture-driven, and deliberately so: what
@@ -312,7 +319,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        return;
                     }
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
 
                     // Default to the folder holding the valid model: a sibling of
                     // it is where a create flow would put the new file.
@@ -360,10 +367,68 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  const driver = await connect();
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text });
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: resolveDeferred(edit.to) });
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+                    await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: AUTHOR,
+                       model: resolveDeferred(edit.to),
+                       basedOn: 'anything'
+                    });
                     const document = await driver.proxy.getModelDocument({ uri: model.uri });
                     assert.ok(edit.expect(document.root), 'edit.expect(root) was false — the edit was not reflected by a follow-up get');
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
+      });
+
+      checks.push({
+         title: `updateModelDocument arms the conflict gate on a based-on snapshot version ${tag}`,
+         skipReason: edit ? undefined : editSkipReason,
+         body: edit
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    const model = resolveModel(valid);
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
+
+                    // The version the gate is meant to accept, read BEFORE the
+                    // foreign edit that supersedes it.
+                    const stale = await driver.proxy.getModelDocument({ uri: model.uri });
+                    await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: SEEDER,
+                       model: resolveDeferred(edit.to),
+                       basedOn: 'anything'
+                    });
+
+                    let rejection: unknown;
+                    await driver.proxy
+                       .updateModelDocument({
+                          uri: model.uri,
+                          clientId: AUTHOR,
+                          model: model.text,
+                          basedOn: stale.version
+                       })
+                       .catch((error: unknown) => {
+                          rejection = error;
+                       });
+                    assert.ok(
+                       isConflictError(rejection),
+                       `a write based on the superseded v${stale.version} was not refused: ${String(rejection)}`
+                    );
+
+                    // The other half, and it is not optional: a head that refused
+                    // EVERY write would satisfy the assertion above on its own, so
+                    // the gate has to be shown accepting a current snapshot too.
+                    const fresh = await driver.proxy.getModelDocument({ uri: model.uri });
+                    await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: AUTHOR,
+                       model: resolveDeferred(edit.to),
+                       basedOn: fresh.version
+                    });
                  } finally {
                     driver.dispose();
                  }
@@ -386,8 +451,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     try {
                        const model = resolveModel(valid);
                        const other = resolveModel(dependent);
-                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text });
-                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text });
+                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
+                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text, basedOn: 'anything' });
                        // Watch ONLY the referenced document. The dependent is left
                        // unwatched on purpose: that is the state in which no other
                        // channel can report it, and the state a workspace view is in
@@ -395,7 +460,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
                        const before = driver.builds.length;
 
-                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: resolveDeferred(edit.to) });
+                       await driver.proxy.updateModelDocument({
+                          uri: model.uri,
+                          clientId: AUTHOR,
+                          model: resolveDeferred(edit.to),
+                          basedOn: 'anything'
+                       });
 
                        await waitFor(() => driver.builds.slice(before).some(event => event.uris.includes(other.uri)), {
                           message: `no onDocumentsBuilt event named ${other.uri} after editing the document it references`
@@ -423,9 +493,14 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  const driver = await connect();
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text });
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
                     await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: resolveDeferred(edit.to) });
+                    await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: AUTHOR,
+                       model: resolveDeferred(edit.to),
+                       basedOn: 'anything'
+                    });
                     await waitFor(() => driver.events.some(event => event.sourceClientId === AUTHOR), {
                        message: `no onDocumentUpdated event for ${model.uri} after the post-subscription update`
                     });

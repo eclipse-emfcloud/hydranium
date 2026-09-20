@@ -10,6 +10,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { type AstNode, type AstReflection, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
+import { AstDocument } from '../../../src/documents/ast-document-manager.js';
 import { makeFakeAstNode, makeFakeDocument } from '../../../src/testing/fake-document.js';
 import { makeFakeReflection, makeNoopSharedServices, makeTestServices } from '../../../src/testing/index.js';
 import { makeStubDocumentBuilder } from '../../../src/testing/stub-document-builder.js';
@@ -496,7 +497,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
 
    it('is the chokepoint for the AstDocument snapshot path too', () => {
       const encoder = buildTaggingEncoder();
-      const astDocument = { uri: 'file:///snap.a', version: 7, root: makeFakeAstNode({ $type: 'Root', id: 'r' }), diagnostics: [] };
+      const astDocument = AstDocument.create<AstNode, TransferDiagnostic>('file:///snap.a', 7, makeFakeAstNode({ $type: 'Root', id: 'r' }));
 
       const result = encoder.astDocumentToTransferDocument(astDocument);
       // Guards the two-path split: were this path to build the envelope inline
@@ -597,7 +598,11 @@ describe('TransferEncoder extension hooks', () => {
          workspace: { DocumentBuilder: makeStubDocumentBuilder() }
       });
       const encoder = new HookedEncoder(services);
-      const astDocument = { uri: 'file:///ctx.a', version: 1, root: makeFakeAstNode({ $type: 'Root', name: 'a' }), diagnostics: [] };
+      const astDocument = AstDocument.create<AstNode, TransferDiagnostic>(
+         'file:///ctx.a',
+         1,
+         makeFakeAstNode({ $type: 'Root', name: 'a' })
+      );
       const result = encoder.astDocumentToTransferDocument(astDocument);
       expect((result.root as unknown as Record<string, unknown>)._decorated).toBe('@file:///ctx.a');
    });

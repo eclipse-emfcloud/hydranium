@@ -35,7 +35,14 @@
  * cost a full server implementation to reproduce over a wire.
  */
 
-import { isDocumentSource, isSyntheticSource } from '@hydranium/protocol';
+import {
+   asSnapshotVersion,
+   ConflictError,
+   isDocumentSource,
+   isSnapshotVersion,
+   isSyntheticSource,
+   TransferDocument
+} from '@hydranium/protocol';
 import type {
    CloseModelArgs,
    OpenModelArgs,
@@ -43,7 +50,6 @@ import type {
    ReferenceCandidate,
    ReferenceContext,
    TransferDiagnostic,
-   TransferDocument,
    TransferElement
 } from '@hydranium/protocol';
 import type {
@@ -146,6 +152,12 @@ export interface CanaryDefects {
    readonly silentCascade?: boolean;
    /** The cascade report names the WATCHED document too, which the update channel already carried. */
    readonly cascadeNamesWatched?: boolean;
+   /**
+    * Every write lands, whatever version it claims to be based on — the head
+    * that accepts `basedOn` on the wire and never compares it, so a form editor
+    * overwrites a concurrent text edit with nothing logged.
+    */
+   readonly ungatedWrites?: boolean;
    /**
     * A synthetic source whose URI names no file answers `[]` instead of the
     * project's candidates — the create-dialog defect: a head that routes only
@@ -258,6 +270,15 @@ export class CanaryDataServer {
    async updateModelDocument(args: TransferUpdateDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
       const text = typeof args.model === 'string' ? args.model : args.model.text;
       const existing = this.documents.get(args.uri);
+      // The conflict gate, which is the property the based-on check probes. An
+      // unknown URI answers v0, so a write claiming a version against a document
+      // that does not exist is stale rather than unchecked.
+      if (!this.defects.ungatedWrites && isSnapshotVersion(args.basedOn)) {
+         const current = existing?.version ?? 0;
+         if (current !== args.basedOn) {
+            throw new ConflictError(args.uri, args.basedOn, current);
+         }
+      }
       // An edit is any update that follows the first one for this URI, which is
       // the only notion of "edit" a fake with no grammar can hold.
       const isEdit = existing !== undefined;
@@ -306,7 +327,7 @@ export class CanaryDataServer {
       if (!stored) {
          // `root` absent is the documented answer for a URI the server does not
          // have, so this is an ordinary branch rather than an error.
-         return { uri, version: 0, diagnostics: [] };
+         return TransferDocument.absent<CanaryRoot, TransferDiagnostic>(uri);
       }
       const diagnostics = this.defects.diagnosticsOnValid
          ? [canaryDiagnostic('the canary reports every model as broken', this.defects)]
@@ -315,7 +336,7 @@ export class CanaryDataServer {
            : diagnosticsFor(stored.text, this.defects);
       return {
          uri,
-         version: this.defects.fractionalVersion ? stored.version + 0.5 : stored.version,
+         version: asSnapshotVersion(this.defects.fractionalVersion ? stored.version + 0.5 : stored.version),
          root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
          diagnostics
       };

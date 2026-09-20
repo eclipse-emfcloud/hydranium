@@ -102,7 +102,7 @@ describe('order-flow language-client attach over the real transport', () => {
 
       // A non-LSP client writes a document the editor has not opened. `update` is
       // an upsert, so no file has to exist for the store to hold this.
-      await shared.model.ModelService.update({ uri: URI, model: AUTHORED, clientId: 'diagram' });
+      await shared.model.ModelService.update({ uri: URI, model: AUTHORED, clientId: 'diagram', basedOn: 'anything' });
 
       // The editor opens the same URI from disk, which is now the older text. The
       // server notices the two disagree and pushes, which is what the client is

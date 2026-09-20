@@ -197,7 +197,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     * The whole root goes back, because `TransferUpdateArgs.model` IS the
     * document root — there is no path- or op-scoped variant, since the encoder
     * is AST→transfer only and the parser is the decoder. So a field edit is
-    * read-modify-write, and `baseVersion` plus patch replay is what keeps it
+    * read-modify-write, and `basedOn` plus patch replay is what keeps it
     * from clobbering a concurrent writer rather than finer granularity.
     *
     * **This is destructive to comments and formatting, and an adopter has to
@@ -231,7 +231,9 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
             await this.session.updateDocument({
                uri: baseline.uri,
                model: attempted,
-               baseVersion: baseline.version
+               // The version the READ returned, not one re-read here: that is
+               // what makes the gate able to fire at all.
+               basedOn: baseline.version
             })
          );
          return { status: 'applied' };
@@ -273,8 +275,8 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     *
     * The refetched document is captured rather than only its root, because a
     * successful replay has to be written back against the version it was
-    * merged onto — retrying without a `baseVersion` would silently reopen the
-    * hole the gate exists to close.
+    * merged onto — retrying based on anything would silently reopen the hole the
+    * gate exists to close.
     */
    protected async reconcile(baseline: LoadedTransferDocument<TTransfer>, attempted: TTransfer): Promise<SetFieldOutcome> {
       const server = await this.session.connected();
@@ -292,7 +294,9 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
                await this.session.updateDocument({
                   uri: baseline.uri,
                   model: outcome.merged,
-                  baseVersion: fresh?.version
+                  // A merge implies the refetch ran, so `fresh` is set here; the
+                  // fallback is the type's, not a case this branch reaches.
+                  basedOn: fresh?.version ?? 'anything'
                })
             );
             return { status: 'merged' };

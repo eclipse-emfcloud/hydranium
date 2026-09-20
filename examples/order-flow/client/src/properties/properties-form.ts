@@ -175,7 +175,7 @@ export class PropertiesForm {
     * The consequence, stated rather than hidden: a foreign edit to the field the
     * user is IN leaves that one input stale, because blurring fires no model
     * change to redraw it from. The user's own next write then trips
-    * `baseVersion`, and the conflict branch adopts the server's value and fires a
+    * `basedOn`, and the conflict branch adopts the server's value and fires a
     * change — by which point the input is no longer focused, so it updates. The
     * edit is never silently lost; it is only the display that lags, and only for
     * the field being typed in.

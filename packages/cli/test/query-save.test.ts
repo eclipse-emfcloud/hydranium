@@ -85,7 +85,9 @@ describe('runSave', () => {
          write: line => written.push(line),
          __proxyForTest: makeStubProxy(calls)
       });
-      expect(calls.saveModelDocument).toEqual([{ uri: 'file:///workspace/A.fake', clientId: 'hydranium-cli', model: 'name:literal' }]);
+      expect(calls.saveModelDocument).toEqual([
+         { uri: 'file:///workspace/A.fake', clientId: 'hydranium-cli', model: 'name:literal', basedOn: 'anything' }
+      ]);
       expect(written).toHaveLength(1);
       const parsed = JSON.parse(written[0]);
       expect(parsed.root.name).toBe('name:literal');
