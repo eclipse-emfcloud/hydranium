@@ -147,10 +147,10 @@ export function isElementSource(object: unknown): object is ElementSource {
 /** An element of a document that does not yet exist on disk — used during element creation flows. */
 export interface SyntheticSource {
    /**
-    * The document the element would belong to. That document must already be
-    * LOADED — the default resolution takes its parse root as the synthetic
-    * node's container and answers `undefined` when it is not, so a URI for a
-    * file that exists on disk but was never opened resolves to nothing.
+    * The document the element would belong to. It need not be loaded, or
+    * exist — an unloaded URI materialises a transient empty document, so a
+    * folder is a valid anchor. A URI that IS loaded contributes that
+    * document's parse root as the container, putting its contents in scope.
     */
    uri: string;
    /**
@@ -159,6 +159,16 @@ export interface SyntheticSource {
     * it is what scoping filters candidates against.
     */
    type: string;
+   /**
+    * The grammar the element will belong to, as a language id.
+    *
+    * Optional because `uri` and `type` each answer on their own when
+    * unambiguous. Set it when neither is: a URI naming no file carries no
+    * extension to route on, and a `type` two grammars can produce identifies
+    * neither. Unset, such a source reaches the server's own policy, which
+    * answers the same way for every caller.
+    */
+   language?: string;
 }
 
 export function isSyntheticSource(object: unknown): object is SyntheticSource {
@@ -183,8 +193,10 @@ export namespace ReferenceSource {
    export function element(name: string, type?: string): ElementSource {
       return { name, type };
    }
-   export function synthetic(uri: string, type: string): SyntheticSource {
-      return { uri, type };
+   export function synthetic(uri: string, type: string, language?: string): SyntheticSource {
+      // The key is omitted rather than set to `undefined`, so a source built
+      // without a language stays deep-equal to the two-argument form.
+      return language === undefined ? { uri, type } : { uri, type, language };
    }
 }
 
@@ -477,4 +489,10 @@ export interface FindNextNameArgs {
     * See {@link NameTier} for what each tier covers.
     */
    tier?: NameTier;
+   /**
+    * The grammar to name under, routed as {@link SyntheticSource.language} —
+    * this call builds one. A caller that sets it there must set it here, or
+    * candidates and the name it proposes come from different grammars.
+    */
+   language?: string;
 }
