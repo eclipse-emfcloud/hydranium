@@ -30,6 +30,11 @@ class TestHandler extends AbstractSocketForwardingConnectionHandler {
       this.replayBufferedMessages(channel, buffered);
    }
 
+   /** Reach the protected dial under test. */
+   connect(channel: Channel, port: number): Promise<void> {
+      return this.connectToServer(channel, port);
+   }
+
    /** Expose the protected configuration the base derives from its options. */
    get config(): {
       portCommand: string;
@@ -78,6 +83,43 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
       expect(handler.config.findPortTimeout).toBe(50);
       expect(handler.config.findPortAttempts).toBe(3);
       expect(handler.config.connectTimeoutMs).toBe(1234);
+   });
+
+   /**
+    * The heads bind `127.0.0.1`, so the dial has to name that address rather
+    * than leave Node to resolve its `localhost` default: on a dual-stack machine
+    * where `localhost` yields `::1` first, the connection is refused by an
+    * address family nothing in the error names.
+    */
+   it('dials the loopback address the heads bind, not the resolver default', async () => {
+      const connectCalls: unknown[] = [];
+      const handler = new TestHandler({
+         ...baseOptions(),
+         connectTimeoutMs: 1,
+         onSocketCreated: socket => {
+            // Replace the dial before the base calls it, so the assertion needs
+            // no listening server and opens no real connection.
+            socket.connect = ((...args: unknown[]) => {
+               connectCalls.push(args[0]);
+               return socket;
+            }) as typeof socket.connect;
+         }
+      });
+      (handler as unknown as { logger: ILogger }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+
+      const channel = new ForwardingChannel(
+         'test',
+         () => {},
+         () => {
+            throw new Error('write buffer not needed for this test');
+         }
+      );
+      // Never resolves — the stubbed dial emits no `ready` — so the timeout
+      // rejection is the expected outcome and is consumed here rather than
+      // surfacing as an unhandled rejection.
+      await expect(handler.connect(channel, 4711)).rejects.toBeDefined();
+
+      expect(connectCalls).toEqual([{ port: 4711, host: '127.0.0.1' }]);
    });
 
    /**

@@ -25,6 +25,21 @@ export interface SocketServerOptions {
     */
    readonly port?: number;
    /**
+    * Interface to bind. Default `'127.0.0.1'` (LOCAL ONLY) — a head whose
+    * port is OS-assigned and announced over the LSP connection is
+    * reachable only by a client on the same machine anyway, so a wider
+    * binding exposes a port nothing off-box can address. Matches
+    * `startGlspServer`'s default, so the two socket heads agree.
+    *
+    * Pass `'::'` for every interface: that is the dual-stack any-address,
+    * so both IPv4 and IPv6 clients connect. `'0.0.0.0'` is NOT the same —
+    * it takes IPv4 only and refuses `::1`.
+    *
+    * An address no local interface holds fails the bind, so `started`
+    * rejects with `EADDRNOTAVAIL` rather than falling back to a wider one.
+    */
+   readonly host?: string;
+   /**
     * Optional logger. If omitted, the launcher runs silently — the
     * adopter is expected to surface lifecycle events through their own
     * logging in {@link OnClientConnection} if needed.
@@ -88,6 +103,7 @@ export interface StartedSocketServer extends IntegratedServer {
  */
 export function startSocketServer(options: SocketServerOptions, onClientConnection: OnClientConnection): StartedSocketServer {
    const port = options.port ?? 0;
+   const host = options.host ?? '127.0.0.1';
    const logger = options.logger;
    const tag = options.logTag ?? 'SocketServer';
    const started = new Deferred<void>();
@@ -128,7 +144,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
       connection.listen();
    });
 
-   netServer.listen(port);
+   netServer.listen(port, host);
    netServer.on('listening', () => {
       const addressInfo = netServer.address();
       if (!addressInfo) {
@@ -144,7 +160,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
          return;
       }
       handle.port = addressInfo.port;
-      logger?.info(`[${tag}] Ready to accept new client requests on port: ${addressInfo.port}`);
+      logger?.info(`[${tag}] Ready to accept new client requests on ${addressInfo.address} port: ${addressInfo.port}`);
       started.resolve();
    });
    netServer.on('error', err => {

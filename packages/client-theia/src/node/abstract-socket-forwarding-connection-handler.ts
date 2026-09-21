@@ -175,7 +175,12 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
       if (channel instanceof ForwardingChannel) {
          socket.on('error', error => channel.onErrorEmitter.fire(error));
       }
-      socket.connect({ port });
+      // `127.0.0.1`, not the `localhost` Node dials when no host is given, and it
+      // has to match the head: the socket launchers bind `127.0.0.1` by default,
+      // so on a dual-stack machine where `localhost` resolves to `::1` first the
+      // dial fails as ECONNREFUSED with nothing in the message naming the address
+      // family as the cause.
+      socket.connect({ port, host: '127.0.0.1' });
       setTimeout(() => connected.reject('Timeout reached.'), this.connectTimeoutMs);
       return connected.promise;
    }
