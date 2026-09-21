@@ -76,7 +76,15 @@ jobs:
         # moving alias: it advances a major Windows Server release under the
         # workflow, and a leg whose runtime and failure rate both move on someone
         # else's schedule cannot be measured against a change made here.
-        os: [ubuntu-22.04, windows-2025]
+        #
+        # macOS earns its place on two properties neither other leg has, and
+        # being a second POSIX is not one of them. Its temp root is reached
+        # through a symlink — `tmpdir()` answers `/tmp`, which links to
+        # `/private/tmp` — so any path compared without resolving first differs
+        # by a prefix, which is invisible on the other two. And it is the only
+        # arm64 image, so a native module is rebuilt for a second ARCHITECTURE
+        # rather than only a second OS. Pinned for the same reason Windows is.
+        os: [ubuntu-22.04, windows-2025, macos-26]
 
     env:
       # `--report-on-fatalerror` makes a V8 fatal error drop a report naming the
