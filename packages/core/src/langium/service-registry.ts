@@ -255,9 +255,13 @@ export class ExtendedServiceRegistry<
     * inherited Langium semantics, which throws on miss). Used for
     * dynamically-routed lookups where the language id comes from
     * external input.
+    *
+    * The cast is sound because {@link register} is the only way a language
+    * enters and takes `TServices`; `languageIdMap` is inherited and typed to
+    * Langium's base, which is the only reason one is needed.
     */
-   getServicesById(languageId: string): LangiumCoreServices | undefined {
-      return this.languageIdMap.get(languageId);
+   getServicesById(languageId: string): TServices | undefined {
+      return this.languageIdMap.get(languageId) as TServices | undefined;
    }
 
    /**

@@ -800,7 +800,7 @@ export class DataServer<
       // synthetic source — and the create-element flow driving this method is
       // the one that produces directory URIs, on which a bare
       // `getServices(uri)` throws while `findReferenceCandidates` succeeds.
-      const nameProvider = this.resolveReferenceServices(ReferenceSource.synthetic(args.uri, args.type)).NameProvider;
+      const nameProvider = this.resolveReferenceServices(ReferenceSource.synthetic(args.uri, args.type, args.language)).NameProvider;
       const tier = args.tier ?? 'project';
       if (tier === 'public') {
          return nameProvider.findNextProjectQualifiedName(args.type, args.proposal);
@@ -847,6 +847,9 @@ export class DataServer<
    /**
     * Pick the language that owns a reference source, in order:
     *
+    * 0. A {@link isSyntheticSource} naming its own `language` routes there.
+    *    First because every step below infers, and an inference must not
+    *    override a caller that has said which grammar it means.
     * 1. A URI-bearing source ({@link isDocumentSource}/{@link isSyntheticSource})
     *    whose URI resolves to a registered language routes by URI.
     * 2. A single-language workspace always routes to that one language — so
@@ -865,6 +868,15 @@ export class DataServer<
     */
    protected resolveReferenceLanguage(source: ReferenceSource): HydraniumLanguageServices | undefined {
       const registry = this.services.ServiceRegistry;
+      if (isSyntheticSource(source) && source.language !== undefined) {
+         const declared = registry.getServicesById(source.language);
+         if (declared) {
+            return declared;
+         }
+         // Falling through on an UNREGISTERED id rather than failing: the id
+         // crosses the wire, so a client built against a head with one more
+         // grammar would otherwise lose queries the steps below can answer.
+      }
       // `getServicesFor` (non-throwing, one ladder walk) gates the URI lookup:
       // an extensionless / unregistered URI falls through to the steps below
       // rather than throwing "no services for the extension ''".

@@ -1877,6 +1877,71 @@ describe('DataServer — multi-language reference routing', () => {
       }
    });
 
+   it('routes a declared language ahead of the type that contradicts it', async () => {
+      const bundle = buildBundle();
+      // `TypeTwo` is produced by `other` ALONE, so the type step would answer —
+      // and answer differently. The declared language has to win for this to
+      // distinguish step 0 from step 4 at all; asserting against a type nobody
+      // else claims would pass with the new step deleted.
+      const { services, fake } = makeMultiLanguageServices(bundle, [], { fake: ['TypeOne'], other: ['TypeTwo'] });
+      const { server, pair } = makeHarness(services);
+      try {
+         const ctx: ReferenceContext = { source: ReferenceSource.synthetic(DIR_URI, 'TypeTwo', 'fake'), property: 'ref' };
+         await expect(server.findReferenceCandidates(ctx)).resolves.toBe(fake.candidates);
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('answers an ambiguous type once the source declares its language', async () => {
+      const bundle = buildBundle();
+      // The case the field exists for: both grammars produce the type, so every
+      // inference below abstains and the adopter policy would have to answer
+      // globally. A caller that knows says so per call.
+      const { services, other } = makeMultiLanguageServices(bundle, [], { fake: ['SharedType'], other: ['SharedType'] });
+      const { server, pair } = makeHarness(services);
+      try {
+         const ctx: ReferenceContext = { source: ReferenceSource.synthetic(DIR_URI, 'SharedType', 'other'), property: 'ref' };
+         await expect(server.findReferenceCandidates(ctx)).resolves.toBe(other.candidates);
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('falls through to the ladder when the declared language is not registered', async () => {
+      const bundle = buildBundle();
+      // The id crosses the wire, so a client built against a head that registers
+      // one more grammar must not lose a query the inference can still answer.
+      const { services, other } = makeMultiLanguageServices(bundle, [], { fake: ['TypeOne'], other: ['TypeTwo'] });
+      const { server, pair } = makeHarness(services);
+      try {
+         const ctx: ReferenceContext = { source: ReferenceSource.synthetic(DIR_URI, 'TypeTwo', 'absent'), property: 'ref' };
+         await expect(server.findReferenceCandidates(ctx)).resolves.toBe(other.candidates);
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('names an element under the language the args declare', async () => {
+      const bundle = buildBundle();
+      // `findNextName` builds a synthetic source of its own, so the language
+      // has to reach it too — otherwise a caller lists candidates from one
+      // grammar and proposes a name from another.
+      const { services, fake, other } = makeMultiLanguageServices(bundle, [], { fake: ['TypeOne'], other: ['TypeTwo'] });
+      const { server, pair } = makeHarness(services);
+      try {
+         const name = await server.findNextName({ uri: DIR_URI, type: 'TypeTwo', proposal: 'x', language: 'fake' });
+         // Each stub answers `<label>:<method>`, so the prefix names the language
+         // that was reached. Asserting `other` was NOT reached as well, because
+         // the type alone routes there and a step that never ran would too.
+         expect(name.startsWith('fake:')).toBe(true);
+         expect(other.nameCalls).toEqual([]);
+         expect(fake.nameCalls).toHaveLength(1);
+      } finally {
+         pair.dispose();
+      }
+   });
+
    it('prefers the owning document over the type for an element source', async () => {
       const bundle = buildBundle();
       // The index says the element lives in a `.other` document while the type
