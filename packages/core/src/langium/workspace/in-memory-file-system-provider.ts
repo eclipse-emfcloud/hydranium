@@ -128,8 +128,14 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       this.setFile(uri, content);
    }
 
-   readFile(uri: URI): Promise<string> {
-      return Promise.resolve(this.readFileSync(uri));
+   // `async` on each read whose sync twin can throw, rather than
+   // `Promise.resolve(this.<x>Sync(uri))`. That form evaluates the sync call
+   // FIRST, so a miss throws before `Promise.resolve` is ever reached — and a
+   // synchronous throw escapes the promise chain: `.catch()` never attaches and
+   // `Promise.all` dies while its argument array is still being built, so a
+   // caller reading several URIs cannot handle the miss it asked about.
+   async readFile(uri: URI): Promise<string> {
+      return this.readFileSync(uri);
    }
 
    readFileSync(uri: URI): string {
@@ -144,16 +150,16 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       return content;
    }
 
-   readBinary(uri: URI): Promise<Uint8Array> {
-      return Promise.resolve(this.readBinarySync(uri));
+   async readBinary(uri: URI): Promise<Uint8Array> {
+      return this.readBinarySync(uri);
    }
 
    readBinarySync(uri: URI): Uint8Array {
       return new TextEncoder().encode(this.readFileSync(uri));
    }
 
-   stat(uri: URI): Promise<FileSystemNode> {
-      return Promise.resolve(this.statSync(uri));
+   async stat(uri: URI): Promise<FileSystemNode> {
+      return this.statSync(uri);
    }
 
    statSync(uri: URI): FileSystemNode {

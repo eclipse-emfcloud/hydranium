@@ -243,3 +243,37 @@ describe('InMemoryFileSystemProvider agreement across the read surface', () => {
       expect(() => provider().statSync(virtualUri('builtin', 'absent.a'))).toThrow();
    });
 });
+
+/**
+ * A miss on an async read arrives as a rejection. Contract: the sync twins
+ * throw, and the async ones reject — a synchronous throw from a method
+ * declared to return a promise escapes the chain, so a caller batching several
+ * URIs cannot handle the miss it asked about.
+ */
+describe('InMemoryFileSystemProvider async misses reject', () => {
+   const missing = URI.parse(`${ROOT}/missing.a`);
+
+   it('rejects rather than throwing synchronously', async () => {
+      // `rejects` discriminates on its own: a synchronous throw never hands the
+      // matcher a promise, and the case errors out instead of passing.
+      await expect(seeded().readFile(missing)).rejects.toThrow();
+      await expect(seeded().readBinary(missing)).rejects.toThrow();
+      await expect(seeded().stat(missing)).rejects.toThrow();
+   });
+
+   it('is catchable when several URIs are read together', async () => {
+      // The shape a synchronous throw actually breaks: it fires while the
+      // argument array is still being built, so `Promise.all` never returns a
+      // promise and neither handler below can run.
+      const files = seeded();
+      const settled = await Promise.all([files.readFile(URI.parse(`${ROOT}/alpha/one.a`)), files.readFile(missing)]).then(
+         () => 'resolved',
+         (err: unknown) => `rejected: ${String(err)}`
+      );
+      expect(settled).toContain('No such file');
+   });
+
+   it('still resolves a hit', async () => {
+      await expect(seeded().readFile(URI.parse(`${ROOT}/alpha/one.a`))).resolves.toBe('content one');
+   });
+});

@@ -33,7 +33,9 @@ function servicesWith(virtualDocuments: Record<string, string> = {}): ServerShar
  *   provider a browser or CLI host boots on and a virtual stdlib is the one
  *   thing such a host does have;
  * - everything else keeps the empty base's answers, so "no filesystem" is still
- *   distinguishable from "an empty one".
+ *   distinguishable from "an empty one";
+ * - a refusal from an async read arrives as a REJECTION, not as a synchronous
+ *   throw the promise chain cannot see.
  *
  * Its Node and in-memory siblings make the same agreement, and that uniformity
  * is the point: a head that swaps providers must not watch the same URI change
@@ -73,20 +75,17 @@ describe('DefaultEmptyFileSystemProvider', () => {
          expect(await provider().exists(URI.parse('file:///a.a'))).toBe(false);
       });
 
-      // The async reads refuse SYNCHRONOUSLY rather than returning a rejected
-      // promise, because the empty base throws from a method merely declared to
-      // return one. Asserted as `toThrow` on the call and not `rejects`, which
-      // would pass a non-promise to the matcher and fail for its own reason —
-      // inherited behaviour, pinned here so a change to it is visible.
-      it('refuses to read or stat', () => {
+      it('refuses to read or stat', async () => {
          const files = provider();
          const uri = URI.parse('file:///a.a');
          expect(() => files.readFileSync(uri)).toThrow();
-         expect(() => files.readFile(uri)).toThrow();
          expect(() => files.readBinarySync(uri)).toThrow();
-         expect(() => files.readBinary(uri)).toThrow();
          expect(() => files.statSync(uri)).toThrow();
-         expect(() => files.stat(uri)).toThrow();
+         // `rejects` discriminates: a method that threw synchronously would
+         // never hand the matcher a promise, and the case errors instead.
+         await expect(files.readFile(uri)).rejects.toThrow();
+         await expect(files.readBinary(uri)).rejects.toThrow();
+         await expect(files.stat(uri)).rejects.toThrow();
       });
 
       it('drops writes without failing', async () => {

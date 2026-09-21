@@ -41,9 +41,15 @@ export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider impl
    // read); delegate everything else to the empty base (which throws, or
    // answers "absent"). The base declares these param-less, so the param is
    // optional here.
-   override readFile(uri?: URI): Promise<string> {
+   //
+   // The async reads are `async` so the base's refusal becomes a rejection: it
+   // throws SYNCHRONOUSLY from a method declared to return a promise, and a
+   // synchronous throw escapes the promise chain — `.catch()` never attaches
+   // and `Promise.all` dies while its argument array is still being built, so
+   // a caller reading several URIs cannot handle the miss it asked about.
+   override async readFile(uri?: URI): Promise<string> {
       const served = this.served(uri);
-      return served !== undefined ? Promise.resolve(served) : super.readFile();
+      return served !== undefined ? served : super.readFile();
    }
 
    override readFileSync(uri?: URI): string {
@@ -51,9 +57,9 @@ export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider impl
       return served !== undefined ? served : super.readFileSync();
    }
 
-   override readBinary(uri?: URI): Promise<Uint8Array> {
+   override async readBinary(uri?: URI): Promise<Uint8Array> {
       const served = this.served(uri);
-      return served !== undefined ? Promise.resolve(new TextEncoder().encode(served)) : super.readBinary();
+      return served !== undefined ? new TextEncoder().encode(served) : super.readBinary();
    }
 
    override readBinarySync(uri?: URI): Uint8Array {
@@ -62,9 +68,9 @@ export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider impl
    }
 
    // The base declares these two WITH a URI parameter, so they stay required.
-   override stat(uri: URI): Promise<FileSystemNode> {
+   override async stat(uri: URI): Promise<FileSystemNode> {
       const served = serveVirtualNode(this.services, uri);
-      return served !== undefined ? Promise.resolve(served) : super.stat(uri);
+      return served !== undefined ? served : super.stat(uri);
    }
 
    override statSync(uri: URI): FileSystemNode {
