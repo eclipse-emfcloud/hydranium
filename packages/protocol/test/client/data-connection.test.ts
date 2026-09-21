@@ -13,6 +13,14 @@
  * The assertions worth having read the clientId the SERVER received, not the
  * one the session reports: the server keys its holds and watches per
  * `(uri, clientId)`, so a stamp that never reaches the wire buys nothing.
+ *
+ * Every close asserted here is fired WITHOUT being awaited — a `Disposable`
+ * cannot be, and a close issued after its caller is gone has nobody to hand a
+ * promise to — so arrival is polled, never timed. A fixed delay buys no
+ * margin: the crossing costs event-loop turns and no wall time, so the delay
+ * expires on a clock the delivery does not run on, and any stall inside it
+ * fails the assertion. `tick` stays right for the assertions that are an
+ * ABSENCE, which no amount of polling can establish.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -285,7 +293,7 @@ describe('DataConnection sessions', () => {
 
          openTheGate();
          await opening;
-         await tick();
+         await waitFor(() => closes(calls).length === 1, { message: 'the raced-open hold was never closed' });
 
          expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
       } finally {
@@ -333,9 +341,7 @@ describe('DataConnection sessions', () => {
          // out, leaving the hold alive on the server with nothing left to
          // release it.
          panel.dispose();
-         await tick();
-
-         expect(closes(calls)).toHaveLength(2);
+         await waitFor(() => closes(calls).length === 2, { message: 'dispose did not retry the failed close' });
       } finally {
          dispose();
       }
