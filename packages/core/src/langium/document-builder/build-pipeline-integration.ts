@@ -64,16 +64,6 @@ const BUILD_PHASE_PASS_STATES: readonly DocumentState[] = [
  */
 export const INTEGRITY_PASS_PRIORITY = -1000;
 
-/**
- * Default priority of the framework scope-cache pass. In the NEGATIVE
- * foundational band for the reason {@link INTEGRITY_PASS_PRIORITY} gives: an
- * adopter pass at `IndexedContent` takes the default `0`, and one running first
- * reads scopes built from the mid-rebuild index. Sharing that constant's value
- * is not sharing its knob — priority orders passes only within one phase
- * bucket, and integrity registers at no phase this pass runs at.
- */
-export const SCOPE_CACHE_PASS_PRIORITY = -1000;
-
 /** Construction options for {@link BuildPipelineIntegration}. */
 export interface BuildPipelineIntegrationOptions {
    /**
@@ -148,17 +138,6 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
          });
       }
 
-      // A pass rather than a listener each scope provider registers for itself,
-      // so an adopter pass at this phase is ordered against it by declaration
-      // instead of by DI construction order. `clearScopeCaches` carries why the
-      // caches' own eviction does not cover this.
-      passes.register({
-         id: 'framework:scope-cache:indexed-content',
-         state: DocumentState.IndexedContent,
-         priority: SCOPE_CACHE_PASS_PRIORITY,
-         run: () => this.clearScopeCaches()
-      });
-
       // One onBuildPhase listener per pass state, routed through the overridable
       // `runBuildPhase` seam → priority-ordered, sequential, cancel-aware pass
       // dispatch. The returned promise is awaited by the build pipeline, so a
@@ -172,6 +151,14 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
             )
          );
       }
+
+      // Per DOCUMENT as well: `reparseAndRelink` re-indexes one document from
+      // inside the `Linked` phase and fires no build-phase notification, so a
+      // batch-level listener cannot see the AST it replaced.
+      builder.onDocumentPhase(
+         DocumentState.IndexedContent,
+         labelPhaseListener(() => this.clearScopeCaches(), 'BuildPipeline.clearScopeCaches')
+      );
 
       // AST enrichment stays per-document (onDocumentPhase) and node-granular —
       // unchanged by the build-phase-pass registry, which is batch-granular. The

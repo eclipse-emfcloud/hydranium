@@ -49,9 +49,7 @@ order). The framework reserves **negative** priorities for *foundational*
 passes, and what the band holds is decided by a rule rather than by a list: a
 pass belongs in it when the rest of its phase reads what that pass produced.
 Integrity qualifies because it cleans the AST every derived-state pass then
-walks. Scope-cache eviction qualifies because the stale scopes it drops are what
-the linking phase would otherwise resolve through. Adopters therefore use `0` or
-higher:
+walks. Adopters therefore use `0` or higher:
 
 - framework foundational: negative band — a pass the rest of the phase reads
   the output of
