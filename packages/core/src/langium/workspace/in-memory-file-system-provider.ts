@@ -12,16 +12,18 @@ import { defineMessage, type Tracer } from '@hydranium/protocol';
 import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../shared-services.js';
-import { serveVirtualDocument } from './virtual-document.js';
+import { serveVirtualDocument, serveVirtualNode } from './virtual-document.js';
 
 /**
- * The browser host's spelling of "the document is not there". Its Node
- * counterpart is `NO_LOADABLE_CONTENT`: this provider has no `realpath`, so the
- * URI policy cannot answer the existence question ahead of the read and the miss
- * surfaces here instead.
+ * A provider's spelling of "the document is not there", raised wherever a read
+ * finds no content — this filesystem, or a URI naming no location a disk-backed
+ * provider can reach. Distinct from `NO_LOADABLE_CONTENT`, which the URI policy
+ * raises when it can settle the question AHEAD of the read; a provider with no
+ * `realpath` cannot, so the miss surfaces here instead.
  */
 export const NO_SUCH_FILE = defineMessage('hydranium/core/no-such-file', 'No such file: {uri}');
 
+/** The same for a node of any kind, so it also covers a directory. */
 export const NO_SUCH_PATH = defineMessage('hydranium/core/no-such-path', 'No such file or directory: {uri}');
 
 /**
@@ -155,6 +157,11 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    }
 
    statSync(uri: URI): FileSystemNode {
+      // Virtual first, on the same terms as `readFileSync`.
+      const served = serveVirtualNode(this.services, uri);
+      if (served !== undefined) {
+         return served;
+      }
       const path = normalize(uri);
       if (this.files.has(path)) {
          return { isFile: true, isDirectory: false, uri };
@@ -170,6 +177,9 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    }
 
    existsSync(uri: URI): boolean {
+      if (serveVirtualDocument(this.services, uri) !== undefined) {
+         return true;
+      }
       const path = normalize(uri);
       return this.files.has(path) || this.hasChildren(path);
    }

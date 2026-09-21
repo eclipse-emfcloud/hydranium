@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { type LangiumDocument, URI } from '@hydranium/langium';
-import { isVirtualUri, serveVirtualDocument, virtualUri } from '../../../src/langium/workspace/virtual-document.js';
+import { isVirtualUri, serveVirtualDocument, serveVirtualNode, virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
@@ -72,5 +72,28 @@ describe('serveVirtualDocument', () => {
    it('returns undefined for a virtual URI with no registered document', () => {
       const services = servicesWith({});
       expect(serveVirtualDocument(services, virtualUri('builtin', 'Missing'))).toBeUndefined();
+   });
+});
+
+describe('serveVirtualNode', () => {
+   it('reports a registered virtual document as a file, never a directory', () => {
+      const services = servicesWith({ 'virtual:builtin/Element': 'element Element' });
+      expect(serveVirtualNode(services, virtualUri('builtin', 'Element'))).toMatchObject({ isFile: true, isDirectory: false });
+   });
+
+   it('carries the URI it was asked about', () => {
+      const services = servicesWith({ 'virtual:builtin/Element': 'element Element' });
+      const uri = virtualUri('builtin', 'Element');
+      expect(serveVirtualNode(services, uri)?.uri).toBe(uri);
+   });
+
+   it('serves an empty document, which is present rather than missing', () => {
+      const services = servicesWith({ 'virtual:builtin/Empty': '' });
+      expect(serveVirtualNode(services, virtualUri('builtin', 'Empty'))).toBeDefined();
+   });
+
+   it('returns undefined on the same terms as serveVirtualDocument', () => {
+      expect(serveVirtualNode(servicesWith({}), virtualUri('builtin', 'Missing'))).toBeUndefined();
+      expect(serveVirtualNode(servicesWith({ 'file:///a.a': 'x' }), URI.parse('file:///a.a'))).toBeUndefined();
    });
 });

@@ -206,3 +206,40 @@ describe('inMemoryFileSystem', () => {
       expect(fileSystemProvider(servicesWith())).toBeInstanceOf(InMemoryFileSystemProvider);
    });
 });
+
+/**
+ * Every read agrees about a registered virtual document. Contract: a provider
+ * that serves the document's text and then reports nothing there cannot be
+ * probed before a read, so the registry is consulted by the whole surface and
+ * not only by `readFileSync`.
+ *
+ * Asserted alongside a map that does NOT hold the URI, so a pass cannot come
+ * from the map answering instead of the registry.
+ */
+describe('InMemoryFileSystemProvider agreement across the read surface', () => {
+   const uri = virtualUri('builtin', 'types.a');
+   const files = (): InMemoryFileSystemProvider => provider({}, { [uri.toString()]: 'element Any' });
+
+   it('reports the document present', async () => {
+      // The map is empty, so `true` can only have come from the registry.
+      expect(provider().existsSync(uri)).toBe(false);
+      expect(files().existsSync(uri)).toBe(true);
+      expect(await files().exists(uri)).toBe(true);
+   });
+
+   it('stats the document as a file', async () => {
+      expect(files().statSync(uri)).toMatchObject({ isFile: true, isDirectory: false });
+      expect(await files().stat(uri)).toMatchObject({ isFile: true, isDirectory: false });
+   });
+
+   it('reads the document as text and as bytes', async () => {
+      expect(files().readFileSync(uri)).toBe('element Any');
+      expect(files().readBinarySync(uri)).toEqual(new TextEncoder().encode('element Any'));
+      expect(await files().readBinary(uri)).toEqual(new TextEncoder().encode('element Any'));
+   });
+
+   it('still reports an unregistered virtual URI absent', () => {
+      expect(provider().existsSync(virtualUri('builtin', 'absent.a'))).toBe(false);
+      expect(() => provider().statSync(virtualUri('builtin', 'absent.a'))).toThrow();
+   });
+});

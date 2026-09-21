@@ -23,8 +23,9 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { URI, UriUtils } from '@hydranium/langium';
+import { type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
 import { DefaultFileSystemProvider } from '../../src/node/node-file-system-provider.js';
+import { virtualUri } from '../../src/langium/workspace/virtual-document.js';
 import { makeNoopSharedServices } from '../../src/testing/index.js';
 import { makeStubSelfSaveRegistry } from '../../src/testing/stub-self-save-registry.js';
 
@@ -406,5 +407,140 @@ describe('DefaultFileSystemProvider.writeFile preserves the target it replaces',
       // every write would quietly stop being indivisible and only this reddens.
       expect(statSync(file).ino).not.toBe(replaced.ino);
       expect(readFileSync(file, 'utf8')).toBe('replacement');
+   });
+});
+
+/**
+ * The read surface against URIs that name no disk location. Contract:
+ * - a registered virtual document is served by EVERY read, not only the text
+ *   ones, so a caller can probe before reading rather than getting "here is the
+ *   content" and "nothing is there" from one provider about one URI;
+ * - a URI this provider cannot reach on disk is answered "nothing here" and is
+ *   never turned into a path — `URI.fsPath` yields one for any scheme, so
+ *   delegating to Node would silently answer about an unrelated real file;
+ * - a `file:` URI is untouched by either rule.
+ *
+ * The masquerading URIs below are built with `.with({ scheme })` off a real
+ * `file:` URI rather than parsed from a string, so `fsPath` is byte-identical
+ * to the occupied path on every platform. Each case asserts that collision as a
+ * PRECONDITION: without it the provider would answer "absent" for the boring
+ * reason that nothing is there, and the test would pass having proved nothing.
+ */
+describe('DefaultFileSystemProvider read surface for URIs that name no disk location', () => {
+   let root: string;
+   let occupiedPath: string;
+   let provider: DefaultFileSystemProvider;
+
+   const VIRTUAL_TEXT = 'element Registered';
+   const registered = virtualUri('stdlib', 'types.fake');
+
+   /** The occupied on-disk path, re-addressed under a scheme that is not `file:`. */
+   const masquerading = (scheme: string): URI => URI.file(occupiedPath).with({ scheme });
+
+   beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), 'hydranium-read-surface-'));
+      occupiedPath = join(root, 'occupied.fake');
+      writeFileSync(occupiedPath, 'unrelated on-disk content');
+
+      provider = new DefaultFileSystemProvider(
+         makeNoopSharedServices({
+            workspace: {
+               SelfSaveRegistry: makeStubSelfSaveRegistry(),
+               LangiumDocuments: {
+                  getDocument: (uri: URI): LangiumDocument | undefined =>
+                     uri.toString() === registered.toString()
+                        ? ({ uri, textDocument: { getText: () => VIRTUAL_TEXT } } as unknown as LangiumDocument)
+                        : undefined
+               }
+            }
+         })
+      );
+   });
+
+   afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+   });
+
+   describe('a registered virtual document', () => {
+      it('is reported present by exists and existsSync', async () => {
+         expect(provider.existsSync(registered)).toBe(true);
+         expect(await provider.exists(registered)).toBe(true);
+      });
+
+      it('stats as a file, never a directory', async () => {
+         for (const node of [provider.statSync(registered), await provider.stat(registered)]) {
+            expect(node.isFile).toBe(true);
+            expect(node.isDirectory).toBe(false);
+         }
+      });
+
+      it('reads back as its text and as the bytes of that text', async () => {
+         expect(provider.readFileSync(registered)).toBe(VIRTUAL_TEXT);
+         expect(await provider.readFile(registered)).toBe(VIRTUAL_TEXT);
+         const expected = new TextEncoder().encode(VIRTUAL_TEXT);
+         expect(provider.readBinarySync(registered)).toEqual(expected);
+         expect(await provider.readBinary(registered)).toEqual(expected);
+      });
+   });
+
+   describe('an unreachable URI whose fsPath collides with a real file', () => {
+      // `virtual:` for a scheme the framework knows and does not back with disk,
+      // and `builtin:` for one it knows nothing about — the rule is the scheme
+      // not being `file:`, not the scheme being recognised.
+      for (const scheme of ['virtual', 'builtin']) {
+         it(`is reported absent under ${scheme}:, not present via the occupied path`, async () => {
+            const uri = masquerading(scheme);
+            // Without this the assertions below are satisfied by an empty directory.
+            expect(uri.fsPath).toBe(URI.file(occupiedPath).fsPath);
+            expect(statSync(uri.fsPath).isFile()).toBe(true);
+
+            expect(uri.scheme).toBe(scheme);
+            expect(provider.existsSync(uri)).toBe(false);
+            expect(await provider.exists(uri)).toBe(false);
+         });
+
+         it(`refuses to stat under ${scheme}: rather than describing the occupant`, async () => {
+            const uri = masquerading(scheme);
+            expect(() => provider.statSync(uri)).toThrow();
+            await expect(provider.stat(uri)).rejects.toThrow();
+         });
+
+         it(`refuses to read under ${scheme}: rather than returning the occupant's content`, async () => {
+            const uri = masquerading(scheme);
+            expect(() => provider.readFileSync(uri)).toThrow();
+            await expect(provider.readFile(uri)).rejects.toThrow();
+            // The binary pair is asserted separately: it reaches `fs` by its own
+            // route, so a guard on the text methods alone still leaks the file.
+            expect(() => provider.readBinarySync(uri)).toThrow();
+            await expect(provider.readBinary(uri)).rejects.toThrow();
+         });
+
+         it(`lists no children under ${scheme}: for a directory that does exist`, async () => {
+            const uri = URI.file(root).with({ scheme });
+            // The directory really is populated, so an empty listing is the rule
+            // firing rather than there being nothing to find.
+            expect(readdirSync(uri.fsPath).length).toBeGreaterThan(0);
+            expect(provider.readDirectorySync(uri)).toEqual([]);
+            expect(await provider.readDirectory(uri)).toEqual([]);
+         });
+      }
+   });
+
+   describe('an ordinary file: URI', () => {
+      it('still reads, stats and lists off disk', async () => {
+         const uri = URI.file(occupiedPath);
+         expect(provider.existsSync(uri)).toBe(true);
+         expect(await provider.exists(uri)).toBe(true);
+         expect(provider.statSync(uri).isFile).toBe(true);
+         expect(provider.readFileSync(uri)).toBe('unrelated on-disk content');
+         expect(await provider.readFile(uri)).toBe('unrelated on-disk content');
+         expect(provider.readDirectorySync(URI.file(root)).map(entry => UriUtils.basename(entry.uri))).toContain('occupied.fake');
+      });
+
+      it('reports an absent file absent', async () => {
+         const absent = URI.file(join(root, 'absent.fake'));
+         expect(provider.existsSync(absent)).toBe(false);
+         expect(await provider.exists(absent)).toBe(false);
+      });
    });
 });

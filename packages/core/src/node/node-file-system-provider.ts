@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type Tracer } from '@hydranium/protocol';
-import { URI, UriUtils } from '@hydranium/langium';
+import { type FileSystemNode, URI, UriUtils } from '@hydranium/langium';
 import { NodeFileSystemProvider } from '@hydranium/langium/node';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -18,7 +18,8 @@ import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { serveVirtualDocument } from '../langium/workspace/virtual-document.js';
+import { NO_SUCH_FILE, NO_SUCH_PATH } from '../langium/workspace/in-memory-file-system-provider.js';
+import { serveVirtualDocument, serveVirtualNode } from '../langium/workspace/virtual-document.js';
 
 /**
  * Node-based default {@link WritableFileSystemProvider}. Extends Langium's
@@ -27,6 +28,10 @@ import { serveVirtualDocument } from '../langium/workspace/virtual-document.js';
  * that would break a hard link, and registers the resulting mtime with the
  * {@link SelfSaveRegistry} bound at `services.workspace.SelfSaveRegistry` — so
  * consumers can suppress the `didChangeWatchedFiles` echo for their own writes.
+ *
+ * Its read surface answers for registered virtual documents and refuses to
+ * derive a disk path from a URI that names no disk location — see
+ * {@link servesFromDisk}, which is the one place that judgement is made.
  *
  * Server-only (`@hydranium/core/node`): pulls `node:fs`. The portable `.`
  * entry binds `DefaultEmptyFileSystemProvider` by default, so a Node host
@@ -46,15 +51,114 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       this.tracer = services.Tracer.for(options.logName ?? this.constructor.name).trace('instantiated');
    }
 
-   // Serve virtual documents from the registered document before touching disk
-   // (a virtual URI has no `fsPath` backing); delegate everything else to Node.
+   /**
+    * Whether `uri` names something this provider can reach on disk.
+    *
+    * Only a `file:` URI does. `URI.fsPath` yields a path for ANY scheme — for a
+    * hierarchical one it is the path component, which for a schemed URI with no
+    * authority comes out RELATIVE — so delegating an unrecognised scheme to Node
+    * does not fail, it probes `<cwd>/<path>` and answers about whatever
+    * unrelated file happens to sit there. A server whose working directory is
+    * the workspace root makes that collision ordinary rather than exotic.
+    *
+    * Note the deliberate disagreement with {@link realpath}, which treats a
+    * non-`file:` URI as PRESENT. The two degrade in opposite directions because
+    * they answer different questions: identity has to hand back a usable URI, so
+    * its safe answer is the one it was given, while occupancy and content must
+    * not be invented from an unrelated path, so their safe answer is "nothing
+    * here". A subclass adding a second on-disk scheme widens this and nothing
+    * else.
+    */
+   protected servesFromDisk(uri: URI): boolean {
+      return uri.scheme === 'file';
+   }
+
+   // Each read resolves in the same order: a registered virtual document first
+   // (it has no `fsPath` backing), then disk for a path this provider can
+   // reach, then the filesystem's own "nothing here" answer — never a probe
+   // against a path derived from a URI that names no disk location.
    override readFile(uri: URI): Promise<string> {
       const served = serveVirtualDocument(this.services, uri);
-      return served !== undefined ? Promise.resolve(served) : super.readFile(uri);
+      if (served !== undefined) {
+         return Promise.resolve(served);
+      }
+      return this.servesFromDisk(uri) ? super.readFile(uri) : Promise.reject(noSuchFile(uri));
    }
 
    override readFileSync(uri: URI): string {
-      return serveVirtualDocument(this.services, uri) ?? super.readFileSync(uri);
+      const served = serveVirtualDocument(this.services, uri);
+      if (served !== undefined) {
+         return served;
+      }
+      if (!this.servesFromDisk(uri)) {
+         throw noSuchFile(uri);
+      }
+      return super.readFileSync(uri);
+   }
+
+   override readBinary(uri: URI): Promise<Uint8Array> {
+      const served = serveVirtualDocument(this.services, uri);
+      if (served !== undefined) {
+         return Promise.resolve(encode(served));
+      }
+      return this.servesFromDisk(uri) ? super.readBinary(uri) : Promise.reject(noSuchFile(uri));
+   }
+
+   override readBinarySync(uri: URI): Uint8Array {
+      const served = serveVirtualDocument(this.services, uri);
+      if (served !== undefined) {
+         return encode(served);
+      }
+      if (!this.servesFromDisk(uri)) {
+         throw noSuchFile(uri);
+      }
+      return super.readBinarySync(uri);
+   }
+
+   override stat(uri: URI): Promise<FileSystemNode> {
+      const served = serveVirtualNode(this.services, uri);
+      if (served !== undefined) {
+         return Promise.resolve(served);
+      }
+      return this.servesFromDisk(uri) ? super.stat(uri) : Promise.reject(noSuchPath(uri));
+   }
+
+   override statSync(uri: URI): FileSystemNode {
+      const served = serveVirtualNode(this.services, uri);
+      if (served !== undefined) {
+         return served;
+      }
+      if (!this.servesFromDisk(uri)) {
+         throw noSuchPath(uri);
+      }
+      return super.statSync(uri);
+   }
+
+   // Delegating to `existsSync` would be shorter and would put a blocking stat
+   // on the async path.
+   override async exists(uri: URI): Promise<boolean> {
+      if (serveVirtualDocument(this.services, uri) !== undefined) {
+         return true;
+      }
+      return this.servesFromDisk(uri) ? super.exists(uri) : false;
+   }
+
+   override existsSync(uri: URI): boolean {
+      if (serveVirtualDocument(this.services, uri) !== undefined) {
+         return true;
+      }
+      return this.servesFromDisk(uri) ? super.existsSync(uri) : false;
+   }
+
+   // A URI this provider cannot reach on disk has no children rather than an
+   // error: a workspace walk enumerates folders it was handed, and failing one
+   // aborts the walk where an empty listing simply contributes nothing.
+   override readDirectory(uri: URI): Promise<FileSystemNode[]> {
+      return this.servesFromDisk(uri) ? super.readDirectory(uri) : Promise.resolve([]);
+   }
+
+   override readDirectorySync(uri: URI): FileSystemNode[] {
+      return this.servesFromDisk(uri) ? super.readDirectorySync(uri) : [];
    }
 
    /**
@@ -167,6 +271,21 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
          return undefined;
       }
    }
+}
+
+/** The "no content here" rejection, for a URI naming no readable file. */
+function noSuchFile(uri: URI): Error {
+   return new Error(NO_SUCH_FILE.format({ uri: uri.toString() }));
+}
+
+/** The "nothing occupies this" rejection, for a URI naming no filesystem node. */
+function noSuchPath(uri: URI): Error {
+   return new Error(NO_SUCH_PATH.format({ uri: uri.toString() }));
+}
+
+/** A virtual document's text as the bytes a binary read returns. */
+function encode(text: string): Uint8Array {
+   return new TextEncoder().encode(text);
 }
 
 /**
