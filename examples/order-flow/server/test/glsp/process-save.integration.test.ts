@@ -82,9 +82,10 @@ function idOf(diagram: GlspHarness<OrderFlowGlspState>, name: string): string {
  * asserts against a save that has not run. The write this test is about is the
  * only unambiguous evidence the save finished.
  *
- * Sound as a barrier for BOTH documents, because the flush writes the primary
- * before the secondary: by the time the layout lands, the process file's write
- * has already happened or already been skipped.
+ * Sound as a barrier for BOTH documents' WRITES, because the flush writes the
+ * primary before the secondary: by the time the layout lands, the process
+ * file's write has already happened or already been skipped. It is NOT a
+ * barrier for the save ANNOUNCEMENTS — see {@link waitForSaveAnnouncements}.
  */
 async function waitForFileToContain(path: string, needle: string): Promise<void> {
    for (let attempt = 0; attempt < 200; attempt++) {
@@ -94,6 +95,26 @@ async function waitForFileToContain(path: string, needle: string): Promise<void>
       await new Promise(resolve => setTimeout(resolve, 10));
    }
    throw new Error(`${path} never came to contain ${needle}`);
+}
+
+/**
+ * Wait until `count` saves have been announced.
+ *
+ * A save announces in the continuation AFTER its write resolves, so a written
+ * document's bytes are readable by an outside reader one turn before its
+ * announcement fires. {@link waitForFileToContain} therefore returns while the
+ * last announcement is still pending, and an assertion made straight after it
+ * sees a short list — under load, not deterministically, which is what makes
+ * the file barrier look sufficient.
+ */
+async function waitForSaveAnnouncements(count: number): Promise<void> {
+   for (let attempt = 0; attempt < 200; attempt++) {
+      if (savedUris.length >= count) {
+         return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+   }
+   throw new Error(`only ${savedUris.length} of ${count} saves announced: ${savedUris.join(', ')}`);
 }
 
 describe('order-flow .process save', () => {
@@ -149,7 +170,10 @@ describe('order-flow .process save', () => {
       expect(statSync(processPath).mtimeMs).toBe(processMtime);
       expect(statSync(layoutPath).mtimeMs).not.toBe(layoutMtime);
       // Every document in the write set announces, written or not: a consumer
-      // that clears a dirty marker on save must not have to know which.
+      // that clears a dirty marker on save must not have to know which. Both
+      // are awaited before the order is asserted, so a missing announcement
+      // fails as a timeout naming what arrived rather than as a wrong order.
+      await waitForSaveAnnouncements(2);
       expect(savedUris).toEqual([diagram.state.sourceUri, diagram.state.layoutUri]);
    });
 });
