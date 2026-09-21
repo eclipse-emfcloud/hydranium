@@ -45,22 +45,26 @@ left to DI construction order.
 ## Priority bands
 
 `BuildPhasePass.priority` defaults to `0` (ascending; ties break by registration
-order). The framework reserves **negative** priorities for *foundational* passes
-that must precede adopter work regardless of registration order — notably
-integrity (`INTEGRITY_PASS_PRIORITY`), which cleans the AST every derived-state
-pass reads. Adopters therefore use `0` or higher:
+order). The framework reserves **negative** priorities for *foundational*
+passes, and what the band holds is decided by a rule rather than by a list: a
+pass belongs in it when the rest of its phase reads what that pass produced.
+Integrity qualifies because it cleans the AST every derived-state pass then
+walks. Scope-cache eviction qualifies because the stale scopes it drops are what
+the linking phase would otherwise resolve through. Adopters therefore use `0` or
+higher:
 
-- framework foundational (integrity): negative band
+- framework foundational: negative band — a pass the rest of the phase reads
+  the output of
 - adopter passes: `0`+ (a derived-state pass naturally runs after the
   foundational band); chained adopter passes order among themselves with
   increasing values (e.g. an inheritance pass at `100` → synthetic-attribute
   reprojection at `200`)
 
 The negative band is load-bearing: an adopter pass registered with no explicit
-priority is `0`, and adopter contributions register *before* the framework
-integrity pass (contribution-group construction precedes
+priority is `0`, and adopter contributions register *before* the framework's own
+passes (contribution-group construction precedes
 `BuildPipelineIntegration`'s constructor), so a `0`-vs-`0` tie would let the
-adopter run before integrity. The negative band removes that footgun.
+adopter run first. The negative band removes that footgun.
 
 ## What does NOT go through these registries
 

@@ -78,6 +78,25 @@ export const NO_ACTIVE_PROFILE_CODE = 1002;
 
 export const noActiveProfileError = (): HydraniumResponseError => messageError(NO_ACTIVE_PROFILE_CODE, NO_ACTIVE_PROFILE);
 
+/**
+ * Raised when a reference question's wait for the build exceeds
+ * {@link DataServerOptions.referenceSettleTimeoutMs}.
+ *
+ * A `ResponseError` because a class name does not cross RPC: without the code a
+ * wire client cannot tell a wedged build from a reference that resolves to
+ * nothing, which is the distinction the wait exists to keep.
+ */
+export const REFERENCE_SETTLE_TIMEOUT = defineMessage(
+   'hydranium/data-server/reference-settle-timeout',
+   'Timed out after {elapsedMs}ms waiting for the build to settle before answering a reference query.'
+);
+
+/** See {@link NO_ACTIVE_PROFILE_CODE} for why this is separate from the catalogue code. */
+export const REFERENCE_SETTLE_TIMEOUT_CODE = 1003;
+
+export const referenceSettleTimeoutError = (elapsedMs: number): HydraniumResponseError =>
+   messageError(REFERENCE_SETTLE_TIMEOUT_CODE, REFERENCE_SETTLE_TIMEOUT, { elapsedMs });
+
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './diagnostics-provider.js';
 import type {
    ClientTextDocumentChangeEvent,
@@ -229,6 +248,22 @@ export interface DataServerOptions extends LogNameOptions {
    readonly fingerprintStrategy?: FingerprintStrategy;
 
    /**
+    * How long a reference question waits for the build to reach `Linked` before
+    * failing with {@link REFERENCE_SETTLE_TIMEOUT_CODE}. Bounded because the
+    * wait resolves off a build-phase notification, so a build cancelled below
+    * `Linked` with nothing after it leaves the request unanswered for the life
+    * of the server.
+    *
+    * Expiry rejects rather than reading the index anyway: the unsettled index
+    * is what the wait keeps the caller away from, so falling through to it on a
+    * slow build reinstates the fault — and on a name proposal persists it.
+    *
+    * Default {@link DataServer.DEFAULT_OPTIONS}, sized for a cold workspace
+    * still reaching `Linked` for the first time.
+    */
+   readonly referenceSettleTimeoutMs?: number;
+
+   /**
     * Wire-method namespace for both inbound request handlers and the
     * outbound notification client proxy. Defaults to
     * {@link DATA_SERVER_WIRE_PREFIX} (`'data-server/'`).
@@ -301,6 +336,7 @@ interface ResolvedDataServerOptions {
    readonly excludedMethods: readonly string[];
    /** Always resolved — to the caller's, or to the platform default. */
    readonly diagnostics: DataServerDiagnosticsProvider;
+   readonly referenceSettleTimeoutMs: number;
 }
 
 /**
@@ -360,8 +396,9 @@ export class DataServer<
     * Framework defaults, exposed so an adopter can spread them when
     * extending rather than restate a value the framework may change.
     */
-   static readonly DEFAULT_OPTIONS: Required<Pick<DataServerOptions, 'subscriptionPhase'>> = {
-      subscriptionPhase: DocumentState.Validated
+   static readonly DEFAULT_OPTIONS: Required<Pick<DataServerOptions, 'subscriptionPhase' | 'referenceSettleTimeoutMs'>> = {
+      subscriptionPhase: DocumentState.Validated,
+      referenceSettleTimeoutMs: 60_000
    };
 
    protected readonly options: ResolvedDataServerOptions;
@@ -770,21 +807,59 @@ export class DataServer<
    // (see resolveReferenceServices) and delegate.
    // ============================================================
 
-   async findReferenceCandidates(ctx: ReferenceContext): Promise<ReferenceCandidate[]> {
-      // Candidates are derived from resolved cross-references, so the relevant document(s) must
-      // have finished the Linked phase — otherwise a query issued right after a model update races
-      // the asynchronous rebuild and returns stale candidates. Wait the source document
-      // specifically, but ONLY when a document is actually loaded at that URI: a synthetic source
-      // can address a URI with no document (a directory URI, typically), and a per-URI `waitUntil`
-      // there throws "No document found". Fall back to a global Linked settle, matching the
-      // id-based ElementSource (no URI) path.
-      const uri = isDocumentSource(ctx.source) || isSyntheticSource(ctx.source) ? UriUtils.toUri(ctx.source.uri) : undefined;
+   /**
+    * Settle the build before a reference question is answered from the index.
+    *
+    * A query issued right after a model update otherwise races the rebuild and
+    * reads an index missing the symbols it asks about. The cost is not confined
+    * to this call: a scope built inside that window is cached, and the build's
+    * remaining documents link against it.
+    *
+    * Waits the source document specifically, but ONLY when one is loaded at
+    * that URI: a synthetic source can address a URI with no document (a
+    * directory URI, typically), where a per-URI `waitUntil` throws "No document
+    * found". Falls back to a global settle, matching the id-based
+    * `ElementSource` path.
+    *
+    * Bounded by {@link DataServerOptions.referenceSettleTimeoutMs}.
+    */
+   protected async awaitReferencesLinked(source: ReferenceSource): Promise<void> {
+      const uri = isDocumentSource(source) || isSyntheticSource(source) ? UriUtils.toUri(source.uri) : undefined;
       const waitUri = uri && this.services.workspace.LangiumDocuments.hasDocument(uri) ? uri : undefined;
-      await this.services.workspace.DocumentBuilder.waitUntil(DocumentState.Linked, waitUri);
+      const stopwatch = this.services.Clock.stopwatch();
+      let timer: Disposable | undefined;
+      const timeout = new Promise<void>((resolve, reject) => {
+         timer = this.services.Clock.setTimer(() => {
+            const elapsedMs = Math.round(stopwatch.elapsedMs);
+            // A per-URI wait resolves off a document-phase notification, so a
+            // missed one strands a wait on a document that HAS reached the
+            // phase. Re-read before failing; the workspace-wide wait has no
+            // equivalent reading and can only reject.
+            const document = waitUri ? this.services.workspace.LangiumDocuments.getDocument(waitUri) : undefined;
+            if (waitUri && document && document.state >= DocumentState.Linked) {
+               this.tracer
+                  .withUri(waitUri.toString())
+                  .warn(`Missed the 'Linked' notification after ${elapsedMs}ms; the document already reached it`);
+               resolve();
+               return;
+            }
+            reject(referenceSettleTimeoutError(elapsedMs));
+         }, this.options.referenceSettleTimeoutMs);
+      });
+      try {
+         await Promise.race([this.services.workspace.DocumentBuilder.waitUntil(DocumentState.Linked, waitUri), timeout]);
+      } finally {
+         timer?.dispose();
+      }
+   }
+
+   async findReferenceCandidates(ctx: ReferenceContext): Promise<ReferenceCandidate[]> {
+      await this.awaitReferencesLinked(ctx.source);
       return this.resolveReferenceServices(ctx.source).CandidateProvider.find(ctx);
    }
 
    async resolveReference(ref: ReferenceRequest): Promise<ReferenceTarget<TTransfer> | undefined> {
+      await this.awaitReferencesLinked(ref.source);
       const resolved = this.resolveReferenceServices(ref.source).CandidateProvider.resolveCandidate(ref);
       if (!resolved) {
          return undefined;
@@ -800,7 +875,14 @@ export class DataServer<
       // synthetic source — and the create-element flow driving this method is
       // the one that produces directory URIs, on which a bare
       // `getServices(uri)` throws while `findReferenceCandidates` succeeds.
-      const nameProvider = this.resolveReferenceServices(ReferenceSource.synthetic(args.uri, args.type, args.language)).NameProvider;
+      const source = ReferenceSource.synthetic(args.uri, args.type, args.language);
+      // Mid-rebuild the names of documents not yet re-indexed are absent from
+      // the taken set, and the caller PERSISTS what it is handed. Nothing
+      // reserves the answer either, so a name is free of the collisions the
+      // index knows about and of nothing else — two callers racing get the same
+      // proposal, which only uniqueness at the write can catch.
+      await this.awaitReferencesLinked(source);
+      const nameProvider = this.resolveReferenceServices(source).NameProvider;
       const tier = args.tier ?? 'project';
       if (tier === 'public') {
          return nameProvider.findNextProjectQualifiedName(args.type, args.proposal);
@@ -1413,7 +1495,8 @@ export class DataServer<
          methodNamespace: partial.methodNamespace ?? DATA_SERVER_WIRE_PREFIX,
          additionalMethods,
          excludedMethods: partial.excludedMethods ?? [],
-         diagnostics: partial.diagnostics ?? defaultDataServerDiagnostics()
+         diagnostics: partial.diagnostics ?? defaultDataServerDiagnostics(),
+         referenceSettleTimeoutMs: partial.referenceSettleTimeoutMs ?? DataServer.DEFAULT_OPTIONS.referenceSettleTimeoutMs
       };
    }
 }

@@ -149,8 +149,16 @@ describe('BuildPipelineIntegration — listener wiring', () => {
    it('does not attach listeners for non-useful phases', () => {
       const { builder } = setup();
       expect(builder.buildCount(DocumentState.Changed)).toBe(0);
-      expect(builder.buildCount(DocumentState.IndexedContent)).toBe(0);
       expect(builder.documentCount(DocumentState.Changed)).toBe(0);
+   });
+
+   // `IndexedContent` is the one phase where the two listener families diverge.
+   // Per document it carries nothing `Parsed` does not, so AST enrichment skips
+   // it; per batch it is the only phase meaning the global index is whole again,
+   // which batch work keyed on a complete index has no other phase to sit at.
+   it('attaches a batch listener but no document listener at IndexedContent', () => {
+      const { builder } = setup();
+      expect(builder.buildCount(DocumentState.IndexedContent)).toBe(1);
       expect(builder.documentCount(DocumentState.IndexedContent)).toBe(0);
    });
 });

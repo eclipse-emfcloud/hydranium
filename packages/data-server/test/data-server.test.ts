@@ -20,6 +20,7 @@ import {
    resolvedFromResponseError,
    type ReferenceCandidate,
    type ReferenceContext,
+   type ReferenceRequest,
    type TransferDiagnostic
 } from '@hydranium/protocol';
 import type { ResponseError } from 'vscode-jsonrpc';
@@ -30,7 +31,7 @@ import {
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol
 } from '@hydranium/protocol/data';
-import { tick, waitFor } from '@hydranium/protocol/testing';
+import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import {
    IntegrityService,
@@ -51,7 +52,13 @@ import {
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { ProfileCapture } from '@hydranium/core/node';
 import { DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
-import { DataServer, NO_ACTIVE_PROFILE, NO_ACTIVE_PROFILE_CODE } from '../src/data-server.js';
+import {
+   DataServer,
+   NO_ACTIVE_PROFILE,
+   NO_ACTIVE_PROFILE_CODE,
+   REFERENCE_SETTLE_TIMEOUT,
+   REFERENCE_SETTLE_TIMEOUT_CODE
+} from '../src/data-server.js';
 import { defaultDataServerDiagnostics as browserDefaultDiagnostics } from '../src/default-diagnostics.browser.js';
 import { nodeDataServerDiagnostics } from '../src/node/node-diagnostics-provider.js';
 import { type DataServerHarness, makeDataServerHarness } from '../src/testing/data-server-harness.js';
@@ -1653,6 +1660,165 @@ describe('DataServer — reference resolution', () => {
          await server.findReferenceCandidates(ctx);
          const last = bundle.documentBuilder.waitUntilCalls.at(-1)!;
          expect(last.args[1]?.toString()).toBe(URI.parse(SYN_URI).toString());
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('waits on the source URI before resolving a single reference', async () => {
+      const bundle = buildBundle();
+      bundle.documents.set(SYN_URI, { $type: 'FakeRoot', name: 'x' });
+      const { server, pair } = makeHarness(makeReferenceServices(bundle, []));
+      try {
+         const ref: ReferenceRequest = { source: ReferenceSource.synthetic(SYN_URI, 'TypeTwo'), property: 'ref', value: 'Target' };
+         const before = bundle.documentBuilder.waitUntilCalls.length;
+         await server.resolveReference(ref);
+
+         expect(bundle.documentBuilder.waitUntilCalls).toHaveLength(before + 1);
+         const last = bundle.documentBuilder.waitUntilCalls.at(-1)!;
+         expect(last.args[0]).toBe(DocumentState.Linked);
+         expect(last.args[1]?.toString()).toBe(URI.parse(SYN_URI).toString());
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('does not read the index to resolve a reference until the build settles', async () => {
+      const bundle = buildBundle();
+      let resolveCandidateCalls = 0;
+      const registry = makeStubServiceRegistry([
+         {
+            languageId: 'fake',
+            fileExtensions: ['.fake'],
+            services: {
+               references: {
+                  CandidateProvider: {
+                     find: () => [],
+                     resolveCandidate: () => {
+                        resolveCandidateCalls++;
+                        return undefined;
+                     }
+                  }
+               }
+            }
+         }
+      ]);
+      const services = { ...bundle.services, ServiceRegistry: registry } as unknown as ServerSharedServices;
+      const { server, pair } = makeHarness(services);
+      try {
+         const gate = bundle.documentBuilder.gateNextWaitUntil();
+         const ref: ReferenceRequest = { source: ReferenceSource.synthetic(SYN_URI, 'TypeTwo'), property: 'ref', value: 'Target' };
+         const pending = server.resolveReference(ref);
+
+         // Park at the gated wait, then assert the index has not been read yet.
+         // A read taken before the build settles does not just answer this call
+         // from an index the rebuild has emptied — the scope it builds on the way
+         // is cached, so every document linked later in that build reads it too.
+         await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+         expect(resolveCandidateCalls).toBe(0);
+
+         gate.resolve();
+         await pending;
+         expect(resolveCandidateCalls).toBe(1);
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('does not read the index for a name proposal until the build settles', async () => {
+      const bundle = buildBundle();
+      let proposalReads = 0;
+      const registry = makeStubServiceRegistry([
+         {
+            languageId: 'fake',
+            fileExtensions: ['.fake'],
+            services: {
+               references: {
+                  NameProvider: {
+                     findNextProjectQualifiedName: (_type: string, proposal: string) => {
+                        proposalReads++;
+                        return proposal;
+                     }
+                  }
+               }
+            }
+         }
+      ]);
+      const services = { ...bundle.services, ServiceRegistry: registry } as unknown as ServerSharedServices;
+      const { server, pair } = makeHarness(services);
+      try {
+         const gate = bundle.documentBuilder.gateNextWaitUntil();
+         // The `public` tier reads the index directly, with no ProjectManager
+         // step in between — the shortest path to the taken-name set.
+         const pending = server.findNextName({ uri: SYN_URI, type: 'TypeTwo', proposal: 'Name', tier: 'public' });
+
+         // A proposal settled here would be settled against a taken-name set the
+         // rebuild has emptied, and the caller persists what it is handed.
+         await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+         expect(proposalReads).toBe(0);
+
+         gate.resolve();
+         await expect(pending).resolves.toBe('Name');
+         expect(proposalReads).toBe(1);
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   /** Bundle whose `Clock` the test drives, for the bounded reference wait. */
+   function buildTimedBundle(documentState: DocumentState): { bundle: Bundle; clock: FakeClock } {
+      const clock = makeFakeClock();
+      const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
+         serialize: (_uri, root) => `name:${root.name}`,
+         clock
+      });
+      bundle.documents.set(SYN_URI, { $type: 'FakeRoot', name: 'x' }, { state: documentState });
+      return { bundle, clock };
+   }
+
+   it('fails a reference lookup when the build never reaches Linked', async () => {
+      const { bundle, clock } = buildTimedBundle(DocumentState.Parsed);
+      const { server, pair } = makeHarness(makeReferenceServices(bundle, []));
+      try {
+         const gate = bundle.documentBuilder.gateNextWaitUntil();
+         const ref: ReferenceRequest = { source: ReferenceSource.synthetic(SYN_URI, 'TypeTwo'), property: 'ref', value: 'Target' };
+         const pending = server.resolveReference(ref);
+         await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+
+         clock.advance(DataServer.DEFAULT_OPTIONS.referenceSettleTimeoutMs);
+
+         // Asserted on the wire code, not the class: a class name does not
+         // survive RPC reconstruction, so the code is the only thing a client
+         // can use to tell this from a reference that resolves to nothing.
+         const err = await pending.then(
+            () => undefined,
+            (reason: unknown) => reason
+         );
+         expect((err as ResponseError<unknown>).code).toBe(REFERENCE_SETTLE_TIMEOUT_CODE);
+         expect(resolvedFromResponseError(err as ResponseError<unknown>)?.code).toBe(REFERENCE_SETTLE_TIMEOUT.code);
+         gate.resolve();
+      } finally {
+         pair.dispose();
+      }
+   });
+
+   it('answers anyway when the timer finds the document already linked', async () => {
+      // The per-URI wait resolves off a document-phase notification, so one lost
+      // between the builder's state check and its listener registration strands
+      // a wait on a document that HAS reached the phase. Re-reading the document
+      // is what keeps a lost event from failing the caller.
+      const { bundle, clock } = buildTimedBundle(DocumentState.Validated);
+      const { server, pair } = makeHarness(makeReferenceServices(bundle, []));
+      try {
+         const gate = bundle.documentBuilder.gateNextWaitUntil();
+         const ref: ReferenceRequest = { source: ReferenceSource.synthetic(SYN_URI, 'TypeTwo'), property: 'ref', value: 'Target' };
+         const pending = server.resolveReference(ref);
+         await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+
+         clock.advance(DataServer.DEFAULT_OPTIONS.referenceSettleTimeoutMs);
+
+         await expect(pending).resolves.toBeUndefined();
+         gate.resolve();
       } finally {
          pair.dispose();
       }
