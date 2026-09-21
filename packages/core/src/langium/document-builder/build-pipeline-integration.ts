@@ -31,13 +31,24 @@ const AST_EXTENSION_PHASES: readonly DocumentState[] = [
 ];
 
 /**
- * Build phases at which the `BuildPhasePassService` is driven. Same useful
- * set as {@link AST_EXTENSION_PHASES}: a pass registered at any other state
- * never fires (the listener is not wired), mirroring the AST-extension contract.
+ * Build phases at which the `BuildPhasePassService` is driven. A pass
+ * registered at any other state never fires (the listener is not wired), and
  * `runPasses` no-ops at a phase with no registered pass, so wiring the full set
  * unconditionally costs only an empty-bucket check per phase.
+ *
+ * `IndexedContent` belongs here and NOT in {@link AST_EXTENSION_PHASES}, so the
+ * two cannot be collapsed. Per document it carries nothing `Parsed` does; per
+ * BATCH it is the only phase meaning the global index is whole again, which
+ * batch work keyed on a complete index has nowhere else to run.
  */
-const BUILD_PHASE_PASS_STATES: readonly DocumentState[] = AST_EXTENSION_PHASES;
+const BUILD_PHASE_PASS_STATES: readonly DocumentState[] = [
+   DocumentState.Parsed,
+   DocumentState.IndexedContent,
+   DocumentState.ComputedScopes,
+   DocumentState.Linked,
+   DocumentState.IndexedReferences,
+   DocumentState.Validated
+];
 
 /**
  * Default priority of the framework integrity passes. Integrity mutates / cleans
@@ -52,6 +63,16 @@ const BUILD_PHASE_PASS_STATES: readonly DocumentState[] = AST_EXTENSION_PHASES;
  * higher. See {@link BuildPipelineIntegrationOptions} to override.
  */
 export const INTEGRITY_PASS_PRIORITY = -1000;
+
+/**
+ * Default priority of the framework scope-cache pass. In the NEGATIVE
+ * foundational band for the reason {@link INTEGRITY_PASS_PRIORITY} gives: an
+ * adopter pass at `IndexedContent` takes the default `0`, and one running first
+ * reads scopes built from the mid-rebuild index. Sharing that constant's value
+ * is not sharing its knob — priority orders passes only within one phase
+ * bucket, and integrity registers at no phase this pass runs at.
+ */
+export const SCOPE_CACHE_PASS_PRIORITY = -1000;
 
 /** Construction options for {@link BuildPipelineIntegration}. */
 export interface BuildPipelineIntegrationOptions {
@@ -127,6 +148,17 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
          });
       }
 
+      // A pass rather than a listener each scope provider registers for itself,
+      // so an adopter pass at this phase is ordered against it by declaration
+      // instead of by DI construction order. `clearScopeCaches` carries why the
+      // caches' own eviction does not cover this.
+      passes.register({
+         id: 'framework:scope-cache:indexed-content',
+         state: DocumentState.IndexedContent,
+         priority: SCOPE_CACHE_PASS_PRIORITY,
+         run: () => this.clearScopeCaches()
+      });
+
       // One onBuildPhase listener per pass state, routed through the overridable
       // `runBuildPhase` seam → priority-ordered, sequential, cancel-aware pass
       // dispatch. The returned promise is awaited by the build pipeline, so a
@@ -184,6 +216,19 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
          // on first touch; cached by Langium's DI proxy after that.
          void languageServices.validation.ValidationContributionCollector;
          await languageServices.integrity.IntegrityService.enforceBatch(group, phase, cancelToken);
+      }
+   }
+
+   /**
+    * Drop the cached scopes of every REGISTERED language, not of those owning a
+    * document in the batch. The index a scope is built from is
+    * workspace-global, so narrowing to the batch with
+    * {@link groupDocumentsByLanguage}, the way {@link callIntegrity} does,
+    * leaves a cross-grammar reference resolving against a mid-rebuild scope.
+    */
+   protected clearScopeCaches(): void {
+      for (const languageServices of this.services.ServiceRegistry.all) {
+         languageServices.references.ScopeProvider.clearScopeCaches();
       }
    }
 

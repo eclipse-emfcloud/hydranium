@@ -210,6 +210,19 @@ export class ExtendedServiceRegistry<
    }
 
    /**
+    * Every registered language's services, typed as `TServices` like the
+    * lookups here rather than as Langium's base shape, so a sweep of the whole
+    * set reaches what a URI or a typed handle would have given it.
+    *
+    * The cast is sound because {@link register} is the only way a language
+    * enters and takes `TServices`; the inherited accessor is typed to Langium's
+    * base, which is the only reason one is needed.
+    */
+   override get all(): readonly TServices[] {
+      return super.all as readonly TServices[];
+   }
+
+   /**
     * Lookup by anything that identifies a document — an AST node (routed by
     * the document it lives in), a `URI`, or a URI string. `undefined` when the
     * node has no document, or nothing routes the URI.

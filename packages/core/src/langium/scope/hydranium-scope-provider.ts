@@ -184,6 +184,26 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
+    * Drop every cached scope — the framework's project-tier chain and the
+    * inherited global scope it is filtered from.
+    *
+    * **Called from outside the class**, by the build pipeline once the batch is
+    * re-indexed. The caches' own eviction does not cover this:
+    * `DocumentBuilder.onUpdate` fires after the build has taken every changed
+    * document's symbols out of the index and before it puts them back, so a
+    * scope built in that gap denies those symbols exist and every document the
+    * same build links afterwards resolves against it.
+    *
+    * Both go together because the second is derived from the first: clearing
+    * only {@link scopeCache} refills it from a stale `globalScopeCache`, and
+    * clearing only `globalScopeCache` leaves the filtered copy standing.
+    */
+   clearScopeCaches(): void {
+      this.scopeCache.clear();
+      this.globalScopeCache.clear();
+   }
+
+   /**
     * Framework-owned assembly seam. **Adopters do NOT override this** —
     * override {@link createGlobalScope} instead. This method layers the
     * scope-extension tiers around the adopter-overridable global scope.
