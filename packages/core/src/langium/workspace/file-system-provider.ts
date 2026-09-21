@@ -9,11 +9,11 @@
 
 import { type Tracer } from '@hydranium/protocol';
 import { EmptyFileSystemProvider } from '@hydranium/langium';
-import type { URI } from '@hydranium/langium';
+import type { FileSystemNode, URI } from '@hydranium/langium';
 import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
-import { serveVirtualDocument } from './virtual-document.js';
+import { serveVirtualDocument, serveVirtualNode } from './virtual-document.js';
 
 /**
  * Empty-filesystem default {@link WritableFileSystemProvider}. For
@@ -38,15 +38,55 @@ export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider impl
    }
 
    // Serve virtual documents from the registered document (there is no disk to
-   // read); delegate everything else to the empty base (which throws). The
-   // base declares these param-less, so the param is optional here.
-   override readFile(uri?: URI): Promise<string> {
-      const served = uri !== undefined ? serveVirtualDocument(this.services, uri) : undefined;
-      return served !== undefined ? Promise.resolve(served) : super.readFile();
+   // read); delegate everything else to the empty base (which throws, or
+   // answers "absent"). The base declares these param-less, so the param is
+   // optional here.
+   //
+   // The async reads are `async` so the base's refusal becomes a rejection: it
+   // throws SYNCHRONOUSLY from a method declared to return a promise, and a
+   // synchronous throw escapes the promise chain — `.catch()` never attaches
+   // and `Promise.all` dies while its argument array is still being built, so
+   // a caller reading several URIs cannot handle the miss it asked about.
+   override async readFile(uri?: URI): Promise<string> {
+      const served = this.served(uri);
+      return served !== undefined ? served : super.readFile();
    }
 
    override readFileSync(uri?: URI): string {
-      const served = uri !== undefined ? serveVirtualDocument(this.services, uri) : undefined;
+      const served = this.served(uri);
       return served !== undefined ? served : super.readFileSync();
+   }
+
+   override async readBinary(uri?: URI): Promise<Uint8Array> {
+      const served = this.served(uri);
+      return served !== undefined ? new TextEncoder().encode(served) : super.readBinary();
+   }
+
+   override readBinarySync(uri?: URI): Uint8Array {
+      const served = this.served(uri);
+      return served !== undefined ? new TextEncoder().encode(served) : super.readBinarySync();
+   }
+
+   // The base declares these two WITH a URI parameter, so they stay required.
+   override async stat(uri: URI): Promise<FileSystemNode> {
+      const served = serveVirtualNode(this.services, uri);
+      return served !== undefined ? served : super.stat(uri);
+   }
+
+   override statSync(uri: URI): FileSystemNode {
+      return serveVirtualNode(this.services, uri) ?? super.statSync(uri);
+   }
+
+   override async exists(uri?: URI): Promise<boolean> {
+      return this.existsSync(uri);
+   }
+
+   override existsSync(uri?: URI): boolean {
+      return this.served(uri) !== undefined;
+   }
+
+   /** Text of the virtual document registered at `uri`, if there is one. */
+   protected served(uri: URI | undefined): string | undefined {
+      return uri !== undefined ? serveVirtualDocument(this.services, uri) : undefined;
    }
 }

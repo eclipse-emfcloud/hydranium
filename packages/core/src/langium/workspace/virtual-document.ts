@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { URI } from '@hydranium/langium';
+import { type FileSystemNode, URI } from '@hydranium/langium';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 
 /**
@@ -76,14 +76,19 @@ export function isVirtualUri(uri: URI | string): boolean {
  * is not virtual or no document is registered for it (so a FileSystemProvider
  * delegates to its real backing).
  *
- * The framework's FileSystemProvider defaults call this at the top of
- * `readFile` / `readFileSync` so a virtual document survives a re-read:
+ * The framework's FileSystemProvider defaults consult this across their whole
+ * read surface, so a virtual document survives a re-read:
  * `DocumentBuilder.update` / `LangiumDocumentFactory.update` re-read a changed
  * URI from the FileSystemProvider, and nothing on disk backs a virtual URI. The
  * text comes from the registered document — the original source for a
  * `fromString` document, or the serialized form retained by the framework's
  * `fromModel` (which fills in the text Langium leaves empty). No serializer is
  * consulted here; the text is already on the document.
+ *
+ * **Every read method has to agree.** Serving only the text methods leaves one
+ * provider answering "here is the content" and "nothing is there" about one
+ * URI, which is a worse contract than answering neither: a caller cannot probe
+ * before reading.
  */
 export function serveVirtualDocument(services: ServerSharedServicesMinimal, uri: URI): string | undefined {
    if (!isVirtualUri(uri)) {
@@ -91,4 +96,17 @@ export function serveVirtualDocument(services: ServerSharedServicesMinimal, uri:
    }
    const document = services.workspace.LangiumDocuments.getDocument(uri);
    return document ? document.textDocument.getText() : undefined;
+}
+
+/**
+ * The filesystem node a registered virtual document presents as, or `undefined`
+ * on the same terms as {@link serveVirtualDocument}.
+ *
+ * Always a FILE: a virtual document is a leaf carrying text, and nothing is
+ * addressable beneath it. Reporting it as a directory instead would put it in
+ * front of a workspace walk that would then try to enumerate children it has
+ * none of.
+ */
+export function serveVirtualNode(services: ServerSharedServicesMinimal, uri: URI): FileSystemNode | undefined {
+   return serveVirtualDocument(services, uri) === undefined ? undefined : { isFile: true, isDirectory: false, uri };
 }
