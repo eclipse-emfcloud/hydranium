@@ -58,6 +58,24 @@ export default defineConfig({
     */
    timeout: 30_000,
    expect: { timeout: 10_000 },
+   /*
+    * Tests, not files, are the unit of parallelism.
+    *
+    * With the default the largest spec runs whole on ONE worker while the
+    * others finish and the second worker idles, and `--shard` can only deal
+    * whole files — so a spec holding most of the cases sets a floor that no
+    * shard count goes under. Adding workers does not help either: at the
+    * default two, a four-core runner is already saturated by a page and its
+    * in-page language-server worker apiece.
+    *
+    * What this does NOT change is what a test shares. Playwright gives every
+    * test its own browser context and page either way, the `webServer` here is
+    * stateless, and the language server lives in the page rather than in a
+    * backend the suite has one of. So the new exposure is only that two cases
+    * from one file may now overlap, where cases from different files always
+    * could.
+    */
+   fullyParallel: true,
    retries: process.env.CI ? 1 : 0,
    // JUnit beside the HTML one under CI, and it is not redundant with it: the
    // HTML report is for a human opening an artefact, while the XML carries a

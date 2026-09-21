@@ -473,8 +473,20 @@ jobs:
       # The gate that decides the job. It runs from the repository root and
       # covers every workspace, because the per-package scripts this fans out to
       # are the same ones a developer runs.
+      #
+      # Windows runs `check:platform`, which drops the two turbo targets that
+      # cannot reach a different verdict there and keeps the entire tail. The
+      # manifest's `//check:platform` note carries the argument and the
+      # measurement; `check:gate-targets`, which runs inside that tail on BOTH
+      # legs, is what stops the subset widening by accident.
+      #
+      # Conditioned on ubuntu rather than on windows because that is the shape
+      # of the rule: ONE leg runs every target, and any other leg runs the
+      # platform-sensitive subset. Naming windows instead would read as an
+      # exemption for one image and would leave a third entry running a gate
+      # nobody chose for it.
       - name: Full gate
-        run: npm run check
+        run: npm run ${{ matrix.os == 'ubuntu-22.04' && 'check' || 'check:platform' }}
 
       # The one piece of this that a reader sees without downloading anything:
       # the artefact below is a zip, and GitHub renders no JUnit of its own. It
@@ -505,23 +517,41 @@ jobs:
   # a 6m30s gate they do not depend on; and it reports as its own check, so a
   # browser failure is legible on the pull request without opening a log.
   #
-  # The cost is honest: install and build run again here, about two minutes of
-  # duplicated work, because jobs get separate runners with empty workspaces.
-  # Wall clock still falls from roughly 12m20s to 8m35s.
+  # The cost is honest: install and build run again here, because jobs get
+  # separate runners with empty workspaces, and the shard matrix below pays
+  # that about 134s per shard. Sharing one prebuilt workspace was costed and
+  # rejected — the consumers would then queue behind the job that builds it,
+  # which adds more wall clock than the duplication costs.
   #
   # What is deliberately NOT split this way is the gate itself. Running its
   # clauses as separate steps or jobs is how nine of them once drifted out of
-  # CI unnoticed, so `npm run check` stays one command in one job. The safe cut
-  # is between the gate and e2e, not inside the gate.
+  # CI unnoticed, so a leg's gate stays one command in one job. A leg may vary
+  # WHICH command, which keeps that property; what it may not do is run the
+  # clauses separately. The safe cut is between the gate and e2e, not inside
+  # the gate.
   #
   # Ubuntu only, and that is now expressed by the job rather than by an `if:`
   # on every step: the browser and the Theia backend behave the same on both
   # platforms, so a second leg buys coverage of the runner rather than of the
   # code. The matrix above is what covers the platform differences that matter.
-  e2e:
-    name: e2e
+  #
+  # SHARDED across two runners. The tiers are CPU-bound on a page load that
+  # parses three grammars and builds a workspace, once per test, so a shard buys
+  # cores rather than just concurrency — the worker count alone was measured and
+  # does nothing, a four-core runner already being saturated at two workers.
+  # Each shard re-pays about 134s of checkout, install, build and browser
+  # install, which is what bounds how many are worth having.
+  e2e-shard:
+    name: e2e (${{ matrix.shard }}/2)
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+
+    strategy:
+      # A shard that fails says nothing about the other, and cancelling it
+      # discards the half of the report that was still going to be useful.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # Skippable ONLY from a dispatch, where the input exists: repeating a run to
     # measure the gate should not also repeat four minutes this job shares
     # nothing with. On a push or a pull request the input is empty and the job
@@ -539,18 +569,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # RESTORE ONLY, unlike the gate job, which both restores and saves under
+      # this key. Two jobs of one run racing to reserve the same key is the
+      # `Failed to save: Unable to reserve cache` the Theia compatibility leg
+      # had to drop its own cache to be rid of — and there is nothing here worth
+      # saving anyway, since the gate job populates the key from a tree it has
+      # already installed, built and linked.
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ !inputs.skip_node_modules_cache }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          # Empty on a hit, for the gate job's reason: `~/.npm` is read only by
+          # the `npm ci` a hit skips, so restoring it then is pure cost.
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
 
       - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci --no-fund --no-audit
 
       # The same two-step as the gate job, and for the same reason: `npm ci`
       # skips a workspace `bin` symlink whose target does not exist yet, so the
-      # first example to invoke `hydranium-cli` dies with exit 127.
+      # first example to invoke `hydranium-cli` dies with exit 127. Both steps
+      # run unconditionally here, restore or no restore — this job is ubuntu
+      # only, so the link is a symlink rather than a junction and survives the
+      # cache round trip, but `npm install` is two seconds and re-linking is
+      # cheaper than the gate job's verify-the-restore machinery.
       - name: Build the framework packages
         run: npm run build
 
@@ -570,10 +625,19 @@ jobs:
       # sets `reuseExistingServer: false` under CI — so every run here is a COLD
       # start, the state a warm developer machine cannot reproduce and the one
       # where the startup handshakes actually fail.
+      # The only tier `--shard` divides. It carries most of the e2e time and its
+      # config makes tests rather than files the unit of parallelism, without
+      # which one 55-case spec lands whole on one shard and sets a floor no
+      # shard count can go under.
       - name: Browser e2e
-        run: npm run test:e2e -w @hydranium/example-order-flow-browser
+        run: npm run test:e2e -w @hydranium/example-order-flow-browser -- --shard=${{ matrix.shard }}/2
 
+      # The Theia tiers are NOT sharded — they are three separate Playwright
+      # invocations for reasons of their own, documented below, so they are
+      # dealt out between the shards instead. One here and two on the other
+      # keeps the halves within seconds of each other.
       - name: Theia e2e
+        if: matrix.shard == 1
         run: npm run test:e2e -w @hydranium/example-order-flow-theia-app
 
       # Separated by the suite itself, at one worker: it kills and re-launches
@@ -582,6 +646,7 @@ jobs:
       # subdirectory of `test-results/`, because Playwright CLEARS that
       # directory on start and a shared one deletes the previous tier's report.
       - name: Theia e2e (restart tier)
+        if: matrix.shard == 2
         env:
           HYDRANIUM_PLAYWRIGHT_TIER: restart
         run: npm run test:e2e:restart -w @hydranium/example-order-flow-theia-app
@@ -591,6 +656,7 @@ jobs:
       # sharing the run would see its own socket die. Its own ports keep it clear
       # of the tiers above, and its config carries its own `outputDir`.
       - name: Theia e2e (reconnect tier)
+        if: matrix.shard == 2
         run: npm run test:e2e:reconnect -w @hydranium/example-order-flow-theia-app
 
       # Each job summarizes what its own workspace holds — the runners are
@@ -604,9 +670,41 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-reports-e2e
+          name: test-reports-e2e-${{ matrix.shard }}
           path: |
             examples/*/*/test-results/
             examples/*/*/playwright-report/
           retention-days: 7
           if-no-files-found: ignore
+
+  # A matrix job reports one check PER ENTRY, so sharding renames the check
+  # branch protection is waiting for and nothing reports the old name ever
+  # again — on this branch and, once merged, on every pull request after it.
+  # The ruleset requires `e2e`, so this job exists to keep that name a stable
+  # contract and leave the shard COUNT an implementation detail the ruleset
+  # never has to learn about. Changing the count must not be a repository
+  # settings change.
+  #
+  # It is the only job here that needs no checkout: it reads a result and
+  # nothing else.
+  e2e:
+    needs: e2e-shard
+    # `always()`, or a skipped or failed shard leaves this pending rather than
+    # reporting — which is the very state this job exists to prevent.
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Every shard passed
+        run: |
+          # A matrix `needs` result is already the aggregate: `success` only
+          # when every entry succeeded. `skipped` is a PASS, because the shards
+          # carry the `skip_e2e` condition and a dispatch that deliberately
+          # skipped them must not report a failure here.
+          result='${{ needs.e2e-shard.result }}'
+          if [ "$result" != 'success' ] && [ "$result" != 'skipped' ]; then
+            echo "The e2e shards reported: $result" >&2
+            exit 1
+          fi
+          echo "e2e shards: $result"
