@@ -16,6 +16,7 @@ import {
    mkdtempSync,
    readFileSync,
    readdirSync,
+   realpathSync,
    rmSync,
    statSync,
    symlinkSync,
@@ -57,7 +58,11 @@ describe('DefaultFileSystemProvider.realpath', () => {
 
    beforeAll(() => {
       provider = new DefaultFileSystemProvider(services);
-      root = mkdtempSync(join(tmpdir(), 'hydranium-realpath-'));
+      // Resolved at creation: the temp root can itself be a symlink — on macOS
+      // `tmpdir()` answers `/tmp`, which links to `/private/tmp` — and
+      // `realpath` collapses the whole path, so an expectation built from the
+      // unresolved root differs by a prefix that is not the link under test.
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'hydranium-realpath-')));
       realDir = join(root, 'real');
       linkDir = join(root, 'link');
       mkdirSync(realDir);

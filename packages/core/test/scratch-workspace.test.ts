@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -37,7 +37,16 @@ describe('makeScratchWorkspace', () => {
    it('creates an empty directory when given no seed', () => {
       const workspace = track(makeScratchWorkspace());
       expect(existsSync(workspace.root)).toBe(true);
-      expect(workspace.root.startsWith(tmpdir())).toBe(true);
+      expect(workspace.root.startsWith(realpathSync(tmpdir()))).toBe(true);
+   });
+
+   it('hands back a root that is already resolved', () => {
+      // Discriminates only where `tmpdir()` is ITSELF a symlink, which is macOS
+      // answering `/tmp` for `/private/tmp`. Where the temp root is already
+      // real this passes whatever the helper does, so the macOS leg is what
+      // guards the resolve rather than this assertion on its own.
+      const workspace = track(makeScratchWorkspace());
+      expect(realpathSync(workspace.root)).toBe(workspace.root);
    });
 
    it('copies a seed directory recursively, leaving the seed untouched', () => {

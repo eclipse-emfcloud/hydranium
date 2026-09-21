@@ -49,7 +49,7 @@
  */
 
 import { URI } from '@hydranium/langium';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -106,7 +106,12 @@ export interface ScratchWorkspace {
  * returned {@link ScratchWorkspace.dispose} with an `afterEach`.
  */
 export function makeScratchWorkspace(options: ScratchWorkspaceOptions = {}): ScratchWorkspace {
-   const root = mkdtempSync(path.join(tmpdir(), options.prefix ?? 'hydranium-scratch-'));
+   // RESOLVED, because `tmpdir()` can itself be a symlink — on macOS it answers
+   // `/tmp`, which links to `/private/tmp`. A root the server canonicalises to a
+   // different path than the one it was handed registers documents under one
+   // spelling and reads them under the other, failing initialization with an
+   // ENOENT that names neither the link nor this call.
+   const root = realpathSync(mkdtempSync(path.join(tmpdir(), options.prefix ?? 'hydranium-scratch-')));
    if (options.seed) {
       cpSync(options.seed, root, { recursive: true });
    }
