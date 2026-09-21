@@ -1122,6 +1122,27 @@ describe('DataServer', () => {
          }
       });
 
+      it('rejects a request whose namespace disagrees with the server', async () => {
+         const bundle = buildBundle();
+         const pair = makeDuplexConnectionPair();
+         try {
+            // A LIVE server, unlike the neighbouring dead-port cases: the
+            // connection answers, the handlers are registered, and the only
+            // disagreement is the prefix each side spells. That is the shape
+            // `DataServerOptions.methodNamespace` calls out when it says the
+            // client's `createRpcProxy` MUST agree, and the failure it
+            // produces is silence on the wire rather than a mismatch anyone
+            // reports.
+            new TestDataServer(pair.left, bundle.services, { methodNamespace: 'server/' });
+            const proxy = createRpcProxy<DataServerProtocol<FakeRoot, FakeDiagnostic>>(pair.right, {
+               methodNamespace: 'client/'
+            });
+            await expect(proxy.getProjects()).rejects.toThrow();
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('registers additional adopter methods alongside framework methods', async () => {
          const bundle = buildBundle();
          const pair = makeDuplexConnectionPair();
