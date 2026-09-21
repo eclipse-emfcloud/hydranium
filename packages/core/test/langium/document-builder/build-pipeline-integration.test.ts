@@ -152,14 +152,15 @@ describe('BuildPipelineIntegration — listener wiring', () => {
       expect(builder.documentCount(DocumentState.Changed)).toBe(0);
    });
 
-   // `IndexedContent` is the one phase where the two listener families diverge.
-   // Per document it carries nothing `Parsed` does not, so AST enrichment skips
-   // it; per batch it is the only phase meaning the global index is whole again,
-   // which batch work keyed on a complete index has no other phase to sit at.
-   it('attaches a batch listener but no document listener at IndexedContent', () => {
+   // `IndexedContent` carries a listener of each kind, for different reasons:
+   // the batch one so an adopter pass can target the phase at which the global
+   // index is whole again, the document one so the scope-cache clear also
+   // covers `reparseAndRelink`, which re-indexes a single document and fires no
+   // build-phase notification.
+   it('attaches both listener kinds at IndexedContent', () => {
       const { builder } = setup();
       expect(builder.buildCount(DocumentState.IndexedContent)).toBe(1);
-      expect(builder.documentCount(DocumentState.IndexedContent)).toBe(0);
+      expect(builder.documentCount(DocumentState.IndexedContent)).toBe(1);
    });
 });
 
