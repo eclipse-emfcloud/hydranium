@@ -225,8 +225,13 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
       await reader;
 
       expect(torn).toEqual([]);
-      // A run that never yielded to the reader proves nothing about tearing.
-      expect(samples).toBeGreaterThan(ROUNDS * 4);
+      // A run that never yielded to the reader proves nothing about tearing, so
+      // this floor guards against an empty `torn` for the wrong reason. One
+      // sample per round, deliberately far below what a healthy run produces: a
+      // floor set near the real sample count reddens for LIVENESS under load
+      // while `torn` is empty, which reports the opposite of the defect this
+      // case exists to catch. Tearing is caught by `torn`, not by this number.
+      expect(samples).toBeGreaterThanOrEqual(ROUNDS);
       expect(complete.has(readFileSync(file, 'utf8'))).toBe(true);
    });
 
