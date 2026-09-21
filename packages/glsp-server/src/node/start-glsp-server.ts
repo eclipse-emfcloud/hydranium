@@ -177,7 +177,7 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
             if (options.lspConnection && options.portCommand) {
                options.lspConnection.onRequest(options.portCommand, () => portHandle.port);
             }
-            lifecycle?.info(`[GlspServer] Ready to accept new client requests on port: ${address.port}`);
+            lifecycle?.info(`[GlspServer] Ready to accept new client requests on ${address.address} port: ${address.port}`);
             started.resolve();
          } else {
             const message = address === null ? 'address is null' : `bound to non-TCP "${String(address)}"`;
