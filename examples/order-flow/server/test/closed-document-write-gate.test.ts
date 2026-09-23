@@ -134,3 +134,66 @@ describe('the based-on gate on a document no client holds open', () => {
       ).rejects.toSatisfy(isConflictError);
    });
 });
+
+/**
+ * What a REFUSED write leaves behind.
+ *
+ * `update` is an upsert, so the write it refuses is also the one that would
+ * have created the document. Rejecting only after the upsert has opened means
+ * the caller gets its `ConflictError` and the server keeps the payload: the
+ * text store holds content no writer was allowed to commit, and the rejected
+ * client holds a document it never asked to open and will never close, because
+ * from its side the call failed. A reader arriving next sees the refused text
+ * as though it were the document.
+ *
+ * Asserted through the REAL store rather than a stub: the property is about
+ * what survives in the shared text store and its per-client hold set, and the
+ * framework's stub answers 0 for anything not currently open.
+ */
+describe('a write the based-on gate refuses', () => {
+   it('leaves no text, no version and no hold for a URI it would have created', async () => {
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN));
+      const { harness, workspace } = scratch;
+      // A URI the workspace scan never saw, so the refused write is the only
+      // thing that could put it in the store.
+      const uri = URI.file(workspace.resolve('never-written.domain')).toString();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      expect(textDocuments.version(uri)).toBe(0);
+
+      await expect(
+         harness.shared.model.ModelService.update({
+            uri,
+            clientId: 'stale-client',
+            model: WRITTEN_BACK,
+            basedOn: asSnapshotVersion(5)
+         })
+      ).rejects.toSatisfy(isConflictError);
+
+      expect(textDocuments.get(uri)?.getText()).toBeUndefined();
+      expect(textDocuments.isOpen(uri)).toBe(false);
+      // The client never asked to open this URI, so nothing on its side would
+      // ever issue the close that releases a hold taken on its behalf.
+      expect(textDocuments.isOpenInClient(uri, 'stale-client')).toBe(false);
+      expect(textDocuments.version(uri)).toBe(0);
+   });
+
+   it('leaves a closed document at the text and version it already had', async () => {
+      const { harness, uri, version } = await closedWithSequence();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+
+      await expect(
+         harness.shared.model.ModelService.update({
+            uri: uri.toString(),
+            clientId: 'stale-client',
+            model: WRITTEN_BACK,
+            basedOn: asSnapshotVersion(version - 1)
+         })
+      ).rejects.toSatisfy(isConflictError);
+
+      // The refused payload renames the entity, so reopening on it would be
+      // visible as content — the assertion is that the sequence and the store
+      // both describe the document as the refused write found it.
+      expect(textDocuments.version(uri.toString())).toBe(version);
+      expect(textDocuments.isOpenInClient(uri.toString(), 'stale-client')).toBe(false);
+   });
+});

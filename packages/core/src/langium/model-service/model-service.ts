@@ -708,26 +708,38 @@ export class DefaultModelService<
       // create stays at its initial version rather than adopting a number the
       // caller chose.
       //
-      // The gate's version is read BEFORE that open, and must be: for a document
-      // no client holds open, the open assigns the shared version from the
-      // INCOMING text, so a version read afterwards has already absorbed the
-      // caller's own write. Gating on it rejected every modifying write to a
-      // closed document, having compared the caller's `basedOn` against a
-      // number the caller itself produced — and a serialised round-trip that is
-      // not byte-identical to the stored text was enough to trigger it. Reading
-      // first keeps both cases the gate exists for: an unknown URI answers 0, so
-      // a based-on-version update of a not-yet-existing document still trips it,
-      // and a genuine conflict still trips it, another writer having advanced the
-      // sequence past the version the caller read.
+      // The gate reads the version and decides BEFORE the open, and both halves
+      // of that matter.
+      //
+      // Reading first, because for a document no client holds open the open
+      // assigns the shared version from the INCOMING text, so a version read
+      // afterwards has already absorbed the caller's own write. Gating on it
+      // rejects every modifying write to a closed document, comparing the
+      // caller's `basedOn` against a number the caller itself produced — and a
+      // serialised round-trip that is not byte-identical to the stored text is
+      // enough to trigger that. Reading first keeps both cases the gate exists
+      // for: an unknown URI answers 0, so a based-on-version update of a
+      // not-yet-existing document still trips it, and a genuine conflict still
+      // trips it, another writer having advanced the sequence past the version
+      // the caller read.
+      //
+      // Deciding first, because the open is a mutation and `update` is an
+      // upsert: for a cold URI it installs the payload in the shared text store
+      // and records a hold for the writing client. Throwing after it hands the
+      // caller its rejection while the server keeps the refused text — and the
+      // hold outlives the call, because a client whose write failed has no
+      // reason to close a document it never asked to open. Serialisation is
+      // held back too; it is the adopter's code and need not be side-effect
+      // free.
       const currentVersion = this.services.workspace.TextDocuments.version(uri);
-      const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
-      await run('open', () => this.open({ uri, clientId: args.clientId, text }));
       if (isSnapshotVersion(args.basedOn) && currentVersion !== args.basedOn) {
          // Distinct from the post-build "superseded" debug line below: this is a
          // based-on-stale rejection (the write never applies), not two writes racing.
          this.tracer.debug(`Conflict on ${uri}: based-on v${args.basedOn} stale, server at v${currentVersion}`);
          throw new ConflictError(uri, args.basedOn, currentVersion);
       }
+      const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
+      await run('open', () => this.open({ uri, clientId: args.clientId, text }));
       const appliedVersion = await run('apply', () => this.services.workspace.AstDocumentManager.update(uri, text, args.clientId));
       // Dispatch through the public `rebuild` (which re-canonicalizes the already-
       // canonical `uri` once, idempotently) rather than `rebuildCanonical`, so an
