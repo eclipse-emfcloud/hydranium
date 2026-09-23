@@ -943,6 +943,16 @@ export class MonacoLspAdapter {
          automaticLayout: true,
          minimap: { enabled: false },
          scrollBeyondLastLine: false,
+         // ON, because this page puts editors in panes SMALLER than the widgets
+         // that open over them. Monaco sizes the suggest list against the
+         // document body rather than against the editor — it expects to overflow
+         // — so with the default the list is laid out at its full height, the
+         // pane's clipping ancestor cuts it off part-way down, and the rows
+         // below the cut are simply not painted. The list believes every row is
+         // visible, so it draws no scrollbar either: a nine-item completion
+         // reads as a two-item one, with nothing on screen saying otherwise.
+         // Fixed positioning takes the container out of that ancestor's clip.
+         fixedOverflowWidgets: true,
          // OFF, and this is a correctness setting rather than a preference.
          // Monaco's word-based suggestions offer every word already in the
          // document as a completion — so in a language whose every identifier is

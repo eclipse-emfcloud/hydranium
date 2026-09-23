@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { UriUtils, URI } from '@hydranium/langium';
+import type { Locale } from '@hydranium/protocol';
 // Bare `'path'` (not `node:path`) so a browser bundle can alias it to a POSIX
 // shim — this is the only filesystem-path use left on the portable `.` entry,
 // and it's the headless/CLI string-input convenience of `toWorkspaceFolders`.
@@ -34,7 +35,7 @@ export interface ProgrammaticInitOptions {
     * framework's English. That is the correct answer for a headless tool: it
     * has no reading user to have a language.
     */
-   readonly locale?: string;
+   readonly locale?: Locale;
 }
 
 /**

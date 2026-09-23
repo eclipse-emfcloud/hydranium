@@ -82,6 +82,10 @@ move together is the point:
   itself — like the filesystem and the transport. The English stays in
   `index.html` and the catalogue is a partial overlay keyed by `data-nls`
   attributes, so a missing key degrades to English rather than to nothing.
+- **The properties panel's own sentences.** Shared client code with no markup on
+  this page, so these are message codes rather than `data-nls` keys — but the
+  page renders them, so they sit in the same catalogue. A host passes the form a
+  renderer; one that passes none takes the English.
 - **Monaco's own menus.** Right-click in an editor: `Ausschneiden`, `Kopieren`,
   `Befehlspalette`. That German is `monaco-editor-core`'s, shipped in the
   package as one of thirteen locale bundles, and it costs no catalogue at all —

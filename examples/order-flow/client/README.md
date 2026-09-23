@@ -67,8 +67,16 @@ look Theia-only.
 - `src/properties/properties-messages.ts` — the panel's own user-facing
   messages, declared with the framework's `defineMessage`. This is the adopter
   half of message externalization: a stable code beside an English default,
-  resolved where the failure is raised and rendered by whoever knows the reading
-  user's locale. **This tier still renders its own messages, and only its own**
+  rendered by whoever knows the reading user's locale. Which side that is
+  differs by message, and the split is worth copying. A **failure** is resolved
+  where it is raised and handed to the host, because the host owns the surface
+  it lands on. A **label** the form draws has no raise site, so the host passes
+  a `renderMessage` in `PropertiesFormOptions` instead and the form renders at
+  draw time; omitting it takes the English, which is the same fallback a missing
+  catalogue entry gives. Leaving labels as literals is what makes a panel read
+  half-translated, and the untranslated half is the half a reader meets on an
+  ordinary document rather than on a broken one.
+  **This tier still renders its own messages, and only its own**
   — they fire when the data server is unreachable, which is precisely when no
   server could have worded them. A diagnostic arrives already rendered, in the
   locale its client declared at init, so the form draws `message` as it came:

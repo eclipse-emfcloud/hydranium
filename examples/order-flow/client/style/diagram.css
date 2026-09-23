@@ -365,3 +365,41 @@
 .sprotty > .minimize-palette-button {
    color: var(--order-flow-foreground);
 }
+
+/*
+ * The popup a marker opens on hover, and the one block here whose selectors are
+ * NOT scoped to `.sprotty`: sprotty appends the popup to `document.body`, so a
+ * `.sprotty .sprotty-popup` spelling — which every other rule in this file
+ * follows — matches nothing at all and reads as coverage while the defaults show
+ * through.
+ *
+ * Left alone those defaults are a white box in a Helvetica stack with a border
+ * in `currentColor`. On a dark canvas that is a lit rectangle in a face no host
+ * chose, and it is the surface a reader meets at the moment something is already
+ * wrong.
+ *
+ * It takes the ELEVATED surface for the same reason the tool palette does — it
+ * floats over the canvas — and no shadow, GLSP's being two fixed black offsets
+ * that darken a dark theme rather than lifting off it. The themed border is what
+ * separates the box from whatever it covers.
+ */
+.sprotty-popup {
+   background: var(--order-flow-panel-background);
+   color: var(--order-flow-panel-foreground);
+   border: 1px solid var(--order-flow-panel-border);
+   border-radius: 4px;
+   /* The family only. GLSP states no size on this element, so the size already
+      follows the host; restating it would override a reader's own. */
+   font-family: inherit;
+}
+
+/*
+ * GLSP wraps the issues in a `<ul>` whatever their number, so the user agent
+ * indents the text by its own list padding — measured against a 100px minimum
+ * width, that is most of the box. The markers stay: they are what separates two
+ * issues on one element from one issue that wrapped.
+ */
+.sprotty-popup .sprotty-popup-title ul {
+   margin: 0;
+   padding-inline-start: 1.1em;
+}

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
+import type { Locale, MessageCatalogue } from '@hydranium/protocol';
 import germanCatalogue from '../nls/order-flow.de.json' with { type: 'json' };
 
 /**
@@ -24,7 +25,7 @@ import germanCatalogue from '../nls/order-flow.de.json' with { type: 'json' };
  * catalogue entry — and so this agrees with the flattener the catalogue test
  * uses, which has always keyed off the prefix.
  */
-const CATALOGUES: Record<string, Record<string, string>> = {
+const CATALOGUES: Record<Locale, MessageCatalogue> = {
    de: Object.fromEntries(Object.entries(germanCatalogue).filter(([code]) => !code.startsWith('_')))
 };
 
@@ -45,7 +46,7 @@ const CATALOGUES: Record<string, Record<string, string>> = {
  * substance would key on the full tag instead.
  */
 export class OrderFlowMessageRenderer extends DefaultMessageRenderer {
-   protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
+   protected override translationsFor(locale: Locale | undefined): MessageCatalogue | undefined {
       return locale ? CATALOGUES[locale.split('-')[0].toLowerCase()] : undefined;
    }
 }

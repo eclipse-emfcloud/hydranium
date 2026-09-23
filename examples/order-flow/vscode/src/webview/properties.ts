@@ -44,7 +44,7 @@ import {
    type WebviewMessengerLike
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
+import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import { DataConnectionWithEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
@@ -147,7 +147,7 @@ function main(): void {
       // during a slow open should still come back to the right document.
       vscodeApi.setState(document_);
       form.setLoading(true);
-      form.report('Loading…');
+      form.report(PROPERTIES_LOADING);
       model
          .open(uri)
          .then(() => {

@@ -62,6 +62,7 @@ import {
    type DataSession,
    formatLatencyReport,
    type LatencyReport,
+   type Locale,
    type TransferDocument
 } from '@hydranium/protocol';
 import {
@@ -792,7 +793,7 @@ function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, ada
  * German chrome around English diagnostics reads as a broken catalogue rather
  * than as a client bug.
  */
-export async function main(locale: string | undefined): Promise<void> {
+export async function main(locale: Locale | undefined): Promise<void> {
    // Both switches before anything else, and for the same reason: the page must
    // not paint in one scheme or language and then flip. The editors read the
    // current scheme when they are created, the chrome's roles resolve as soon as

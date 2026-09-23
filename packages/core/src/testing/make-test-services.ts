@@ -10,6 +10,7 @@
 import {
    type Clock,
    DefaultTracer,
+   type Locale,
    type Logger,
    NoopLogger,
    type Project,
@@ -141,7 +142,7 @@ export interface MakeTestServicesOptions<
     */
    messageRenderer?: (services: ServerSharedServices<TProject>) => MessageRenderer;
    /** Locale handed to the bundle's {@link ServerLocale}. Default: none, i.e. the framework's English. */
-   locale?: string;
+   locale?: Locale;
    /**
     * Languages to register on a {@link StubServiceRegistry} bound on the
     * `ServiceRegistry` slot. This is how a test gets multi-language routing:

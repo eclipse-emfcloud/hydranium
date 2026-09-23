@@ -34,6 +34,14 @@
  * composition cannot be made to read correctly in every language. `describeError`
  * is what fills `{detail}`: a technical error string is not itself translatable
  * text, so it travels as a parameter rather than needing a code of its own.
+ *
+ * **The panel's own LABELS carry codes as well as its failures, and the two
+ * differ in who renders them.** A failure is resolved at the raise site and
+ * handed to whoever owns the surface, that being the tier which knows the
+ * reading user's locale. A label has no raise site — `PropertiesForm` draws it —
+ * so the form is handed a renderer instead. Leaving the labels as literals is
+ * what makes a panel read half-translated, and the untranslated half is the half
+ * a reader meets on an ordinary document rather than on a broken one.
  */
 
 import { defineMessage } from '@hydranium/protocol';
@@ -51,4 +59,39 @@ export const PROPERTIES_CLOSE_FAILED = defineMessage(
 export const PROPERTIES_WRITE_FAILED = defineMessage(
    'order-flow/properties/write-failed',
    "Order Flow properties: could not save '{field}'. {detail}"
+);
+
+export const PROPERTIES_NO_DOCUMENT = defineMessage('order-flow/properties/no-document', 'No Order Flow document selected');
+
+export const PROPERTIES_NO_FIELDS = defineMessage('order-flow/properties/no-fields', 'This document root has no editable text properties.');
+
+export const PROPERTIES_LOADING = defineMessage('order-flow/properties/loading', 'Loading…');
+
+export const PROPERTIES_APPLY_HINT = defineMessage('order-flow/properties/apply-hint', 'Press Enter to apply');
+
+export const PROPERTIES_DISCONNECTED = defineMessage(
+   'order-flow/properties/disconnected',
+   'The data server connection closed. Reopen the panel to reconnect.'
+);
+
+/**
+ * Each of these says what became of the write AND whose value the box now holds,
+ * because the two come apart: a merge kept the edit, a conflict replaced it with
+ * someone else's, and an unavailable document left text nothing has accepted. A
+ * translation that shortens one to "saved" or "not saved" leaves a reader unable
+ * to tell whether what is in front of them is their own.
+ */
+export const PROPERTIES_WRITE_MERGED = defineMessage(
+   'order-flow/properties/write-merged',
+   'Saved. Someone else had edited another field; both changes were kept.'
+);
+
+export const PROPERTIES_WRITE_CONFLICT = defineMessage(
+   'order-flow/properties/write-conflict',
+   'Not saved — someone else changed this field first. The value shown is theirs.'
+);
+
+export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
+   'order-flow/properties/write-unavailable',
+   'Not saved — the document could not be re-read to resolve a conflict.'
 );
