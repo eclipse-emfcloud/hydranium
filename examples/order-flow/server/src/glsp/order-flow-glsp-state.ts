@@ -138,9 +138,10 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     *
     * Keeps the base class's `hasChanged` guard on both sides, and it matters most
     * here: a pure drag changes only the layout, and writing the `.process` file
-    * anyway would re-serialize it — reformatting effects onto separate lines and
-    * dropping every comment in the file. A move must not touch the semantics at
-    * all, which is the whole reason layout was split out.
+    * anyway would re-serialize it — reformatting effects onto separate lines, and
+    * rewriting every line of a file the user did not edit even though its
+    * comments survive. A move must not touch the semantics at all, which is the
+    * whole reason layout was split out.
     */
    protected override async persist(model: OrderFlowSourceModel, basedOn: BasedOn): Promise<{ root: ProcessModel }> {
       const result = this.hasChanged(this.baseline?.primary, model.primary)

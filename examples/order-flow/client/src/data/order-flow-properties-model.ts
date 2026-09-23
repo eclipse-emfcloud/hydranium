@@ -200,13 +200,13 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     * read-modify-write, and `basedOn` plus patch replay is what keeps it
     * from clobbering a concurrent writer rather than finer granularity.
     *
-    * **This is destructive to comments and formatting, and an adopter has to
-    * tell its users so.** The server's only route from a transfer model back to
-    * text is the serializer, which emits the whole document — so one field edit
-    * rewrites the file, dropping every comment and re-laying-out every line. The
-    * transfer model has no trivia channel, so there is nothing for the encode
-    * side to round-trip; it is a property of the layer boundary rather than
-    * something this panel could avoid.
+    * **This is destructive to formatting, and an adopter has to tell its users
+    * so.** The server's only route from a transfer model back to text is the
+    * serializer, which emits the whole document — so one field edit re-lays-out
+    * every line, and hand-wrapping goes. Comments are carried across separately,
+    * taken off the document being overwritten rather than travelling in the
+    * payload, so the absence of a trivia channel on the transfer model does not
+    * decide their fate; layout has no such counterpart.
     */
    async setField(name: string, value: string): Promise<SetFieldOutcome> {
       this.assertLive();

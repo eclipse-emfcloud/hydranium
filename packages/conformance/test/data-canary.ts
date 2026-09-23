@@ -343,11 +343,6 @@ export class CanaryDataServer {
    }
 }
 
-/**
- * The fixture the canary server answers correctly. `edit.expect` reads the
- * root through {@link isCanaryRoot} rather than trusting the shape, because
- * the kit hands it `unknown`.
- */
 /** The single candidate the canary's reference surface offers. */
 export const CANARY_CANDIDATE = 'CanaryTarget';
 
@@ -356,6 +351,11 @@ export const CANARY_VALID_URI = 'file:///one.x';
 /** The fixture's `dependent` URI — the document the fake reports as cascade-rebuilt. */
 export const CANARY_DEPENDENT_URI = 'file:///three.x';
 
+/**
+ * The fixture the canary server answers correctly. `edit.expect` reads the
+ * root through {@link isCanaryRoot} rather than trusting the shape, because
+ * the kit hands it `unknown`.
+ */
 export const CANARY_FIXTURE: LanguageFixture = {
    valid: { uri: CANARY_VALID_URI, languageId: 'x', text: VALID_TEXT },
    invalid: { uri: 'file:///two.x', languageId: 'x', text: INVALID_TEXT },

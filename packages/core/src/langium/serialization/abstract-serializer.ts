@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { isPromiseLike, type MaybePromise, type Tracer, type TransferElement } from '@hydranium/protocol';
+import { type MaybePromise, type Tracer, type TransferElement } from '@hydranium/protocol';
 import { type AstNode, type AstReflection, type GenericAstNode, isAstNode } from '@hydranium/langium';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
@@ -66,16 +66,6 @@ export interface AbstractSerializerOptions extends LogNameOptions {
     * the extra property carries a value.
     */
    readonly referenceWrapperTypes?: ReadonlyMap<string, string>;
-   /**
-    * Whether {@link AbstractSerializer.serializeAst} trims trailing whitespace
-    * from the final output (leading whitespace is always trimmed). Defaults to
-    * `true` — the conventional "no trailing blank lines" document shape. Set to
-    * `false` for grammars whose values may legitimately END the document with
-    * blank lines that must survive a round-trip — e.g. a multi-line block-scalar
-    * property (see `YamlSerializerOptions.blockScalarProperties`),
-    * where a trailing-trim would silently eat user-typed blank lines.
-    */
-   readonly trimTrailingWhitespace?: boolean;
 }
 
 /**
@@ -139,29 +129,20 @@ export abstract class AbstractSerializer<
     * Entry point for AST-shape inputs. Typically the grammar root, but any
     * AST node works — the walker is recursive and shape-agnostic.
     *
-    * Preserves the sync fast path: when every subclass override and every
-    * adopter hook is sync, the return is a bare `string` (no Promise
-    * allocation, no microtask). The async branch fires only if at least one
-    * recursive `serializeNode` call resolved to a Promise.
+    * **Emits the model and nothing else — do not trim here.** Trailing
+    * whitespace belongs to the author, and a write path holding the prior
+    * document restores it from there; trimming at this end deletes it before
+    * that restore sees it. A serializer has no prior document to consult, so it
+    * cannot tell a deliberate blank line from an accidental one.
+    *
+    * **Nothing trims what a subclass emits**, at either end. Emitting leading
+    * whitespace therefore puts it in the file, where no write path removes it.
+    *
+    * Returns whatever `serializeNode` returns, so a fully sync subclass keeps a
+    * bare `string` with no promise allocation.
     */
    serializeAst(model: TAst): MaybePromise<string> {
-      const result = this.serializeNode(model, 0);
-      if (isPromiseLike(result)) {
-         return result.then(text => this.trimSerialized(text));
-      }
-      return this.trimSerialized(result);
-   }
-
-   /**
-    * Trim the final serialized output. Leading whitespace is always removed;
-    * trailing whitespace is removed unless {@link AbstractSerializerOptions.trimTrailingWhitespace}
-    * is `false` (which preserves document-ending blank lines, e.g. inside a block scalar).
-    */
-   protected trimSerialized(text: string | undefined): string {
-      if (text === undefined) {
-         return '';
-      }
-      return this.options.trimTrailingWhitespace === false ? text.trimStart() : text.trim();
+      return this.serializeNode(model, 0);
    }
 
    /**

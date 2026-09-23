@@ -35,6 +35,8 @@ import {
    OrderFlowGeneratedSharedModule,
    ProcessGeneratedModule
 } from './generated/module.js';
+import { OrderFlowTriviaContribution } from './order-flow-trivia.js';
+import { OrderFlowFormatter } from './order-flow-formatter.js';
 import { OrderFlowHoverProvider } from './order-flow-hover.js';
 import { OrderFlowMessageRenderer } from './order-flow-message-renderer.js';
 import { OrderFlowProjectManager } from './order-flow-project-manager.js';
@@ -226,6 +228,7 @@ const DomainLanguageModule = (
    // comment with `//`, so the default resolves every declaration correctly and
    // then has nothing to say about any of them.
    lsp: {
+      Formatter: () => new OrderFlowFormatter(),
       HoverProvider: services => new OrderFlowHoverProvider(services),
       SemanticTokenProvider: services => new OrderFlowSemanticTokenProvider(services, options)
    }
@@ -246,11 +249,21 @@ const LayoutLanguageModule = (
    serializer: {
       Serializer: services => new LayoutSerializer(services)
    },
+   // A `DiagramNode` is identified by the flow node it positions, which no name
+   // property holds, so the framework's comment preserver would drop every
+   // comment in a `.layout` body — the whole body — on each diagram write. Same
+   // sub-key as the framework's, because this REPLACES it.
+   trivia: {
+      preservers: {
+         comments: services => new OrderFlowTriviaContribution(services)
+      }
+   },
    references: {
       ScopeComputation: services => new OrderFlowScopeComputation(services, { logName: 'LayoutScopeComputation' }),
       ScopeProvider: services => new OrderFlowLayoutScopeProvider(services, { logName: 'LayoutScopeProvider' })
    },
    lsp: {
+      Formatter: () => new OrderFlowFormatter(),
       HoverProvider: services => new OrderFlowHoverProvider(services),
       SemanticTokenProvider: services => new OrderFlowSemanticTokenProvider(services, options)
    }
@@ -261,6 +274,11 @@ const ProcessLanguageModule = (
 ): Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
    serializer: {
       Serializer: services => new ProcessSerializer(services)
+   },
+   trivia: {
+      preservers: {
+         comments: services => new OrderFlowTriviaContribution(services)
+      }
    },
    integrity: {
       rules: {
@@ -282,6 +300,7 @@ const ProcessLanguageModule = (
       ScopeProvider: services => new OrderFlowProcessScopeProvider(services, { logName: 'ProcessScopeProvider' })
    },
    lsp: {
+      Formatter: () => new OrderFlowFormatter(),
       HoverProvider: services => new OrderFlowHoverProvider(services),
       SemanticTokenProvider: services => new OrderFlowSemanticTokenProvider(services, options)
    }

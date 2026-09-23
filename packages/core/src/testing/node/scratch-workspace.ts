@@ -21,8 +21,8 @@
  * committed sample workspace can **rewrite the sample files**, after which
  * every later run asserts against already-repaired input: a suite that passes
  * while testing nothing. The same applies to a fixture built in place, which
- * additionally loses its explanatory comments, because the write-back goes
- * through the serializer.
+ * additionally comes back in the serializer's layout, because the write-back
+ * goes through it.
  *
  * The second reason is cleanup. Hand-rolled `mkdtempSync` without a matching
  * `rmSync` leaks a directory per test run into the OS temp dir, which nobody

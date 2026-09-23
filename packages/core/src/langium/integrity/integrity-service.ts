@@ -315,7 +315,15 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
       const root = document.parseResult.value as TRoot;
-      const newText = await this.services.serializer.Serializer.serializeAst(root);
+      // Extracted while `document` still holds the text being replaced — the
+      // resync that follows overwrites it with `newText`. Absent on a test
+      // stub that binds no trivia group; `createServerLanguageModule` always
+      // provides it, and an empty registry is already the no-op.
+      const trivia = this.services.trivia?.TriviaService;
+      const extracted = trivia?.extract(document);
+      const serialized = await this.services.serializer.Serializer.serializeAst(root);
+      const newText =
+         extracted === undefined ? serialized : trivia!.apply(serialized, extracted, UriUtils.toUri(document.textDocument.uri));
 
       const oldText = document.textDocument.getText();
       if (oldText === newText) {

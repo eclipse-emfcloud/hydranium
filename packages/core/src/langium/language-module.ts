@@ -28,6 +28,10 @@ import { DefaultReferenceBuilder, type ReferenceBuilder } from './scope/referenc
 import { type ScopeExtensionContribution } from './scope/scope-extension-contribution.js';
 import { DefaultScopeExtensionService, type ScopeExtensionService } from './scope/scope-extension-service.js';
 import { type Serializer } from './serialization/serializer.js';
+import { type TriviaContribution } from './trivia/trivia-contribution.js';
+import { type TriviaService, DefaultTriviaService } from './trivia/trivia-service.js';
+import { CommentPreserverContribution } from './trivia/comment-preserver.js';
+import { DocumentEndingPreserverContribution } from './trivia/document-ending-preserver.js';
 import { type UpdateRewriteContribution } from './update-rewrite/update-rewrite-contribution.js';
 import { DefaultUpdateRewriteService, type UpdateRewriteService } from './update-rewrite/update-rewrite-service.js';
 import { HydraniumDocumentValidator } from './validation/document-validator.js';
@@ -181,6 +185,29 @@ export interface ServerAddedServices {
        */
       rules: Record<string, IntegrityRuleContribution>;
    };
+   trivia: {
+      /**
+       * Runs the registered trivia preservers around a write, so what a
+       * document carries that its model does not — its comments, the whitespace
+       * it ended with — survives being re-serialized from that model.
+       *
+       * A separate group from {@link Serializer} because a preserver needs the
+       * document being overwritten, which a serializer is never given:
+       * `serializeAst` could reach one through its model, but
+       * `serializeTransfer` receives a plain wire object with no document at
+       * all, so folding this in would carry trivia on one write path and
+       * silently not on the other.
+       */
+      TriviaService: TriviaService;
+      /**
+       * Declarative {@link TriviaContribution} group. Distinct sub-keys
+       * accumulate across framework + adopter modules via Langium's deep-merge;
+       * binding one the framework already uses REPLACES it. The framework ships
+       * a sub-key per preserver, so an adopter replacing `comments` keeps
+       * `documentEnding` and whatever else ships beside it.
+       */
+      preservers: Record<string, TriviaContribution>;
+   };
    updateRewrite: {
       /**
        * Per-language runner for transfer-model rewrites applied on the
@@ -333,6 +360,17 @@ export function createServerLanguageModule(
       },
       serializer: {
          Serializer: () => new UnboundSerializer()
+      },
+      // Bound with a sub-key per preserver so an adopter can replace one and
+      // keep the other. Adopters MUST avoid these two keys for their own
+      // contributions unless replacement is what they mean — Langium's
+      // deep-merge is last-wins on same-key leaves.
+      trivia: {
+         TriviaService: services => new DefaultTriviaService(services),
+         preservers: {
+            comments: services => new CommentPreserverContribution(services),
+            documentEnding: () => new DocumentEndingPreserverContribution()
+         }
       },
       // The per-URI serialise / re-parse path only fires when a rule mutates,
       // so the no-op default is safe even before adopters bind a real

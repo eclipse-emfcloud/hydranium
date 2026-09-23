@@ -50,10 +50,6 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
    /** 3-space indent matches the example's source-code style. */
    private static readonly INDENT_UNIT = '   ';
 
-   override serializeAst(model: DomainModel): string {
-      return this.serializeNode(model, 0);
-   }
-
    protected override serializeNode(node: AstNode | Record<string, unknown>, indentationLevel: number, _isArrayElement = false): string {
       if (isDomainModel(node)) {
          return this.emitModel(node);

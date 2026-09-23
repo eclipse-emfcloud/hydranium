@@ -693,15 +693,11 @@ describe('runInit', () => {
 });
 
 /**
- * `--monorepo`, over an in-memory workspace.
+ * `--monorepo`, over an in-memory workspace: what the templates DO with the
+ * detected workspace facts, which is the part an adopter sees.
  *
- * The detection RULES are covered in `init-workspace.test.ts`; what is asserted
- * here is what the scaffold does with them — which is the part an adopter sees.
- */
-/**
- * What the templates DO with the two detected workspace facts. The detection
- * rules themselves are covered in `init-workspace.test.ts`; a placement is
- * supplied directly here so neither half can pass by leaning on the other.
+ * The detection rules have their own suite; a placement is supplied directly
+ * here so neither half can pass by leaning on the other.
  */
 describe('planInitFiles, detected workspace facts', () => {
    const plan = (workspace: { printWidth?: number; eslintConfig?: string }): readonly InitFile[] =>

@@ -36,10 +36,6 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
    /** 3-space indent matches the example's source-code style. */
    private static readonly INDENT_UNIT = '   ';
 
-   override serializeAst(model: LayoutModel): string {
-      return this.serializeNode(model, 0);
-   }
-
    protected override serializeNode(node: AstNode | Record<string, unknown>, indentationLevel: number, _isArrayElement = false): string {
       if (isLayoutModel(node)) {
          return this.emitLayout(node);

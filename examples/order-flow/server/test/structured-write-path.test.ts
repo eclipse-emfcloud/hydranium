@@ -79,8 +79,24 @@ describe('order-flow structured write path — ModelService.update with a transf
       await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
+      // The header, the blank line under it and the final newline all survive:
+      // they are the author's trivia, carried by the trivia preservers. The
+      // effects DO move onto their own lines — that is layout, and the write
+      // path emits the serializer's canonical shape rather than preserving the
+      // author's. Reflowing it back is the formatter's job, on request.
       expect(after).toBe(
          [
+            '// The behavioural half of `orders`. `for',
+            '// Order` and every `writes` / `reads`',
+            '// effect reaches across a GRAMMAR boundary',
+            '// into `orders.domain`.',
+            '//',
+            '// `writes Order.status = PAID` is three',
+            '// references, each scoped by the one',
+            '// before it. Rename `OrderStatus.PAID` and',
+            '// this file follows; delete the field and',
+            '// the effect reports at a precise range.',
+            '',
             'process Fulfillment for Order {',
             '   task Pay',
             '      writes Order.status = PAID',
@@ -95,7 +111,8 @@ describe('order-flow structured write path — ModelService.update with a transf
             '      writes Order.status = CANCELLED',
             '   transition Pay -> PaymentOk',
             '   transition Pick -> Ship',
-            '}'
+            '}',
+            ''
          ].join('\n')
       );
    });
@@ -118,12 +135,35 @@ describe('order-flow structured write path — ModelService.update with a transf
       // `node  at …` rather than a merely unresolved name.
       expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(
          [
+            '// Layout for `fulfillment.process`, in its',
+            '// own file: each entry REFERENCES the flow',
+            '// node it positions, so the `.process` file',
+            '// carries no rendering concern and is',
+            '// complete without this one.',
+            '//',
+            '// Dragging a node in the diagram rewrites',
+            '// an entry here.',
+            '//',
+            '// `Cancel` is deliberately absent — a node',
+            '// with no entry is left to client layout,',
+            '// which places it at the ORIGIN, so the',
+            '// entries below start well clear of it.',
+            '//',
+            '// `PaymentOk` deliberately has NO size: a',
+            "// gateway's shape comes from the notation,",
+            '// and pinning one here can only contradict',
+            '// it.',
+            '//',
+            '// A `size` is a MINIMUM; a node grows past',
+            '// it to fit its labels.',
+            '',
             'layout FulfillmentLayout for Fulfillment {',
             '   node Pay at 40, 100 size 160, 60',
             '   node PaymentOk at 260, 90',
             '   node Pick at 440, 200 size 160, 60',
             '   node Ship at 660, 200 size 160, 60',
-            '}'
+            '}',
+            ''
          ].join('\n')
       );
    });

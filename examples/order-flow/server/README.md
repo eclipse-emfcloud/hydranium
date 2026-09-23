@@ -217,9 +217,11 @@ that file's shape rather than its contents.
 
 One thing to know if you bind integrity in your own language: the service's
 default `'silent'` sync mode **writes its repairs back to disk**, through the
-serializer, so closed files get rewritten and lose their comments. Bind the
-service with an explicit `syncMode` if that is not what you want. The tests
-here build temp-directory copies of their fixtures for the same reason.
+serializer, so closed files get rewritten in the serializer's layout. Comments
+and the file's ending are carried across by the `trivia` preservers; the
+hand-formatting around them is not. Bind the service with an explicit `syncMode`
+if a silent disk write is not what you want. The tests here build
+temp-directory copies of their fixtures for the same reason.
 
 ## The large workspace fixture
 
