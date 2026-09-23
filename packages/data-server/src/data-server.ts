@@ -617,8 +617,35 @@ export class DataServer<
          holders = new Set<string>();
          this.openedDocuments.set(args.uri, holders);
       }
+      const heldBefore = holders.has(args.clientId);
       holders.add(args.clientId);
-      const document = await this.getModelDocument({ uri: args.uri });
+      let document: TransferDocument<TTransfer, TDiagnostic>;
+      try {
+         document = await this.getModelDocument({ uri: args.uri });
+      } catch (error: unknown) {
+         // The snapshot is the last step, and failing it fails the RPC — so the
+         // caller sees no open and has no reason to close. Release what this
+         // call took rather than leaving a hold nothing on either side is
+         // tracking. A repeat open by a client that already held the URI keeps
+         // it: the hold is one per `(uri, clientId)`, so releasing here would
+         // revoke an earlier open that is still legitimately in use.
+         if (!heldBefore) {
+            try {
+               // Untracked only once the close has actually LANDED. Dropping the
+               // record first gives a failed close the same effect as a
+               // successful one: the hold survives on the document store while
+               // the connection-close drain — the only thing left that would
+               // release it — has no record of it.
+               await this.modelService.close({ uri: args.uri, clientId: args.clientId });
+               this.forgetOpenDocument(args.uri, args.clientId);
+            } catch {
+               // Swallowed so the caller receives the reason the OPEN failed
+               // rather than a secondary one about the cleanup. The record stays
+               // behind deliberately, so teardown retries the release.
+            }
+         }
+         throw error;
+      }
       // Project the authoritative client-facing version onto the open snapshot.
       // `getModelDocument` encodes the freshly-built AST snapshot, whose version
       // is the `LangiumDocument`'s own `textDocument.version`. That lags the

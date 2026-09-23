@@ -115,6 +115,18 @@ class PlainFailureServer extends TestDataServer {
    }
 }
 
+/**
+ * Fails the snapshot an open returns, leaving everything before it intact.
+ * `openModelDocument` takes the model-service hold and records it BEFORE
+ * fetching that snapshot, so this is the injection that shows whether a failed
+ * open releases what it took.
+ */
+class FailingSnapshotServer extends TestDataServer {
+   override async getModelDocument(): Promise<never> {
+      throw new Error('snapshot refused');
+   }
+}
+
 type TestHarness = DataServerHarness<TestDataServer, FakeRoot, FakeDiagnostic>;
 
 /**
@@ -821,6 +833,77 @@ describe('DataServer', () => {
             fireRebuild(bundle, changedAgain);
             await waitFor(() => events.length === 1);
             expect(events).toHaveLength(1);
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
+   /**
+    * An open that fails after it has already taken the hold.
+    *
+    * `openModelDocument` opens through the model service, records the hold, and
+    * only then builds the snapshot it answers with. A snapshot that rejects
+    * fails the RPC, so the client sees no open and issues no close — and the
+    * hold sits there until an explicit close that never comes, or until the
+    * connection goes. A per-panel open over a long-lived shared connection is
+    * where that gap is longest.
+    */
+   describe('openModelDocument when the snapshot fails', () => {
+      function failingHarness(bundle: Bundle): DataServerHarness<FailingSnapshotServer, FakeRoot, FakeDiagnostic> {
+         return makeDataServerHarness<FailingSnapshotServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new FailingSnapshotServer(channel, bundle.services, { diagnostics: nodeDataServerDiagnostics() })
+         });
+      }
+
+      it('releases the hold it took', async () => {
+         // The store's per-URI open-client set is the observable, one layer
+         // below the `isOpenInAnyClient` the residency and revert decisions read.
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { proxy, pair } = failingHarness(bundle);
+         try {
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
+
+            expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual([]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('keeps the open record when the rollback close itself fails, so teardown retries it', async () => {
+         // Forgetting the record before the close has landed gives a FAILED
+         // close the same effect as a successful one: the hold survives on the
+         // document store and the connection-close drain no longer knows to
+         // release it, which is the leak the rollback exists to prevent.
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { server, proxy, pair } = failingHarness(bundle);
+         try {
+            (bundle.astDocumentManager as unknown as { close: () => Promise<void> }).close = () =>
+               Promise.reject(new Error('close refused'));
+
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
+
+            const internal = server as unknown as { openedDocuments: Map<string, Set<string>> };
+            expect([...(internal.openedDocuments.get(URI_A) ?? [])]).toEqual(['doomed']);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('forgets the open record, so teardown fires no second close', async () => {
+         // Pairs with the release above: dropping the model-service hold while
+         // leaving the bookkeeping entry makes `dispose` close a URI this server
+         // no longer holds, which another client may by then legitimately hold.
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { server, proxy, pair } = failingHarness(bundle);
+         try {
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
+
+            const internal = server as unknown as { openedDocuments: Map<string, Set<string>> };
+            expect(internal.openedDocuments.size).toBe(0);
          } finally {
             pair.dispose();
          }
