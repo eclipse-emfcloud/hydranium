@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "langium": {
+      "source": "eclipse-langium/langium-ai",
+      "sourceType": "github",
+      "skillPath": "skills/langium/SKILL.md",
+      "computedHash": "e4a200591c6938b9c3b5382ec54f046044db1352f767b037781642b3042d0215"
+    }
+  }
+}

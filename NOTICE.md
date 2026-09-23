@@ -69,6 +69,21 @@ and Theia itself — keep resolving the package.
 The patch applies only to a local `node_modules` tree. It is not redistributed:
 no published Hydranium package contains patched Microsoft code.
 
+## Vendored source
+
+`.claude/skills/langium/SKILL.md` is copied **verbatim** from
+[`eclipse-langium/langium-ai`](https://github.com/eclipse-langium/langium-ai)
+(`skills/langium/SKILL.md`), MIT-licensed, Copyright (c) 2025 TypeFox, and
+carries no Hydranium copyright. `skills-lock.json` pins its provenance.
+
+Unlike everything else in this file it is not a dependency — it is third-party
+text living in this tree, so neither the runtime-closure inventory above nor the
+`^ * Copyright` header convention used for source files covers it. This section
+is the notice MIT requires to accompany a substantial portion, and it lives here
+rather than in a header because the file is kept byte-identical to upstream.
+
+It is not redistributed: no published Hydranium package contains it.
+
 ## Assets
 
 - `@vscode/codicons` is licensed **CC-BY-4.0**, under which attribution is a
