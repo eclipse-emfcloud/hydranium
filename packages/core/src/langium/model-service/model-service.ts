@@ -134,6 +134,10 @@ export interface ModelServiceOptions extends LogNameOptions {
 }
 
 /**
+ * The seam every non-LSP head talks to: the data server, the GLSP head and an
+ * adopter's own services reach documents through this slot rather than through
+ * the workspace stores.
+ *
  * In-process facade over the framework's document plumbing
  * (`HydraniumTextDocuments`, `LangiumDocuments`,
  * `DocumentBuilder`, `WritableFileSystemProvider`). Owns the
@@ -192,24 +196,6 @@ export interface ModelServiceOptions extends LogNameOptions {
  * by URI happens here so consumers can subscribe per-document without
  * implementing the URI gate at each callsite.
  *
- * **Generic parameters.**
- * - `TAst` — the AST root type each consumer expects on the returned
- *   {@link AstDocument}. Constrained to {@link AstNode}.
- * - `TDiagnostic` — the AST-layer diagnostic: whatever the build left on
- *   `LangiumDocument.diagnostics`, carried through on the returned
- *   {@link AstDocument}. Defaults to {@link AstDiagnostic}.
- *   **Not the `TransferEncoder`'s parameter of the same name**, which is
- *   that encoder's OUTPUT and so names the wire shape. This one names its
- *   input, and an adopter binds the two to different types.
- * - `TTransfer` — transfer-model root accepted by `update` / `save`
- *   args. Constrained to {@link TransferElement}. Defaults to the
- *   structural base.
- */
-/**
- * The seam every non-LSP head talks to: the data server, the GLSP head and an
- * adopter's own services reach documents through this slot rather than through
- * the workspace stores.
- *
  * **Two families, and the distinction matters more than the names suggest.**
  * `waitFor*` is a pure wait — it never triggers a build, so a caller waiting on
  * a document no build has touched waits until something else builds it.
@@ -232,6 +218,19 @@ export interface ModelServiceOptions extends LogNameOptions {
  * direction is the safe one: the alternative permits stale reads silently. A
  * member taking a phase as a PARAMETER cannot judge statically and so returns
  * `TDiagnostic`, leaving the choice to the caller.
+ *
+ * **Generic parameters.**
+ * - `TAst` — the AST root type each consumer expects on the returned
+ *   {@link AstDocument}. Constrained to {@link AstNode}.
+ * - `TDiagnostic` — the AST-layer diagnostic: whatever the build left on
+ *   `LangiumDocument.diagnostics`, carried through on the returned
+ *   {@link AstDocument}. Defaults to {@link AstDiagnostic}.
+ *   **Not the `TransferEncoder`'s parameter of the same name**, which is
+ *   that encoder's OUTPUT and so names the wire shape. This one names its
+ *   input, and an adopter binds the two to different types.
+ * - `TTransfer` — transfer-model root accepted by `update` / `save`
+ *   args. Constrained to {@link TransferElement}. Defaults to the
+ *   structural base.
  */
 export interface ModelService<
    TAst extends AstNode,
@@ -1175,7 +1174,47 @@ export class DefaultModelService<
          return model;
       }
       const rewritten = await this.rewriteModel(uri, model, cancelToken);
-      return this.serialize(uri, rewritten);
+      const target = UriUtils.toUri(uri);
+      const trivia = this.services.ServiceRegistry?.getServices(target)?.trivia?.TriviaService;
+      // Extracted BEFORE serializing, so it reads the document the write is
+      // about to replace rather than whatever a concurrent build left behind.
+      let document = this.services.workspace.LangiumDocuments.getDocument(target);
+      if (trivia !== undefined && document === undefined) {
+         const source = await this.textToTakeTriviaFrom(uri, target);
+         if (source !== undefined) {
+            document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
+         }
+      }
+      const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
+      const serialized = await this.serialize(uri, rewritten);
+      return extracted === undefined ? serialized : trivia!.apply(serialized, extracted, target);
+   }
+
+   /**
+    * The text a write into an unloaded document should take its trivia from —
+    * the open editor's if one holds it, the file's otherwise, and `undefined`
+    * when neither can supply it.
+    *
+    * **A read that fails answers `undefined` rather than throwing.** `getDocument`
+    * is a store read, so an ordinary create answers nothing here and must still
+    * write; letting a permission error or a path that turned into a directory
+    * escape would fail the user's write instead, having found nothing to preserve
+    * in a file the write is about to replace anyway. Losing the comments is
+    * recoverable, and traced; losing the write is neither.
+    */
+   protected async textToTakeTriviaFrom(uri: string, target: URI): Promise<string | undefined> {
+      const open = this.services.workspace.TextDocuments.get(uri)?.getText();
+      if (open !== undefined) {
+         return open;
+      }
+      const fileSystem = this.services.workspace.FileSystemProvider;
+      try {
+         return (await fileSystem.exists(target)) ? await fileSystem.readFile(target) : undefined;
+      } catch (err: unknown) {
+         const detail = err instanceof Error ? err.message : String(err);
+         this.tracer.withUri(uri).debug(`Could not read the file to take trivia from; writing as emitted. ${detail}`);
+         return undefined;
+      }
    }
 
    /**

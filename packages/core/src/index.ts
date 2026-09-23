@@ -28,6 +28,7 @@ export * from './langium/project/index.js';
 export * from './langium/residency/index.js';
 export * from './langium/scope/index.js';
 export * from './langium/serialization/index.js';
+export * from './langium/trivia/index.js';
 export * from './langium/transfer/index.js';
 export * from './langium/update-rewrite/index.js';
 export * from './langium/validation/index.js';

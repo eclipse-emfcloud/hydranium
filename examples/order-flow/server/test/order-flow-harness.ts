@@ -191,8 +191,8 @@ export function documentFor<TRoot extends AstNode>(harness: OrderFlowHarness, re
  *   rewrites it. The first run would consume the fixture and every run after
  *   that would assert against already-repaired input — a test that passes
  *   while testing nothing.
- * - The write-back goes through the serializer, so the fixture would also lose
- *   its explanatory comments.
+ * - The write-back goes through the serializer, so the fixture would also come
+ *   back in the serializer's layout rather than as it was authored.
  *
  * Fixtures live outside the workspace root on purpose too: they are broken by
  * design and must not reach the sample workspace, whose only intended error is

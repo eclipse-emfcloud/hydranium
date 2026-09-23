@@ -200,34 +200,72 @@ write succeeds, nothing is logged, and the concurrent edit it overwrote is simpl
 gone. Test it by advancing the document between the read and the write and
 asserting a `ConflictError`, not by observing that ordinary writes succeed.
 
-## A transfer write does not preserve comments or formatting
+## A transfer write preserves comments, but not layout
 
 Follow the table one more step. A form editor's field edit reaches the server as
 a transfer model, and the only route back to text is *AST or transfer → text* —
 the serializer, which emits the whole document from the model. So **the file is
-rewritten, not patched**: every comment is dropped and every line is re-emitted
-in the serializer's own layout. Editing one string field of a `.process` root
-costs the file its explanatory header and re-wraps every task.
+rewritten, not patched**, and most lines come back in the serializer's own
+layout. The comment preserver may open lines around inline syntax so comments
+remain beside their nodes. Editing one string field of a `.process` root
+re-wraps every task that was hand-wrapped differently.
 
-This is a property of the layer boundary, not a serializer bug. The transfer
-model has no trivia channel — comments and whitespace live in the CST, which
-`TransferEncoder` does not project and the wire shape has no slot for — so there
-is nothing for the encode side to round-trip. A serializer cannot re-emit what it
-was never given.
+Comments and the document's trailing whitespace do survive, because the write
+path carries them separately. The `trivia` preservers extract them from the
+document being overwritten and put them back into the serializer's output — the
+comment preserver locating its anchors by re-parsing that output — so no
+serializer has to participate, and one that reaches its children through its own
+per-`$type` emitters cannot silently skip a node. Both are registered per
+language by default; an empty registry is how preservation is switched off.
+
+What it avoids where it can is guessing. A comment it cannot tie to one node is
+dropped rather than placed somewhere the author did not write it: a node the
+`NameProvider` gives no identity, two siblings sharing one, or an anchor the
+write deleted. A transfer-model rename is carried when one node of the same
+type and shape occupies the same parent slot in the rewritten document; an
+ambiguous match is dropped. A delete followed by an otherwise identical insert
+in that slot is indistinguishable from a rename without edit provenance.
+
+Rearranging a list is where that bites. Without provenance, renaming members
+in place and shifting them along produce the same evidence, so a list whose
+membership count is unchanged, or whose surviving members come back in a
+different relative order, is read as identifiers having been exchanged and
+those members lose their comments. An insertion or a deletion that only shifts
+what survives keeps them.
+
+**One shape is beyond that reach, and a transfer-model client can reach it.** A
+payload that renames a node and gives its old name to another node in the same
+write produces exactly the text a plain insertion produces, with the same keys
+and a node under the old name that is identical under either reading. The
+comment follows the name, so it lands on a declaration its author never wrote
+it on. No rule over the two documents separates the two writes; only a caller
+recording which node it renamed could, and the transfer model has nowhere to
+put that. An in-place write — an integrity repair, a diagram gesture — is not
+affected, because there the comment is anchored to the node object itself.
+
+Identity here is whatever `NameProviderOptions.nameProperties` names, so point
+that at the real identifier wherever `name` is a display label. A grammar that
+identifies some nodes outside the naming surface altogether — by a
+cross-reference unique among its siblings, say — overrides `anchorKey` and gets
+those captured and placed too, though not carried across a rename, which asks
+the `NameProvider` what changed.
+When the serializer puts a commented child inline, the preserver opens a line
+before it and verifies that the re-parsed comment still belongs to that child.
 
 **Tell your users.** Two consequences an adopter has to decide about rather than
 discover:
 
-- A document that a form/diagram client can write is a document whose comments
-  are transient. If your language's users keep meaning in comments, say so at the
-  point they open the form, not in a changelog.
+- Layout is transient even though comments are not. If your language's users
+  hand-format their files, a form or diagram write normalises that formatting.
 - A text editor and a form editor over the same file is still the supported
   shape — the LSP head mirrors the rewritten text straight back into the open
-  editor — but the diff a user sees after one field edit is the whole file.
+  editor — but the diff a user sees after one field edit spans the file.
 
-The narrower alternative, if you need it, is not a serializer change: it is a
-write path that computes text edits over the changed nodes' CST ranges and
-re-serializes only on a structural change. The framework does not do that today.
+Normalising layout on demand rather than on every write is what
+`textDocument/formatting` is for; bind Langium's `lsp.Formatter` slot. The
+narrower alternative for the write itself, if you need it, is a path that
+computes text edits over the changed nodes' CST ranges and re-serializes only on
+a structural change. The framework does not do that today.
 
 ## Where an adopter's alias belongs
 

@@ -143,6 +143,19 @@ function idOf(diagram: OpenDiagram, name: string): string {
    return diagram.harness.state.index.createId(node);
 }
 
+/**
+ * `text` with COMMENT TEXT removed and code kept, for assertions about what a
+ * document actually declares.
+ *
+ * The workspace fixtures carry explanatory headers quoting the very syntax
+ * several tests assert has gone, and a write preserves that prose rather than
+ * rewriting it, so a bare `not.toContain` reads the author's words as a stale
+ * reference. Blanking whole LINES instead would hide a stale reference sitting
+ * on a line that merely ends in a comment, which is the assertion these tests
+ * exist to make.
+ */
+const code = (text: string): string => text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+
 describe('order-flow .process operations', () => {
    afterEach(() => {
       open?.harness.dispose();
@@ -376,10 +389,19 @@ describe('order-flow .process operations', () => {
       // entry as an unexplained failure somewhere in the document.
       expect(diagram.harness.state.layoutRoot.nodes.map(node => node.flowNode.$refText)).toContain('PaymentChecked');
       expect(diagram.layoutText()).toContain('node PaymentChecked at 260, 90');
-      expect(diagram.text()).not.toContain('PaymentOk');
-      // Both files are clean of the old name, which is what makes this a real
-      // multi-document write rather than one that happened to update the AST.
-      expect(diagram.layoutText()).not.toContain('PaymentOk');
+      // Both files are clean of the old name in their CODE, which is what makes
+      // this a real multi-document write rather than one that happened to update
+      // the AST. Comment lines are excluded deliberately: the layout file's
+      // header explains why `PaymentOk` carries no size, and a rename carries
+      // that prose across untouched rather than rewriting what the author wrote.
+      // Editing their words to match a diagram gesture is not the write path's
+      // business, so a now-stale mention there is correct behaviour.
+      expect(code(diagram.text())).not.toContain('PaymentOk');
+      expect(code(diagram.layoutText() ?? '')).not.toContain('PaymentOk');
+      // Positive counterpart: the rename reached both documents' ASTs, which a
+      // text assertion alone cannot distinguish from the name never appearing.
+      expect(flowNodeNames(diagram.root())).not.toContain('PaymentOk');
+      expect(diagram.harness.state.layoutRoot.nodes.map(node => node.flowNode.$refText)).not.toContain('PaymentOk');
    });
 
    it('adds a reads effect to a task, resolving against the process subject', async () => {
@@ -424,6 +446,9 @@ describe('order-flow .process operations', () => {
       expect(after.effects).toHaveLength(0);
       expect(flowNodeNames(diagram.root())).toContain('Pay');
       expect(diagram.text()).toContain('task Pay');
-      expect(diagram.text()).not.toContain('writes Order.status = PAID');
+      // Comment lines excluded: this file's header quotes `writes Order.status
+      // = PAID` to explain the three-reference effect, and a write carries the
+      // author's prose across rather than editing it to match a gesture.
+      expect(code(diagram.text())).not.toContain('writes Order.status = PAID');
    });
 });

@@ -180,11 +180,11 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     *
     * **Skipping unchanged documents is correctness, not an optimisation.** A
     * write goes through `ModelService.update`, which re-serializes from the AST —
-    * so writing a document that did not change still rewrites its text, and a
-    * serializer is free to normalise formatting and cannot preserve comments.
-    * Persisting the whole write set unconditionally therefore means a pure layout
-    * drag reflows the semantic file and strips its comments, which is a data
-    * loss the user never asked for and would struggle to attribute.
+    * so writing a document that did not change still rewrites its text in the
+    * serializer's own layout. Persisting the whole write set unconditionally
+    * therefore means a pure layout drag reflows the semantic file, a change the
+    * user never asked for and would struggle to attribute. Comments survive that
+    * rewrite, but the hand-formatting around them does not.
     *
     * Compared by serialised form. Both sides come from the same encoder walking
     * the same shape, so key order is stable and a string compare is sound here;

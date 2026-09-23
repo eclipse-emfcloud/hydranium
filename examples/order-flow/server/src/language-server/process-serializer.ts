@@ -56,10 +56,6 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
    /** 3-space indent matches the example's source-code style. */
    private static readonly INDENT_UNIT = '   ';
 
-   override serializeAst(model: ProcessModel): string {
-      return this.serializeNode(model, 0);
-   }
-
    protected override serializeNode(node: AstNode | Record<string, unknown>, indentationLevel: number, _isArrayElement = false): string {
       if (isProcessModel(node)) {
          return this.emitProcess(node);

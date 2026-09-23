@@ -99,8 +99,15 @@ describe('a staged integrity correction reaches the client that opens the file',
       // the Parsed-phase resync re-reads disk, where nothing was written, which
       // leaves `textDocument` holding the unrepaired text while skipping the
       // re-parse that would have discarded the mutation.
+      // Through the SAME chain the repair used: serialize, then reattach the
+      // document's trivia. The CST still holds the comments and the text
+      // document still holds the on-disk ending, which is exactly the state
+      // `resyncDocument` captured from.
       const document = harness.shared.workspace.LangiumDocuments.getDocument(uri);
-      const repaired = await harness.domain.serializer.Serializer.serializeAst(document!.parseResult.value);
+      const trivia = harness.domain.trivia.TriviaService;
+      const extracted = trivia.extract(document!);
+      const serialized = await harness.domain.serializer.Serializer.serializeAst(document!.parseResult.value);
+      const repaired = trivia.apply(serialized, extracted, uri);
       expect(repaired).toContain('Staged__1');
 
       // Arm the mirror before the open: `ModelService` registers the settled

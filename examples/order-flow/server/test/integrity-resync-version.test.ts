@@ -150,7 +150,15 @@ describe('an integrity repair of a closed document lands on the store version se
       // based-on version taken from this build is stale before anyone can use it.
       // Reconciling is idempotent when the content already matches, so the same
       // version coming back IS the assertion.
-      const repaired = await harness.domain.serializer.Serializer.serializeAst(root);
+      // Reconstructed through the SAME chain the repair used — serialize, then
+      // reattach the document's trivia. Deriving it from the serializer alone
+      // would compare the sequence against text the repair never produced, and
+      // the mismatch would read as a version defect rather than as the test
+      // modelling the write path incorrectly.
+      const trivia = harness.domain.trivia.TriviaService;
+      const extracted = trivia.extract(document);
+      const serialized = await harness.domain.serializer.Serializer.serializeAst(root);
+      const repaired = trivia.apply(serialized, extracted, uri);
       expect(textDocuments.reconcileExternalContent(uriString, repaired)).toBe(sequenceVersion);
    }
 

@@ -339,23 +339,6 @@ async function switchLocale(locale: PageLocale): Promise<void> {
 }
 
 /**
- * Put the whole page into `scheme` — the page chrome, the diagram's
- * `--order-flow-*` colour roles, and every Monaco editor.
- *
- * **One function, three surfaces, and that is the design rather than
- * convenience.** The three are themed by different mechanisms — the chrome and
- * the roles by CSS keyed off this attribute, the editors by a Monaco API — and
- * three independent switches is how a page ends up half-switched, with a dark
- * editor in light chrome and a diagram that matches neither.
- *
- * The attribute goes on the root element because that is what the light role set
- * in `index.html` is scoped to. Writing it is the entire CSS half: `dark` means
- * no override, so the DARK values are the ones
- * `@hydranium/example-order-flow-client`'s own stylesheet declares — a shell that
- * supplies nothing still renders a legible diagram, and this page exercises that
- * by supplying only the light half.
- */
-/**
  * Mark the pane holding the focus. The caret cannot say: a diagram has none,
  * and an editor that lost focus goes on drawing the one it had.
  *
@@ -372,6 +355,23 @@ function wireActivePane(): void {
    });
 }
 
+/**
+ * Put the whole page into `scheme` — the page chrome, the diagram's
+ * `--order-flow-*` colour roles, and every Monaco editor.
+ *
+ * **One function, three surfaces, and that is the design rather than
+ * convenience.** The three are themed by different mechanisms — the chrome and
+ * the roles by CSS keyed off this attribute, the editors by a Monaco API — and
+ * three independent switches is how a page ends up half-switched, with a dark
+ * editor in light chrome and a diagram that matches neither.
+ *
+ * The attribute goes on the root element because that is what the light role set
+ * in `index.html` is scoped to. Writing it is the entire CSS half: `dark` means
+ * no override, so the DARK values are the ones
+ * `@hydranium/example-order-flow-client`'s own stylesheet declares — a shell that
+ * supplies nothing still renders a legible diagram, and this page exercises that
+ * by supplying only the light half.
+ */
 function applyScheme(scheme: ColourScheme): void {
    document.documentElement.dataset.theme = scheme;
    applyEditorScheme(scheme);

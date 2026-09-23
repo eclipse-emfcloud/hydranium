@@ -185,8 +185,10 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
 }
 
 /**
- * Residency policy that reclaims memory by shedding the concrete syntax tree
- * (CST) of closed documents while keeping their AST resident. Each build refreshes
+ * Keeps a document's CST available to the readers that need one, shedding it
+ * for documents that have gone idle and re-grafting on demand.
+ *
+ * Each build refreshes
  * the idle window of the documents in its batch; when a closed, sheddable
  * document's window elapses, every AST node's `$cstNode` and every reference's
  * `$refNode` are nulled, and the CST root, `Range`s and `Position`s become
@@ -230,10 +232,6 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * {@link rehydrate}, driven transparently from the framework
  * `NameProvider.getNameNode` chokepoint, the comment provider, and
  * `HydraniumLangiumDocuments.getOrCreateDocument`.
- */
-/**
- * Keeps a document's CST available to the readers that need one, shedding it
- * for documents that have gone idle and re-grafting on demand.
  */
 export interface CstResidencyService {
    /**
