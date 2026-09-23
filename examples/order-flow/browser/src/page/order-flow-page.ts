@@ -48,6 +48,7 @@
  * `MonacoEnvironment.getWorker` for strings no user sees.
  */
 
+import type { Locale } from '@hydranium/protocol';
 import { applyBuildStamp } from './build-stamp.js';
 import { requireElement } from './dom.js';
 import { requestedLocale } from './page-nls.js';
@@ -65,7 +66,7 @@ import { requestedLocale } from './page-nls.js';
  * `PAGE_LOCALES` offers rather than the full thirteen: offering a language whose
  * page chrome is untranslated would put a German editor menu in an English page.
  */
-const MONACO_CATALOGUES: Readonly<Record<string, () => Promise<unknown>>> = {
+const MONACO_CATALOGUES: Readonly<Record<Locale, () => Promise<unknown>>> = {
    de: () => import('monaco-editor-core/esm/nls.messages.de.js')
 };
 
@@ -76,7 +77,7 @@ const MONACO_CATALOGUES: Readonly<Record<string, () => Promise<unknown>>> = {
  * assigns two globals and exports nothing — so the returned module object is
  * discarded and the `await` is the entire contract.
  */
-async function loadMonacoLocale(locale: string | undefined): Promise<void> {
+async function loadMonacoLocale(locale: Locale | undefined): Promise<void> {
    const catalogue = locale === undefined ? undefined : MONACO_CATALOGUES[locale];
    if (catalogue !== undefined) {
       await catalogue();

@@ -9,7 +9,11 @@
 
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
-import { PROPERTIES_CLOSE_FAILED, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
+import {
+   PROPERTIES_CLOSE_FAILED,
+   PROPERTIES_LOADING,
+   PROPERTIES_OPEN_FAILED
+} from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import {
    type DataEvents,
    type DataSession,
@@ -20,6 +24,7 @@ import {
    type TransferElement
 } from '@hydranium/protocol';
 import { requireElement } from './dom.js';
+import { pageTranslations } from './page-nls.js';
 
 /**
  * This panel's identity on the data head.
@@ -72,9 +77,12 @@ export class PropertiesPanel {
             setField: (name, value) => this.model.setField(name, value),
             reportError: (error, reported) => this.reportError(error, reported)
          },
-         // The form's heading is the document's, and here it sits inside a panel
-         // the page has already headed `Properties` with an `h2`.
-         { headingLevel: 'h3' }
+         {
+            // The form's heading is the document's, and here it sits inside a
+            // panel the page has already headed `Properties` with an `h2`.
+            headingLevel: 'h3',
+            renderMessage: message => renderFrameworkMessage(message, pageTranslations())
+         }
       );
       this.model.onDidChange(() => this.render());
    }
@@ -106,7 +114,7 @@ export class PropertiesPanel {
       }
       this.form.setTitle(uri.substring(uri.lastIndexOf('/') + 1));
       this.form.setLoading(true);
-      this.form.report('Loading…');
+      this.form.report(PROPERTIES_LOADING);
       this.model
          .open(uri)
          .then(() => {

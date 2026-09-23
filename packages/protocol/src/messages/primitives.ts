@@ -162,11 +162,46 @@ export function messageError<S extends string>(
 }
 
 /**
- * Render on the side that knows the reading user's locale. `translations` is
- * whatever flat `code → template` map the host exposes; omitting it is how an
- * adopter without i18n opts out, and yields the English.
+ * The reading user's language, as the tag a client declared.
+ *
+ * Neither validated nor normalised anywhere: rejecting an unfamiliar tag would
+ * be selecting a locale, which the framework does not do.
+ *
+ * NOT a Langium language id, which names a grammar. The two are strings of the
+ * same shape reachable from the same services, so one used where the other
+ * belongs misses every lookup rather than failing.
  */
-export function renderFrameworkMessage(message: ResolvedMessage, translations?: Record<string, string>): string {
+export type Locale = string;
+
+/**
+ * A host's templates for one locale, keyed by the whole message code.
+ *
+ * **Flat, not nested.** A code is one key here, `/` separators included; a host
+ * whose own catalogue format nests — Theia's does — flattens on the way in. A
+ * map that nests instead misses every lookup while type-checking, because the
+ * value this is indexed by is `ResolvedMessage.code`.
+ *
+ * **Partial by nature rather than by convention.** A code with no entry renders
+ * its English default, so a catalogue covering none of a package's codes is a
+ * valid catalogue and not a broken one — which is what lets an adopter translate
+ * as much or as little as they like.
+ *
+ * Deliberately NOT narrowed to the codes that exist, and a `Code extends string`
+ * parameter would not buy what it appears to: a catalogue is loaded as JSON, so
+ * it reaches a checked position as a variable rather than as an object literal,
+ * and excess-property checking — the only thing that would reject a mistyped
+ * key — does not run there. The gain is a compile error for a catalogue with no
+ * correct key at all; the cost is a code union to maintain by hand, since a
+ * declaration does not carry its code as a literal type.
+ */
+export type MessageCatalogue = Readonly<Record<string, string>>;
+
+/**
+ * Render on the side that knows the reading user's locale. Omitting
+ * `translations` is how an adopter without i18n opts out, and yields the
+ * English.
+ */
+export function renderFrameworkMessage(message: ResolvedMessage, translations?: MessageCatalogue): string {
    const template = translations?.[message.code];
    return template ? interpolate(template, message.params) : message.text;
 }

@@ -49,8 +49,17 @@
  * here: they are rendered SERVER-side, from the locale declared at `initialize`,
  * so they arrive already translated. That is the framework's own mechanism and
  * this file must not duplicate it.
+ *
+ * # One catalogue, split by who renders rather than by who owns the markup
+ *
+ * The properties panel's own sentences are codes rather than `data-nls` keys —
+ * it is shared client code with no markup on this page — but they are rendered
+ * by this page, so they live in the same file. Splitting by owner instead would
+ * put two catalogues in front of a translator for one language and let them
+ * disagree about the same word.
  */
 
+import type { Locale, MessageCatalogue } from '@hydranium/protocol';
 import germanChrome from './nls/order-flow-page.de.json';
 import { rememberPreference, storedPreference } from './preferences.js';
 
@@ -65,7 +74,7 @@ import { rememberPreference, storedPreference } from './preferences.js';
  */
 export interface PageLocale {
    /** The `?locale=` value, absent for the untranslated default. */
-   readonly code?: string;
+   readonly code?: Locale;
    /** How the switch names it — in that language, never translated. */
    readonly label: string;
 }
@@ -99,7 +108,7 @@ export const PAGE_LOCALES: readonly PageLocale[] = [{ label: 'English' }, { code
  * catalogue and the server's `initialize` — and a second read is how two of them
  * end up disagreeing.
  */
-export function requestedLocale(): string | undefined {
+export function requestedLocale(): Locale | undefined {
    const parameters = new URLSearchParams(window.location.search);
    if (parameters.has('locale')) {
       const requested = parameters.get('locale')?.trim();
@@ -127,17 +136,29 @@ export function rememberLocale(locale: PageLocale): void {
  * here leaves the document's English in place, which is what an adopter with no
  * catalogue for a reader's language also gets.
  */
-const CHROME_CATALOGUES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+const CHROME_CATALOGUES: Readonly<Record<Locale, MessageCatalogue>> = {
    de: germanChrome
 };
 
 /** The catalogue in force: the `data-nls*` overlay reaches markup only, so a
  *  string the page builds at runtime has nothing else to resolve against. */
-let activeCatalogue: Readonly<Record<string, string>> | undefined;
+let activeCatalogue: MessageCatalogue | undefined;
 
 /** Translate `key`, falling back to `english` as an unknown locale does. */
 export function pageText(key: string, english: string): string {
    return activeCatalogue?.[key] ?? english;
+}
+
+/**
+ * The catalogue in force.
+ *
+ * Read per render rather than captured once, because the switch is applied
+ * before the heads start and a consumer built earlier would hold the catalogue
+ * from before it. `undefined` is the English, which is what a host that ships no
+ * catalogue for a code passes.
+ */
+export function pageTranslations(): MessageCatalogue | undefined {
+   return activeCatalogue;
 }
 
 /**
@@ -163,7 +184,7 @@ const NLS_TARGETS: readonly { readonly attribute: string; readonly apply: (eleme
  * Called before the heads are started, so the page never paints English and then
  * flips — the same ordering reason `wireSchemeSwitch` is called first.
  */
-export function applyPageLocale(locale: string | undefined): void {
+export function applyPageLocale(locale: Locale | undefined): void {
    const catalogue = locale === undefined ? undefined : CHROME_CATALOGUES[locale];
    // The document is already in its fallback language, so there is nothing to
    // undo for an unknown code: this returns having changed nothing, which is the

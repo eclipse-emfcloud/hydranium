@@ -19,8 +19,24 @@
  */
 
 import type { PropertyField, SetFieldOutcome } from '../data/order-flow-properties-model';
-import { describeError, resolve, type ResolvedMessage, type TransferDiagnostic } from '@hydranium/protocol';
-import { PROPERTIES_WRITE_FAILED } from './properties-messages';
+import {
+   describeError,
+   type MessageDefinition,
+   renderFrameworkMessage,
+   resolve,
+   type ResolvedMessage,
+   type TransferDiagnostic
+} from '@hydranium/protocol';
+import {
+   PROPERTIES_APPLY_HINT,
+   PROPERTIES_DISCONNECTED,
+   PROPERTIES_NO_DOCUMENT,
+   PROPERTIES_NO_FIELDS,
+   PROPERTIES_WRITE_CONFLICT,
+   PROPERTIES_WRITE_FAILED,
+   PROPERTIES_WRITE_MERGED,
+   PROPERTIES_WRITE_UNAVAILABLE
+} from './properties-messages';
 
 /** What the form needs from whoever owns the model. */
 export interface PropertiesFormHandlers {
@@ -51,15 +67,24 @@ export interface PropertiesFormOptions {
     * this heading is the first one on it.
     */
    readonly headingLevel?: HeadingLevel;
+   /**
+    * Turn one of this panel's messages into the text a reader sees.
+    *
+    * The form draws its own labels, so there is no raise site for a host to
+    * resolve them at and no way for this tier to reach a locale: it runs in a
+    * webview that knows none, in a page whose language is a query parameter, and
+    * in a widget whose shell holds the catalogue. Omitting this is how a host
+    * without i18n takes the English, which is the same fallback a missing
+    * catalogue entry gives.
+    */
+   readonly renderMessage?: (message: ResolvedMessage) => string;
 }
 
-/** How each write outcome reads to a user. `applied` is silent on purpose. */
-const OUTCOME_MESSAGES: Record<SetFieldOutcome['status'], string> = {
-   applied: '',
-   unchanged: '',
-   merged: 'Saved. Someone else had edited another field; both changes were kept.',
-   conflict: 'Not saved — someone else changed this field first. The value shown is theirs.',
-   unavailable: 'Not saved — the document could not be re-read to resolve a conflict.'
+/** How each write outcome reads to a user. `applied` and `unchanged` are silent on purpose. */
+const OUTCOME_MESSAGES: Partial<Record<SetFieldOutcome['status'], MessageDefinition<string>>> = {
+   merged: PROPERTIES_WRITE_MERGED,
+   conflict: PROPERTIES_WRITE_CONFLICT,
+   unavailable: PROPERTIES_WRITE_UNAVAILABLE
 };
 
 /**
@@ -101,12 +126,15 @@ export class PropertiesForm {
    protected built = false;
    /** Whether a document load is in flight — see {@link setLoading}. */
    protected loading = false;
+   /** How this panel's own messages reach a reader — see {@link PropertiesFormOptions.renderMessage}. */
+   protected readonly renderMessage: (message: ResolvedMessage) => string;
 
    constructor(
       root: HTMLElement,
       protected readonly handlers: PropertiesFormHandlers,
       options: PropertiesFormOptions = {}
    ) {
+      this.renderMessage = options.renderMessage ?? (message => renderFrameworkMessage(message));
       this.heading = this.createElement(options.headingLevel ?? 'h1');
       this.fieldsHost = this.createElement('div');
       this.status = this.createElement('div');
@@ -114,7 +142,12 @@ export class PropertiesForm {
       this.diagnosticsHost = this.createElement('ul');
       this.diagnosticsHost.className = 'diagnostics';
       root.append(this.heading, this.fieldsHost, this.status, this.diagnosticsHost);
-      this.heading.textContent = 'No Order Flow document selected';
+      this.heading.textContent = this.text(PROPERTIES_NO_DOCUMENT);
+   }
+
+   /** This panel's own `message`, in the reader's language. */
+   protected text(message: MessageDefinition<string>): string {
+      return this.renderMessage(resolve(message));
    }
 
    /**
@@ -138,7 +171,7 @@ export class PropertiesForm {
 
    /** The document this form is showing, for the heading. */
    setTitle(label: string | undefined): void {
-      this.heading.textContent = label ?? 'No Order Flow document selected';
+      this.heading.textContent = label ?? this.text(PROPERTIES_NO_DOCUMENT);
    }
 
    /**
@@ -251,9 +284,15 @@ export class PropertiesForm {
       );
    }
 
-   /** Say something in the status line. `kind` colours it. */
-   report(message: string, kind?: string): void {
-      this.status.textContent = message;
+   /**
+    * Say something in the status line. `kind` colours it.
+    *
+    * A declaration is rendered here and a plain string is shown as it stands,
+    * which is what lets a caller report `describeError`'s output: a technical
+    * error string is not translatable text and has no code to render it by.
+    */
+   report(message: string | MessageDefinition<string>, kind?: string): void {
+      this.status.textContent = typeof message === 'string' ? message : this.text(message);
       if (kind) {
          this.status.dataset.kind = kind;
       } else {
@@ -266,7 +305,7 @@ export class PropertiesForm {
       for (const input of this.inputs.values()) {
          input.disabled = true;
       }
-      this.report('The data server connection closed. Reopen the panel to reconnect.', 'error');
+      this.report(PROPERTIES_DISCONNECTED, 'error');
    }
 
    /**
@@ -303,7 +342,7 @@ export class PropertiesForm {
             const hint = this.createElement('div');
             hint.id = `field-${field.name}-hint`;
             hint.className = 'field-hint';
-            hint.textContent = 'Press Enter to apply';
+            hint.textContent = this.text(PROPERTIES_APPLY_HINT);
             // Hidden by the ATTRIBUTE rather than by a stylesheet rule, so a
             // host that adds no CSS for this gets the behaviour rather than a
             // note that never goes away.
@@ -328,7 +367,7 @@ export class PropertiesForm {
       );
       if (fields.length === 0) {
          const empty = this.createElement('div');
-         empty.textContent = 'This document root has no editable text properties.';
+         empty.textContent = this.text(PROPERTIES_NO_FIELDS);
          this.fieldsHost.replaceChildren(empty);
       }
    }
@@ -336,7 +375,7 @@ export class PropertiesForm {
    protected async write(name: string, value: string): Promise<void> {
       try {
          const outcome = await this.handlers.setField(name, value);
-         this.report(OUTCOME_MESSAGES[outcome.status], OUTCOME_KINDS[outcome.status]);
+         this.report(OUTCOME_MESSAGES[outcome.status] ?? '', OUTCOME_KINDS[outcome.status]);
          if (SETTLED_ON_THE_WRITTEN_VALUE.has(outcome.status)) {
             // The server now holds what was typed, so it is no longer pending —
             // and this is the only place that can say so when the write came

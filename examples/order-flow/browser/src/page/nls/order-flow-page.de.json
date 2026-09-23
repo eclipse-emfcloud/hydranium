@@ -1,5 +1,5 @@
 {
-  "_comment": "German catalogue for the CHROME OF THIS PAGE — the panel titles, buttons, hints and tooltips written in index.html. See src/page/page-nls.ts. Flat keys, and English is deliberately absent: the English IS index.html, so this file is a partial overlay and any key missing here falls back to the document. Disjoint from the server package's catalogue, which holds the codes the language server renders and reaches this page as diagnostic text rather than as chrome. The status-bar category labels and every report VALUE the page computes are deliberately not keys here — see page-nls.ts. Terminology follows VS Code's German UI where it has a word for the same thing (Arbeitsbereich, Probleme, Dunkel), and keeps the established English term where German developers do (Language Server, Layout) rather than inventing a calque.",
+  "_comment": "German catalogue for everything THIS PAGE renders: the chrome written in index.html under `order-flow/page/*`, and the properties panel's own message codes under `order-flow/properties/*`. See src/page/page-nls.ts. Flat keys, and English is deliberately absent: the English IS index.html for the chrome and the declaration's own default for a code, so this file is a partial overlay and any key missing here falls back. Disjoint from the server package's catalogue, which holds the codes the language server renders and reaches this page as diagnostic text rather than as chrome. The status-bar category labels and every report VALUE the page computes are deliberately not keys here — see page-nls.ts. Terminology follows VS Code's German UI where it has a word for the same thing (Arbeitsbereich, Probleme, Dunkel), and keeps the established English term where German developers do (Language Server, Layout) rather than inventing a calque.",
   "order-flow/page/tagline": "Text, Diagramm und Formulare",
   "order-flow/page/language": "Sprache",
   "order-flow/page/save-workspace": "Arbeitsbereich speichern",
@@ -41,5 +41,16 @@
   "order-flow/page/diagnostics": "Diagnosemeldungen",
   "order-flow/page/click-to-open": "zum Öffnen klicken",
   "order-flow/page/click-to-open-hint": "Auf eine Meldung klicken, um das Dokument an der betreffenden Zeile zu öffnen",
-  "order-flow/page/latency-hint": "RPC-Latenz vom Datenkopf abrufen"
+  "order-flow/page/latency-hint": "RPC-Latenz vom Datenkopf abrufen",
+  "order-flow/properties/no-document": "Kein Order-Flow-Dokument ausgewählt",
+  "order-flow/properties/no-fields": "Dieses Dokument hat keine bearbeitbaren Texteigenschaften.",
+  "order-flow/properties/loading": "Wird geladen…",
+  "order-flow/properties/apply-hint": "Zum Übernehmen die Eingabetaste drücken",
+  "order-flow/properties/disconnected": "Die Verbindung zum Datenserver wurde geschlossen. Öffnen Sie den Bereich erneut, um sich wieder zu verbinden.",
+  "order-flow/properties/write-merged": "Gespeichert. Jemand anderes hatte ein anderes Feld bearbeitet; beide Änderungen wurden übernommen.",
+  "order-flow/properties/write-conflict": "Nicht gespeichert — jemand anderes hat dieses Feld zuerst geändert. Angezeigt wird dessen Wert.",
+  "order-flow/properties/write-unavailable": "Nicht gespeichert — das Dokument konnte nicht erneut gelesen werden, um den Konflikt aufzulösen.",
+  "order-flow/properties/open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}",
+  "order-flow/properties/close-failed": "Order-Flow-Eigenschaften: Das vorherige Dokument konnte nicht geschlossen werden. {detail}",
+  "order-flow/properties/write-failed": "Order-Flow-Eigenschaften: '{field}' konnte nicht gespeichert werden. {detail}"
 }

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { Tracer } from '@hydranium/protocol';
+import type { Locale, Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
 
@@ -25,8 +25,8 @@ export type ServerLocaleOptions = LogNameOptions;
  */
 export interface ServerLocale {
    /** The locale, or `undefined` when no init supplied one — the framework's English. */
-   readonly value: string | undefined;
-   accept(locale: string): void;
+   readonly value: Locale | undefined;
+   accept(locale: Locale): void;
 }
 
 /**
@@ -40,14 +40,14 @@ export interface ServerLocale {
  */
 export class DefaultServerLocale implements ServerLocale {
    protected readonly tracer: Tracer;
-   protected current: string | undefined;
+   protected current: Locale | undefined;
 
    constructor(services: ServerSharedServicesMinimal, options: ServerLocaleOptions = {}) {
       this.tracer = services.Tracer.for(options.logName ?? 'ServerLocale').trace('instantiated');
    }
 
    /** The locale, or `undefined` when no init supplied one — which means the framework's English. */
-   get value(): string | undefined {
+   get value(): Locale | undefined {
       return this.current;
    }
 
@@ -79,7 +79,7 @@ export class DefaultServerLocale implements ServerLocale {
     * threshold and therefore absent from exactly the log someone would be
     * reading.
     */
-   accept(locale: string): void {
+   accept(locale: Locale): void {
       this.current = locale;
       this.tracer.info(`rendering messages in locale '${locale}'`);
    }

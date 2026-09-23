@@ -11,10 +11,11 @@
  * The `@hydranium/conformance/lsp` slice — protocol conformance for the LSP
  * head. The driver port is a STRUCTURAL minimum (`LspConformanceDriver`) that
  * `@hydranium/core/testing/node`'s `LspHarness` satisfies with NO adapter: the kit
- * names only `string`, plain coordinates, and tiny structural minima
+ * names only strings, plain coordinates, and tiny structural minima
  * (`{ message }`, `{ items }`, `{ capabilities }`), never
  * `vscode-languageserver-protocol` wire types, so the harness's richer return
- * types are assignable to the narrower port.
+ * types are assignable to the narrower port. An alias of `string` is still a
+ * string for that purpose and stays inside the rule; a wire type does not.
  *
  * **This slice does not read `LanguageFixture.edit` at all.** The didChange
  * check drives `valid → invalid` using `invalid.text`, so there is no
@@ -23,6 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
+import type { Locale } from '@hydranium/protocol';
 import type { Harness } from '@hydranium/protocol/testing';
 import type { ConformanceCheck } from '../conformance-suite.js';
 import { type ConformanceModel, type LanguageFixture, resolveDeferred, resolveModel } from '../model.js';
@@ -35,7 +37,7 @@ import { type ConformanceModel, type LanguageFixture, resolveDeferred, resolveMo
  * upstream's shape satisfies the port with no adapter.
  */
 export interface LspConformanceInitializeParams {
-   readonly locale?: string;
+   readonly locale?: Locale;
 }
 
 /** Structural minimum of an LSP `InitializeResult` — only the baseline capabilities the kit asserts. */

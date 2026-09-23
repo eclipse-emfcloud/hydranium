@@ -12,6 +12,8 @@ import {
    renderFrameworkMessage,
    resolve,
    resolvedFromResponseError,
+   type Locale,
+   type MessageCatalogue,
    type MessageDefinition,
    type ParamsArg,
    type ResolvedMessage,
@@ -76,7 +78,7 @@ export class DefaultMessageRenderer implements MessageRenderer {
     * locale arrives once per process. A subclass whose catalogue can change
     * clears it.
     */
-   protected readonly catalogues = new SimpleCache<string | undefined, Record<string, string> | undefined>();
+   protected readonly catalogues = new SimpleCache<Locale | undefined, MessageCatalogue | undefined>();
 
    constructor(services: ServerSharedServicesMinimal, options: MessageRendererOptions = {}) {
       this.serverLocale = services.ServerLocale;
@@ -165,7 +167,7 @@ export class DefaultMessageRenderer implements MessageRenderer {
     * `Diagnostic.data.code` from an overridden {@link renderDiagnostic}, never
     * the sentence.
     */
-   protected translationsFor(_locale: string | undefined): Record<string, string> | undefined {
+   protected translationsFor(_locale: Locale | undefined): MessageCatalogue | undefined {
       return undefined;
    }
 

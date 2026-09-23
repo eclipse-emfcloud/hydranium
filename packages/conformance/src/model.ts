@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import type { Locale } from '@hydranium/protocol';
+
 /**
  * A fixture value that may be given directly or DEFERRED to check time.
  *
@@ -212,7 +214,7 @@ export interface LanguageFixture {
  */
 export interface RenderedDiagnosticSpec {
    /** The locale to declare at `initialize` — the tag whose catalogue the server has. */
-   readonly locale: string;
+   readonly locale: Locale;
    /** A fragment of the translated sentence, present in some diagnostic of the `invalid` fixture. */
    readonly expected: string;
    /**

@@ -9,8 +9,13 @@
 
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
-import { PROPERTIES_CLOSE_FAILED, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { describeError, resolve, type TransferElement } from '@hydranium/protocol';
+import {
+   PROPERTIES_CLOSE_FAILED,
+   PROPERTIES_LOADING,
+   PROPERTIES_OPEN_FAILED
+} from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
+import { describeError, renderFrameworkMessage, resolve, type TransferElement } from '@hydranium/protocol';
+import { nls } from '@theia/core/lib/common/nls';
 import { BaseWidget } from '@theia/core/lib/browser/widgets/widget';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { OrderFlowDataConnection } from './order-flow-data-connection';
@@ -96,10 +101,16 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       // No diagnostic renderer: the server renders what it publishes, so this
       // host supplies a catalogue only for the messages the CLIENT tier raises,
       // which fire when the server is unreachable and it alone can word.
-      this.form = new PropertiesForm(host, {
-         setField: (name, value) => this.model.setField(name, value),
-         reportError: (error, reported) => this.dataConnection.reportError(error, reported)
-      });
+      this.form = new PropertiesForm(
+         host,
+         {
+            setField: (name, value) => this.model.setField(name, value),
+            reportError: (error, reported) => this.dataConnection.reportError(error, reported)
+         },
+         // The same catalogue the data port renders a failure through, so a
+         // sentence the panel draws and one it raises come from one authority.
+         { renderMessage: message => renderFrameworkMessage(message, nls.localization?.translations) }
+      );
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));
       this.toDispose.push(this.model);
@@ -146,7 +157,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       }
       this.form.setTitle(uri.substring(uri.lastIndexOf('/') + 1));
       this.form.setLoading(true);
-      this.form.report('Loading…');
+      this.form.report(PROPERTIES_LOADING);
       this.model
          .open(uri)
          .then(() => {
