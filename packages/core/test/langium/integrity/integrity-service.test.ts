@@ -16,6 +16,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { DefaultIntegrityService } from '../../../src/langium/integrity/integrity-service.js';
+import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import type { ServerLanguageServices } from '../../../src/langium/language-module.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from '../../../src/langium/integrity/integrity-rule.js';
@@ -506,6 +507,27 @@ describe('IntegrityService corrections sync', () => {
       await probe.syncCorrectionsNow(td);
 
       expect(fileSystemProvider.writes).toEqual([{ uri: 'file:///closed.fake', content: 'corrected' }]);
+      expect(textDocuments.setAuthorCalls).toEqual([]);
+   });
+
+   it('persists nothing for a virtual document in silent mode, rather than writing it to a derived path', async () => {
+      // A virtual document has no disk backing at all, so "closed" does not mean
+      // "on disk somewhere" for it. Silent mode must skip the write instead of
+      // handing the URI to the filesystem provider: `URI.fsPath` yields a path
+      // for any scheme, so the write either lands somewhere unrelated (the
+      // provider derives `<cwd>/<contributor>/<name>`) or, against a provider
+      // that refuses a URI it cannot reach, rejects and fails the whole build
+      // for a repair that was never persistable. The repair still
+      // rides the in-memory AST and the text store, which is where a virtual
+      // document lives.
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInLanguageClient = false;
+      const td = TextDocument.create(virtualUri('probe-contributor', 'built-in.fake').toString(), 'fake', 3, 'corrected');
+
+      await probe.syncCorrectionsNow(td);
+
+      expect(fileSystemProvider.writes).toEqual([]);
+      expect(textDocuments.stagedContent).toEqual([]);
       expect(textDocuments.setAuthorCalls).toEqual([]);
    });
 

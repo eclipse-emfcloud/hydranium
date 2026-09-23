@@ -17,6 +17,7 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { Registry } from '../../util/registry.js';
 import { type ServerLanguageServices } from '../language-module.js';
+import { isVirtualUri } from '../workspace/virtual-document.js';
 import { type IntegrityRuleRegistry } from './integrity-contribution.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from './integrity-rule.js';
 
@@ -403,6 +404,19 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       // question is asked, so no reverse address resolution is needed: a file
       // open under a symlinked path still answers `true`.
       if (this.textDocuments.isOpenInLanguageClient(document.uri)) {
+         return;
+      }
+
+      // A virtual document has no disk backing, so neither persisting nor
+      // staging applies: there is no file to write and no editor that could open
+      // one. `URI.fsPath` yields a path for any scheme, so handing this to the
+      // provider would address `<cwd>/<contributor>/<name>` — an unrelated
+      // location a disk-backed provider refuses outright, turning a repair that
+      // was never persistable into a build failure. The correction is already on
+      // the AST and in the text store, which is the whole of where a virtual
+      // document lives, so there is nothing further to propagate.
+      if (isVirtualUri(document.uri)) {
+         this.tracer.with(document.uri).debug('Virtual document: correction kept in memory, nothing to persist');
          return;
       }
 
