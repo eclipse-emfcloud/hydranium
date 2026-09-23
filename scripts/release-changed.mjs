@@ -56,6 +56,18 @@ const INERT = [
       test: path => path.startsWith('.github/')
    },
    { name: '.vscode/**', why: 'editor configuration', test: path => path.startsWith('.vscode/') },
+   {
+      name: '.claude/**',
+      why: 'agent guidance, read by a coding agent and packed by no manifest',
+      test: path => path.startsWith('.claude/')
+   },
+   {
+      name: 'skills-lock.json',
+      // Not in ROOT_TOOLING: its reader is neither git nor the formatter, so it
+      // does not satisfy that set's stated scope.
+      why: 'provenance for the vendored agent skills, read by the skills CLI alone',
+      test: path => path === 'skills-lock.json'
+   },
    { name: 'docs/**', why: 'contributor documentation; every package ships `lib` and `src` only', test: path => path.startsWith('docs/') },
    { name: 'examples/**', why: 'every example package is `private: true`', test: path => path.startsWith('examples/') },
    {
@@ -153,6 +165,11 @@ const FIXTURES = [
    { name: 'a doc page publishes nothing', paths: ['docs/concepts/architecture.md'], publishable: false },
    { name: 'a changeset publishes nothing', paths: ['.changeset/reject-non-file-writes.md'], publishable: false },
    { name: 'an example source publishes nothing', paths: ['examples/order-flow/server/src/main.ts'], publishable: false },
+   {
+      name: 'a vendored agent skill and its lock publish nothing',
+      paths: ['.claude/skills/langium/SKILL.md', 'skills-lock.json'],
+      publishable: false
+   },
    { name: 'a patch mutates an installed dependency and publishes', paths: ['patches/vitest+4.1.11.patch'], publishable: true },
    { name: 'the lockfile publishes', paths: ['package-lock.json'], publishable: true },
    { name: 'a root tsconfig publishes', paths: ['tsconfig.base.json'], publishable: true },
