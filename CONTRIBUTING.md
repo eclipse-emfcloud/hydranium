@@ -144,16 +144,28 @@ mutation and perf audits, see [`docs/contributing/testing.md`](docs/contributing
 
 - Use Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, etc.).
 - One concern per PR. Smaller is better.
-- Add a changeset (`npx changeset add`), or the explicit empty marker
-  (`npx changeset add --empty`) when the change needs no release note.
-  Nothing in CI enforces this and nothing stalls without it: every nightly
-  version is derived from the commit count, so a change with no changeset
-  still publishes. What it misses is the CHANGELOG for the stable cut, which
-  is the only thing changesets feed here — see
-  [`docs/contributing/releasing.md`](docs/contributing/releasing.md), which is also the runbook for
-  versioning policy, dist-tags and provenance. If you are unsure which bump
-  a change deserves, leave it out and say so; the packages version in
-  lockstep, so that is a call about the whole published surface.
+- **Write no changeset until the first stable release exists.** A changeset
+  feeds one thing here, the CHANGELOG for the stable cut, and nothing yet
+  reads it: the rolling version is derived from the commit count, so a change
+  with no changeset still publishes. Nor would accumulating them help. A
+  changelog describes what moved relative to a version somebody pinned, and
+  nobody pins a prerelease of a package with no stable line — so the notes a
+  1.0.0 would assemble out of them describe upgrades from versions no adopter
+  had. `docs/contributing/releasing.md` is the runbook for versioning policy,
+  dist-tags and provenance.
+- **From the first stable release onward, every user-visible change wants
+  one** (`npx changeset add`) — that is where the CHANGELOG starts being
+  read, because adopters then have a baseline to upgrade from. Until then the
+  directory stays empty of entries.
+- **Never write an empty changeset.** It declares no package and renders no
+  entry, so it records only that somebody ran the command, while sitting in a
+  directory whose contents are read as pending release notes. A change that
+  deserves no note gets no file.
+- **Name a changeset for its change**, not with the three-word phrase the
+  generator invents — `reject-non-file-writes.md` over `plain-geese-refuse.md`.
+  Prefix it with the issue or PR number where one exists. The generated names
+  are unique and nothing else, which is the one property a reviewer scanning
+  the directory does not need.
 - Reference the concept doc under `docs/concepts/` your change follows, if there is one.
 - A test must justify its existence: it should catch a real class of bug.
 

@@ -90,9 +90,9 @@ YAML serializer, transfer-model codegen, and a project/scope tier model.
 
 ## Packages
 
-Ten packages, all at v0 and released in lockstep — mixing versions across the
-set is unsupported, because several of them share types by identity rather than
-by structure.
+Ten packages, released in lockstep on one `1.0.0-next` prerelease version —
+mixing versions across the set is unsupported, because several of them share
+types by identity rather than by structure.
 
 They are grouped below by the role each name declares. A package name reads
 `<head>-<role>-<platform>`, so each head's server and its Theia client sit
