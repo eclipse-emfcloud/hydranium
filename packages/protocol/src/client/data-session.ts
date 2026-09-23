@@ -61,7 +61,7 @@ export type DataSessionDocument<
  * `(uri, clientId)`: the server has one, however many opens are in flight, so
  * one flag is the accurate model of it.
  */
-interface OpeningDocument {
+export interface OpeningDocument {
    /** Opens still running for this URI. The last one out answers for the hold. */
    inFlight: number;
    /** An open succeeded, and no open has since claimed the hold via `openUris`. */
