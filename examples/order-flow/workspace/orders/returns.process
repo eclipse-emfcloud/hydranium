@@ -4,6 +4,10 @@
 // `Order.status` has to update both.
 
 process Returns for Order {
+   /* Both comment forms are hidden terminals
+      and both survive a write back. A block
+      comment is the form that does NOT end
+      the line it sits on. */
    task Receive reads Order.id
    gateway Restockable
       yes -> Restock

@@ -161,6 +161,22 @@ process Fulfillment for Order {
 // trails the whole file
 `;
 
+/** {@link SOURCE}'s comments as `/* *\/` blocks, in the same four positions. */
+const BLOCK_COMMENT_SOURCE = `/* leads the whole file */
+
+process Fulfillment for Order {
+   /* leads task Pay */
+   task Pay writes Order.status = PAID
+   task Pick reads Order.id /* trails the Pick line */
+   /* separated by a blank line
+      from Ship, and spanning two lines */
+
+   task Ship
+   /* dangles after the last member */
+}
+/* trails the whole file */
+`;
+
 const URI_STRING = 'memory:///comments.process';
 
 /** The comment preserver's payload out of an extraction, for asserting on what was taken. */
@@ -1041,6 +1057,34 @@ describe('trivia preservation', () => {
       expect(onDisk).toContain('// explains why this process exists');
       expect(onDisk.endsWith('}\n')).toBe(true);
       expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(workspace.uri('orders/duplicated.process')))).toBeDefined();
+   });
+
+   it('places block comments, which unlike a line comment do not end their line', async () => {
+      // Every case above uses `//`, whose range runs to the end of the line. A
+      // `/* */` does not, so a splice that lands mid-line leaves live syntax to
+      // its right rather than commenting the remainder out — a different way for
+      // the same misplacement to go wrong, and the one the sample workspace
+      // never exercises.
+      expect(await writeBack(makeServices(), () => undefined, BLOCK_COMMENT_SOURCE)).toBe(
+         [
+            '/* leads the whole file */',
+            '',
+            'process Fulfillment for Order {',
+            '   /* leads task Pay */',
+            '   task Pay',
+            '      writes Order.status = PAID',
+            '   task Pick',
+            '      reads Order.id /* trails the Pick line */',
+            '   /* separated by a blank line',
+            '      from Ship, and spanning two lines */',
+            '',
+            '   task Ship',
+            '   /* dangles after the last member */',
+            '}',
+            '/* trails the whole file */',
+            ''
+         ].join('\n')
+      );
    });
 
    it('reports no comments and the ending for a document that carries none', async () => {
