@@ -3,9 +3,10 @@
 ## Status: alpha, pre-v0
 
 Hydranium is under active development and is **not yet published to npm**. Every
-package sits at version `0.0.0`. The public API is not frozen: names, module
-layout, service slots and DI bindings can and do change between commits, without
-a deprecation window.
+package sits on the `1.0.0-next` prerelease line, and that number is not a
+stability claim — "Stability and versioning" below says what it does and does not
+mean. The public API is not frozen: names, module layout, service slots and DI
+bindings can and do change between commits, without a deprecation window.
 
 What that means in practice:
 
