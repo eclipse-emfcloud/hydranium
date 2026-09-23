@@ -209,9 +209,10 @@ every change.
 6. **Keep it deterministic.** Fake time with `makeFakeClock` (anything routed
    through `services.Clock`); await with `waitFor` / `tick`; never a fixed sleep.
 7. **Green means the gate.** Before committing, `npm run check` must pass in
-   full, with **0 lint errors and 0 warnings**. Read the LAST line of the run,
-   not turbo's task count: turbo is the first element of a long `&&` chain, so
-   `Tasks: N successful` can print while a later clause reddens.
+   full, with **0 lint errors and 0 warnings**. Read the run's VERDICT line —
+   `✓ GATE PASSED` or `✗ GATE FAILED` — and not turbo's task count: turbo is the
+   first clause of a long chain, so `Tasks: N successful` can print while a later
+   clause reddens. A capture with no verdict line in it did not finish.
 
 ## Where things are
 

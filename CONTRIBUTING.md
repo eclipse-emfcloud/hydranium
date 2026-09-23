@@ -112,15 +112,17 @@ fixes.
 
 ## The gate
 
-`npm run check` is an `&&` chain, not a single command: `turbo run build lint
-typecheck:test test`, then `check:neutral`, `check:host-load`,
+`npm run check` is a chain of clauses, not a single command: `turbo run build
+lint typecheck:test test`, then `check:neutral`, `check:host-load`,
 `check:webview-csp`, `check:exports`, `check:glob-coverage`, `check:readme`,
 `check:readmes`, `check:init-provenance`, `check:deps`, `check:link-tags`,
 `check:headers`, `check:licenses` and `format:check`. The
 list here is a map, not the contract — read the chain out of `package.json`
-before relying on its extent. Turbo is only the first element, so read
-the END of the run rather than turbo's task count — `Tasks: N successful` can
-print while a later clause reddens.
+before relying on its extent. Turbo is only the first element, so turbo's task
+count is not the verdict — `Tasks: N successful` can print while a later clause
+reddens. The run ends in one line that is the verdict, `✓ GATE PASSED` or
+`✗ GATE FAILED` with the clause that decided it; if the capture has no such
+line, the run did not finish and its exit code is the only thing that knows.
 
 ## Testing
 

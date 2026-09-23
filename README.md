@@ -413,9 +413,12 @@ npm run lint
 npm run check          # the full pre-PR gate — see below
 ```
 
-`npm run check` is an `&&` chain rather than one command, and turbo is only its
-first clause. A later `check:*` script can redden after turbo has already
-printed `Tasks: N successful`, so read the END of the run, not turbo's summary.
+`npm run check` is a chain of clauses rather than one command, and turbo is only
+its first. A later `check:*` script can redden after turbo has already printed
+`Tasks: N successful`, so turbo's summary is not the verdict. The run closes with
+one line of its own — `✓ GATE PASSED` or `✗ GATE FAILED`, naming the clause that
+decided it — and that line is the one to read. Its ABSENCE means the run was cut
+short rather than that it passed.
 `scripts.check` in `package.json` is the enumeration in force, and the only one
 — [`CONTRIBUTING.md`](./CONTRIBUTING.md#the-gate) names the clauses and what
 each is for, but does not fix their order.

@@ -160,6 +160,31 @@ function selfTest() {
    }
 }
 
+/**
+ * The script names one gate hands to the gate runner, in order.
+ *
+ * The two gates are spelled as an argument list rather than as an `&&` chain
+ * because a chain has no way to SAY it failed: npm suppresses its own message
+ * for a failed `run`, so a chain's verdict is its exit code alone and a capture
+ * of a red run reads green. What matters HERE is only that the assembly stays
+ * written in the manifest, in a form this can read back — a clause list that
+ * moved into the runner would sit where nothing compares it against the halves.
+ */
+function gateClausesOf(script, scriptName) {
+   const match = /^node scripts\/run-gate\.mjs\s+(.+)$/.exec(script.trim());
+   if (!match) {
+      throw new Error(
+         `\`${scriptName}\` is no longer \`node scripts/run-gate.mjs <script>...\`, so the halves it assembles cannot be read: ${script}`
+      );
+   }
+   const named = match[1].trim().split(/\s+/);
+   const flag = named.find(clause => clause.startsWith('-'));
+   if (flag) {
+      throw new Error(`\`${scriptName}\` passes \`${flag}\`; this gate reads clauses positionally and would treat it as one.`);
+   }
+   return named;
+}
+
 /** The script names one `&&` chain of `npm run` clauses invokes, in order. */
 function clausesOf(script, scriptName) {
    return script.split('&&').map(clause => {
@@ -217,7 +242,7 @@ const problems = [
 // can lose a half to a typo and still exit 0 on a shorter chain.
 const assembled = { check: 'check:turbo check:rest', 'check:platform': 'check:turbo:platform check:rest:platform' };
 for (const [name, expected] of Object.entries(assembled)) {
-   const actual = clausesOf(manifest.scripts[name], name).join(' ');
+   const actual = gateClausesOf(manifest.scripts[name], name).join(' ');
    if (actual !== expected) {
       problems.push(
          `\`${name}\` should be \`${expected.split(' ').join('\` then \`')}\`, and is \`${actual.split(' ').join('\` then \`')}\`.`
