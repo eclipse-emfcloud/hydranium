@@ -175,13 +175,13 @@ By contributing, you agree that your contributions are licensed under the
 project's license: `MIT`.
 
 This project is hosted by the Eclipse Foundation, so contributing to it carries
-two requirements beyond that.
+one requirement beyond that.
 
 - **Sign the [Eclipse Contributor Agreement](https://www.eclipse.org/legal/eca/).**
   It is signed once, against an Eclipse Foundation account, and it covers every
-  Eclipse project. Use the same email address on the account as on your commits
-  — the check matches them, and a mismatch is the usual reason a pull request
-  from a signatory is still blocked.
-- **Sign off every commit** with `git commit -s`, which appends the
-  `Signed-off-by` line the agreement requires. It is per commit, not per pull
-  request, so a branch with one unsigned commit does not pass.
+  Eclipse project. The `eclipsefdn/eca` check resolves the author address of
+  each commit in a pull request to an Eclipse account and reports whether that
+  account has signed, so use the same address on the account as on your commits
+  — a mismatch is the usual reason a pull request from a signatory is still
+  blocked. The check's own status page lists the addresses it resolved, which
+  is where to look when it is unclear which one it saw.
