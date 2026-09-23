@@ -342,6 +342,22 @@ class RecordingTextDocuments {
       return undefined;
    }
 
+   /**
+    * This stub holds no synced documents, so `undefined` — "nothing open here to
+    * commit into" — is the truthful answer, and it routes `resyncDocument` down
+    * the same fallback a CLOSED document takes. That is the branch these tests
+    * are about; the open-document commit needs the real store, because what it
+    * commits into is the object the store holds and a stub holds none.
+    */
+   commitRepair(): { status: 'not-open' } {
+      return { status: 'not-open' };
+   }
+
+   /** Consistent with {@link commitRepair}: a stub with no synced documents. */
+   isOpen(): boolean {
+      return false;
+   }
+
    update(document: TextDocument, changes: { text: string }[], version: number): TextDocument {
       return TextDocument.create(document.uri, document.languageId, version, changes[changes.length - 1].text);
    }

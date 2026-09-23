@@ -332,13 +332,91 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       }
 
       const version = document.textDocument.version;
+      // Commit into the store's own document when the URI is open there, rather
+      // than into whichever text-document object this build is holding. The two
+      // are the same on the LSP path and are NOT when the document was built for
+      // an already-open URI through `fromString`: repairing only the build's copy
+      // leaves the store — the server's authority on what an open document says —
+      // on the unrepaired text, and the reconciling re-parse then redefines
+      // `textDocument` onto the store's object and discards the repair with it.
+      //
+      // Compared against the CST's own text, not against `document.textDocument`.
+      // That object IS the store's on the LSP path, so asking it whether the
+      // store still agrees compares the store with itself and can only ever say
+      // yes — the guard would be vacuous exactly where an editor race can happen.
+      // The CST's `fullText` is the text that actually produced this AST, which
+      // is the only thing a repair derived from it is valid against. A document
+      // with no CST (built from a model rather than parsed) has no better answer
+      // than the text it is carrying.
+      const parsedFrom = document.parseResult.value.$cstNode?.root.fullText ?? oldText;
+      const commit = this.textDocuments.commitRepair(document.textDocument.uri, parsedFrom, newText);
+      if (commit.status === 'stale') {
+         // An edit landed after the parse this repair came from, so the repair
+         // describes text the store has already replaced. Abandon it rather than
+         // persist or stage it: that edit drives a build of its own, which
+         // re-runs these rules against what the document actually says.
+         //
+         // Abandoning the WRITE is only half of it. The build carries on to its
+         // settled phase with whatever AST is registered, and every settled
+         // consumer reads that AST rather than the store — so leaving the rule's
+         // mutation in place would answer questions about this document from a
+         // parse of text nobody has. Reconciling discards it by re-reading the
+         // store, which is what the document now has to agree with.
+         await this.reconcileDocument(document, cancelToken);
+         return;
+      }
+
       // Keep the same version so HydraniumTextDocuments doesn't reject subsequent client edits.
       // Use manager.update so the `instanceof FullTextDocument` gate in the bare
       // `TextDocument.update` doesn't trip on adopter-custom text-document types.
-      const textDocument = this.textDocuments.update(document.textDocument, [{ text: newText }], version);
+      const textDocument =
+         commit.status === 'committed' ? commit.document : this.textDocuments.update(document.textDocument, [{ text: newText }], version);
 
       await this.syncCorrections(textDocument);
 
+      await this.reconcileDocument(document, cancelToken);
+
+      // Re-version against the REPAIRED text, after either branch. The repair is
+      // a content change the store has not seen: whatever reconciliation ran
+      // during the re-parse saw the text on disk, which in `'editor'` sync mode
+      // is the PRE-repair text. Leave the sequence describing that and the next
+      // open hashes the repair, finds a mismatch and steps the version again, so
+      // every based-on version taken from this build is stale before it is used.
+      // Falls back to the pre-re-parse number for a URI the store never tracked,
+      // where there is no sequence to advance; an OPEN document answers
+      // `undefined` and keeps the store's own version, which is not this
+      // method's to move.
+      //
+      // Deliberately NOT gated on cancellation, unlike the entry to this method:
+      // `syncCorrections` has already written or staged the repair by now, so a
+      // preempted build that skipped this would leave the sequence describing
+      // text that is no longer there.
+      //
+      // Gated on the document being closed, because the fallback restores a
+      // number this method captured off whatever object it started with — and
+      // for a separately created document that is its own seeded numbering, not
+      // the store's. Applying it to the store's document (which the re-parse has
+      // by then made `textDocument`) would roll the shared version backwards.
+      // The store's own answer for an open document is `undefined` either way.
+      if (!this.textDocuments.isOpen(document.textDocument.uri)) {
+         const reconciled = this.textDocuments.reconcileExternalContent(document.textDocument.uri, newText) ?? version;
+         if (document.textDocument.version !== reconciled) {
+            this.textDocuments.update(document.textDocument, [], reconciled);
+         }
+      }
+   }
+
+   /**
+    * Bring `document` back into agreement with the text it is supposed to
+    * describe, after a rule has mutated its AST.
+    *
+    * Used for a correction that was applied and for one that was abandoned,
+    * because the document is left inconsistent either way: applied, the text
+    * moved under the CST; abandoned, the AST carries a mutation the text never
+    * had. Both are the same question — re-read and re-derive — and the phase is
+    * what decides how far that has to go.
+    */
+   protected async reconcileDocument(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void> {
       if (document.state <= DocumentState.Parsed) {
          // Parsed-phase correction: re-parse only. The build pipeline still runs
          // IndexedContent → ComputedScopes → Linked → … on the fresh AST afterwards,
@@ -362,26 +440,6 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // build-phase listeners (which would re-enter integrity). The phase logic
          // stays in the builder, its proper home, rather than being duplicated here.
          await this.documentBuilder.reparseAndRelink(document, cancelToken);
-      }
-
-      // Re-version against the REPAIRED text, after either branch. The repair is
-      // a content change the store has not seen: whatever reconciliation ran
-      // during the re-parse saw the text on disk, which in `'editor'` sync mode
-      // is the PRE-repair text. Leave the sequence describing that and the next
-      // open hashes the repair, finds a mismatch and steps the version again, so
-      // every based-on version taken from this build is stale before it is used.
-      // Falls back to the pre-re-parse number for a URI the store never tracked,
-      // where there is no sequence to advance; an OPEN document answers
-      // `undefined` and keeps the store's own version, which is not this
-      // method's to move.
-      //
-      // Deliberately NOT gated on cancellation, unlike the entry to this method:
-      // `syncCorrections` has already written or staged the repair by now, so a
-      // preempted build that skipped this would leave the sequence describing
-      // text that is no longer there.
-      const reconciled = this.textDocuments.reconcileExternalContent(document.textDocument.uri, newText) ?? version;
-      if (document.textDocument.version !== reconciled) {
-         this.textDocuments.update(document.textDocument, [], reconciled);
       }
    }
 
