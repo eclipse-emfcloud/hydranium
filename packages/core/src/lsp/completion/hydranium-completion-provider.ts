@@ -7,9 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type AstNodeDescription, type ReferenceInfo, type Stream } from '@hydranium/langium';
+import { type AstNodeDescription, type LangiumDocument, type ReferenceInfo, type Stream } from '@hydranium/langium';
 import { DefaultCompletionProvider, type CompletionContext, type CompletionValueItem } from '@hydranium/langium/lsp';
-import type { CompletionItem, InsertReplaceEdit } from 'vscode-languageserver';
+import {
+   CompletionList,
+   type CancellationToken,
+   type CompletionItem,
+   type CompletionParams,
+   type InsertReplaceEdit,
+   type Position
+} from 'vscode-languageserver';
 import { type ReferenceCandidateProvider } from '../../langium/scope/reference-candidate-provider.js';
 import { type ServerLanguageServices } from '../../langium/language-module.js';
 
@@ -52,6 +59,14 @@ import { type ServerLanguageServices } from '../../langium/language-module.js';
  * elements. The provider owns that pipeline in one place, so the
  * text-editor dropdown and the protocol candidate picker stay in sync; this
  * class keeps only the LSP-specific {@link fillCompletionItem} upgrade.
+ *
+ * **A comment is not a completion site.** Langium's context builder reads the
+ * non-hidden token stream alone, so a cursor in a comment is indistinguishable
+ * from one in the whitespace between the tokens surrounding it: the grammar's
+ * follow-set goes out as keyword proposals, and none of them is filtered,
+ * because the characters the user typed belong to the hidden token and the
+ * prefix matched against is therefore empty. {@link isInsideComment} suppresses
+ * the request instead.
  */
 export class HydraniumCompletionProvider extends DefaultCompletionProvider {
    protected readonly candidateProvider: ReferenceCandidateProvider;
@@ -59,6 +74,71 @@ export class HydraniumCompletionProvider extends DefaultCompletionProvider {
    constructor(services: ServerLanguageServices) {
       super(services);
       this.candidateProvider = services.references.CandidateProvider;
+   }
+
+   /**
+    * Answer no proposals at all when the cursor is inside a comment.
+    *
+    * Suppressing the whole request is what makes the rule hold for every
+    * proposal kind at once. Filtering the built contexts instead has to catch
+    * each context kind the base builds separately, and a kind added upstream
+    * arrives unguarded.
+    *
+    * The list is marked incomplete so the client re-asks on the next keystroke
+    * and proposals resume the moment the cursor leaves the comment.
+    */
+   override async getCompletion(
+      document: LangiumDocument,
+      params: CompletionParams,
+      cancelToken?: CancellationToken
+   ): Promise<CompletionList | undefined> {
+      if (this.isInsideComment(document, params.position)) {
+         return CompletionList.create([], true);
+      }
+      return super.getCompletion(document, params, cancelToken);
+   }
+
+   /**
+    * Whether `position` falls in text a comment terminal claims.
+    *
+    * The two comment kinds part company at their far edge. A single-line
+    * comment runs to the line break, so a cursor at its end offset is still in
+    * prose and that offset counts as inside. A multi-line comment is
+    * terminated, so a cursor at its end offset has passed the terminator and is
+    * back in code. A cursor ON the opening delimiter is outside either way,
+    * that offset being a legal position for whatever token the comment
+    * displaced.
+    *
+    * The hidden token stream decides rather than the CST. A leaf lookup by
+    * offset misses the position a cursor reaches by typing prose into a
+    * trailing comment, because that comment ends AT the line break and
+    * whitespace is discarded before a CST node is built over it — so the
+    * lookup answers nothing exactly where proposals are least wanted.
+    *
+    * An adopter whose comment syntax carries completable content — a
+    * documentation tag naming a type — narrows this to return `false` over that
+    * region rather than replacing {@link getCompletion}.
+    */
+   protected isInsideComment(document: LangiumDocument, position: Position): boolean {
+      const text = document.textDocument.getText();
+      const offset = document.textDocument.offsetAt(position);
+      const multilineCommentRules = this.grammarConfig.multilineCommentRules;
+      for (const token of this.lexer.tokenize(text).hidden) {
+         if (token.startOffset >= offset) {
+            // Hidden tokens arrive in document order, so no later one reaches back over the cursor.
+            return false;
+         }
+         // `endOffset` is optional on the token type and the image is not, so
+         // the width comes from the image and needs no absent-value branch.
+         const endOffset = token.startOffset + token.image.length;
+         if (offset < endOffset) {
+            return true;
+         }
+         if (offset === endOffset && !multilineCommentRules.includes(token.tokenType.name)) {
+            return true;
+         }
+      }
+      return false;
    }
 
    /**

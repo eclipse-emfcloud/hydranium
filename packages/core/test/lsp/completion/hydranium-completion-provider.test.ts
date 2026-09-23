@@ -8,10 +8,18 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type AstNode, type AstNodeDescription, type ReferenceInfo, type Scope, stream, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   type AstNodeDescription,
+   type LangiumDocument,
+   type ReferenceInfo,
+   type Scope,
+   stream,
+   URI
+} from '@hydranium/langium';
 import { type CompletionContext, type CompletionValueItem } from '@hydranium/langium/lsp';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import type { CompletionItem, InsertReplaceEdit } from 'vscode-languageserver';
+import type { CompletionItem, CompletionParams, InsertReplaceEdit, Position } from 'vscode-languageserver';
 import { HydraniumCompletionProvider } from '../../../src/lsp/completion/hydranium-completion-provider.js';
 import { DefaultReferenceCandidateProvider } from '../../../src/langium/scope/reference-candidate-provider.js';
 import { type DescriptionTier } from '../../../src/langium/scope/scoped-ast-node-description.js';
@@ -25,12 +33,25 @@ function description(name: string, tier: DescriptionTier, path: string): AstNode
 
 /** Exposes the protected cross-reference candidate hook for testing. */
 class TestCompletionProvider extends HydraniumCompletionProvider {
+   /** Counts how far a request got: the base builds contexts only once the comment guard lets it through. */
+   builtContexts = 0;
+
    getReferenceCandidatesPublic(refInfo: ReferenceInfo, context: CompletionContext) {
       return this.getReferenceCandidates(refInfo, context);
    }
 
    fillCompletionItemPublic(context: CompletionContext, item: CompletionValueItem) {
       return this.fillCompletionItem(context, item);
+   }
+
+   isInsideCommentPublic(document: LangiumDocument, position: Position) {
+      return this.isInsideComment(document, position);
+   }
+
+   protected override buildContexts(): IterableIterator<CompletionContext> {
+      this.builtContexts++;
+      const none: CompletionContext[] = [];
+      return none[Symbol.iterator]();
    }
 }
 
@@ -154,6 +175,107 @@ describe('HydraniumCompletionProvider gathering delegates to the candidate pipel
          .toArray();
       expect(fromCandidate).toEqual(['A', 'B']);
       expect(fromCompletion).toEqual(fromCandidate);
+   });
+});
+
+describe('HydraniumCompletionProvider comment suppression', () => {
+   // A line comment at 17, six characters wide, so its end offset 23 is the
+   // line break; a block comment at 32, nine wide, so its end offset 41 is the
+   // first character past the terminator. Both kinds sit after code on their
+   // line, which is where a cursor reaches them by typing rather than by
+   // opening one.
+   const commentDocText = 'element Element1 // one\nelement /* two */ Element2';
+   const hiddenTokens = [
+      { startOffset: 17, image: '// one', tokenType: { name: 'SL_COMMENT' } },
+      { startOffset: 32, image: '/* two */', tokenType: { name: 'ML_COMMENT' } }
+   ];
+
+   function makeCommentProvider(): { provider: TestCompletionProvider; document: LangiumDocument; textDocument: TextDocument } {
+      const textDocument = TextDocument.create('memory://comment-test', 'plaintext', 1, commentDocText);
+      const services = makeNoopLanguageServices({
+         references: { ScopeProvider: {}, NameProvider: {} },
+         Grammar: {},
+         parser: {
+            CompletionParser: {},
+            // `hidden` is the only lexer output the guard reads; `tokens` stays
+            // empty because the base never runs when the guard fires.
+            Lexer: { tokenize: () => ({ tokens: [], hidden: hiddenTokens, errors: [] }) },
+            GrammarConfig: { nameRegexp: /\w/, multilineCommentRules: ['ML_COMMENT'] }
+         },
+         documentation: { DocumentationProvider: {} },
+         shared: { lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => true } }, AstReflection: {} }
+      });
+      const provider = new TestCompletionProvider(services);
+      return { provider, document: { textDocument } as unknown as LangiumDocument, textDocument };
+   }
+
+   function insideAt(offset: number): boolean {
+      const { provider, document, textDocument } = makeCommentProvider();
+      return provider.isInsideCommentPublic(document, textDocument.positionAt(offset));
+   }
+
+   it('leaves code positions alone', () => {
+      expect(insideAt(5)).toBe(false);
+   });
+
+   it('treats a cursor ON an opening delimiter as code', () => {
+      // Still a legal position for the token the comment displaced, for both kinds.
+      expect(insideAt(17)).toBe(false);
+      expect(insideAt(32)).toBe(false);
+   });
+
+   it('suppresses between the two characters of a line-comment delimiter', () => {
+      expect(insideAt(18)).toBe(true);
+   });
+
+   it('suppresses within comment prose of either kind', () => {
+      expect(insideAt(21)).toBe(true);
+      expect(insideAt(36)).toBe(true);
+   });
+
+   it('suppresses at the END of a line comment', () => {
+      // Typing at the tail of a trailing comment is how the unfiltered
+      // follow-set shows up, and an end-exclusive test would miss exactly here.
+      expect(insideAt(23)).toBe(true);
+   });
+
+   it('resumes on the line after a line comment', () => {
+      expect(insideAt(24)).toBe(false);
+   });
+
+   it('suppresses before a block comment terminator', () => {
+      expect(insideAt(40)).toBe(true);
+   });
+
+   it('resumes at the END of a block comment', () => {
+      // The asymmetry against the line-comment case: past `*/` the cursor is in
+      // code, so the same end offset that counts as inside for a line comment
+      // counts as outside here.
+      expect(insideAt(41)).toBe(false);
+   });
+
+   function completionAt(offset: number): { provider: TestCompletionProvider; result: Promise<unknown> } {
+      const { provider, document, textDocument } = makeCommentProvider();
+      const params = {
+         textDocument: { uri: 'memory://comment-test' },
+         position: textDocument.positionAt(offset)
+      } as CompletionParams;
+      return { provider, result: provider.getCompletion(document, params) };
+   }
+
+   it('answers an empty incomplete list without building contexts inside a comment', async () => {
+      const { provider, result } = completionAt(21);
+      const list = (await result) as { items: CompletionItem[]; isIncomplete: boolean };
+      expect(list.items).toEqual([]);
+      // Incomplete, so the client re-asks and proposals resume on leaving the comment.
+      expect(list.isIncomplete).toBe(true);
+      expect(provider.builtContexts).toBe(0);
+   });
+
+   it('delegates to the base outside a comment', async () => {
+      const { provider, result } = completionAt(5);
+      await result;
+      expect(provider.builtContexts).toBe(1);
    });
 });
 
