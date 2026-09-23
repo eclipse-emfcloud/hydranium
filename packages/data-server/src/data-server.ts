@@ -327,8 +327,13 @@ export interface DataServerOptions extends LogNameOptions {
    readonly latency?: LatencyCollector;
 }
 
-/** Fully-resolved variant — every field set, used internally after merging defaults. */
-interface ResolvedDataServerOptions {
+/**
+ * Fully-resolved variant of {@link DataServerOptions} — every field set, after
+ * merging defaults. Returned by the `protected`
+ * {@link DataServer.resolveOptions} and held on {@link DataServer.options}, so
+ * an adopter changing how defaults resolve has to name it.
+ */
+export interface ResolvedDataServerOptions {
    readonly subscriptionPhase: DocumentState;
    readonly fingerprintStrategy: FingerprintStrategy;
    readonly methodNamespace: string;

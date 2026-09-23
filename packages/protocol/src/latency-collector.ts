@@ -87,8 +87,13 @@ export interface LatencyReport {
  */
 export type LatencyRetention = { readonly kind: 'keep-all' } | { readonly kind: 'ring-buffer'; readonly maxSamplesPerMethod: number };
 
-/** Per-method state: retained samples (bounded in ring-buffer mode) plus lifetime totals. */
-interface MethodAccumulator {
+/**
+ * Per-method state: retained samples (bounded in ring-buffer mode) plus lifetime
+ * totals. The mutable tally behind {@link MethodLatency}, which is the derived
+ * report row. Held by the `protected` {@link LatencyCollector.durations}, so a
+ * subclass recording its own samples has to name it.
+ */
+export interface MethodLatencyTally {
    /** Retained durations for percentile estimation; capped in ring-buffer mode. Order is irrelevant (report sorts). */
    readonly samples: number[];
    /** Next slot to overwrite once the ring buffer is full (ring-buffer mode only). */
@@ -119,7 +124,7 @@ function percentile(sortedAscending: readonly number[], percent: number): number
  * deterministic on a fake clock.
  */
 export class LatencyCollector {
-   protected readonly durations = new Map<string, MethodAccumulator>();
+   protected readonly durations = new Map<string, MethodLatencyTally>();
    protected window: Stopwatch;
 
    constructor(

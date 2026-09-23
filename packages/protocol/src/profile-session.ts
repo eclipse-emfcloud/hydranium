@@ -62,7 +62,12 @@ export interface ProfileSession {
    records(): readonly ProfileRecord[];
 }
 
-interface ScopeFrame {
+/**
+ * One in-flight {@link ProfileSession.scope} call. Held on the `protected`
+ * {@link DefaultProfileSession.stack} and named by
+ * {@link DefaultProfileSession.closeFrame}, so a subclass has to name it too.
+ */
+export interface ProfileScopeFrame {
    readonly id: string;
    /** Session-stopwatch reading when this scope began. */
    readonly start: number;
@@ -78,7 +83,7 @@ interface ScopeFrame {
 export class DefaultProfileSession implements ProfileSession {
    /** Single monotonic timeline for the whole session; per-scope readings are deltas off it. */
    protected readonly sessionStopwatch: Stopwatch;
-   protected readonly stack: ScopeFrame[] = [];
+   protected readonly stack: ProfileScopeFrame[] = [];
    protected readonly entries = new Map<string, number[]>();
 
    constructor(
@@ -92,7 +97,7 @@ export class DefaultProfileSession implements ProfileSession {
    scope<T>(id: string, fn: () => Promise<T>): Promise<T>;
    scope<T>(id: string, fn: () => T): T;
    scope<T>(id: string, fn: () => T | Promise<T>): T | Promise<T> {
-      const frame: ScopeFrame = { id, start: this.sessionStopwatch.elapsedMs, childMs: 0 };
+      const frame: ProfileScopeFrame = { id, start: this.sessionStopwatch.elapsedMs, childMs: 0 };
       this.stack.push(frame);
       let result: T | Promise<T>;
       try {
@@ -118,7 +123,7 @@ export class DefaultProfileSession implements ProfileSession {
    }
 
    /** Pop `frame`, charge its full duration to the parent, and record its self-time. */
-   protected closeFrame(frame: ScopeFrame): void {
+   protected closeFrame(frame: ProfileScopeFrame): void {
       this.stack.pop();
       const duration = this.sessionStopwatch.elapsedMs - frame.start;
       const parent = this.stack[this.stack.length - 1];
