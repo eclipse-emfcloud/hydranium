@@ -59,6 +59,11 @@ const INERT = [
    { name: 'docs/**', why: 'contributor documentation; every package ships `lib` and `src` only', test: path => path.startsWith('docs/') },
    { name: 'examples/**', why: 'every example package is `private: true`', test: path => path.startsWith('examples/') },
    {
+      name: '.changeset/**',
+      why: 'release notes for a future stable cut, read by `changeset version` and packed by no manifest',
+      test: path => path.startsWith('.changeset/')
+   },
+   {
       name: '<root>/*.md',
       why: 'the repository root is not a published package, so its prose is packed nowhere',
       // Root-scoped, because npm includes a PACKAGE's README whatever its
@@ -146,6 +151,7 @@ const FIXTURES = [
    { name: "a package's README is packed and publishes", paths: ['packages/core/README.md'], publishable: true },
    { name: "the root's README is packed nowhere", paths: ['README.md'], publishable: false },
    { name: 'a doc page publishes nothing', paths: ['docs/concepts/architecture.md'], publishable: false },
+   { name: 'a changeset publishes nothing', paths: ['.changeset/reject-non-file-writes.md'], publishable: false },
    { name: 'an example source publishes nothing', paths: ['examples/order-flow/server/src/main.ts'], publishable: false },
    { name: 'a patch mutates an installed dependency and publishes', paths: ['patches/vitest+4.1.11.patch'], publishable: true },
    { name: 'the lockfile publishes', paths: ['package-lock.json'], publishable: true },
