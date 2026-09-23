@@ -13,6 +13,7 @@
   "hydranium/core/no-loadable-content": "Kein ladbarer Inhalt für {uri}",
   "hydranium/core/no-such-file": "Datei nicht gefunden: {uri}",
   "hydranium/core/no-such-path": "Datei oder Verzeichnis nicht gefunden: {uri}",
+  "hydranium/core/unsupported-write": "{uri} kann nicht geschrieben werden: Das URI-Schema verweist auf keinen Speicherort im Dateisystem",
   "hydranium/protocol/stale-based-update": "Veraltete Änderung für {uri}: erwartet v{expectedVersion}, der Server ist bei v{actualVersion}",
   "hydranium/data-server/no-active-profile": "Es läuft keine Profiling-Aufzeichnung; rufen Sie zuerst startProfiling auf.",
   "hydranium/glsp-server/diagram-readonly-parse-error": "Schreibgeschützt: Dieses Dokument enthält einen Syntaxfehler. Beheben Sie ihn, um das Diagramm wieder bearbeiten zu können.",

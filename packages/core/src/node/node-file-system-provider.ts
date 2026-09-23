@@ -18,7 +18,7 @@ import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { NO_SUCH_FILE, NO_SUCH_PATH } from '../langium/workspace/in-memory-file-system-provider.js';
+import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
 import { serveVirtualDocument, serveVirtualNode } from '../langium/workspace/virtual-document.js';
 
 /**
@@ -31,7 +31,10 @@ import { serveVirtualDocument, serveVirtualNode } from '../langium/workspace/vir
  *
  * Its read surface answers for registered virtual documents and refuses to
  * derive a disk path from a URI that names no disk location — see
- * {@link servesFromDisk}, which is the one place that judgement is made.
+ * {@link servesFromDisk}, which is the one place that judgement is made. Every
+ * method that derives an OS path is held to it, writes most of all: a read that
+ * skipped it would only mis-report, while a write would CREATE a file at a path
+ * the URI never named.
  *
  * Server-only (`@hydranium/core/node`): pulls `node:fs`. The portable `.`
  * entry binds `DefaultEmptyFileSystemProvider` by default, so a Node host
@@ -208,6 +211,17 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
     * only possible, which is what settles the trade.
     */
    async writeFile(uri: URI, content: string): Promise<void> {
+      // BEFORE the `mkdir`, and before any other OS path is derived. The read
+      // surface degrades to "nothing here" for a URI naming no disk location;
+      // a write has no such harmless degradation — `fsPath` would hand it a
+      // real path regardless of scheme, so an unguarded write does not fail,
+      // it CREATES a file (and the directories above it) somewhere unrelated.
+      // Rejecting is the only safe answer: a caller holding a `memory:` or
+      // `untitled:` document has nowhere for it to go, and inventing a
+      // destination from the path component is never what it meant.
+      if (!this.servesFromDisk(uri)) {
+         throw unsupportedWrite(uri);
+      }
       await fsp.mkdir(UriUtils.dirname(uri).fsPath, { recursive: true });
       const destination = this.realpath(uri)?.fsPath ?? uri.fsPath;
       const replaced = await replacedFile(destination);
@@ -240,6 +254,15 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
    }
 
    async mtimeMs(uri: URI): Promise<number | undefined> {
+      // Same rule as the read surface, and "unknown" is already the answer the
+      // caller handles — so a URI naming no disk location reports no mtime
+      // rather than the modification time of whatever occupies its `fsPath`.
+      // A stamp borrowed from an unrelated file is worse than none: the
+      // self-save registry keys on it to suppress a watcher echo, so a
+      // coincidental match would drop a real external change.
+      if (!this.servesFromDisk(uri)) {
+         return undefined;
+      }
       try {
          const stat = await fsp.stat(uri.fsPath);
          return stat.mtimeMs;
@@ -281,6 +304,11 @@ function noSuchFile(uri: URI): Error {
 /** The "nothing occupies this" rejection, for a URI naming no filesystem node. */
 function noSuchPath(uri: URI): Error {
    return new Error(NO_SUCH_PATH.format({ uri: uri.toString() }));
+}
+
+/** The "nowhere to put this" rejection, for a write to a URI with no disk backing. */
+function unsupportedWrite(uri: URI): Error {
+   return new Error(UNSUPPORTED_WRITE.format({ uri: uri.toString() }));
 }
 
 /** A virtual document's text as the bytes a binary read returns. */

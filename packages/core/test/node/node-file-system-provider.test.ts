@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
    chmodSync,
+   existsSync,
    linkSync,
    lstatSync,
    mkdirSync,
@@ -551,6 +552,82 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
          const absent = URI.file(join(root, 'absent.fake'));
          expect(provider.existsSync(absent)).toBe(false);
          expect(await provider.exists(absent)).toBe(false);
+      });
+   });
+});
+
+/**
+ * The WRITE counterpart of the read-surface suite, and the reason it is
+ * separate: `URI.fsPath` yields a path for any scheme, so a write that skips
+ * the disk-serving check does not fail on an unreachable URI — it CREATES a
+ * real file at whatever path the URI happens to map to. That is strictly worse
+ * than the read case, which only mis-reports.
+ *
+ * Every destination sits inside a disposable temp directory, so a regression
+ * that writes stays contained rather than landing somewhere a test run has no
+ * business touching. Each case asserts the `fsPath` collision as a
+ * PRECONDITION, for the same reason the read cases do: without it the
+ * "nothing was created" assertion passes having proved nothing.
+ *
+ * The target is nested one directory deep so the assertions also cover the
+ * `mkdir` that runs BEFORE the write — a guard placed after it would leave a
+ * directory tree behind for a URI naming no disk location.
+ */
+describe('DefaultFileSystemProvider write surface for URIs that name no disk location', () => {
+   let root: string;
+   let provider: DefaultFileSystemProvider;
+
+   beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), 'hydranium-write-surface-'));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+   });
+
+   afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+   });
+
+   // `memory:`/`untitled:` for the schemes an editor really produces for a
+   // document with no disk backing, `https:` for a remote one, and `virtual:`
+   // for the framework's own — the rule is the scheme not being `file:`.
+   for (const scheme of ['memory', 'untitled', 'https', 'virtual']) {
+      it(`refuses to write under ${scheme}: and leaves nothing on disk`, async () => {
+         const directory = join(root, `${scheme}-destination`);
+         const target = join(directory, 'written.fake');
+         const uri = URI.file(target).with({ scheme });
+
+         // Without this the assertions below are satisfied by a URI that never
+         // addressed the temp directory in the first place.
+         expect(uri.scheme).toBe(scheme);
+         expect(uri.fsPath).toBe(URI.file(target).fsPath);
+
+         await expect(provider.writeFile(uri, 'content that must never reach disk')).rejects.toThrow();
+
+         // Neither the file nor the parent `mkdir` creates.
+         expect(existsSync(target)).toBe(false);
+         expect(existsSync(directory)).toBe(false);
+      });
+
+      it(`reports no mtime under ${scheme}: rather than the occupant's`, async () => {
+         const occupied = join(root, `${scheme}-occupied.fake`);
+         writeFileSync(occupied, 'unrelated on-disk content');
+         const uri = URI.file(occupied).with({ scheme });
+         expect(statSync(uri.fsPath).isFile()).toBe(true);
+
+         expect(await provider.mtimeMs(uri)).toBeUndefined();
+      });
+   }
+
+   describe('an ordinary file: URI', () => {
+      it('still writes, creating the parent directory', async () => {
+         const target = join(root, 'real-destination', 'written.fake');
+         await provider.writeFile(URI.file(target), 'content');
+         expect(readFileSync(target, 'utf8')).toBe('content');
+      });
+
+      it('still reports an mtime', async () => {
+         const target = join(root, 'mtime.fake');
+         writeFileSync(target, 'content');
+         expect(await provider.mtimeMs(URI.file(target))).toBe(statSync(target).mtimeMs);
       });
    });
 });

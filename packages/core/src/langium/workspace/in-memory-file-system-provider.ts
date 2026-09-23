@@ -27,6 +27,23 @@ export const NO_SUCH_FILE = defineMessage('hydranium/core/no-such-file', 'No suc
 export const NO_SUCH_PATH = defineMessage('hydranium/core/no-such-path', 'No such file or directory: {uri}');
 
 /**
+ * A write addressed a URI the provider cannot reach on disk.
+ *
+ * Deliberately not a not-found code: {@link NO_SUCH_FILE} reports something
+ * missing, which a caller may reasonably answer by creating it — exactly the
+ * wrong reading here. The destination is not missing; the URI names no disk
+ * location at all, and no retry makes it one.
+ *
+ * Declared here rather than beside the Node provider that raises it, so the
+ * message catalog stays reachable from the portable `.` entry — the Node
+ * module pulls `node:fs` and is server-only.
+ */
+export const UNSUPPORTED_WRITE = defineMessage(
+   'hydranium/core/unsupported-write',
+   'Cannot write {uri}: the scheme names no location on disk'
+);
+
+/**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
  *
  * Keys are absolute URI strings unless {@link InMemoryFileSystemOptions.rootUri}
