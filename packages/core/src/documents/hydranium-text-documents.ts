@@ -130,6 +130,20 @@ export interface OpenDocument {
 }
 
 /**
+ * What {@link HydraniumTextDocuments.commitRepair} did with an integrity repair.
+ *
+ * Three outcomes rather than a document-or-nothing, because the two ways of
+ * getting nothing call for opposite responses: `not-open` means there is no
+ * store document to correct and the caller carries on with the one it holds,
+ * while `stale` means there IS one and it has moved past the text the repair
+ * was computed against — so carrying on would persist a correction over an edit
+ * that superseded it. Collapsing them lets the second read as permission to
+ * proceed, which is the failure this shape exists to make unrepresentable.
+ */
+export type RepairCommit<T extends TextDocument> =
+   { readonly status: 'committed'; readonly document: T } | { readonly status: 'stale' } | { readonly status: 'not-open' };
+
+/**
  * Where a URI's shared version sequence left off — written once at last-client
  * close, consulted at the next open so the sequence CONTINUES instead of
  * restarting at whatever version id the reopening client declares. One entry
@@ -900,6 +914,51 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       this.__versionSequences.set(key, stepped);
       this.logUri(key, `External content change while closed: sequence stepped to version ${stepped.version}`, 'debug');
       return stepped.version;
+   }
+
+   /**
+    * Commit an integrity repair into the OPEN document for `uri`, returning the
+    * document that now holds it, or `undefined` when there was nothing here to
+    * commit into.
+    *
+    * The one thing this exists to do is address the store BY URI. A repair
+    * reaches the resync as a text-document object, and that object is the
+    * store's own only on the LSP path; a document built for an already-open URI
+    * through `LangiumDocumentFactory.fromString` carries its own, so writing the
+    * repair into it corrects a copy the store does not know about and the editor
+    * never sees.
+    *
+    * `parsedFrom` is the text the repaired AST was parsed from, and a mismatch
+    * against the current content REFUSES the commit: the store has moved on,
+    * which means an editor change landed after that parse, and committing would
+    * overwrite a newer edit with a repair computed against text the user has
+    * already replaced. The build that change provokes recomputes the repair.
+    *
+    * Deliberately NOT compared by version. A separately created document seeds
+    * its own numbering, so requiring the two to agree would refuse every commit
+    * on the path this exists for. Content is the thing both sides can be held to.
+    *
+    * The version is KEPT rather than stepped, and no change event is fired: the
+    * repair rides the build already under way, so minting a version would
+    * invalidate the based-on token every watcher just took, and an event would
+    * re-enter the build that is mid-flight.
+    */
+   commitRepair(uri: DocumentUri, parsedFrom: string, repaired: string): RepairCommit<T> {
+      const key = this.documentKey(uri);
+      const document = this.__syncedDocuments.get(key);
+      if (document === undefined) {
+         return { status: 'not-open' };
+      }
+      if (document.getText() !== parsedFrom) {
+         this.logUri(key, 'Refuse repair commit: the open document moved on from the text the AST was parsed from', 'debug');
+         return { status: 'stale' };
+      }
+      // Reassigned rather than mutated in place: the default configuration
+      // updates and returns the SAME instance, but an adopter-supplied one may
+      // return a new object, and the store must end up holding whichever it is.
+      const updated = this.configuration.update(document, [{ text: repaired }], document.version);
+      this.__syncedDocuments.set(key, updated);
+      return { status: 'committed', document: updated };
    }
 
    getAuthor(uri: DocumentUri, version?: number): string | undefined {
