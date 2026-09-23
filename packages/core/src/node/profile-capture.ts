@@ -147,8 +147,14 @@ export function formatProfileReport(report: ProfileReport, label = 'Profile repo
    return lines.join('\n');
 }
 
-/** Minimal structural view of a `node:inspector` `Session` — its typed per-method overloads can't be called generically. */
-interface InspectorSessionLike {
+/**
+ * Minimal structural view of a `node:inspector` `Session` — its typed per-method
+ * overloads can't be called generically.
+ *
+ * Held by the `protected` {@link ProfileCapture.session}, so a subclass reaching
+ * the inspector names this rather than `Session`.
+ */
+export interface InspectorSessionLike {
    connect(): void;
    disconnect(): void;
    post(method: string, params: Record<string, unknown>, callback: (error: Error | null, result?: unknown) => void): void;

@@ -90,8 +90,13 @@ export interface HydraniumTextDocumentsOptions<T extends TextDocument = TextDocu
  *    separately-tested diff/apply-verify abstraction that owns its own baseline
  *    text; folding its storage here would couple a clean utility to this record
  *    for no real gain.
+ *
+ * Returned by the `protected` {@link HydraniumTextDocuments.trackingFor}, so an
+ * override has to name it. Restating the shape structurally instead compiles
+ * until a field is added here, and then fails at the adopter rather than at the
+ * change that caused it.
  */
-interface DocumentTracking {
+export interface DocumentTrackingRecord {
    /** Client ids currently holding this document open (multi-client membership). */
    readonly clients: Set<string>;
    /** Author of each version, sparse-indexed by the SHARED (server-assigned) version number. */
@@ -133,9 +138,10 @@ export interface OpenDocument {
  * Where a URI's shared version sequence left off — written once at last-client
  * close, consulted at the next open so the sequence CONTINUES instead of
  * restarting at whatever version id the reopening client declares. One entry
- * of {@link HydraniumTextDocuments.__versionSequences}.
+ * of {@link HydraniumTextDocuments.__versionSequences} — a `protected` field, so
+ * a subclass reading the map has to name what it holds.
  */
-interface VersionSequence {
+export interface VersionSequence {
    /** The shared version at last-client close. */
    readonly version: number;
    /** {@link contentHash} of the synced text at last-client close. */
@@ -162,9 +168,10 @@ interface ConnectionWithTextDocumentSync {
 /**
  * One text pushed to the LSP textual language client by
  * {@link HydraniumTextDocuments.applyEditToLanguageClient} whose echo has not
- * come back yet. One entry of {@link HydraniumTextDocuments.__pendingPushes}.
+ * come back yet. One entry of {@link HydraniumTextDocuments.__pendingPushes} —
+ * a `protected` field, so a subclass reading the queue has to name what it holds.
  */
-interface PendingPush {
+export interface PendingLanguageClientPush {
    /**
     * The text the client held BEFORE this push, and therefore the text its
     * echo addresses with its ranges. Wider than the baseline the push's edits
@@ -184,9 +191,10 @@ interface PendingPush {
 /**
  * What an incoming language-client change turns out to be once reconstructed
  * against the buffer its ranges address — the return of
- * {@link HydraniumTextDocuments.classifyLanguageClientChange}.
+ * {@link HydraniumTextDocuments.classifyLanguageClientChange}. That method is
+ * `protected`, so an override has to name every arm it can return.
  */
-type LanguageClientChangeOrigin =
+export type LanguageClientChangeOrigin =
    /** The client is reporting a text we pushed it. The synced document is already there. */
    | { readonly kind: 'echo' }
    /**
@@ -248,19 +256,19 @@ function contentHash(text: string): string {
  */
 export class HydraniumTextDocuments<T extends TextDocument = TextDocument> extends NormalizedTextDocuments<T> {
    /**
-    * Per-URI client-facing tracking ({@link DocumentTracking}): client
+    * Per-URI client-facing tracking ({@link DocumentTrackingRecord}): client
     * membership, version-author history, and integrity-staged pending content,
     * keyed by normalized URI. One record per URI so the last-client close clears
     * every axis atomically. The language-client diff baseline stays in
     * {@link __shadow} (its own abstraction); the parsed-document store stays in
     * the inherited `__syncedDocuments`.
     */
-   protected __documents = new Map<CanonicalUri, DocumentTracking>();
+   protected __documents = new Map<CanonicalUri, DocumentTrackingRecord>();
 
    /**
     * Per-URI shared-version continuity across close/reopen cycles
     * ({@link VersionSequence}), written at last-client close and consulted by
-    * the next first-client open. DELIBERATELY outside {@link DocumentTracking}:
+    * the next first-client open. DELIBERATELY outside {@link DocumentTrackingRecord}:
     * that record is deleted on last close, while the version sequence must
     * survive it — the shared version is a server-owned, monotonic,
     * advances-iff-content-changes counter that never resets while the server
@@ -277,7 +285,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    /**
     * Texts pushed to the LSP textual language client via
     * {@link applyEditToLanguageClient} whose echoes have not come back yet
-    * ({@link PendingPush}), keyed like the shadow by language-client URI.
+    * ({@link PendingLanguageClientPush}), keyed like the shadow by language-client URI.
     * Outbound pushes and inbound echoes are uncorrelated on the wire; this
     * FIFO is the explicit correlation, and it is what
     * {@link classifyLanguageClientChange} reconstructs against.
@@ -299,7 +307,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * a pathological echo that never arrives; the memory cost until then is
     * one pre-push text per in-flight push, for milliseconds.
     */
-   protected readonly __pendingPushes = new Map<LanguageClientUri, PendingPush[]>();
+   protected readonly __pendingPushes = new Map<LanguageClientUri, PendingLanguageClientPush[]>();
 
    /**
     * Tracked text content per URI for the LSP textual language client (Monaco / VS Code).
@@ -800,7 +808,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * two URIs for one physical file (a symlink path and its real path) into a
     * single registration — dedup at the editor layer, not just in
     * `LangiumDocuments`. The URI the client opened under is preserved separately
-    * for egress addressing (see {@link DocumentTracking.languageClientUris}). The
+    * for egress addressing (see {@link DocumentTrackingRecord.languageClientUris}). The
     * policy is always bound (the framework defaults it to
     * `DefaultDocumentUriPolicy`, where canonical ≡ syntactic normalize).
     */
@@ -821,7 +829,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /** Get-or-create the per-URI tracking record. `uri` must already be a {@link documentKey}. */
-   protected trackingFor(uri: CanonicalUri): DocumentTracking {
+   protected trackingFor(uri: CanonicalUri): DocumentTrackingRecord {
       let record = this.__documents.get(uri);
       if (!record) {
          record = { clients: new Set(), versionAuthors: [], clientVersions: new Map() };

@@ -62,8 +62,13 @@ export interface ResolvedRpcConnectionOptions<TClient extends object> {
    readonly lifecycle: RpcConnectionLifecycle;
 }
 
-/** One connection generation: its connection, its proxy, and its readiness. */
-interface Generation<TServer extends object> {
+/**
+ * One connection generation: its connection, its proxy, and its readiness.
+ *
+ * Named by the `protected` reconnect seams {@link RpcConnection.currentGeneration}
+ * and {@link RpcConnection.awaitReady}, so an override has to name it too.
+ */
+export interface RpcConnectionGeneration<TServer extends object> {
    readonly connection: Promise<MessageConnection>;
    readonly server: RpcProxy<TServer>;
    /** Set on first use; the shared readiness gate for this generation. */
@@ -93,7 +98,7 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
    protected readonly clientMethods: readonly (keyof TClient & string)[];
    protected readonly lifecycle: RpcConnectionLifecycle;
    /** The current generation, or `undefined` before the first request / after a teardown. */
-   protected generation?: Generation<TServer>;
+   protected generation?: RpcConnectionGeneration<TServer>;
    protected disposed = false;
    protected readonly portDisposeListener: { dispose(): void };
 
@@ -170,7 +175,7 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
    }
 
    /** The live generation, building one if there is none. */
-   protected currentGeneration(): Generation<TServer> {
+   protected currentGeneration(): RpcConnectionGeneration<TServer> {
       if (this.generation) {
          return this.generation;
       }
@@ -192,7 +197,7 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
    }
 
    /** Await the connection and the server's startup gate for one generation. */
-   protected async awaitReady(generation: Generation<TServer>): Promise<void> {
+   protected async awaitReady(generation: RpcConnectionGeneration<TServer>): Promise<void> {
       try {
          await generation.connection;
          await generation.server.waitForReady();
