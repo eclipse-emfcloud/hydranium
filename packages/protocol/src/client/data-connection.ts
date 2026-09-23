@@ -76,6 +76,18 @@ export class DataConnection<
    TClient extends object = DataClientProtocol<TTransfer>
 > extends RpcConnection<TServer, TClient> {
    protected readonly sessions = new Set<DataSession<TTransfer, TServer>>();
+   /**
+    * Holds a disposed session could not release, keyed `clientId` + `uri` so a
+    * repeated handover does not queue the same close twice.
+    *
+    * Retried on this connection's own activity rather than on a timer: every
+    * session operation asks for the proxy, so a shared connection with anything
+    * else going on supplies the occasions, and one with nothing going on has
+    * nobody whose documents the stale hold could affect.
+    */
+   protected readonly orphanedHolds = new Map<string, { readonly uri: string; readonly clientId: string }>();
+   /** Guards {@link releaseOrphanedHolds} against re-entering through its own proxy lookup. */
+   protected releasingOrphans = false;
 
    constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient>) {
       const [options = {}] = rest as [(DataConnectionOptions & Partial<DataConnectionOptionsWithMethods<TClient>>)?];
@@ -110,7 +122,12 @@ export class DataConnection<
     * widget class rather than per instance — satisfies the type and violates
     * this.
     *
-    * The check spans this connection only, so a head several connections reach
+    * And throws for an id whose previous session left a hold this connection is
+    * still trying to release. That release closes `(uri, clientId)`, so an id
+    * reissued while it is outstanding can have the new participant's hold closed
+    * out from under it. The id frees itself as soon as the release lands.
+    *
+    * The checks span this connection only, so a head several connections reach
     * can still be addressed twice under one id.
     */
    createSession(clientId: string): DataSession<TTransfer, TServer> {
@@ -121,12 +138,76 @@ export class DataConnection<
       if ([...this.sessions].some(session => session.clientId === clientId)) {
          throw new Error(`clientId '${clientId}' already identifies a live participant on this connection`);
       }
+      if ([...this.orphanedHolds.values()].some(hold => hold.clientId === clientId)) {
+         // A retry is still outstanding for this id, and it closes
+         // `(uri, clientId)` — which the server keys one hold per. Handing the
+         // id over now lets that close land on the NEW participant's hold
+         // instead, taking a document away from a session that opened it
+         // successfully. Nothing about that fails on its own: the document
+         // simply stops following, and the close that did it was issued for a
+         // participant already gone.
+         //
+         // Attempted first, so an id whose release has become possible is free
+         // by the next call rather than waiting for other traffic.
+         void this.releaseOrphanedHolds();
+         throw new Error(`clientId '${clientId}' has an unreleased hold on this connection and cannot identify a new participant yet`);
+      }
       const session = new DataSession<TTransfer, TServer>(clientId, {
-         connected: () => this.connected(),
-         releaseSession: released => this.sessions.delete(released)
+         connected: async () => {
+            const server = await this.connected();
+            // Unawaited: a session's own operation must not wait on, or fail
+            // for, the release of a hold another participant abandoned.
+            void this.releaseOrphanedHolds();
+            return server;
+         },
+         releaseSession: released => this.sessions.delete(released),
+         orphanHold: (uri, holder) => this.orphanHold(uri, holder)
       });
       this.sessions.add(session);
       return session;
+   }
+
+   /**
+    * Take over a `(uri, clientId)` hold a disposed session could not release.
+    *
+    * One attempt is made straight away, since whatever refused the session's
+    * close may already be over; a refusal leaves the entry for the next
+    * operation on this connection to retry.
+    */
+   protected orphanHold(uri: string, clientId: string): void {
+      this.orphanedHolds.set(`${clientId}\u0000${uri}`, { uri, clientId });
+      void this.releaseOrphanedHolds();
+   }
+
+   /**
+    * Try to close every hold handed over by a disposed session, keeping the ones
+    * the server still refuses.
+    *
+    * Errors are swallowed per entry: this runs off another participant's
+    * operation, which has no interest in an unrelated release and no caller to
+    * surface it to. A hold that survives every attempt is released by the
+    * server's connection-close cleanup.
+    */
+   protected async releaseOrphanedHolds(): Promise<void> {
+      if (this.releasingOrphans || this.orphanedHolds.size === 0 || this.disposed) {
+         return;
+      }
+      this.releasingOrphans = true;
+      try {
+         const server = await this.connected();
+         for (const [key, hold] of [...this.orphanedHolds]) {
+            try {
+               await server.closeModelDocument({ uri: hold.uri, clientId: hold.clientId });
+               this.orphanedHolds.delete(key);
+            } catch {
+               // Kept for the next occasion.
+            }
+         }
+      } catch {
+         // No proxy to release through; the entries wait for one.
+      } finally {
+         this.releasingOrphans = false;
+      }
    }
 
    /**
@@ -139,6 +220,10 @@ export class DataConnection<
          session.detach();
       }
       this.sessions.clear();
+      // Dropped rather than closed, for the same reason the sessions detach: the
+      // server releases every hold on a connection it sees close, and the close
+      // would travel over the connection being disposed.
+      this.orphanedHolds.clear();
       super.dispose();
    }
 }

@@ -64,7 +64,35 @@ function document(uri: string): unknown {
  */
 interface ServerBehaviour {
    readonly watchGate?: Promise<void>;
-   readonly failClose?: boolean;
+   /** Mutable, so a test can refuse a close and then let a later retry through. */
+   failClose?: boolean;
+   /**
+    * Make `watchModelDocument` reject. Mutable and read per call, so a test can
+    * let one open succeed and fail the next — the shape that decides whether a
+    * rollback closes a hold this attempt took or one that predated it.
+    */
+   failWatch?: boolean;
+   /**
+    * Reject only the next `n` watch calls, counting down as they arrive. A
+    * boolean cannot express the overlapping case: both opens are in flight
+    * before either handler runs, so flipping a flag between the two calls
+    * changes it long before the first one reads it.
+    */
+   failNextWatches?: number;
+   /**
+    * Reject `openModelDocument` from the given call number onward (1-based), so
+    * a test can let one open take its hold and fail the next outright. An open
+    * that fails has no hold of its own and no rollback path, which is what makes
+    * it the peer a deferring rollback cannot rely on.
+    */
+   failOpenFromCall?: number;
+   /**
+    * Holds the OPEN handler open for the calls {@link failOpenFromCall} selects.
+    * Without it the second open rejects before the first open's watch has even
+    * been issued, so the two never actually overlap and the test proves nothing
+    * about concurrency — it just happens to resolve in the safe order.
+    */
+   readonly openGate?: Promise<void>;
 }
 
 /** Bind a server that records the `(method, uri, clientId)` of every call. */
@@ -76,12 +104,28 @@ function recordingServer(connection: MessageConnection, behaviour: ServerBehavio
          calls.push({ method, uri: args.uri, clientId: args.clientId });
          return document(args.uri);
       };
+   let openCalls = 0;
    const target = {
       waitForReady: async (): Promise<void> => undefined,
-      openModelDocument: record('open'),
+      openModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         openCalls += 1;
+         if (behaviour.failOpenFromCall !== undefined && openCalls >= behaviour.failOpenFromCall) {
+            await behaviour.openGate;
+            throw new Error('open refused');
+         }
+         return record('open')(args);
+      },
       watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          await behaviour.watchGate;
-         return record('watch')(args);
+         const result = await record('watch')(args);
+         if (behaviour.failNextWatches !== undefined && behaviour.failNextWatches > 0) {
+            behaviour.failNextWatches -= 1;
+            throw new Error('watch refused');
+         }
+         if (behaviour.failWatch) {
+            throw new Error('watch refused');
+         }
+         return result;
       },
       closeModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          const result = await record('close')(args);
@@ -389,6 +433,254 @@ describe('DataConnection sessions', () => {
          expect(port.reported).toEqual([{ error: failure, message: reported }]);
       } finally {
          dispose();
+      }
+   });
+});
+
+/**
+ * An open that fails halfway.
+ *
+ * `openDocument` takes a server-side hold and then starts the watch, so a watch
+ * that rejects leaves the hold standing with nothing tracking it: the URI is
+ * registered only once BOTH calls return, so `dispose` cannot release what it
+ * cannot see. The connection's own close-time cleanup eventually collects it,
+ * which is no help to a panel disposed while its peers keep the connection
+ * open — the hold then outlives the participant for as long as the connection
+ * lives.
+ *
+ * The rollback is therefore part of the open, not of disposal, and the
+ * assertions are about what the SERVER received: a hold it never releases is
+ * the failure, and only the wire shows that.
+ */
+describe('DataSession.openDocument when the watch fails', () => {
+   it('closes the hold the failed open took, and rejects', async () => {
+      const { connection, calls, dispose } = harness({ failWatch: true });
+      try {
+         const panel = connection.createSession('panel');
+
+         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
+         await waitFor(() => closes(calls).length > 0);
+
+         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('leaves a second session on the same connection holding its own document', async () => {
+      const { connection, calls, dispose } = harness({ failWatch: true });
+      try {
+         const tree = connection.createSession('tree');
+         const panel = connection.createSession('panel');
+
+         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
+         await waitFor(() => closes(calls).length > 0);
+
+         // The rollback is scoped to the failing session's own (uri, clientId).
+         expect(closes(calls).every(call => call.clientId === 'panel')).toBe(true);
+         expect(closes(calls).some(call => call.clientId === 'tree')).toBe(false);
+         // And the connection is still usable by the session that did not fail.
+         expect(tree.isOwnEcho('tree')).toBe(true);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the URI tracked for dispose to retry when the rollback close also fails', async () => {
+      const { connection, calls, dispose } = harness({ failWatch: true, failClose: true });
+      try {
+         const panel = connection.createSession('panel');
+         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
+         await waitFor(() => closes(calls).length > 0);
+         const afterRollback = closes(calls).length;
+
+         // A rollback whose close was refused must not drop the URI: the hold is
+         // still there, and disposal is the only thing left that would release it.
+         panel.dispose();
+         await waitFor(() => closes(calls).length > afterRollback);
+
+         expect(closes(calls).length).toBeGreaterThan(afterRollback);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('does not strand the URI in a set nothing reads when the session is already disposed', async () => {
+      // The rollback close can land after a `dispose` that has already drained
+      // `openUris`. Tracking the URI then reads as handled and is not: nothing
+      // will look at that set again, so the entry is a leak wearing the shape of
+      // a retry. The honest outcome is that the server's connection-close
+      // cleanup owns it, and the session says so by not tracking it.
+      const { connection, calls, dispose } = harness({ failWatch: true, failClose: true });
+      try {
+         const panel = connection.createSession('panel');
+         const opening = panel.openDocument({ uri: URI_A });
+         panel.dispose();
+         await expect(opening).rejects.toThrow(/watch refused/);
+         await tick(5);
+
+         // The hold is the thing that matters, so the release must have been
+         // ATTEMPTED on the wire — a session that only tidied its own bookkeeping
+         // would have an empty `openUris` while leaving the server holding it.
+         expect(closes(calls)).toContainEqual({ method: 'close', uri: URI_A, clientId: 'panel' });
+         const tracked = panel as unknown as { openUris: Set<string> };
+         expect([...tracked.openUris]).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('hands a hold it could not release to the connection, which retries it', async () => {
+      // A disposed session has drained and will not look again, so a rollback
+      // close that is REFUSED has nobody left to answer for the hold. Leaving it
+      // to the server's connection-close cleanup means it survives for as long as
+      // the connection does, which on a shared connection is the whole session of
+      // every other participant. The connection outlives the session and owns the
+      // wire, so it is what can still release it.
+      const behaviour: ServerBehaviour = { failWatch: true, failClose: true };
+      const { connection, calls, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel');
+         const opening = panel.openDocument({ uri: URI_A });
+         panel.dispose();
+         await expect(opening).rejects.toThrow(/watch refused/);
+         await waitFor(() => closes(calls).length > 0);
+         const attempts = closes(calls).filter(call => call.uri === URI_A).length;
+
+         // Whatever refused the close has passed. Any later activity on the
+         // shared connection is an opportunity to retry.
+         behaviour.failClose = false;
+         behaviour.failWatch = false;
+         const tree = connection.createSession('tree');
+         await tree.openDocument({ uri: URI_B });
+         await waitFor(() => closes(calls).filter(call => call.uri === URI_A).length > attempts);
+
+         expect(closes(calls).filter(call => call.uri === URI_A && call.clientId === 'panel').length).toBeGreaterThan(attempts);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('refuses to mint a session under an id that still owes an orphaned hold', async () => {
+      // The pending retry closes `(uri, clientId)`, and the server keys one hold
+      // per that pair. Handing the same id to a new participant lets that close
+      // land on ITS hold instead — the document goes out from under a session
+      // that opened it successfully, and the close that did it was issued on
+      // behalf of a participant already gone.
+      const behaviour: ServerBehaviour = { failWatch: true, failClose: true };
+      const { connection, calls, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel');
+         const opening = panel.openDocument({ uri: URI_A });
+         panel.dispose();
+         await expect(opening).rejects.toThrow(/watch refused/);
+         await waitFor(() => closes(calls).length > 0);
+
+         expect(() => connection.createSession('panel')).toThrow(/unreleased hold/);
+
+         // The reservation lasts exactly as long as the debt: once the release
+         // lands, nothing is left that could close on the id's behalf.
+         behaviour.failClose = false;
+         behaviour.failWatch = false;
+         const tree = connection.createSession('tree');
+         await tree.openDocument({ uri: URI_B });
+         await waitFor(() => {
+            try {
+               connection.createSession('panel').dispose();
+               return true;
+            } catch {
+               return false;
+            }
+         });
+      } finally {
+         dispose();
+      }
+   });
+
+   it('releases the hold when a concurrent open of the same URI fails before taking one', async () => {
+      // The deferring rollback assumes the peer it defers to will either keep the
+      // hold or release it. An open that FAILS does neither: it never took a hold
+      // of its own, so it has nothing to roll back, and the hold the first open
+      // took is left with nobody who believes they own it.
+      let releaseSecondOpen = (): void => undefined;
+      const openGate = new Promise<void>(resolve => {
+         releaseSecondOpen = resolve;
+      });
+      const behaviour: ServerBehaviour = { failNextWatches: 1, failOpenFromCall: 2, openGate };
+      const pair = makeDuplexConnectionPair();
+      const calls = recordingServer(pair.left, behaviour);
+      const port = makeFakeDataPort({ connect: () => pair.right });
+      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
+      try {
+         const panel = connection.createSession('panel');
+         const first = panel.openDocument({ uri: URI_A });
+         const second = panel.openDocument({ uri: URI_A });
+
+         // The first open's watch fails while the second is STILL in flight, so
+         // the first sees a peer it could defer to. Only then does that peer fail.
+         await expect(first).rejects.toThrow(/watch refused/);
+         releaseSecondOpen();
+         await expect(second).rejects.toThrow(/open refused/);
+         await tick(5);
+
+         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
+      } finally {
+         connection.dispose();
+         pair.dispose();
+      }
+   });
+
+   it('does not close a hold a concurrent open of the same URI is establishing', async () => {
+      // Two opens of one URI overlap, and both read "not held yet" on the way
+      // in. The server keys a hold per `(uri, clientId)`, so a rollback issued
+      // by the failing one releases the hold the succeeding one is relying on —
+      // and the document goes out from under a caller whose open returned fine.
+      const behaviour: ServerBehaviour = {};
+      const pair = makeDuplexConnectionPair();
+      const calls = recordingServer(pair.left, behaviour);
+      const port = makeFakeDataPort({ connect: () => pair.right });
+      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
+      try {
+         const panel = connection.createSession('panel');
+         // Both launched before either is awaited, so both read "not held yet".
+         // Only the first watch to arrive rejects, which is the failing open's.
+         behaviour.failNextWatches = 1;
+         const failing = panel.openDocument({ uri: URI_A });
+         const succeeding = panel.openDocument({ uri: URI_A });
+
+         await expect(failing).rejects.toThrow(/watch refused/);
+         await succeeding;
+         await tick(5);
+
+         expect(closes(calls)).toEqual([]);
+      } finally {
+         connection.dispose();
+         pair.dispose();
+      }
+   });
+
+   it('does not close a hold the session already had when a repeat open fails', async () => {
+      const behaviour: ServerBehaviour = {};
+      const pair = makeDuplexConnectionPair();
+      const calls = recordingServer(pair.left, behaviour);
+      const port = makeFakeDataPort({ connect: () => pair.right });
+      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
+      try {
+         const panel = connection.createSession('panel');
+         // First open succeeds, so the session holds the URI for real.
+         await panel.openDocument({ uri: URI_A });
+
+         // A second open of the SAME URI fails at the watch. Rolling that back
+         // with a close would release the hold the first open established, which
+         // the server keys per (uri, clientId) and cannot tell apart.
+         behaviour.failWatch = true;
+         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
+         await tick(5);
+
+         expect(closes(calls)).toEqual([]);
+      } finally {
+         connection.dispose();
+         pair.dispose();
       }
    });
 });
