@@ -174,6 +174,7 @@ export async function measureModelMemory(options: MeasureModelMemoryOptions): Pr
       result.churnGrowthBytes = growth;
       const verdict = growth > 5 * 1024 * 1024 ? 'POSSIBLE RETENTION' : 'stable (no leak)';
       log(`Rebuild churn growth ${Format.bytes(growth)} over ${editCycles} cycles - ${verdict}`);
+      log(`Documents after churn: ${shared.workspace.LangiumDocuments.all.toArray().length}`);
    }
 
    if (options.writeSnapshot) {

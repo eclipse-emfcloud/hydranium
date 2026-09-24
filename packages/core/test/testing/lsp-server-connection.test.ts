@@ -289,3 +289,28 @@ describe('makeLspServerConnection applyEdit', () => {
       }
    });
 });
+
+describe('makeLspServerConnection wire', () => {
+   it('delivers a message sent before the server listens, and counts it', async () => {
+      const wire = makeLspServerConnection();
+      try {
+         const received: unknown[] = [];
+         // Sent while nothing reads the client-to-server stream: the wire has
+         // to buffer it, the way a real transport does, until `listen()`.
+         await wire.client.sendNotification('test/early', { value: 1 });
+         const sentBytes = wire.wireBytes().clientToServer;
+         expect(sentBytes).toBeGreaterThan(0);
+
+         wire.serverConnection.onNotification('test/early', params => {
+            received.push(params);
+         });
+         wire.serverConnection.listen();
+         await waitFor(() => received.length > 0, { message: 'the early notification was never delivered' });
+
+         expect(received).toEqual([{ value: 1 }]);
+         expect(wire.wireBytes()).toEqual({ clientToServer: sentBytes, serverToClient: 0, total: sentBytes });
+      } finally {
+         wire.dispose();
+      }
+   });
+});

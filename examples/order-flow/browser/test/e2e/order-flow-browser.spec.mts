@@ -161,6 +161,8 @@ const PROPERTIES_HEADING = 'h3';
  */
 const SYNTAX_ERROR_TEXT = 'nonsense';
 
+const REPAIRED_STORE_SIGNATURE = 'Entity:ShipmentLog|Entity:ShipmentLog__1';
+
 /**
  * The tool palette's collapse toggle.
  *
@@ -744,6 +746,38 @@ test.describe('order-flow in a web worker', () => {
       //    value only the worker can compute.
       expect(workers.filter(url => url.endsWith('/out/order-flow-worker.js'))).toHaveLength(1);
       expect(workers.filter(url => url.endsWith('/out/monaco-editor-worker.js'))).toHaveLength(1);
+   });
+
+   test('an integrity repair reaches the visible editor and matches the data head', async ({ page }) => {
+      await page.goto('/');
+      const documentRow = page.locator('#document-list .document-row').filter({ hasText: 'audit-leak' });
+      await documentRow.click();
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/audit-leak.domain');
+      await expect(page.locator('#selected-editor .view-lines')).toContainText('entity ShipmentLog {');
+
+      await page.locator('#selected-editor .view-line').last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('\nentity ShipmentLog {\n}\n');
+
+      // The store oracle is the transfer model's declaration signature, not a
+      // substring match on the editor. A missing workspace/applyEdit handler
+      // leaves the store repaired while the visible buffer stays duplicated.
+      await expect(page.locator('[data-report="data-head"]')).toHaveAttribute('data-store-signature', REPAIRED_STORE_SIGNATURE);
+      const visibleLines = page.locator('#selected-editor .view-line');
+      // Keep this as a rendered-line check rather than reading the whole Monaco
+      // buffer: the latter is vulnerable to DOM ordering and virtualization.
+      // The exact count also catches broad visible corruption; comment contents
+      // are intentionally covered by the in-process document tests instead.
+      await expect(visibleLines).toHaveCount(15);
+      await expect(visibleLines.filter({ hasText: 'entity ShipmentLog {' })).toHaveCount(1);
+      await expect(visibleLines.filter({ hasText: 'stamp: AuditStamp' })).toHaveCount(1);
+      await expect(visibleLines.filter({ hasText: 'entity ShipmentLog__1 {}' })).toHaveCount(1);
+
+      // The open editor is dirty, while storage still has no saved edit. In the
+      // browser host that is the observable boundary for silent sync: the repair
+      // reached the open buffer and did not rewrite the persisted workspace.
+      await expect(page.locator('#selected-editor-title')).toHaveClass(/is-dirty/);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', FIRST_VISIT);
    });
 
    test('completion walks the dependent scope chain', async ({ page }) => {

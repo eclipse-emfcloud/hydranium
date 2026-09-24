@@ -121,6 +121,54 @@ the rest of the tier's traps, in
 npm test -w @hydranium/example-order-flow-server   # includes test/smoke/ (stdio LSP)
 ```
 
+### Packed consumer smoke (on demand)
+
+```bash
+npm run check:packed-consumer
+```
+
+This builds and packs the server-side framework packages, installs their
+tarballs into a disposable project outside the npm workspace, compiles the
+bookstore server with `NodeNext`, opens a document over LSP and expects it to
+publish no diagnostics, then requests its model over the data socket. It applies the documented `vscode-jsonrpc` patch in the consumer's
+own `postinstall`, then checks the resolved versions and single-copy Langium and
+JSON-RPC installs. Run it when changing package exports, peers, the patch, or
+server bootstrap. It is separate from the regular gate because it performs a
+fresh npm install. Set `HYDRANIUM_KEEP_PACKED_CONSUMER=1` to inspect the
+disposable project after a failure.
+
+The package-file assertion has a deliberate negative control. After a build,
+run `node scripts/check-packed-consumer.mjs --negative-missing-package-file`;
+it must fail with `consumer package @hydranium/core is missing or installed
+through a symlink`. This confirms the check reaches the install-shape assertion
+rather than merely completing the consumer smoke.
+
+### Published prerelease baseline smoke
+
+```bash
+npm run check:published-baseline
+```
+
+This resolves the current published prerelease from npm, installs the same
+server-side packages at that exact version into a fresh consumer, and runs the
+same TypeScript, LSP, and data-server checks. It is opt-in because it depends
+on registry availability and the current published prerelease. The consumer
+source is this tree's bookstore server, so an example already using an
+unpublished API fails it without any published package being at fault.
+
+### Published prerelease upgrade smoke
+
+```bash
+npm run check:prerelease-upgrade
+```
+
+This installs the prerelease the `latest` dist-tag names into a disposable
+consumer, replaces those dependencies with the candidate package tarballs, then
+compiles and runs the LSP and data-server smoke against the candidates.
+Resolution, migration, and runtime failures are reported at their respective
+phases. The baseline is resolved per run and printed; set
+`HYDRANIUM_UPGRADE_FROM` to that version to repeat a failure against it.
+
 ### Audits — on demand, NOT CI gates
 
 ```bash
@@ -132,6 +180,54 @@ npm run bench -w @hydranium/example-order-flow-server   # vitest bench, perf bas
 These are deliberately kept out of `turbo` / `npm test` / `npm run check`. Run
 them when you want a coverage map (mutation) or a perf number (bench), not on
 every change.
+
+The open-document integrity CST assertions have a focused red control: with
+the post-commit `reconcileDocument` call in `DefaultIntegrityService`
+temporarily disabled, `integrity-open-document-repair.test.ts` fails in both
+sync modes on the CST-versus-store assertion. Restore the call before any other
+run; this control checks that the assertion reaches the reconciliation boundary
+and is not merely reading the already-correct AST.
+
+The browser's visible-editor integrity case has its own red control: temporarily
+make the page's `workspace/applyEdit` handler a no-op. The data-head declaration
+signature still reaches `Entity:ShipmentLog__1`, but the selected Monaco buffer
+stays duplicated, so the exact visible declaration assertions fail. Restore the handler
+before other L5 runs; this distinguishes a store-only repair from one that reaches
+the editor.
+
+### Lifecycle failure and rollback controls
+
+The lifecycle transitions are covered where their owner lives: snapshot
+rollback (`packages/data-server/test/data-server.test.ts`), watch/close rollback
+and retry (`packages/protocol/test/client/data-connection.test.ts`),
+workspace/applyEdit rejection and shadow recovery
+(`packages/core/test/documents/hydranium-text-documents.test.ts`), stale
+update/save conflicts (`packages/core/test/langium/model-service/model-service.test.ts`),
+and save-write propagation
+(`packages/core/test/langium/workspace/persistent-file-system-provider.test.ts`).
+These are framework-owned transitions; a caller-level retry test would
+duplicate policy that Hydranium deliberately leaves to adopters.
+
+### Cross-head coherence controls
+
+`examples/order-flow/server/test/coherence.integration.test.ts` covers the
+shared LSP/data/GLSP tree: a data write an LSP edit overtook is refused with a
+typed conflict, per-client close ownership and watcher cleanup, reconnect, and
+convergence. A disconnect while a write is in flight is a separate case,
+because the client cannot see the server's answer: `vscode-jsonrpc` rejects
+every pending request when its connection is disposed. That test holds the
+write on the server until the transport is gone, then asserts on the server's
+own outcome. Its red control: send the held write with the current version as
+`basedOn` instead of the stale one. The released write then applies, and the
+assertion that the server answered with a conflict fails.
+
+Teardown is quiet because the harness attaches the way a server entry point
+does: its connection carries `withHydraniumLspFeatures`, and
+`startLanguageServer` guards Langium's fire-and-forget diagnostics publish.
+Both drop only a send whose peer is already gone. A quiet run is still not
+proof of a clean one: once a services tree exists in the worker, the workspace
+manager's process-level `unhandledRejection` listener logs a genuine rejection
+rather than failing the test, and Vitest does not report it. Read the log.
 
 ## What to do when adding tests
 

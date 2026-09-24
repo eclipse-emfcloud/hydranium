@@ -1035,18 +1035,20 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
-    * Stages integrity-updated content for a closed document.
+    * Stages integrity-updated content for a document no editor holds.
     *
     * When `workspace/applyEdit` targets a closed file, the client opens it from
     * disk (stale) and sends `didOpen` before applying the edit. This staged
     * content is consumed by {@link notifyDidOpenTextDocument} to replace the
     * stale disk text, preventing a brief revert of the integrity update.
     *
-    * Not cleared on close: pending content is only staged for already-closed
-    * documents (the integrity service checks `isOpenInLanguageClient` first), so
-    * a close → stage → open cycle cannot occur. The only scenario where an
-    * entry lingers is if `workspace/applyEdit` fails and the file is never
-    * opened — the memory cost is one serialised string per URI.
+    * Only a FIRST open consumes it. The integrity service stages whenever the
+    * URI is not open in the language client, which includes a URI held only
+    * through another head; an editor attaching to that URI joins the existing
+    * entry and never reads the stage, and the last close discards it with the
+    * tracking record. For a closed URI an entry lingers only if
+    * `workspace/applyEdit` fails and the file is never opened — the memory cost
+    * is one serialised string per URI.
     */
    stagePendingContent(uri: DocumentUri, text: string): void {
       this.trackingFor(this.documentKey(uri)).pendingContent = text;

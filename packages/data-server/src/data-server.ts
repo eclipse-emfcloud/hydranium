@@ -605,10 +605,10 @@ export class DataServer<
    // no override on DataServer is needed.
 
    async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      // Register the editor session (idempotent — `ModelService.open` refreshes
-      // an already-open document rather than re-opening), then return the built
-      // state at the configured target phase. The one-shot snapshot; subsequent
-      // build-phase events arrive via `watchModelDocument`.
+      // Register the editor session (idempotent — an already-open document is
+      // attached without rebuilding), then return a fresh snapshot at the
+      // configured target phase. Subsequent build-phase events arrive via
+      // `watchModelDocument`.
       await this.modelService.open(args);
       // Record the hold so `dispose` can release it for a client that never
       // closes. Keyed by the URI as given, because that is what `close` takes.

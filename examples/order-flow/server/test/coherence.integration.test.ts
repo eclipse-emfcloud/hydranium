@@ -59,7 +59,11 @@ import {
 import { NodeFileSystem } from '@hydranium/core/node';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { DocumentState, URI } from '@hydranium/langium';
+import { Deferred, isConflictError, type TransferDocument } from '@hydranium/protocol';
+import type { TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
+import { ErrorCodes } from 'vscode-jsonrpc';
 import { Diagnostic, type PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../src/glsp/order-flow-process-diagram-types.js';
 import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
@@ -96,6 +100,8 @@ const EDITED_PROCESS_TEXT = `process Fulfillment for Order {
    transition Pick -> Ship
 }
 `;
+
+const RECONNECTED_PROCESS_TEXT = EDITED_PROCESS_TEXT.replace('task Archive', 'task ArchiveAgain');
 
 /**
  * `orders.domain` with one field ADDED. Harmless to `.process`, so the crossing
@@ -193,6 +199,28 @@ function latestDiagnostics(published: ReadonlyArray<PublishDiagnosticsParams>): 
 }
 
 /**
+ * A data head whose `updateModelDocument` waits for {@link release} before it
+ * runs, so a test can drop the transport while a write is genuinely in flight.
+ * Timing cannot produce that state reliably: the in-process round trip usually
+ * finishes before the disconnect, and when it does not the test is racing the
+ * event loop rather than observing the server.
+ */
+class HeldDataServer extends DataServer<OrderFlowTransfer> {
+   /** Resolves once a write has reached the server and is being held. */
+   readonly entered = new Deferred();
+   readonly release = new Deferred();
+   /** The held write's own outcome, once released — the reply nobody will read. */
+   late: Promise<TransferDocument<OrderFlowTransfer>> | undefined;
+
+   override async updateModelDocument(args: TransferUpdateDocumentArgs<OrderFlowTransfer>): Promise<TransferDocument<OrderFlowTransfer>> {
+      this.entered.resolve();
+      await this.release.promise;
+      this.late = super.updateModelDocument(args);
+      return this.late;
+   }
+}
+
+/**
  * Boot all three heads over ONE shared tree, on a throwaway copy of the sample
  * workspace. Fresh per test so an in-memory edit never leaks between tests.
  */
@@ -240,11 +268,17 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          // returned, and that build fires the diagnostics handler — a publish
          // nobody awaited. Draining first is what keeps dispose from surfacing
          // as "Connection is disposed".
-         await heads.shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         const shared = heads.shared;
+         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         await tick();
          await tick();
          heads.glsp.dispose();
          heads.data.dispose();
          heads.lsp.dispose();
+         // Closing a client can enqueue a last-close rebuild after dispose.
+         // Drain that second boundary before deleting the scratch workspace.
+         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         await tick();
          heads = undefined;
       }
       scratch?.dispose();
@@ -388,5 +422,142 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       const lastEvent = data.events[data.events.length - 1];
       expect(lastEvent.document.uri).toBe(processUri);
       expect(glsp.state.sourceRoot.nodes).toHaveLength(before + 1);
+   });
+
+   it('refuses a data write an LSP edit overtook, then releases its holder and reconnects', async () => {
+      const { shared, lsp, data, glsp, path, uri } = await bootHeads();
+      const processUri = uri(WORKSPACE_FILES.fulfillmentProcess);
+      const initial = readFileSync(path(WORKSPACE_FILES.fulfillmentProcess), 'utf8');
+      const textDocuments = shared.workspace.TextDocuments;
+
+      lsp.openDocument(processUri, initial, 'process', 1);
+      await data.proxy.openModelDocument({ uri: processUri, clientId: 'stale-data-client' });
+      await data.proxy.watchModelDocument({ uri: processUri, clientId: 'stale-data-client' });
+      expect(textDocuments.isOpenInClient(processUri, 'stale-data-client')).toBe(true);
+      const snapshot = await data.proxy.getModelDocument({ uri: processUri });
+
+      // The version has to move BEFORE the write is sent. The two heads are
+      // separate wires, so a write sent first races the edit to the server,
+      // and one that arrives first is not stale at all.
+      lsp.changeDocument(processUri, EDITED_PROCESS_TEXT, 2);
+      await waitFor(() => textDocuments.version(processUri) > snapshot.version, {
+         message: 'the LSP edit did not advance the shared version'
+      });
+      await expect(
+         data.proxy.updateModelDocument({ uri: processUri, clientId: 'stale-data-client', model: initial, basedOn: snapshot.version })
+      ).rejects.toSatisfy(isConflictError);
+
+      // `DataServer` also disposes itself on the transport's close event, but
+      // nothing guarantees that has fired when the transport's dispose returns,
+      // so the release below would be waiting on an unowned event.
+      data.server.dispose();
+      data.dispose();
+      await waitFor(() => !textDocuments.isOpenInClient(processUri, 'stale-data-client'), {
+         message: 'disposing the data head did not release its document holder'
+      });
+
+      await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+      await tick();
+      await tick();
+      expect(textDocuments.get(processUri)?.getText()).toBe(EDITED_PROCESS_TEXT);
+      glsp.dispatch(RequestModelAction.create({ options: { [SOURCE_URI_ARG]: path(WORKSPACE_FILES.fulfillmentProcess) } }));
+      const submitted = await glsp.nextAction<RequestBoundsAction>(RequestBoundsAction.KIND);
+      expect(flowNodeCount(submitted)).toBe(PROCESS_NODE_COUNT + 1);
+
+      // A reconnect's updates must reach only the fresh watch, never the
+      // disposed head's capture.
+      const disposedDataEvents = data.events.length;
+      const reconnected = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
+         server: channel => new DataServer<OrderFlowTransfer>(channel, shared)
+      });
+      try {
+         const reopened = await reconnected.proxy.openModelDocument({ uri: processUri, clientId: 'reconnected-data' });
+         expect(reopened.root?.$type).toBe('ProcessModel');
+         expect((reopened.root as ProcessModel).nodes.map(node => node.name)).toContain('Archive');
+         await reconnected.proxy.watchModelDocument({ uri: processUri, clientId: 'reconnected-data' });
+
+         await reconnected.proxy.updateModelDocument({
+            uri: processUri,
+            clientId: 'reconnected-data',
+            model: RECONNECTED_PROCESS_TEXT,
+            basedOn: 'anything'
+         });
+         await waitFor(() => reconnected.events.length >= 1, {
+            message: 'the reconnected data watch did not receive its first update'
+         });
+         expect(data.events).toHaveLength(disposedDataEvents);
+
+         await reconnected.proxy.updateModelDocument({
+            uri: processUri,
+            clientId: 'reconnected-data',
+            model: EDITED_PROCESS_TEXT,
+            basedOn: 'anything'
+         });
+         await waitFor(() => reconnected.events.length >= 2, {
+            message: 'the reconnected data watch did not receive its second update'
+         });
+         expect(textDocuments.get(processUri)?.getText()).toBe(EDITED_PROCESS_TEXT);
+         await reconnected.proxy.closeModelDocument({ uri: processUri, clientId: 'reconnected-data' });
+         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         await tick();
+      } finally {
+         reconnected.dispose();
+      }
+      await lsp.closeDocument(processUri);
+      await tick();
+      await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+      await tick();
+   });
+
+   it('drops a stale write held across a disconnect without applying it or leaving a holder', async () => {
+      const { shared, lsp, path, uri } = await bootHeads();
+      const processUri = uri(WORKSPACE_FILES.fulfillmentProcess);
+      const initial = readFileSync(path(WORKSPACE_FILES.fulfillmentProcess), 'utf8');
+      const textDocuments = shared.workspace.TextDocuments;
+      const held = makeDataServerHarness<HeldDataServer, OrderFlowTransfer>({
+         server: channel => new HeldDataServer(channel, shared)
+      });
+
+      try {
+         lsp.openDocument(processUri, initial, 'process', 1);
+         await held.proxy.openModelDocument({ uri: processUri, clientId: 'held-data-client' });
+         const snapshot = await held.proxy.getModelDocument({ uri: processUri });
+         lsp.changeDocument(processUri, EDITED_PROCESS_TEXT, 2);
+         await waitFor(() => textDocuments.version(processUri) > snapshot.version, {
+            message: 'the LSP edit did not advance the shared version'
+         });
+
+         const write = held.proxy.updateModelDocument({
+            uri: processUri,
+            clientId: 'held-data-client',
+            model: initial,
+            basedOn: snapshot.version
+         });
+         // Observed here rather than at the assertion: the rejection lands
+         // during the disconnect, and an unobserved one surfaces as an
+         // unhandled rejection before the assertion is reached.
+         const clientOutcome = write.then(
+            () => undefined,
+            (error: unknown) => error
+         );
+         await held.server.entered.promise;
+         held.server.dispose();
+         held.dispose();
+
+         // The client can only learn that its connection went: the jsonrpc
+         // client rejects every pending request on dispose, whatever the server
+         // would have answered.
+         expect(await clientOutcome).toMatchObject({ code: ErrorCodes.PendingResponseRejected });
+         expect(textDocuments.isOpenInClient(processUri, 'held-data-client')).toBe(false);
+
+         held.server.release.resolve();
+         await waitFor(() => held.server.late !== undefined, { message: 'the released write never ran' });
+         await expect(held.server.late).rejects.toSatisfy(isConflictError);
+         expect(textDocuments.get(processUri)?.getText()).toBe(EDITED_PROCESS_TEXT);
+         expect(textDocuments.isOpenInClient(processUri, 'held-data-client')).toBe(false);
+      } finally {
+         held.server.release.resolve();
+         held.dispose();
+      }
    });
 });

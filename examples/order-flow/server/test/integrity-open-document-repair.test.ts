@@ -245,6 +245,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const document = harness.shared.workspace.LangiumDocuments.getDocument(uri)!;
          expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
          expect(document.textDocument.getText()).toContain('Twin__1');
+         expect(document.parseResult.value.$cstNode?.root.fullText).toBe(textDocuments.get(uriString)?.getText());
 
          await until(() => recorded.length > 0, 'the repair to be mirrored to the language client');
          expect(clientTextAfterEdits(uri, DUPLICATES)).toBe(textDocuments.get(uriString)?.getText());
@@ -279,6 +280,9 @@ for (const syncMode of ['editor', 'silent'] as const) {
          expect(declarationNames(harness, uri)).toEqual(['Twin', 'Twin__1']);
          expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
          expect(separate.textDocument.getText()).toContain('Twin__1');
+         expect(harness.shared.workspace.LangiumDocuments.getDocument(uri)?.parseResult.value.$cstNode?.root.fullText).toBe(
+            textDocuments.get(uriString)?.getText()
+         );
 
          await until(() => recorded.length > 0, 'the repair to be mirrored to the language client');
          expect(clientTextAfterEdits(uri, DUPLICATES)).toBe(textDocuments.get(uriString)?.getText());

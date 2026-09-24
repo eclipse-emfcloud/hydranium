@@ -47,8 +47,10 @@ export interface OpenModelArgs extends TransferClientArgs {
     * means read from the filesystem, which is the normal case.
     *
     * Honoured only on the first open of a URI: opening an already-open document
-    * is a no-op, so passing `text` for one silently changes nothing. Write
-    * through the update path instead.
+    * attaches the caller to the existing shared entry and does not replace its
+    * content with this seed. Write through the update path instead. The open
+    * response reads the current shared content after registration; a textual
+    * `didOpen` attach may separately refresh the build.
     */
    text?: string;
 }

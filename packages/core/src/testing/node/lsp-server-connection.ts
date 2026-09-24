@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type Harness } from '@hydranium/protocol/testing';
-import { makeDuplexStreamPair } from '@hydranium/protocol/testing/node';
+import { PassThrough, type TransformCallback } from 'node:stream';
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import { type Connection, ProposedFeatures } from 'vscode-languageserver/node';
 import { withHydraniumLspFeatures } from '../../lsp/connection-features.js';
@@ -29,6 +29,7 @@ import {
    ApplyWorkspaceEditRequest,
    CompletionRequest,
    DidChangeTextDocumentNotification,
+   DidCloseTextDocumentNotification,
    DidOpenTextDocumentNotification,
    HoverRequest,
    InitializeRequest,
@@ -169,8 +170,8 @@ function insertedText(edit: WorkspaceEdit): string {
 }
 
 /**
- * The in-process LSP transport seam — a real `Connection` over the in-memory
- * {@link makeDuplexStreamPair}, plus the client side, the diagnostics capture,
+ * The in-process LSP transport seam — a real `Connection` over a crossed pair
+ * of in-memory streams, plus the client side, the diagnostics capture,
  * and the typed request facades — with NO services attached. It is the lower
  * half of `makeLspHarness`, factored out so a caller can OWN the services
  * tree: build the tree around {@link serverConnection} (`createXxxServices({
@@ -225,6 +226,12 @@ export interface LspServerConnection extends Harness {
     * unhandled method.
     */
    readonly appliedEdits: ReadonlyArray<AppliedEdit>;
+   /** Bytes written in each direction of the in-process JSON-RPC wire. */
+   readonly wireBytes: () => {
+      readonly clientToServer: number;
+      readonly serverToClient: number;
+      readonly total: number;
+   };
 
    /**
     * Drive the real LSP `initialize` → `initialized` handshake and return the
@@ -246,6 +253,8 @@ export interface LspServerConnection extends Harness {
     * associates with a language (silent no-diagnostics). `version` defaults to 1.
     */
    openDocument(uri: string, text: string, languageId: string, version?: number): void;
+   /** Send `textDocument/didClose` for a document opened through this harness. */
+   closeDocument(uri: string): Promise<void>;
    /** Send `textDocument/didChange` for `uri` as a single full-text replacement at `version`. */
    changeDocument(uri: string, text: string, version: number): void;
 
@@ -319,6 +328,39 @@ export interface LspServerConnection extends Harness {
 }
 
 /**
+ * A `PassThrough` that counts the bytes written through it. Counting here
+ * rather than in a `'data'` listener is what keeps the wire buffering: a
+ * listener switches the stream to flowing mode, and a message written before
+ * the server calls `listen()` is then delivered to the counter alone and lost.
+ */
+class CountingPassThrough extends PassThrough {
+   bytes = 0;
+
+   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+      this.bytes += chunk.length;
+      callback(null, chunk);
+   }
+}
+
+/** A crossed pair of {@link CountingPassThrough}s, disposed as one. */
+function makeCountingStreamPair(): {
+   readonly clientToServer: CountingPassThrough;
+   readonly serverToClient: CountingPassThrough;
+   dispose(): void;
+} {
+   const clientToServer = new CountingPassThrough();
+   const serverToClient = new CountingPassThrough();
+   return {
+      clientToServer,
+      serverToClient,
+      dispose(): void {
+         clientToServer.destroy();
+         serverToClient.destroy();
+      }
+   };
+}
+
+/**
  * Build the in-process LSP transport seam (server `Connection` + client + wire +
  * diagnostics capture + typed facades) WITHOUT attaching a server. The caller
  * composes a services tree onto {@link LspServerConnection.serverConnection} and
@@ -330,7 +372,7 @@ export interface LspServerConnection extends Harness {
  * additional protocol heads (data-server, GLSP) onto the same `shared` services.
  */
 export function makeLspServerConnection(): LspServerConnection {
-   const pair = makeDuplexStreamPair();
+   const pair = makeCountingStreamPair();
 
    // No-op watchDog: in-process, no LSP lifecycle event (parent-pid liveness, the
    // `exit` notification, …) may exit the host test runner — `dispose()` owns
@@ -414,6 +456,11 @@ export function makeLspServerConnection(): LspServerConnection {
       client,
       diagnostics,
       appliedEdits,
+      wireBytes: () => ({
+         clientToServer: pair.clientToServer.bytes,
+         serverToClient: pair.serverToClient.bytes,
+         total: pair.clientToServer.bytes + pair.serverToClient.bytes
+      }),
 
       async initialize(params?: Partial<InitializeParams>): Promise<InitializeResult> {
          const initializeParams: InitializeParams = {
@@ -452,6 +499,10 @@ export function makeLspServerConnection(): LspServerConnection {
                text
             }
          });
+      },
+
+      async closeDocument(uri: string): Promise<void> {
+         await client.sendNotification(DidCloseTextDocumentNotification.type, { textDocument: { uri } });
       },
 
       changeDocument(uri: string, text: string, version: number): void {
