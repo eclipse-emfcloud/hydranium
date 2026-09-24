@@ -163,6 +163,12 @@ export class DefaultMessageRenderer implements MessageRenderer {
     * corollary is that a catalogue mutated in place afterwards is not seen;
     * clear {@link catalogues} to invalidate.
     *
+    * **An override merges its entries over the inherited answer rather than
+    * replacing it.** Returning only its own map shadows every entry a base
+    * class supplies, and a shadowed entry renders the English — byte-identical
+    * to a code deliberately left untranslated, so neither the render path nor a
+    * catalogue audit can report it.
+    *
     * An adopter wanting Langium's own uncoded sentences instead matches
     * `Diagnostic.data.code` from an overridden {@link renderDiagnostic}, never
     * the sentence.

@@ -47,22 +47,37 @@ moving, not because the _machinery_ is unproven.
 
 ## Known limitations
 
-### The framework hardcodes user-facing strings
+### The framework ships no translations
 
-There is **no internationalization layer**. Every user-visible string the
-framework emits — command-palette labels, the diagram loading overlay,
-diagnostic and error text — is an English literal in the source. There is no
-message catalogue, no `localize()` call, and no DI slot an adopter can bind to
-supply translations.
+There **is** an internationalization seam, and the framework ships **no
+catalogue** to go through it. Those are different claims, and the second is the
+one that affects you.
 
-Some strings are overridable one at a time by subclassing (the diagram widget
-exposes its label through a `protected` getter, for example), but there is no
-central seam: translating a Hydranium-based tool today means overriding each
-call site individually, and there is no way to enumerate them.
+The seam: an LSP client's `initialize` locale reaches a `ServerLocale` service,
+and a `MessageRenderer` on the shared tree renders every user-facing sentence
+the server sends — diagnostics, RPC errors, and messages a caller holds
+directly. An adopter binds one subclass overriding `translationsFor(locale)` to
+return a code-keyed map; the framework keeps the identity handling, the
+pass-through for a code it has no entry for, and a no-throw contract so a bad
+catalogue key cannot cost a document its diagnostics. Catalogues are resolved
+once per locale, not once per message, so an override may read a file.
+`examples/order-flow` does exactly this in one small class and one JSON file.
 
-Closing this needs a message-catalogue service on the shared tree plus a sweep
-of every literal, and it is a breaking change to several signatures. It is
-planned, not scheduled.
+The framework's own messages are enumerable rather than hidden: `core`,
+`protocol`, `data-server` and `glsp-server` each export a `./messages` subpath,
+and `collectMessages()` returns every declaration on one with its code and its
+English text. `@hydranium/protocol/testing` carries a catalogue audit that finds
+keys naming no real code.
+
+Two real limits remain. **Not every user-facing literal carries a code yet** —
+the routed set is the carriers named above, and a string raised outside them is
+English whatever the locale. And **client-side chrome is the host's business**:
+command labels and widget text localize through the host's own mechanism, which
+is why the browser example ships a page catalogue of its own while its
+diagnostics arrive already translated from the server.
+
+Completing the literal sweep is planned, not scheduled, and touches several
+signatures.
 
 ### Data-head updates are whole-document
 
@@ -192,8 +207,9 @@ Directions, in rough priority order. None of these is a dated commitment.
 2. **Freeze the v0 surface.** Settle role names, member visibility and module
    layout, publish the list of what is covered by the compatibility promise, and
    start writing migration notes against it.
-3. **Internationalization.** A message-catalogue service on the shared tree, and
-   a sweep that routes every user-facing literal through it.
+3. **Finish the internationalization sweep.** The catalogue seam on the shared
+   tree exists; what remains is routing every user-facing literal through it,
+   and a way to emit a starter catalogue from the declared codes.
 4. **Incremental data-head updates.** A patch-shaped update path alongside the
    whole-document one, so large models stop paying full serialization per edit.
 5. **A generated API reference**, published alongside the docs, so the doc

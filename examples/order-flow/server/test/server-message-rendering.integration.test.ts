@@ -77,7 +77,7 @@ import {
 } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver-protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { OrderFlowMessageRenderer } from '../src/language-server/order-flow-message-renderer.js';
@@ -593,6 +593,10 @@ describe('the shipped OrderFlowMessageRenderer', () => {
       catalogueFor(locale: string | undefined): Record<string, string> | undefined {
          return this.translationsFor(locale);
       }
+
+      spyOnWarnings(): ReturnType<typeof vi.spyOn> {
+         return vi.spyOn(this.tracer, 'warn');
+      }
    }
 
    /** The German the checked-in catalogue carries for the one step this suite uses. */
@@ -626,6 +630,19 @@ describe('the shipped OrderFlowMessageRenderer', () => {
       // that ignored the locale and always answered German.
       expect(await shippedMessages('fr')).toEqual([ENGLISH_SELF_TRANSITION]);
       expect(await shippedMessages(undefined)).toEqual([ENGLISH_SELF_TRANSITION]);
+   });
+
+   it('renders English for a tag that does not parse, rather than failing every render', async () => {
+      // The POSIX spelling an environment variable holds. `Intl.Locale` rejects
+      // it; the override has to answer anyway, because the renderer caches only
+      // an answer and would retry, and log, a throw once per message.
+      expect(await shippedMessages('de_DE')).toEqual([ENGLISH_SELF_TRANSITION]);
+
+      const probe = new CatalogueProbe(makeNoopSharedServices());
+      const warnings = probe.spyOnWarnings();
+      expect(probe.catalogueFor('de_DE')).toBeUndefined();
+      expect(warnings).toHaveBeenCalledOnce();
+      expect(String(warnings.mock.calls[0][0])).toContain("'de_DE'");
    });
 
    it('does not serve the catalogue note as a translation', () => {

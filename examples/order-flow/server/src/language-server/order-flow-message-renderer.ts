@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
-import type { Locale, MessageCatalogue } from '@hydranium/protocol';
+import { MessageCatalogue, type Locale } from '@hydranium/protocol';
 import germanCatalogue from '../nls/order-flow.de.json' with { type: 'json' };
 
 /**
@@ -40,13 +40,51 @@ const CATALOGUES: Record<Locale, MessageCatalogue> = {
  * for, and the no-throw contract that stops a bad catalogue key from costing a
  * document its diagnostics.
  *
- * **Matched on the primary subtag**, so `de-AT` and `de-CH` get the German
- * entries rather than falling back to English. That is a decision an adopter
- * owns, not a framework default — a language whose regional variants differ in
- * substance would key on the full tag instead.
+ * **Matched on the language subtag**, so `de-AT` and `de-CH` get the German
+ * entries rather than falling back to English. Which tag a catalogue answers to
+ * is an adopter's decision and not a framework default.
+ *
+ * **A catalogue set carrying regional or script variants needs RFC 4647 Lookup
+ * instead**, truncating one subtag at a time from the right so `de-CH` is tried
+ * before `de`. Taking the language alone skips every intermediate tag, leaving
+ * a `de-CH` catalogue unreachable behind a `de` one; for a script-bearing
+ * language it is wrong rather than coarse, `zh-Hant` and `zh-Hans` being no
+ * substitute for each other.
  */
 export class OrderFlowMessageRenderer extends DefaultMessageRenderer {
+   /**
+    * The inherited entries first, this example's over them: returning the map
+    * alone shadows whatever a base class answers for the same locale, and a
+    * shadowed entry renders the English, which no audit can tell from a code
+    * nobody translated.
+    *
+    * Must not throw. The renderer caches this answer per locale only when it
+    * returns, so a throw is retried, and logged, for every message rendered.
+    */
    protected override translationsFor(locale: Locale | undefined): MessageCatalogue | undefined {
-      return locale ? CATALOGUES[locale.split('-')[0].toLowerCase()] : undefined;
+      return MessageCatalogue.merge(super.translationsFor(locale), this.ownCatalogue(locale));
+   }
+
+   /**
+    * This example's catalogue for `locale`, matched on its language subtag.
+    *
+    * The tag arrives from a client, and a headless caller's obvious source is
+    * an environment variable holding a POSIX spelling such as `de_DE`, which
+    * `Intl.Locale` rejects. That is reported once, here, and answered with no
+    * catalogue, so the inherited entries and the English still apply.
+    */
+   protected ownCatalogue(locale: Locale | undefined): MessageCatalogue | undefined {
+      if (!locale) {
+         return undefined;
+      }
+      let language: string;
+      try {
+         language = new Intl.Locale(locale).language;
+      } catch (err: unknown) {
+         const reason = err instanceof Error ? err.message : String(err);
+         this.tracer.warn(`Locale '${locale}' is not a language tag (${reason}); rendering without this server's catalogue`);
+         return undefined;
+      }
+      return CATALOGUES[language];
    }
 }
