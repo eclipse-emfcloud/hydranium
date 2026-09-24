@@ -25,10 +25,11 @@ way to waste someone's afternoon is to hand a release runbook to an adopter.
 - The [repository README](../README.md) carries the getting-started path: one
   `hydranium-cli init` invocation to a buildable project.
 
-Task-shaped guides — "add a data-server method", "make a diagram editable",
-"add a cross-document validation" — do not exist yet. They are roadmap item 7
-in [Status](adopting/status.md#roadmap). Until then the concept pages below,
-and the two examples, are what carries that job.
+Task-shaped guides — "add a data-server method", "make a diagram editable", "add a validation check" — live under `guides/`, alongside the concept pages and the two executable examples.
+
+- [**Validation check**](guides/add-validation-check.md) — add a diagnostic contribution for a language-owned invariant.
+- [**Data-server method**](guides/data-server-method.md) — expose one typed adopter operation on the data head.
+- [**Editable diagram**](guides/editable-diagram.md) — connect a GLSP diagram's operations to the shared model.
 
 ## Concepts — why it is shaped this way
 

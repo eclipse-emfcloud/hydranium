@@ -94,6 +94,8 @@ Alpha — pre-v0, not yet published. The API is not stable and may change withou
 deprecation cycle. See the [repository README](../../README.md) for the current
 status and known limitations.
 
+For task-shaped adoption paths, start with the [validation check guide](../../docs/guides/add-validation-check.md). It shows the validation contribution boundary that this package supplies.
+
 ## License
 
 `MIT` — see this package's [`LICENSE`](./LICENSE). Third-party notices for the

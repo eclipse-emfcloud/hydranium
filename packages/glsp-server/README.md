@@ -94,6 +94,8 @@ framework/adopter seams are in
 [`docs/concepts/framework-vs-adopter.md`](../../docs/concepts/framework-vs-adopter.md).
 The Theia-side client wiring lives in `@hydranium/glsp-client-theia`.
 
+For the adopter path from a read-only projection to a writable diagram, see [Make a diagram editable](../../docs/guides/editable-diagram.md). It follows the per-diagram module, operation-handler, and shared-services boundaries.
+
 ## Status
 
 Alpha — pre-v0, not yet published. The API is not stable and may change without a
