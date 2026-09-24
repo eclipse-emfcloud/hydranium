@@ -42,6 +42,8 @@ The projection itself is not this package's: it delegates to `TransferEncoder`
 and `ModelService` from `@hydranium/core`, so there is no second in-memory model
 to keep in sync.
 
+For the adopter extension path, see [Add a data-server method](../../docs/guides/data-server-method.md). It covers the typed subclass, `additionalMethods`, shared namespace, and client proxy as one wire contract.
+
 ## Install
 
 ```bash

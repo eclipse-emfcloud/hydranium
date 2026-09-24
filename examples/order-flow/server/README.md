@@ -30,6 +30,16 @@ Models live in [`../workspace`](../workspace), which
 also carries the two-project visibility demonstration and its negative
 fixture.
 
+## Adoption guides derived from this example
+
+The example is the working source for the task guides:
+
+- [validation check](../../../docs/guides/add-validation-check.md) follows the process validation checks;
+- [data-server method](../../../docs/guides/data-server-method.md) follows the data head's typed protocol extension;
+- [editable diagram](../../../docs/guides/editable-diagram.md) follows the process diagram module and operation handlers.
+
+The guides generalise the seams; this example remains the executable reference for the complete three-grammar composition.
+
 ## Why multiple grammars matter to the framework
 
 `AstReflection` is a **single shared slot**, so all three grammars must come

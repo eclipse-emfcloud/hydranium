@@ -10,8 +10,8 @@ bindings can and do change between commits, without a deprecation window.
 
 What that means in practice:
 
-- **Use it if** you are willing to track the framework closely, read the
-  migration notes on every bump, and adapt your code when a seam moves.
+- **Use it if** you are willing to track the framework closely, pin each
+  release exactly, and adapt your code when a seam moves.
 - **Wait if** you need a stable dependency for a product on a fixed schedule.
 
 The framework is not a toy: it runs three protocol heads on one shared workspace
@@ -32,10 +32,10 @@ moving, not because the _machinery_ is unproven.
   range can never pick one up by accident. Until the first stable release
   exists, `latest` points at the newest prerelease, so a bare
   `npm install @hydranium/core` does get it. A **minor** bump may contain
-  breaking changes for as long as the framework is alpha. Pin exactly, or
-  expect to read a changelog. ("pre-v0" above names the un-frozen
-  API surface, not the version number.) [`releasing.md`](../contributing/releasing.md) has the
-  release mechanics.
+  breaking changes for as long as the framework is alpha. Pin exactly; there
+  is no compatibility promise or changelog on this prerelease line. ("pre-v0"
+  above names the un-frozen API surface, not the version number.)
+  [`releasing.md`](../contributing/releasing.md) has the release mechanics.
 - Subpath exports (`@hydranium/core/lsp`, `@hydranium/core/node`,
   `@hydranium/protocol/data`, …) carry the same stability level as the package
   root. Subpaths ending in `/testing` are **test-support only** and may change
@@ -184,14 +184,21 @@ the exposure everyone had before staging existed, narrowed to multiply-linked
 files. Breaking a link happens on every write; tearing only happens under
 contention.
 
-### No generated API reference
+## Documentation position
 
-Documentation is hand-written. The packages ship their sources, and the doc
-comments in them are detailed and kept current, but there is no published API
-reference site to browse. Reading the `.d.ts` or the source is the reference
-today.
+### Source-based API reference
 
-### Runtime requirements
+The reference is deliberately the version of the sources shipped in the
+package, together with the concept pages that explain the service-level
+contracts. The packages ship their sources and declaration files; those are the
+symbol-level authority for an exact prerelease, while concept pages explain the
+surrounding service shape. A generated site would instead describe the moving
+`main` branch while adopters are pinned to an exact prerelease. Start with
+[Architecture](../concepts/architecture.md), [Framework vs.
+adopter](../concepts/framework-vs-adopter.md), or [Head module
+maps](../concepts/head-module-maps.md).
+
+## Runtime requirements
 
 The published packages declare a Node floor you cannot go under, and it is a
 floor rather than a preference — [Requirements](requirements.md) gives the
@@ -212,14 +219,9 @@ Directions, in rough priority order. None of these is a dated commitment.
    and a way to emit a starter catalogue from the declared codes.
 4. **Incremental data-head updates.** A patch-shaped update path alongside the
    whole-document one, so large models stop paying full serialization per edit.
-5. **A generated API reference**, published alongside the docs, so the doc
-   comments become browsable rather than grep-able.
-6. **Broader client coverage.** Promote the VS Code and browser wiring from
+5. **Broader client coverage.** Promote the VS Code and browser wiring from
    example code into supported packages, so a non-Theia host is a dependency
    rather than a copy-paste.
-7. **Task-shaped guides per head**, to sit alongside the existing conceptual
-   documentation — "add a data-server method", "make a diagram editable", "add a
-   cross-document validation".
 
 ## Getting involved
 

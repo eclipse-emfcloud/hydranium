@@ -171,6 +171,22 @@ const SNIPPET_TARGETS = [
    {
       readme: 'docs/adopting/requirements.md',
       host: 'examples/order-flow/server'
+   },
+   {
+      readme: 'docs/guides/add-validation-check.md',
+      host: 'examples/order-flow/server',
+      rewrites: [
+         { from: "'./generated/", to: "'../src/language-server/generated/" },
+         { from: "'./ast.js'", to: "'../src/language-server/ast.js'" }
+      ]
+   },
+   {
+      readme: 'docs/guides/data-server-method.md',
+      host: 'examples/order-flow/server'
+   },
+   {
+      readme: 'docs/guides/editable-diagram.md',
+      host: 'examples/order-flow/server'
    }
 ];
 
