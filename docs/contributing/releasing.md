@@ -66,6 +66,41 @@ a flag someone has to remember to flip on the day it stops being true.
    (`npm run check`) in this workflow, before the publish.
 5. Runs `node scripts/release.mjs next`.
 
+Before merging a package or export change, also run the opt-in packed
+consumer smoke locally:
+
+```bash
+npm run check:packed-consumer
+```
+
+It installs the built tarballs outside the workspace and exercises both the
+LSP and data-server heads. This check is intentionally not part of the regular
+release gate because it performs a fresh npm install, but it is the release
+validation for package exports, peer dependencies, and server bootstrap.
+
+When validating compatibility with the last published prerelease, also run:
+
+```bash
+npm run check:published-baseline
+```
+
+That check installs the exact prerelease version advertised by npm and runs the
+same consumer smoke without workspace tarballs. It validates the published
+baseline; it does not exercise an upgrade to candidate packages. The consumer
+it compiles is this tree's bookstore server, so an example that already uses
+an unpublished API fails it while the published packages are fine.
+
+To validate an upgrade from the published prerelease to the candidate
+packages, also run:
+
+```bash
+npm run check:prerelease-upgrade
+```
+
+It upgrades from whatever the `latest` dist-tag names when it runs, and prints
+that version; set `HYDRANIUM_UPGRADE_FROM` to it to repeat a failing run
+against the same baseline.
+
 The gate lives here rather than in CI deliberately: both workflows fire
 on the same `push: main` with no dependency either way, so they race and
 a red CI run cannot stop a publish. CI asserts the arrangement instead —

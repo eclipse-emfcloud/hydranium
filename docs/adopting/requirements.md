@@ -75,17 +75,22 @@ local install tree is not redistributable: no published `@hydranium/*` tarball
 contains it, none of them declares a `postinstall`, and the patch file is in no
 package's `files` list. Installing from npm gets you the unpatched dependency.
 
-So a consuming project needs one of these, and the first is the supported path:
+So a consuming project needs:
 
-- **Compile with a resolver that reads `exports`** — `moduleResolution` set to
-  `"Bundler"`, `"Node16"` or `"NodeNext"`. Nothing else is required, and every
-  `@hydranium/*` subpath is declared for both resolvers regardless.
-- **Apply the same patch in your own tree** — copy the patch file out of this
-  repository and wire `patch-package` into your own `postinstall`. It is
-  additive and changes no runtime logic; [`NOTICE.md`](../../NOTICE.md) lists
-  exactly what it modifies.
+- **A resolver that reads `exports`, always** — `moduleResolution` set to
+  `"Bundler"`, `"Node16"` or `"NodeNext"`. For the LSP and data heads nothing
+  else is required, and every `@hydranium/*` subpath is declared for both
+  resolvers.
+- **The same patch in your own tree, whenever the GLSP server runs in Node** —
+  copy the patch file out of this repository and wire `patch-package` into your
+  own `postinstall`. It is additive and changes no runtime logic;
+  [`NOTICE.md`](../../NOTICE.md) lists exactly what it modifies. A resolver
+  does not replace it here: `@eclipse-glsp/protocol`, which the GLSP server
+  loads, `require()`s `vscode-jsonrpc/browser` from CommonJS, and `9.0.1`
+  exposes that subpath to CommonJS only through the `default` condition the
+  patch adds. Compilation succeeds without it; the server fails at startup.
 
-### Why `vscode-jsonrpc@8` is not a third option
+### Why `vscode-jsonrpc@8` is not a way out
 
 The Langium chain above pins `9.0.1` exactly, so an `8.x` install produces two
 physical copies in one process, and this wire stack breaks on copy identity

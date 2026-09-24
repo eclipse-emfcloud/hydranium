@@ -702,11 +702,11 @@ export class DefaultModelService<
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (session ? session.scope(stage, fn) : fn());
       // Open WITH the new text so a cold URI (no open editor, no file on disk) is
       // created from the payload rather than read from the filesystem — `update`
-      // is an upsert. For an already-open document `open` refreshes content (the
-      // text is ignored on that branch), so existing-document behaviour is
-      // unchanged. `version` is intentionally NOT forwarded to `open`, so a cold
-      // create stays at its initial version rather than adopting a number the
-      // caller chose.
+      // is an upsert. For an already-open document `open` only attaches the
+      // client (the text is ignored on that branch), and the actual update is
+      // `AstDocumentManager.update`'s. `version` is intentionally NOT
+      // forwarded to `open`, so a cold create stays at its initial version
+      // rather than adopting a number the caller chose.
       //
       // The gate reads the version and decides BEFORE the open, and both halves
       // of that matter.

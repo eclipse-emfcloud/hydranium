@@ -551,8 +551,25 @@ function describeDataDocument(document: TransferDocument<OrderFlowTransferRoot>)
    return `root ${rootType}, ${document.diagnostics?.length ?? 0} diagnostic(s)`;
 }
 
+function describeDomainDeclarations(document: TransferDocument<OrderFlowTransferRoot>): string | undefined {
+   const root = document.root;
+   if (root?.$type !== 'DomainModel' || !('declarations' in root)) {
+      return undefined;
+   }
+   return root.declarations.map(declaration => `${declaration.$type}:${declaration.name}`).join('|');
+}
+
 function setDataReport(document: TransferDocument<OrderFlowTransferRoot>): void {
    publishReport('data-head', describeDataDocument(document));
+   if (document.uri === DATA_HEAD_DOCUMENT) {
+      const report = globalThis.document.querySelector<HTMLElement>('[data-report="data-head"]');
+      const signature = describeDomainDeclarations(document);
+      if (signature === undefined) {
+         report?.removeAttribute('data-store-signature');
+      } else {
+         report?.setAttribute('data-store-signature', signature);
+      }
+   }
 }
 
 /**

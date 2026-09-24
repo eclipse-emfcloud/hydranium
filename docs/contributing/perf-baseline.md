@@ -35,8 +35,20 @@ the generated root, which it does at 436 documents (435 files plus the stdlib
 virtual document).
 
 The recorded series itself — dated blocks, one per framework state — is kept in
-the maintainers work log rather than here. Each block is a single run on one
-machine, so the figure it carries is the delta within a block against the noise
-floor a neighbouring block establishes. Reproduced on your own hardware the
+the maintainers work log rather than here. Reproduced on your own hardware the
 procedure above is meaningful; the absolute numbers are not transferable, which
-is why they are recorded where their context is.
+is why they are recorded where their context is. A published figure would
+describe one machine while reading as the framework's, and nothing regenerates
+it as the code moves.
+
+What a block records, so a later one is comparable with it: machine, Node
+version, source revision, corpus seed and shape, command, run count and warmup,
+and the raw observations — the Vitest distribution rows and the bounded probe
+samples, not means alone. Take at least three `npm run bench` runs and three
+`measure-memory` runs, because a single run of each shows no spread to judge
+the next against.
+
+Timing budgets are tracking budgets, not portable CI gates: a figure from one
+machine gates nothing on another. They are kept beside the observations they
+were derived from, and each names its workload, the quantity measured, and what
+investigation follows a miss.

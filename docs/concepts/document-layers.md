@@ -31,13 +31,18 @@ is the characters its AST was parsed from. An integrity repair breaks that on
 one path, and it is worth knowing before you read a repair back.
 
 A rule mutates the AST in place; the integrity tier then serialises the result
-and routes it by how the document is held. For a document open in an editor it
-rides the current build. For a closed one it goes to disk in `'silent'` sync
-mode, or to a staging slot the next open consumes in `'editor'` mode. Only the
-disk write comes back through a re-parse, because Langium's factory gates
-re-parsing on the CST's own `fullText`: with the repair staged rather than
-written, the text the factory re-reads still matches the CST, the parse is
-skipped, and the mutated AST stands against unrepaired text.
+and routes it by how the document is held. It commits the repair into the
+shared text store only if the store still contains the text that produced the
+AST, then reconciles the registered Langium document by re-parsing or
+re-linking. What happens next depends on whether an editor holds the URI, not
+on whether anything holds it. Open in an editor, the settled listener sends it
+the corrected content as a `workspace/applyEdit`. Not open in an editor — closed,
+or held only through the data or GLSP head — the repair goes to disk in
+`'silent'` sync mode, or to a staging slot in `'editor'` mode. A staged repair
+is the exception: Langium's factory may skip re-parsing because the CST's
+`fullText` still equals the disk text it re-reads, leaving the mutated AST
+ahead of the text document until a first open consumes the stage — which, for
+a URI another head still holds, none does.
 
 So for a closed document with a staged repair, layer 1 mirrors **disk** while
 layer 2's AST carries the repair. `IntegrityService.SettledState` is the
@@ -45,6 +50,56 @@ landmark for post-integrity content, and what it guarantees is the AST: read a
 repair from `parseResult.value`, or from the staged content, never from
 `textDocument.getText()`. Layers 3 and 4 both project the AST, so both carry
 the repair — only a consumer reading the raw text sees the older state.
+
+### Which text wins during a build
+
+The shared text store is `HydraniumTextDocuments`; it is keyed by canonical
+URI. Its *server-owned* content version is distinct from the version an LSP
+client declares for its own buffer. A language-client shadow records the
+client-facing URI and the buffer used to calculate an outbound edit. The shadow
+is delivery state, not another source for parsing.
+
+The build-side descriptions below apply after a successful
+`IntegrityService.SettledState` phase. Client delivery may finish later.
+
+| URI state | Text authority and writer | Registered Langium document at settle | Editor shadow and delivery |
+| --- | --- | --- | --- |
+| Closed file, no staged repair | Disk; a closed `'silent'` repair writes it. | A build reads disk and reconciles after a textual repair. There is no open store entry. | None. |
+| Open in the language client | Shared store; `didChange`, server-authored updates, and current-source integrity repairs write it. Disk is not written under the open editor. | A textual repair commits by URI and reconciles text/CST with the store; the AST also has its derived state. | Based on the editor's declared buffer. The settled listener queues a shadow-based `workspace/applyEdit`. |
+| Open only through data or GLSP | Shared store; `ModelService.update` and current-source repairs write it. `save` persists it, and so does a `'silent'` repair. | A textual repair reconciles against store text. In `'silent'` mode it also writes disk, unsaved updates included. In `'editor'` mode it stages content that no open consumes: an editor attaching joins the existing entry instead of taking the first-open path, and the last close discards the stage. | None until an editor attaches; an editor joining this existing store refreshes from its current content. |
+| Separately constructed Langium document for an already-open URI | Existing shared store; the separate document is not a text authority. | Its AST can enter a build, but repair commits only if its CST source still matches the store. A stale mutation is abandoned and the registered document is reconciled from current text. | Follows the actual open holder, never the separate document's text object. |
+| Closed file with an `'editor'`-mode staged repair | Disk remains persisted; pending content takes priority on the next first open. | The settled AST carries the repair, while `textDocument` and CST may still describe disk. | None while closed. First `didOpen` starts a shadow from the editor's declared buffer so the pending correction can be delivered. |
+
+The transitions that change the owner are explicit:
+
+- **First `didOpen`** creates the shared entry from pending content, if any,
+  otherwise from the client's declared text. An editor shadow starts from the
+  text the editor actually declared. If another client already holds the URI,
+  the editor attaches to that entry and refreshes from its current content.
+- **`didChange` or a data/GLSP update** changes shared text and drives a build.
+  LSP versions gate only that client's incoming packets; the server's content
+  sequence advances only when shared text changes. A server-authored update
+  checks its `basedOn` version before installing a payload.
+- **Integrity repair** compares the AST's parsed source with the current open
+  store before committing. A stale repair cannot overwrite a newer edit, and
+  reconciliation discards its obsolete AST mutation. A repair for a URI no
+  editor holds follows the disk or staging route in the table.
+- **Outbound `workspace/applyEdit`** uses the client's shadow and declared
+  version, not the server's content version. The build can settle while this
+  request is still in flight, so settlement alone does not prove the visible
+  editor has applied the edit. A rejected edit invalidates the shadow for a
+  position-independent retry.
+- **Save and last close** are separate transitions. `save` persists the
+  current store text. The last close removes the shared entry and editor
+  shadow and retains the content-version sequence. A file URI then gets a
+  disk-backed rebuild; the default close handler leaves non-file documents in
+  the index for the adopter to manage.
+
+The open-document repair tests in the order-flow example exercise the normal
+and separately constructed paths in both sync modes, for a URI an editor
+holds. The row for a URI held only through the data or GLSP head is reached
+by no test with a real holder; the integrity unit tests stub the editor-open
+check instead.
 
 ### Layer 3 — `AstDocument`, the in-process snapshot
 

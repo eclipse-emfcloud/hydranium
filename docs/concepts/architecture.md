@@ -117,20 +117,55 @@ The **Model coordination** layer — implemented by the
 is what lets the heads coexist on one document. It generalises the LSP document
 lifecycle to a multi-client scenario:
 
-- The first `open` for a URI transfers the file content from the client to the
-  server, which then owns the source of truth until the last client `closes`
-  it; subsequent opens are no-ops.
-- Between open and close, any client may send `update`s. Each update advances
-  the document's internal version and records the *author* (which client
-  triggered it). The resulting state is forwarded to all co-editing clients
-  tagged with that author, so each client can apply or discard it and
-  update-cycles are easy to avoid.
+- The first `open` for a URI seeds the shared source of truth from content an
+  integrity repair staged for it, if any; otherwise from the supplied client
+  text, or from the filesystem when no text is supplied. The server then
+  owns that source until the last client `closes` it. An open for a URI that is
+  already held attaches the new client to the existing entry without rebuilding
+  it; the data-server response then reads a fresh snapshot from that shared
+  entry. A textual `didOpen` attach can separately refresh the build. Neither
+  path replaces shared content with the caller's optional seed.
+- Between open and close, any client may send `update`s through
+  [`ModelService.update`](../../packages/core/src/langium/model-service/model-service.ts).
+  Its `basedOn` check runs before serialization or mutation; a successful
+  content change is installed by
+  [`AstDocumentManager.update`](../../packages/core/src/documents/ast-document-manager.ts),
+  which advances the server-owned version and records the *author*. The
+  resulting state is forwarded to all co-editing clients tagged with that
+  author, so each client can apply or discard it and update-cycles are easy to
+  avoid.
 - The textual Monaco/LSP client cannot subscribe to that custom listener
   mechanism, so it is updated directly via the LSP
   [`applyEdit`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_applyEdit)
   request — the "shadow path"
   ([`LanguageClientTextShadow`](../../packages/core/src/documents/language-client-text-shadow.ts)).
-- After the last client closes the document, the in-memory state is dropped.
+- After the last client closes the document, the shared text and editor shadow
+  are released, while the server's content-version sequence is retained. File
+  URIs then receive the normal disk-backed close rebuild; non-file URIs remain
+  indexed for adopter-controlled lifecycle handling.
+
+Data-server clients pair an `openModelDocument` hold with a
+`watchModelDocument` subscription when they need streamed build events. Closing
+the document releases both the hold and its matching watch. A session disposing
+while its connection remains usable sends best-effort closes for its holds; a
+connection shutdown is drained by the server itself, so teardown does not send
+RPC over the closing wire.
+
+These operations have deliberate failure semantics. If an open snapshot fails,
+the newly acquired hold is released; if that cleanup fails, it remains recorded
+for connection teardown to retry. If watch registration fails, the session rolls
+back the open it just acquired. A failed close stays tracked until a later retry,
+so a transient transport failure does not turn into an unowned server hold.
+
+Saving is a separate boundary: [`ModelService.save`](../../packages/core/src/langium/model-service/model-service.ts)
+builds through the update path, then
+[`AstDocumentManager.save`](../../packages/core/src/documents/ast-document-manager.ts)
+writes the current store text to disk only when it differs. A successful model
+update therefore changes shared in-memory state only; the caller's save is what
+persists it. The one other writer is an integrity repair in `'silent'` sync
+mode: for a URI no editor holds open, including one held only through the data
+or GLSP head, it writes the repaired store text to disk, and that text carries
+any unsaved update with it.
 
 Updates are currently full-model (the complete model/text is sent and replaces
 the complete model/text on the server and in the other clients).

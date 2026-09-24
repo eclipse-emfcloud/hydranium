@@ -59,7 +59,7 @@ import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import { type LangiumDocument, URI } from '@hydranium/langium';
+import { DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -258,6 +258,14 @@ afterAll(() => {
    for (const corpus of [smallCorpus, largeCorpus]) {
       fs.rmSync(corpus, { recursive: true, force: true });
    }
+   if (wireByteObservations.length > 0) {
+      process.stdout.write(`\n[perf] LSP hover wire-byte observations: ${JSON.stringify(wireByteObservations)}\n`);
+   }
+   for (const [name, observations] of Object.entries(probeObservations)) {
+      if (observations.length > 0) {
+         process.stdout.write(`[perf] ${name} ms observations: ${JSON.stringify(observations)}\n`);
+      }
+   }
 });
 
 describe('large workspace cold build (scaling)', () => {
@@ -366,21 +374,84 @@ function firstFile(root: string, suffix: string): string {
 const editedDocPath = firstFile(largeCorpus, '.domain');
 const editedDocUri = URI.file(editedDocPath).toString();
 const diagramDocPath = firstFile(largeCorpus, '.process');
+const diagramDocUri = URI.file(diagramDocPath).toString();
+
+const repairCleanText = `entity Solo {
+   a : string
+}
+`;
+const repairDuplicateText = `entity Twin {
+   a : string
+}
+
+entity Twin {
+   b : string
+}
+`;
+const repairServices = createOrderFlowServices({ ...NodeFileSystem });
+const repairUri = URI.parse('memory:///perf-integrity-repair.domain');
+const repairDocuments = repairServices.shared.workspace.TextDocuments;
+const repairBuilder = repairServices.shared.workspace.DocumentBuilder;
+repairDocuments.notifyDidOpenTextDocument({
+   textDocument: { uri: repairUri.toString(), languageId: 'domain', version: 1, text: repairCleanText }
+});
+await repairBuilder.update([repairUri], []);
+await repairBuilder.waitUntil(DocumentState.Validated, repairUri);
+let repairVersion = 1;
+let repairToggle = false;
+const wireByteObservations: number[] = [];
+const probeObservations: Record<string, number[]> = {
+   'local edit': [],
+   'integrity repair': [],
+   reconnect: [],
+   'concurrent three-head operations': []
+};
+
+/**
+ * The phase tinybench is running the current bench in, set through its `setup`
+ * hook. The probes record only `'run'` calls: the warmup is excluded from the
+ * Vitest statistics beside them, and it is also the call most likely to overlap
+ * setup, so a warmup sample would make the raw series disagree with the table.
+ */
+let benchPhase: 'warmup' | 'run' = 'warmup';
+const trackPhase = {
+   setup: (_task: unknown, mode: 'warmup' | 'run'): void => {
+      benchPhase = mode;
+   }
+};
+
+function recordSample(samples: number[], value: number): void {
+   if (benchPhase === 'run' && samples.length < 10) {
+      samples.push(value);
+   }
+}
 
 // Two valid variants of the same document, toggled per iteration so every edit
 // is a real change (guaranteeing a rebuild + republish) without the model
 // growing across iterations.
 const editVariantA = fs.readFileSync(editedDocPath, 'utf-8');
 const editVariantB = `${editVariantA}\n// bench edit\n`;
+// Awaited before the suite: the open's own build would otherwise still be
+// running while the first warm bench is being measured.
+const diagramOpened = warm.lsp.nextDiagnostics(diagramDocUri);
+warm.lsp.openDocument(diagramDocUri, fs.readFileSync(diagramDocPath, 'utf-8'), 'process', 1);
+await diagramOpened;
 let editToggle = 0;
+let concurrentToggle = false;
 
 describe('warm cross-head interaction (large workspace, 3 heads attached)', () => {
-   bench('text edit on a .domain document rebuilds and republishes to the LSP head', async () => {
-      const republished = warm.lsp.nextDiagnostics(editedDocUri);
-      const model = editToggle++ % 2 === 0 ? editVariantA : editVariantB;
-      await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model, basedOn: 'anything' });
-      await republished;
-   });
+   bench(
+      'text edit on a .domain document rebuilds and republishes to the LSP head',
+      async () => {
+         const started = performance.now();
+         const republished = warm.lsp.nextDiagnostics(editedDocUri);
+         const model = editToggle++ % 2 === 0 ? editVariantA : editVariantB;
+         await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model, basedOn: 'anything' });
+         await republished;
+         recordSample(probeObservations['local edit'], performance.now() - started);
+      },
+      trackPhase
+   );
 
    bench(
       'graph head re-projects a .process diagram (RequestModel)',
@@ -389,5 +460,80 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
          await warm.glsp.nextAction(RequestBoundsAction.KIND);
       },
       { iterations: 10, warmupIterations: 1, time: 0 }
+   );
+
+   bench(
+      'open-document edit alternating between a clean and a repairing text',
+      async () => {
+         const started = performance.now();
+         repairToggle = !repairToggle;
+         repairVersion++;
+         repairDocuments.notifyDidChangeTextDocument({
+            textDocument: { uri: repairUri.toString(), version: repairVersion },
+            contentChanges: [{ text: repairToggle ? repairDuplicateText : repairCleanText }]
+         });
+         await repairBuilder.update([repairUri], []);
+         await repairBuilder.waitUntil(DocumentState.Validated, repairUri);
+         // Only the duplicate half repairs; the clean half is a plain rebuild,
+         // and a sample of it would dilute the repair figure.
+         if (repairToggle) {
+            recordSample(probeObservations['integrity repair'], performance.now() - started);
+         }
+      },
+      { iterations: 10, warmupIterations: 1, time: 0, ...trackPhase }
+   );
+
+   bench(
+      'LSP hover round-trip wire bytes',
+      async () => {
+         // The counter sees everything on the wire, so an earlier bench's
+         // cascade publishes still in flight would land in this delta. Settle
+         // the builder first so the delta is the hover's alone.
+         await warm.services.shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         const before = warm.lsp.wireBytes().total;
+         await warm.lsp.hover(diagramDocUri, { line: 0, character: 0 });
+         recordSample(wireByteObservations, warm.lsp.wireBytes().total - before);
+      },
+      { iterations: 10, warmupIterations: 1, time: 0, ...trackPhase }
+   );
+
+   bench(
+      'data-head reconnect open and watch',
+      async () => {
+         const started = performance.now();
+         const reconnect = makeDataServerHarness<BenchDataServer, TransferDomainModel | TransferProcessModel>({
+            server: channel => new BenchDataServer(channel, warm.services.shared)
+         });
+         await reconnect.proxy.openModelDocument({ uri: diagramDocUri, clientId: 'bench-reconnect' });
+         await reconnect.proxy.watchModelDocument({ uri: diagramDocUri, clientId: 'bench-reconnect' });
+         reconnect.dispose();
+         recordSample(probeObservations.reconnect, performance.now() - started);
+      },
+      { iterations: 10, warmupIterations: 1, time: 0, ...trackPhase }
+   );
+
+   bench(
+      'data write, LSP republish and GLSP model request issued together',
+      async () => {
+         const started = performance.now();
+         const diagnosticsAt = warm.lsp.diagnostics.length;
+         const editedDiagnostics = warm.lsp.nextDiagnostics(editedDocUri, { fromIndex: diagnosticsAt });
+         const boundsAction = warm.glsp.nextAction(RequestBoundsAction.KIND);
+         const model = concurrentToggle ? editVariantA : editVariantB;
+         concurrentToggle = !concurrentToggle;
+         const dataUpdate = warm.data.proxy.updateModelDocument({
+            uri: editedDocUri,
+            clientId: 'bench-concurrent',
+            model,
+            basedOn: 'anything'
+         });
+         // The GLSP model is requested here, not pushed by the edit: the
+         // diagram document need not depend on the edited one, so this times
+         // three heads working at once rather than one edit fanning out.
+         warm.glsp.dispatch(RequestModelAction.create({ options: { [SOURCE_URI_ARG]: diagramDocPath } }));
+         await Promise.all([editedDiagnostics, dataUpdate, boundsAction]);
+         recordSample(probeObservations['concurrent three-head operations'], performance.now() - started);
+      },
+      { iterations: 10, warmupIterations: 1, time: 0, ...trackPhase }
    );
 });
