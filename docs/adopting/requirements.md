@@ -1,7 +1,7 @@
 # Requirements for a consuming project
 
 What your own project has to satisfy before `@hydranium/*` will install and
-compile. Three requirements, and the second is the one that surprises people.
+compile. The single physical copy of Langium is the one that surprises people.
 
 ## Node 22.13 or newer
 
@@ -122,6 +122,26 @@ Pin the chain yourself:
 Then reinstall from scratch, as above. The `//overrides` note in this
 repository's root `package.json` records the full chain and why each entry is
 there.
+
+## Install Hydranium's LSP connection features
+
+Every LSP connection used with Hydranium must be created with
+`withHydraniumLspFeatures`:
+
+```ts
+import { createConnection, ProposedFeatures } from 'vscode-languageserver/node';
+import { withHydraniumLspFeatures } from '@hydranium/core/lsp';
+
+const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
+```
+
+This installs Hydranium's supported `RemoteConsole` integration. It suppresses
+the expected rejected log notification when a peer has already disconnected,
+while keeping unexpected logging failures visible. Without it, the upstream
+language-server console reports `Sending log message failed` during normal
+teardown. The wrapper must be supplied at each `createConnection` call site;
+`startLanguageServer` receives an already-created connection and cannot add it
+afterward.
 
 ## Related
 

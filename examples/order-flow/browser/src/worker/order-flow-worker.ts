@@ -59,7 +59,7 @@ import type {
 // `createLspServerSharedModule` fails here instead of booting on Langium's
 // default handler. Browser-neutral, so the worker takes the same composition
 // check every other host does.
-import { lspLatencyOptions, startLanguageServer } from '@hydranium/core/lsp';
+import { lspLatencyOptions, startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
 import { LatencyCollector } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
@@ -116,7 +116,7 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
    // sent — no error, no reply, a page that waits forever. Everything
    // asynchronous therefore happens before this function is called.
    const connection = createConnection(
-      ProposedFeatures.all,
+      withHydraniumLspFeatures(ProposedFeatures.all),
       new BrowserMessageReader(port),
       new BrowserMessageWriter(port),
       lspLatencyOptions(latency)

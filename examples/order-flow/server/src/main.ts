@@ -36,7 +36,7 @@ import { DataServer } from '@hydranium/data-server';
 // was never composed. Reaching for Langium's is the natural mistake and it is
 // silent: the server boots, links and completes, while echo suppression, the
 // didChangeContent debounce and the last-client-close rebuild are all inert.
-import { startLanguageServer } from '@hydranium/core/lsp';
+import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 import { OrderFlowProcessDiagramModule } from './glsp/order-flow-process-diagram-module.js';
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from './head-ports.js';
@@ -48,7 +48,7 @@ import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } fro
 import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
-const connection = createConnection(ProposedFeatures.all);
+const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createOrderFlowServices({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
 
