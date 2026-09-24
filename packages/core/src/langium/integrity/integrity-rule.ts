@@ -49,14 +49,22 @@ export namespace IntegrityPhase {
 }
 
 /**
- * Controls how integrity corrections are persisted for *closed* files. The
- * mode does not reach open files: their corrected text is delivered by the
- * model service's settled-state sync, whatever the mode says.
+ * Controls how integrity corrections are persisted for files no editor holds.
+ * The mode does not reach a file open in the language client: the correction
+ * is delivered to the editor, which shows it as an unsaved change.
  *
- * - `silent`: write to disk immediately; no editor involvement.
+ * - `silent`: write to disk immediately; no editor involvement. For a file
+ *    held only through the data or GLSP head, only while disk still holds the
+ *    text the correction was computed from and the text store still holds the
+ *    correction. Otherwise — the holder has unsaved edits, disk changed behind
+ *    the server, or disk cannot be read — the correction waits in the text
+ *    store for the next save.
  * - `editor`: open the file dirty via `applyEdit`. If the user closes without
  *    saving, the correction is suppressed until the file changes or the
- *    workspace reloads.
+ *    workspace reloads. A file held only through the data or GLSP head gets
+ *    neither: the correction stays in the text store, and since those heads
+ *    mark only their own edits unsaved, nothing shows that store and disk
+ *    differ until a save or the last close.
  */
 export type IntegritySyncMode = 'silent' | 'editor';
 

@@ -118,9 +118,11 @@ export class UniqueFlowNodeNamesRule implements IntegrityRule<ProcessModel> {
  *
  * One behaviour to know before binding your own: `IntegrityService`'s default
  * `'silent'` sync mode PERSISTS a repair — `FileSystemProvider.writeFile` on
- * closed documents, with text from the serializer, so the file comes back in the
- * serializer's layout. Bind the service with an explicit `syncMode` if a silent
- * disk write is not what you want.
+ * closed documents, and on a document held only through the data or GLSP head
+ * whose disk content is what the repair was computed from — with text from the
+ * serializer, so the file comes back in the serializer's layout. Bind the
+ * service with an explicit `syncMode` if a silent disk write is not what you
+ * want.
  */
 export class OrderFlowIntegrityContribution implements IntegrityRuleContribution {
    registerIntegrityRules(registry: IntegrityRuleRegistry): void {

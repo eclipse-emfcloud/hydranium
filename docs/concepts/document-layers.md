@@ -34,15 +34,21 @@ A rule mutates the AST in place; the integrity tier then serialises the result
 and routes it by how the document is held. It commits the repair into the
 shared text store only if the store still contains the text that produced the
 AST, then reconciles the registered Langium document by re-parsing or
-re-linking. What happens next depends on whether an editor holds the URI, not
-on whether anything holds it. Open in an editor, the settled listener sends it
-the corrected content as a `workspace/applyEdit`. Not open in an editor — closed,
-or held only through the data or GLSP head — the repair goes to disk in
-`'silent'` sync mode, or to a staging slot in `'editor'` mode. A staged repair
-is the exception: Langium's factory may skip re-parsing because the CST's
-`fullText` still equals the disk text it re-reads, leaving the mutated AST
-ahead of the text document until a first open consumes the stage — which, for
-a URI another head still holds, none does.
+re-linking. What happens next depends on whether any client holds the URI.
+Open in an editor, the settled listener sends it the corrected content as a
+`workspace/applyEdit`. Held only through the data or GLSP head, the repair
+stays in the store, where those heads read it. In `'silent'` sync mode it also
+goes to disk when disk still holds the text the repair was computed from and
+the store still holds the repair, the repair then being the only difference.
+Otherwise — the holder has unsaved edits, disk changed behind the server, or
+disk cannot be read — the repair reaches disk with the next save. Those heads
+mark only their own edits unsaved, so without that write a repair of text they
+never changed would leave store and disk apart with nothing showing it. Closed
+in every client, the repair goes to disk in `'silent'` sync mode, or to a
+staging slot in `'editor'` mode. A staged repair is the exception:
+Langium's factory may skip re-parsing because the CST's `fullText` still
+equals the disk text it re-reads, leaving the mutated AST ahead of the text
+document until a first open consumes the stage.
 
 So for a closed document with a staged repair, layer 1 mirrors **disk** while
 layer 2's AST carries the repair. `IntegrityService.SettledState` is the
@@ -66,7 +72,7 @@ The build-side descriptions below apply after a successful
 | --- | --- | --- | --- |
 | Closed file, no staged repair | Disk; a closed `'silent'` repair writes it. | A build reads disk and reconciles after a textual repair. There is no open store entry. | None. |
 | Open in the language client | Shared store; `didChange`, server-authored updates, and current-source integrity repairs write it. Disk is not written under the open editor. | A textual repair commits by URI and reconciles text/CST with the store; the AST also has its derived state. | Based on the editor's declared buffer. The settled listener queues a shadow-based `workspace/applyEdit`. |
-| Open only through data or GLSP | Shared store; `ModelService.update` and current-source repairs write it. `save` persists it, and so does a `'silent'` repair. | A textual repair reconciles against store text. In `'silent'` mode it also writes disk, unsaved updates included. In `'editor'` mode it stages content that no open consumes: an editor attaching joins the existing entry instead of taking the first-open path, and the last close discards the stage. | None until an editor attaches; an editor joining this existing store refreshes from its current content. |
+| Open only through data or GLSP | Shared store; `ModelService.update` and current-source repairs write it. `save` persists it, and so does a `'silent'` repair whose source text is what disk holds. | A textual repair commits by URI and reconciles against store text. In `'silent'` mode it writes disk only when disk holds the text it was computed from, so unsaved updates never ride along. In `'editor'` mode it never writes disk, and a repair of text the holder never changed then differs from disk with nothing marking it unsaved, since the data and GLSP heads mark only their own edits; that is a known limitation. It never stages, since an editor attaching joins the existing entry instead of taking the first-open path that reads a stage. A last close without a save discards a repair left in the store along with the unsaved updates; the disk-backed rebuild that follows sees a closed file, so a defect still on disk takes the closed-file route. | None until an editor attaches; an editor joining this existing store refreshes from its current content. |
 | Separately constructed Langium document for an already-open URI | Existing shared store; the separate document is not a text authority. | Its AST can enter a build, but repair commits only if its CST source still matches the store. A stale mutation is abandoned and the registered document is reconciled from current text. | Follows the actual open holder, never the separate document's text object. |
 | Closed file with an `'editor'`-mode staged repair | Disk remains persisted; pending content takes priority on the next first open. | The settled AST carries the repair, while `textDocument` and CST may still describe disk. | None while closed. First `didOpen` starts a shadow from the editor's declared buffer so the pending correction can be delivered. |
 
@@ -82,8 +88,10 @@ The transitions that change the owner are explicit:
   checks its `basedOn` version before installing a payload.
 - **Integrity repair** compares the AST's parsed source with the current open
   store before committing. A stale repair cannot overwrite a newer edit, and
-  reconciliation discards its obsolete AST mutation. A repair for a URI no
-  editor holds follows the disk or staging route in the table.
+  reconciliation discards its obsolete AST mutation. A repair for a URI some
+  client holds stays in the store, and in `'silent'` mode also reaches disk
+  when disk holds the text it was computed from; one for a URI no client holds
+  follows the disk or staging route in the table.
 - **Outbound `workspace/applyEdit`** uses the client's shadow and declared
   version, not the server's content version. The build can settle while this
   request is still in flight, so settlement alone does not prove the visible
@@ -97,9 +105,10 @@ The transitions that change the owner are explicit:
 
 The open-document repair tests in the order-flow example exercise the normal
 and separately constructed paths in both sync modes, for a URI an editor
-holds. The row for a URI held only through the data or GLSP head is reached
-by no test with a real holder; the integrity unit tests stub the editor-open
-check instead.
+holds, and the row for a URI held only through the data head, in both sync
+modes: an unsaved update's repair across a save, and a repair of a defect the
+head found on disk. The order-flow GLSP suite holds a URI through an open
+diagram alone and checks that the repair of an unsaved write stays off disk.
 
 ### Layer 3 — `AstDocument`, the in-process snapshot
 

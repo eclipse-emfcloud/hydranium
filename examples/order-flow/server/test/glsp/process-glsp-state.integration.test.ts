@@ -47,8 +47,9 @@
  * - `unavailable` needs the refetch to produce nothing, which over a real
  *   `ModelService` means an unreadable primary — a stub's scenario.
  *
- * The workspace is a scratch copy: this suite writes, and a rebuild runs the
- * integrity rules, whose default silent mode persists repairs to disk.
+ * The workspace is a scratch copy: this suite writes, and a build runs the
+ * integrity rules, whose default silent mode persists repairs to every file no
+ * client holds.
  */
 
 import 'reflect-metadata';

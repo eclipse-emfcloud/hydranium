@@ -89,8 +89,8 @@ describe('validation.DocumentValidator — the framework validator on the stock 
 
    /**
     * A scratch copy, because validating rebuilds documents and the integrity
-    * service's default `silent` sync mode persists its repairs with
-    * `FileSystemProvider.writeFile`.
+    * service's default `silent` sync mode persists its repairs to every file no
+    * client holds with `FileSystemProvider.writeFile`.
     */
    async function boot(): Promise<ScratchOrderFlowHarness> {
       booted = await makeScratchWorkspaceHarness();

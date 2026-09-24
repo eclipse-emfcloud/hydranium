@@ -30,8 +30,10 @@
  * objects the store does and does not know about.
  */
 
-import { DefaultIntegrityService } from '@hydranium/core';
+import { DefaultIntegrityService, HydraniumTextDocuments } from '@hydranium/core';
+import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
+import { asSnapshotVersion } from '@hydranium/protocol';
 import { readFileSync, writeFileSync } from 'node:fs';
 import type { ApplyWorkspaceEditParams, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -59,12 +61,59 @@ entity Twin {
 
 let scratch: ScratchOrderFlowHarness | undefined;
 let recorded: ApplyWorkspaceEditParams[] = [];
+let propagated: string[] = [];
+let staged: string[] = [];
+/** Runs once a file read completes, before its reader continues; cleared per test. */
+let afterRead: ((uri: string) => Promise<void>) | undefined;
 
 afterEach(() => {
    scratch?.workspace.dispose();
    scratch = undefined;
    recorded = [];
+   propagated = [];
+   staged = [];
+   afterRead = undefined;
 });
+
+/**
+ * Records every text a correction is handed on to propagation with. Disk shows
+ * a stale repair only in silent mode, and only while disk holds the text the
+ * repair was computed from; the hand-off is what an override persisting from
+ * `syncCorrections` would write over a newer edit in any mode. Both arguments
+ * are forwarded: dropping `parsedFrom` turns off the silent write for a held
+ * URI.
+ */
+class PropagationRecordingIntegrityService extends DefaultIntegrityService {
+   protected override async syncCorrections(document: TextDocument, parsedFrom?: string): Promise<void> {
+      propagated.push(document.getText());
+      await super.syncCorrections(document, parsedFrom);
+   }
+}
+
+/**
+ * Lets a test act in the gap between a read completing and its reader using
+ * the result, which is where a write that depends on the read can be raced.
+ */
+class InterleavingFileSystemProvider extends DefaultFileSystemProvider {
+   override async readFile(uri: URI): Promise<string> {
+      const content = await super.readFile(uri);
+      if (afterRead !== undefined) {
+         await afterRead(uri.toString());
+      }
+      return content;
+   }
+}
+
+/**
+ * Records every stage. For a URI a client holds, a stage is never read — only
+ * a first open consumes one — so its only observable is the call itself.
+ */
+class StageRecordingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+   override stagePendingContent(uri: string, text: string): void {
+      staged.push(text);
+      super.stagePendingContent(uri, text);
+   }
+}
 
 /** Poll until `predicate` holds, so a coalesced sync is awaited rather than raced. */
 async function until(predicate: () => boolean, what: string): Promise<void> {
@@ -78,8 +127,9 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
 }
 
 /**
- * Boot over a throwaway workspace with `syncMode` bound and the LSP `applyEdit`
- * captured. The file is NOT seeded before init: the separately-parsed case needs
+ * Boot over a throwaway workspace with `syncMode` bound, the LSP `applyEdit`
+ * captured, and propagations and stages recorded. Unless `seed` writes it, the
+ * file is NOT seeded before init: the separately-parsed case needs
  * a URI the workspace scan never indexed, because `LangiumDocuments.addDocument`
  * refuses one that is already present.
  */
@@ -100,10 +150,16 @@ async function bootCapturing(
                         }
                      }
                   }) as never
+            },
+            workspace: {
+               TextDocuments: services => new StageRecordingTextDocuments(services),
+               FileSystemProvider: services => new InterleavingFileSystemProvider(services)
             }
          }
       ],
-      extraLanguageModules: [{ integrity: { IntegrityService: services => new DefaultIntegrityService(services, { syncMode }) } }]
+      extraLanguageModules: [
+         { integrity: { IntegrityService: services => new PropagationRecordingIntegrityService(services, { syncMode }) } }
+      ]
    });
    // Arm the mirror: `ModelService` registers the settled listener that syncs to
    // the language client, and Langium constructs a slot only when something
@@ -134,11 +190,13 @@ function clientTextAfterEdits(uri: URI, original: string): string {
  * the text this AST was parsed from", and the only honest reference for that is
  * the CST's own `fullText`.
  *
- * Held open by a NON-language client on purpose. An open the language client
- * holds short-circuits the persist/stage branch entirely, so it hides the
- * consequence: with a data head as the only holder, a repair that loses the race
- * is written to disk or staged for the next open, and either way a newer edit is
- * overwritten by a correction computed before it existed.
+ * Only a URI open in the store can be stale — a closed one has no newer text to
+ * lose to. Held by a data head in silent mode, with disk still holding the
+ * superseded text, a stale repair that reached propagation would be written to
+ * disk, so disk witnesses the guard here. Whether the stale repair reaches
+ * `syncCorrections` at all is the part that holds for any mode and any disk:
+ * an override persisting from there would overwrite a newer edit with a
+ * correction computed before it existed.
  */
 describe('an integrity repair whose source text the store has already replaced', () => {
    const NEWER = `entity Twin {
@@ -158,8 +216,6 @@ entity Renamed {
       writeFileSync(workspace.resolve(UNINDEXED), DUPLICATES, 'utf8');
       const textDocuments = harness.shared.workspace.TextDocuments;
 
-      // Open under a data-head client, so `isOpenInLanguageClient` is false and
-      // the persist branch is reachable.
       textDocuments.notifyDidOpenTextDocument(
          { textDocument: { uri: uriString, languageId: 'domain', version: 1, text: DUPLICATES } },
          'data-client'
@@ -173,8 +229,10 @@ entity Renamed {
       await harness.shared.workspace.DocumentBuilder.build([separate], { validation: true });
 
       // The store keeps the newer text, and nothing derived from the superseded
-      // parse reaches disk.
+      // parse is handed on to be persisted or staged — or reaches disk, which
+      // still holds the text that parse came from.
       expect(textDocuments.get(uriString)?.getText()).toBe(NEWER);
+      expect(propagated.filter(text => text.includes('Twin__1'))).toEqual([]);
       expect(readFileSync(workspace.resolve(UNINDEXED), 'utf8')).toBe(DUPLICATES);
    });
 
@@ -290,4 +348,122 @@ for (const syncMode of ['editor', 'silent'] as const) {
          expect(readFileSync(workspace.resolve(UNINDEXED), 'utf8')).toBe(DUPLICATES);
       });
    });
+
+   describe(`an integrity repair of a URI held only through the data head (${syncMode} mode)`, () => {
+      // Not a closed file, though no editor holds it: the store is the
+      // authority, and it carries the client's unsaved updates. Routing it as
+      // closed writes those updates to disk in silent mode whenever an edit
+      // happens to need a repair, and in editor mode stages text no open reads.
+
+      it('stays in the store, neither persisted nor staged, until a save writes it', async () => {
+         const harness = await bootCapturing(syncMode, workspace => workspace.write(FILE, CLEAN));
+         const workspace = scratch!.workspace;
+         const uri = URI.file(workspace.resolve(FILE));
+         const uriString = uri.toString();
+         const textDocuments = harness.shared.workspace.TextDocuments;
+         const builder = harness.shared.workspace.DocumentBuilder;
+         const modelService = harness.shared.model.ModelService;
+         const onDisk = (): string => readFileSync(workspace.resolve(FILE), 'utf8');
+
+         await modelService.open({ uri: uriString, clientId: 'data-client' });
+         await builder.waitUntil(DocumentState.Validated, uri);
+
+         // An unsaved update that needs a repair. `update` resolves at the
+         // settled phase, past both integrity passes, and `Validated` follows
+         // every settled-phase listener — so each place a repair could be
+         // persisted or staged has already run.
+         await modelService.update({ uri: uriString, clientId: 'data-client', model: DUPLICATES, basedOn: 'anything' });
+         await builder.waitUntil(DocumentState.Validated, uri);
+
+         expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
+         expect(onDisk()).toBe(CLEAN);
+         expect(staged).toEqual([]);
+
+         // Saved as the text the store already holds, gated on the version that
+         // carries the repair. The version is the discriminating observable:
+         // saving the unrepaired payload again would step it and have the rule
+         // repair afresh, and the rename is deterministic, so disk alone would
+         // read the same either way.
+         const held = textDocuments.get(uriString)!.getText();
+         const heldVersion = textDocuments.version(uriString);
+         await modelService.save({ uri: uriString, clientId: 'data-client', model: held, basedOn: asSnapshotVersion(heldVersion) });
+
+         expect(textDocuments.version(uriString)).toBe(heldVersion);
+         expect(onDisk()).toBe(held);
+      });
+
+      it('reaches disk in silent mode when the store held nothing unsaved', async () => {
+         // A repair the holder did not author: the defect reached disk without
+         // the server seeing it, and the first open repairs it. Nothing the
+         // holder could discard rides along, and no client marks the repair as
+         // unsaved, so waiting for a save would leave disk and store apart with
+         // nothing showing it.
+         //
+         // Editor mode does wait, and that gap is a known limitation rather
+         // than a guarantee: the repair stays in the store alone, unmarked,
+         // until a save or the last close. Writing it would break the mode's
+         // promise that a user sees a repair before disk does, and there is no
+         // editor here to show it in.
+         const harness = await bootCapturing(syncMode, workspace => workspace.write(FILE, CLEAN));
+         const workspace = scratch!.workspace;
+         const uri = URI.file(workspace.resolve(FILE));
+         const uriString = uri.toString();
+         const textDocuments = harness.shared.workspace.TextDocuments;
+         const onDisk = (): string => readFileSync(workspace.resolve(FILE), 'utf8');
+         writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
+
+         // `open` builds the document, and `Validated` follows both integrity
+         // passes and every settled-phase listener.
+         await harness.shared.model.ModelService.open({ uri: uriString, clientId: 'data-client' });
+         await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
+
+         const repaired = textDocuments.get(uriString)?.getText();
+         expect(repaired).toContain('Twin__1');
+         expect(staged).toEqual([]);
+         expect(onDisk()).toBe(syncMode === 'silent' ? repaired : DUPLICATES);
+      });
+   });
 }
+
+describe('a silent repair of a held URI whose source is what disk holds', () => {
+   const SAVED_EDIT = `entity Solo {
+   a : string
+   b : string
+}
+`;
+
+   it('is not written over an edit saved while disk was being read', async () => {
+      // The write depends on a disk read, and a save does not wait for the
+      // build that repair belongs to: a diagram flush saves straight through the
+      // manager. An edit and its save landing in that gap are newer than the
+      // repair, and disk must keep them.
+      const harness = await bootCapturing('silent', workspace => workspace.write(FILE, CLEAN));
+      const workspace = scratch!.workspace;
+      const uri = URI.file(workspace.resolve(FILE));
+      const uriString = uri.toString();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const manager = harness.shared.workspace.AstDocumentManager;
+      writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
+
+      afterRead = async target => {
+         // The integrity pass's read, not the one `open` makes before the store
+         // has the document.
+         if (target !== uriString || !textDocuments.isOpen(uriString)) {
+            return;
+         }
+         afterRead = undefined;
+         manager.update(uriString, SAVED_EDIT, 'data-client');
+         await manager.save(uriString, 'data-client');
+      };
+      // `Validated` for the document follows the integrity passes of the build
+      // `open` drives; the builder-wide wait then covers the one the edit drives.
+      await harness.shared.model.ModelService.open({ uri: uriString, clientId: 'data-client' });
+      await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
+      await harness.shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+
+      // The edit and its save did land inside the gap.
+      expect(afterRead).toBeUndefined();
+      expect(textDocuments.get(uriString)?.getText()).toBe(SAVED_EDIT);
+      expect(readFileSync(workspace.resolve(FILE), 'utf8')).toBe(SAVED_EDIT);
+   });
+});

@@ -39,11 +39,11 @@ import { makeWorkspaceHarness, WORKSPACE_ROOT, type OrderFlowHarness } from './o
 /**
  * Copy a workspace file into a temp directory and build it there.
  *
- * The copy is not incidental: `update` drives a rebuild, and the integrity
- * service's default `'silent'` sync mode persists any repair with
- * `FileSystemProvider.writeFile`. Updating a file in place would therefore risk
- * rewriting the committed sample workspace, whose only intended error is
- * `orders/audit-leak.domain`.
+ * The copy is not incidental: this helper builds a file no client holds, the
+ * build runs the integrity rules, and the service's default `'silent'` sync
+ * mode persists a repair to such a file with `FileSystemProvider.writeFile`.
+ * Building a file in place would therefore risk rewriting the committed sample
+ * workspace, whose only intended error is `orders/audit-leak.domain`.
  */
 async function loadCopy(harness: OrderFlowHarness, relativePath: string): Promise<string> {
    const scratch = mkdtempSync(path.join(tmpdir(), 'order-flow-write-'));

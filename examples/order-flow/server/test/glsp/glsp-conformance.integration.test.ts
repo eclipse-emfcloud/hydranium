@@ -38,8 +38,9 @@
  *
  * The create-operation check writes to disk — through the serializer, and a
  * rebuild also runs the integrity rules, whose default silent mode persists
- * repairs. Pointing the suite at the committed `order-flow-workspace` would
- * rewrite it, so every `connect` seeds a fresh throwaway copy.
+ * repairs to every file no client holds. Pointing the suite at the committed
+ * `order-flow-workspace` would rewrite it, so every `connect` seeds a fresh
+ * throwaway copy.
  *
  * That is only possible because `GlspFixture.requestModel` is a **thunk**: it is
  * called per check, after `connect`, so it can read the root that `connect` just

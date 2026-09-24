@@ -838,10 +838,11 @@ export class MonacoLspAdapter {
     *   seeded documents and cannot open the rest. `applied: true` for an edit
     *   that went nowhere would leave the server's shadow believing this client
     *   holds text it does not, and every later minimal diff for that URI would
-    *   be computed against the wrong baseline. The framework routes writes to
-    *   documents the language client has NOT opened into `stagePendingContent`
-    *   instead, so this branch should stay unreached — it exists so that if it
-    *   is ever reached the failure is loud rather than a slow desynchronisation.
+    *   be computed against the wrong baseline. The framework pushes only to
+    *   documents the language client has opened, and stages or keeps in the
+    *   store a write to any other, so this branch should stay unreached — it
+    *   exists so that if it is ever reached the failure is loud rather than a
+    *   slow desynchronisation.
     * - **A stale version.** The framework addresses a position-dependent
     *   (line-keyed) push at the version this client last declared, precisely so
     *   the client can refuse a push its buffer has outrun: applying a stale

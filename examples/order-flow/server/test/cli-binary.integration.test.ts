@@ -109,9 +109,9 @@ let outputDir: ScratchWorkspace | undefined;
 
 beforeEach(() => {
    // A copy rather than the committed workspace: the build runs the integrity
-   // rules, whose default silent mode persists repairs through
-   // `FileSystemProvider.writeFile`, so a child pointed at the sample workspace
-   // may rewrite it (see `makeScratchWorkspace`'s own docs).
+   // rules, whose default silent mode persists repairs to every file no client
+   // holds through `FileSystemProvider.writeFile`, so a child pointed at the
+   // sample workspace may rewrite it (see `makeScratchWorkspace`'s own docs).
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-cli-binary-' });
    outputDir = makeScratchWorkspace({ prefix: 'order-flow-cli-binary-out-' });
 });
