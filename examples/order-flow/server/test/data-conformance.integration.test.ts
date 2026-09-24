@@ -39,8 +39,9 @@
  * throwaway workspace per check and the thunks read the one it just made. A plain
  * string in `ConformanceModel.uri` would have to be known at module load, before
  * any driver exists, which forces the whole battery to share ONE directory.
- * Scratch rather than the committed workspace for the usual reason: a rebuild
- * runs the integrity rules, whose default silent mode persists repairs to disk.
+ * Scratch rather than the committed workspace for the usual reason: a build
+ * runs the integrity rules, whose default silent mode persists repairs to every
+ * file no client holds.
  *
  * # How to tell these fixtures are not vacuously passing
  *

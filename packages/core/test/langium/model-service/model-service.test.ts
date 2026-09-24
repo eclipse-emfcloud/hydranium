@@ -717,8 +717,12 @@ describe('ModelService rebuild and save', () => {
  *    routed by **content**: the shadow no-ops the RPC when Monaco already matches,
  *    so a Monaco echo and a cascade-unchanged doc both cost nothing. Author is
  *    irrelevant on this path.
- *  - **pending staging** (closed in the language client) → `stagePendingContent`
- *    for the eventual first `didOpen`, gated by **provenance**: stage only a
+ *  - **nothing** (held only by another client) → only a FIRST `didOpen` reads a
+ *    stage, and a language client opening a held URI attaches instead.
+ *  - **pending staging** (closed in every client) → `stagePendingContent`
+ *    for the eventual first `didOpen`, which the default text store never
+ *    reaches — it keeps no author for a document nobody holds — and the stub
+ *    reaches on request. Gated by **provenance**: stage only a
  *    genuine client edit (`hasKnownAuthor && isTriggeringEdit`). An internal build
  *    (no author — `getAuthor` → `undefined` — from startup, a cascade relink, or
  *    a didClose-reload) is NOT staged: its text equals disk or is a transient
@@ -758,10 +762,10 @@ describe('ModelService LSP-client sync', () => {
          isTriggeringEdit: () => boolean;
          getAuthor: () => string | undefined;
       };
-      // `syncToLanguageClient` routes on the text store's open-state predicate:
-      // open in the language client → `applyEditToLanguageClient`; not open →
-      // staging path. (The egress translates the canonical key to the recorded
-      // client URI; presence is all the routing needs.)
+      // `syncToLanguageClient` routes on the text store's open-state predicates:
+      // open in the language client → `applyEditToLanguageClient`; held by no
+      // client → staging path. (The egress translates the canonical key to the
+      // recorded client URI; presence is all the routing needs.)
       if (verdict.open) {
          bundle.textDocuments.seedOpenInLanguageClient(URI_A);
       }
@@ -787,12 +791,27 @@ describe('ModelService LSP-client sync', () => {
       expect(bundle.textDocuments.appliedEdits.map(edit => edit.text)).toEqual(['name:corrected']);
    });
 
-   it('stages (no applyEdit) a client-authored direct change not yet open in the language client', async () => {
+   it('stages (no applyEdit) a client-authored direct change to a URI no client holds', async () => {
+      // A known author for a document nobody holds is a state the default text
+      // store never reports; the stub reports it on request, which is how the
+      // stage stays pinned for a store that does.
       const bundle = buildSyncBundle({ open: false, direct: true, author: 'form-client' });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
       expect(bundle.textDocuments.appliedEdits).toEqual([]);
       expect(bundle.textDocuments.staged).toEqual([{ uri: URI_A, text: 'name:b' }]);
+   });
+
+   it('does NOT stage a client-authored change to a URI another client still holds', async () => {
+      // A language client opening this URI attaches to the held entry and is
+      // refreshed from the store; only a first open reads a stage, so one
+      // staged here would never be read.
+      const bundle = buildSyncBundle({ open: false, direct: true, author: 'form-client' });
+      bundle.textDocuments.seedOpen(URI_A, 'name:a', 'form-client');
+      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
+      await drainSync();
+      expect(bundle.textDocuments.appliedEdits).toEqual([]);
+      expect(bundle.textDocuments.staged).toEqual([]);
    });
 
    it('does NOT stage a closed internal-build change (no author) — disk stays authoritative', async () => {

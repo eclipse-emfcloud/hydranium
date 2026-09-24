@@ -163,9 +163,10 @@ builds through the update path, then
 writes the current store text to disk only when it differs. A successful model
 update therefore changes shared in-memory state only; the caller's save is what
 persists it. The one other writer is an integrity repair in `'silent'` sync
-mode: for a URI no editor holds open, including one held only through the data
-or GLSP head, it writes the repaired store text to disk, and that text carries
-any unsaved update with it.
+mode. It writes a URI no client holds, and a URI held only through the data or
+GLSP head when disk still holds the text the repair was computed from, so it
+never carries an unsaved update; otherwise the repair stays in the store until
+that save.
 
 Updates are currently full-model (the complete model/text is sent and replaces
 the complete model/text on the server and in the other clients).

@@ -25,8 +25,8 @@
  * through `ModelService.update`, and the document is re-parsed. So a mutation
  * the serializer cannot express fails here rather than at runtime.
  *
- * The workspace is a scratch copy: rebuilds run the integrity rules, whose
- * default silent mode writes repairs to disk.
+ * The workspace is a scratch copy: builds run the integrity rules, whose
+ * default silent mode writes repairs to every file no client holds.
  */
 
 import 'reflect-metadata';

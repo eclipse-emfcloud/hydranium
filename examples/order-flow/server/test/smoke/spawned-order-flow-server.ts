@@ -63,8 +63,9 @@ export type SpawnedOrderFlowServer = SpawnedServer;
  * `workspaceRoot` is an absolute directory the child indexes as its single
  * workspace folder. Every suite passes a **throwaway copy** of the sample
  * workspace: the initial build runs the integrity rules, whose default silent
- * mode persists repairs through `FileSystemProvider.writeFile`, so booting a
- * child over the committed workspace would let it rewrite the fixture.
+ * mode persists repairs to every file no client holds through
+ * `FileSystemProvider.writeFile`, so booting a child over the committed
+ * workspace would let it rewrite the fixture.
  */
 export function startSpawnedOrderFlowServer(options: Omit<SpawnedServerOptions, 'serverModule'> = {}): Promise<SpawnedOrderFlowServer> {
    return startSpawnedServer({ serverModule: SERVER_BIN, workspaceFolderName: 'order-flow', ...options });

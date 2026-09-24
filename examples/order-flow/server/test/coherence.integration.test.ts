@@ -37,8 +37,9 @@
  *
  * An in-memory `ModelService.update` is not the only write a test provokes: a
  * rebuild runs the integrity rules, whose default silent mode persists repairs
- * with `writeFile` — and the cross-grammar test below deliberately makes a
- * `.process` effect dangle, which is exactly the state a repair rule acts on.
+ * to every file no client holds with `writeFile` — and the cross-grammar test
+ * below deliberately makes a `.process` effect dangle, which is exactly the
+ * state a repair rule acts on.
  * Pointing this at `examples/order-flow/workspace` would let a test rewrite the
  * committed sample.
  */

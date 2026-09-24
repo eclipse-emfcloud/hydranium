@@ -168,8 +168,8 @@ function diskText(relativePath: string): string {
 describe('order-flow data port', () => {
    beforeEach(async () => {
       // A throwaway copy, because the integrity service's default silent mode
-      // persists its repairs, so a write test aimed at the committed workspace
-      // would rewrite it.
+      // persists its repairs to every file no client holds, so a write test
+      // aimed at the committed workspace would rewrite it.
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-port-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });
       await initializeWorkspaceProgrammatically(shared, workspace.root);

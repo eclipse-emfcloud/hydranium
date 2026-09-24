@@ -316,9 +316,21 @@ class RecordingTextDocuments {
    readonly stagedContent: { uri: string; text: string }[] = [];
    readonly reconciledContent: { uri: string; text: string }[] = [];
    openInLanguageClient = false;
+   /** Held by a client other than the language client — the data or GLSP head. */
+   openInOtherClient = false;
+   /** What `get` answers, by URI: the store's own document for a held URI. */
+   readonly held = new Map<string, TextDocument>();
+
+   get(uri: string): TextDocument | undefined {
+      return this.held.get(uri);
+   }
 
    isOpenInLanguageClient(): boolean {
       return this.openInLanguageClient;
+   }
+
+   isOpenInAnyClient(): boolean {
+      return this.openInLanguageClient || this.openInOtherClient;
    }
 
    setAuthor(uri: string, version: number, author: string): void {
@@ -365,6 +377,16 @@ class RecordingTextDocuments {
 
 class RecordingFileSystemProvider {
    readonly writes: { uri: string; content: string }[] = [];
+   /** What `readFile` answers, by URI; a URI missing here reads as a missing file. */
+   readonly onDisk = new Map<string, string>();
+   /** Runs while a read is pending, before it answers. */
+   duringRead: () => void = () => undefined;
+
+   readFile(uri: { toString(): string }): Promise<string> {
+      this.duringRead();
+      const content = this.onDisk.get(uri.toString());
+      return content === undefined ? Promise.reject(new Error(`no such file: ${uri.toString()}`)) : Promise.resolve(content);
+   }
 
    writeFile(uri: { toString(): string } | string, content: string): Promise<void> {
       this.writes.push({ uri: uri.toString(), content });
@@ -374,8 +396,8 @@ class RecordingFileSystemProvider {
 
 /** Probe exposing the protected correction-sync entry points. */
 class CorrectionsProbe extends DefaultIntegrityService<FakeNode> {
-   syncCorrectionsNow(document: TextDocument): Promise<void> {
-      return this.syncCorrections(document);
+   syncCorrectionsNow(document: TextDocument, parsedFrom?: string): Promise<void> {
+      return this.syncCorrections(document, parsedFrom);
    }
    resyncNow(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void> {
       return this.resyncDocument(document, cancelToken);
@@ -415,10 +437,10 @@ function makeCorrectionsProbe(
                   builderCalls.reparseAndRelink.push(document.uri.toString());
                }
             }
-            // syncCorrections asks the text store directly whether the document is
-            // open in the language client (`isOpenInLanguageClient` canonicalizes
-            // internally, so a symlinked open file is recognised across the R/S
-            // divergence); the RecordingTextDocuments open flag drives it.
+            // syncCorrections asks the text store directly whether any client
+            // holds the document (`isOpenInAnyClient` canonicalizes internally,
+            // so a symlinked open file is recognised across the R/S divergence);
+            // the RecordingTextDocuments open flags drive it.
          }
       },
       serializer: { Serializer: { serializeAst: () => serializeResult } }
@@ -820,11 +842,13 @@ describe('IntegrityService.enforceIntegrity empty-phase-bucket short-circuit', (
 });
 
 /**
- * Pins the `isOpenInLanguageClient` branch: an open file returns immediately —
- * it never stages pending content (the closed-editor path) and never rewrites
- * authorship. An `if (false)` mutant (open file falls through to the editor-mode
- * staging branch) would survive without this. This pins that staging does not
- * run for open files.
+ * Pins the open-file branches: a file any client holds never stages pending
+ * content (the closed-editor path) and never rewrites authorship, and it
+ * reaches disk only in silent mode, only for a holder other than the language
+ * client, and only when disk holds the text the repair was computed from. An
+ * `if (false)` mutant (open file falls through to the closed-file branches)
+ * would survive without this: silent mode would then write unsaved store text
+ * to disk.
  */
 describe('IntegrityService corrections sync — open-file branch isolation', () => {
    it('does not stage pending content or rewrite authorship for an open file (editor mode)', async () => {
@@ -838,6 +862,74 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
       // no author rewrite — delivery is the ModelService content listener's job.
       expect(textDocuments.setAuthorCalls).toEqual([]);
       expect(textDocuments.stagedContent).toEqual([]);
+   });
+
+   for (const syncMode of ['silent', 'editor'] as const) {
+      it(`neither writes disk nor stages for a held file whose source is not what disk holds (${syncMode} mode)`, async () => {
+         const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe(syncMode);
+         textDocuments.openInOtherClient = true;
+         fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+         const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+
+         // Parsed from an unsaved edit, which a disk write would carry along.
+         await probe.syncCorrectionsNow(td, 'unsaved');
+
+         expect(fileSystemProvider.writes).toEqual([]);
+         expect(textDocuments.stagedContent).toEqual([]);
+      });
+   }
+
+   it('writes a held file in silent mode when its source is what disk holds', async () => {
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+      textDocuments.held.set('file:///held.fake', td);
+
+      await probe.syncCorrectionsNow(td, 'saved');
+
+      expect(fileSystemProvider.writes).toEqual([{ uri: 'file:///held.fake', content: 'corrected' }]);
+      expect(textDocuments.stagedContent).toEqual([]);
+   });
+
+   it('writes nothing when an edit lands while disk is being read', async () => {
+      // The document is the store's own object, so a newer edit changes it in
+      // place while the read is pending. The repair is then older than the
+      // store, and writing either text could overwrite a save of that edit.
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+      textDocuments.held.set('file:///held.fake', td);
+      fileSystemProvider.duringRead = () => TextDocument.update(td, [{ text: 'newer unsaved' }], 6);
+
+      await probe.syncCorrectionsNow(td, 'saved');
+
+      expect(td.getText()).toBe('newer unsaved');
+      expect(fileSystemProvider.writes).toEqual([]);
+   });
+
+   it('neither writes nor stages a held file in editor mode, even when its source is what disk holds', async () => {
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('editor');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+
+      await probe.syncCorrectionsNow(td, 'saved');
+
+      expect(fileSystemProvider.writes).toEqual([]);
+      expect(textDocuments.stagedContent).toEqual([]);
+   });
+
+   it('does not write a held file in silent mode without the source text, or when disk cannot be read', async () => {
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+
+      await probe.syncCorrectionsNow(TextDocument.create('file:///held.fake', 'fake', 5, 'corrected'));
+      await probe.syncCorrectionsNow(TextDocument.create('file:///missing.fake', 'fake', 5, 'corrected'), 'saved');
+
+      expect(fileSystemProvider.writes).toEqual([]);
    });
 });
 

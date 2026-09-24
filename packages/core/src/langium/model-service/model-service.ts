@@ -917,15 +917,20 @@ export class DefaultModelService<
     * `HydraniumTextDocuments.applyEditToLanguageClient` and
     * `HydraniumTextDocuments.stagePendingContent`.
     *
-    * Routes to one of two mechanisms by language-client registration, because
-    * an open and a closed document answer different questions:
+    * Routes by client registration, because an open and a closed document
+    * answer different questions:
     *
     * - **Open in the language client** → {@link syncOpenDocument}: mirror the
     *   settled text via a coalesced `applyEditToLanguageClient`, routed purely by
     *   **content**.
-    * - **Closed in the language client** → {@link stageClosedDocument}: stage the
-    *   text for the eventual first `didOpen`, gated by **provenance**
-    *   ({@link isNonLanguageClientEdit}).
+    * - **Open only in another client** (the data or GLSP head) → nothing. A
+    *   language client opening it joins the existing entry and is refreshed from
+    *   the store, and only a FIRST open reads a stage, so staging here would
+    *   leave text nothing reads.
+    * - **Closed in every client** → {@link stageClosedDocument}, gated by
+    *   **provenance** ({@link isNonLanguageClientEdit}). With the default text
+    *   store this never stages; see {@link stageClosedDocument} for why, and
+    *   for the store it serves.
     *
     * The decision is **re-derived from the current settled state every time** (it
     * is not a one-shot enrolment), which is what makes it self-healing: a doc
@@ -935,9 +940,9 @@ export class DefaultModelService<
     */
    protected syncToLanguageClient(document: LangiumDocument): void {
       // `document.textDocument.uri` is the server-identity (canonical) URI off the
-      // build. Route by language-client registration (a presence question —
-      // `isOpenInLanguageClient` canonicalizes internally, so a divergent open path
-      // still resolves to the same record), but key the outbound sync by this
+      // build. Route by client registration (presence questions — both
+      // predicates canonicalize internally, so a divergent open path still
+      // resolves to the same record), but key the outbound sync by this
       // CANONICAL URI — the same key `settleSave` looks the chain up under —
       // so a save-settle can drain the in-flight applyEdit. The canonical→client-URI
       // translation (a symlinked path the client opened, or a dual-open fan-out)
@@ -945,9 +950,10 @@ export class DefaultModelService<
       // the canonical key to the recorded language-client URI(s); driving the chain
       // in client space here would key it under a URI `settleSave` never computes, so
       // the drain would miss for a divergent open path.
-      if (this.services.workspace.TextDocuments.isOpenInLanguageClient(document.textDocument.uri)) {
+      const textDocuments = this.services.workspace.TextDocuments;
+      if (textDocuments.isOpenInLanguageClient(document.textDocument.uri)) {
          this.syncOpenDocument(document.textDocument.uri, document.textDocument.getText());
-      } else {
+      } else if (!textDocuments.isOpenInAnyClient(document.textDocument.uri)) {
          this.stageClosedDocument(document);
       }
    }
@@ -968,11 +974,18 @@ export class DefaultModelService<
    }
 
    /**
-    * Stage the settled text of a document closed in the language client so the
-    * eventual first `didOpen` sees this in-memory text instead of stale disk —
+    * Stage the settled text of a document no client holds so the eventual
+    * first `didOpen` sees this in-memory text instead of stale disk —
     * but only for a {@link isNonLanguageClientEdit genuine non-language-client edit}.
     * A document rebuilt by an internal build is skipped, leaving disk authoritative
     * on the next open.
+    *
+    * The default `HydraniumTextDocuments` never gets this far. Its own paths
+    * record a version's author only while a client holds the document, and the
+    * last close drops that history with the tracking record, so a document no
+    * client holds reports no author and the provenance gate refuses. The stage
+    * is reachable for a text store that keeps authorship past the last close,
+    * or a subclass overriding {@link isNonLanguageClientEdit}.
     */
    protected stageClosedDocument(document: LangiumDocument): void {
       if (this.isNonLanguageClientEdit(document)) {

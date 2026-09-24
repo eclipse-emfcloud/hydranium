@@ -353,8 +353,10 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       if (commit.status === 'stale') {
          // An edit landed after the parse this repair came from, so the repair
          // describes text the store has already replaced. Abandon it rather than
-         // persist or stage it: that edit drives a build of its own, which
-         // re-runs these rules against what the document actually says.
+         // hand it to `syncCorrections`: an override that persists from there
+         // would write a correction over the edit that superseded it. That edit
+         // drives a build of its own, which re-runs these rules against what the
+         // document actually says.
          //
          // Abandoning the WRITE is only half of it. The build carries on to its
          // settled phase with whatever AST is registered, and every settled
@@ -372,7 +374,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       const textDocument =
          commit.status === 'committed' ? commit.document : this.textDocuments.update(document.textDocument, [{ text: newText }], version);
 
-      await this.syncCorrections(textDocument);
+      await this.syncCorrections(textDocument, parsedFrom);
 
       await this.reconcileDocument(document, cancelToken);
 
@@ -448,19 +450,34 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * already in the synced store (in-place in {@link resyncDocument}); this
     * method routes the out-of-band part by document registration:
     *
-    * - **Open in the language client** → nothing to push here. The AST mutation
-    *   rode the current build, so `ModelService.syncToLanguageClient` (the
-    *   persistent integrity-settled listener) mirrors the corrected text to the
-    *   client by *content* (shadow diff) — no authorship rewrite, no second
-    *   rebuild.
+    * - **Open in the language client** → nothing to push here. The AST
+    *   mutation rode the current build, so `ModelService.syncToLanguageClient`
+    *   (the persistent integrity-settled listener) mirrors it to the client by
+    *   *content* (shadow diff), and the editor shows it as an unsaved change.
+    * - **Held only through the data or GLSP head** → the store is the
+    *   authority, and those heads read the correction from the settled build.
+    *   In silent mode it is also written to disk when the text it was computed
+    *   from is what disk holds, since the repair is then the only difference;
+    *   otherwise it waits for the next save. Editor mode always waits, and a
+    *   repair of text the holder never changed then differs from disk with
+    *   nothing marking it unsaved.
     * - **Closed, silent mode** → write to disk directly (disk is authoritative).
     * - **Closed, editor mode** → stage so the next open picks it up via applyEdit.
+    *
+    * A held URI is not closed. Writing it as one persists the holder's unsaved
+    * edits with the repair, and staging it leaves text no open reads, because
+    * only a first open consumes the stage. Leaving every held repair to a save
+    * is not enough either: a data or GLSP head marks only its own edits unsaved,
+    * so a repair of text it never changed would leave disk and store apart with
+    * nothing showing it.
+    *
+    * `parsedFrom` is the text the repaired AST was parsed from. Without it a
+    * held URI's repair is left to the next save.
     */
-   protected async syncCorrections(document: TextDocument): Promise<void> {
-      // Open files: delivery is the ModelService settled listener's job (by
-      // content, via the shadow) — nothing to do here. Only the open/closed
-      // question is asked, so no reverse address resolution is needed: a file
-      // open under a symlinked path still answers `true`.
+   protected async syncCorrections(document: TextDocument, parsedFrom?: string): Promise<void> {
+      // Only the open/closed question is asked, so no reverse address
+      // resolution is needed: a file open under a symlinked path still answers
+      // `true`.
       if (this.textDocuments.isOpenInLanguageClient(document.uri)) {
          return;
       }
@@ -478,6 +495,13 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
 
+      if (this.textDocuments.isOpenInAnyClient(document.uri)) {
+         if (this.syncMode === 'silent' && parsedFrom !== undefined) {
+            await this.persistIfDiskMatches(document, parsedFrom);
+         }
+         return;
+      }
+
       // Closed files, silent mode: write to disk directly.
       if (this.syncMode === 'silent') {
          // Async write so the integrity pass does not block the event loop on a slow filesystem.
@@ -487,6 +511,39 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
 
       // Closed files, editor mode: stage content so the next open picks it up via applyEdit.
       this.textDocuments.stagePendingContent(document.uri, document.getText());
+   }
+
+   /**
+    * Write the repair in `document` to disk when disk still holds `parsedFrom`,
+    * the text the repair was computed from — so the write carries the repair
+    * and nothing a holder could still discard.
+    *
+    * The store is compared again once the read returns, and the write is
+    * skipped if it no longer holds the repair. A save does not wait for the
+    * build this repair belongs to, so an edit and its save can land while the
+    * read is pending; writing the older repair then would overwrite a saved
+    * edit on disk. The skipped repair loses nothing: the edit drives a build
+    * of its own, and a save writes the store's text. A file that cannot be read
+    * is left alone too: there is no evidence it matches.
+    */
+   protected async persistIfDiskMatches(document: TextDocument, parsedFrom: string): Promise<void> {
+      const uri = UriUtils.toUri(document.uri);
+      const repaired = document.getText();
+      let onDisk: string;
+      try {
+         onDisk = await this.fileSystemProvider.readFile(uri);
+      } catch (error: unknown) {
+         this.tracer.with(document.uri).debug(`Held document unreadable on disk, repair left to the next save: ${String(error)}`);
+         return;
+      }
+      if (onDisk !== parsedFrom) {
+         return;
+      }
+      if (this.textDocuments.get(document.uri)?.getText() !== repaired) {
+         this.tracer.with(document.uri).debug('Held document changed while disk was read, repair left to that change');
+         return;
+      }
+      await this.fileSystemProvider.writeFile(uri, repaired);
    }
 
    /**

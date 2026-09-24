@@ -211,8 +211,9 @@ function uriOf(relativePath: string): string {
 describe('order-flow cross-head write smoke (data socket in, LSP wire out)', () => {
    beforeAll(async () => {
       // A throwaway copy, not the committed workspace: the initial build runs the
-      // integrity rules, whose default silent mode persists repairs with
-      // `writeFile`, so a child booted over the fixture could rewrite it.
+      // integrity rules, whose default silent mode persists repairs to every
+      // file no client holds with `writeFile`, so a child booted over the
+      // fixture could rewrite it.
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-smoke-cross-' });
       server = await startSpawnedOrderFlowServer({ workspaceRoot: workspace.root });
       socket = await connectSocket(await server.port(PORT_COMMAND));

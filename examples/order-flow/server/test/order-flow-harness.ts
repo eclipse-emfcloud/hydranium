@@ -147,9 +147,10 @@ export interface ScratchOrderFlowHarness {
  * Any test that drives a write path wants this rather than
  * {@link makeWorkspaceHarness} — the framework helper's own docs carry the
  * reason (a rebuild runs the integrity rules, whose default silent mode
- * persists repairs to disk, so a write test aimed at the committed workspace
- * rewrites it). This wrapper exists only to bind the seed and boot the
- * languages over the result; the caller must `dispose()` the workspace.
+ * persists repairs to every file no client holds, so a write test aimed at the
+ * committed workspace rewrites it). This wrapper exists only to bind the seed
+ * and boot the languages over the result; the caller must `dispose()` the
+ * workspace.
  *
  * `prepare` runs against the copy BEFORE the workspace is initialized, which is
  * the only point at which a test can author content the initial build then sees.
@@ -187,10 +188,10 @@ export function documentFor<TRoot extends AstNode>(harness: OrderFlowHarness, re
  * Two reasons for the copy:
  *
  * - The integrity service's default `silent` sync mode persists its repairs
- *   with `FileSystemProvider.writeFile`, so building a fixture in place
- *   rewrites it. The first run would consume the fixture and every run after
- *   that would assert against already-repaired input — a test that passes
- *   while testing nothing.
+ *   to every file no client holds with `FileSystemProvider.writeFile`, so
+ *   building a fixture in place rewrites it. The first run would consume the
+ *   fixture and every run after that would assert against already-repaired
+ *   input — a test that passes while testing nothing.
  * - The write-back goes through the serializer, so the fixture would also come
  *   back in the serializer's layout rather than as it was authored.
  *
