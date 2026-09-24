@@ -167,6 +167,10 @@ const SNIPPET_TARGETS = [
          'declare const MyAddedSharedModule: never;',
          'declare const MyAddedLanguageModule: never;'
       ].join('\n')
+   },
+   {
+      readme: 'docs/adopting/requirements.md',
+      host: 'examples/order-flow/server'
    }
 ];
 

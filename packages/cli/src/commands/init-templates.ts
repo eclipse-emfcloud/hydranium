@@ -1087,11 +1087,11 @@ ${data ? "import { DataServer } from '@hydranium/data-server';\n" : ''}// The fr
 // was never composed. Reaching for Langium's is the natural mistake and it is
 // silent: the server boots, links and completes, while echo suppression, the
 // didChangeContent debounce and the last-client-close rebuild are all inert.
-import { startLanguageServer } from '@hydranium/core/lsp';
+import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 ${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 ${portCommands === '' ? '' : '\n' + portCommands}
-const connection = createConnection(ProposedFeatures.all);
+const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = create__NAME__Services({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
 ${dataBlock}${glspBlock}`;

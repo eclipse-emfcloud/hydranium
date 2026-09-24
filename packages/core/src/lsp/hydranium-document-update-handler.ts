@@ -16,6 +16,7 @@ import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
 import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { isConnectionGoneError } from '../util/connection-liveness.js';
 import { type DidChangeWatchedFilesParams, type FileEvent, FileChangeType, type TextDocumentChangeEvent } from 'vscode-languageserver';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -338,6 +339,14 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             })
          )
          .catch(err => {
+            // A deferred rebuild can finish after the LSP peer has gone away.
+            // Unless the head was started through `startLanguageServer`, whose
+            // guard absorbs it, the diagnostics publish then fails this build:
+            // a routine teardown race, not a failed workspace update. Keep
+            // genuine update failures visible.
+            if (isConnectionGoneError(err)) {
+               return;
+            }
             const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
             this.logger.error(`Workspace initialization failed. Could not perform document update. ${detail}`);
          });

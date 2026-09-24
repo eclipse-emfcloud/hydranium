@@ -11,14 +11,13 @@ import { type Harness } from '@hydranium/protocol/testing';
 import { makeDuplexStreamPair } from '@hydranium/protocol/testing/node';
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import { type Connection, ProposedFeatures } from 'vscode-languageserver/node';
+import { withHydraniumLspFeatures } from '../../lsp/connection-features.js';
 // The node `createConnection` from `vscode-languageserver/node` is built for a
 // standalone server PROCESS: it wires `process.exit()` onto the input stream's
 // `end`/`close` events, onto the `exit` notification (via its watchDog), and onto
-// a parent-pid liveness timer, and it calls `endProtocolConnection()` (a write)
-// on stream close. In-process every one of those is fatal — destroying the
-// streams at teardown trips the `close` handler, which writes into the destroyed
-// stream (an uncatchable synchronous `ERR_STREAM_DESTROYED`) and/or exits the host
-// test runner. The lower-level common `createConnection(connectionFactory,
+// a parent-pid liveness timer. In-process every one of those is fatal —
+// destroying the streams at teardown trips the `close` handler, which exits the
+// host test runner. The lower-level common `createConnection(connectionFactory,
 // watchDog, features)` form does none of that: it lets us inject a no-op-`exit`
 // WatchDog and build the connection over the in-memory streams, so teardown is the
 // primitive's responsibility alone.
@@ -347,7 +346,7 @@ export function makeLspServerConnection(): LspServerConnection {
       logger =>
          createProtocolConnection(new StreamMessageReader(pair.clientToServer), new StreamMessageWriter(pair.serverToClient), logger),
       watchDog,
-      ProposedFeatures.all
+      withHydraniumLspFeatures(ProposedFeatures.all)
    );
 
    // Client side mirrors the directions: reads serverToClient, writes clientToServer.

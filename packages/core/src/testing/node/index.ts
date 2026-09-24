@@ -27,3 +27,4 @@ export * from './lsp-harness.js';
 export * from './lsp-server-connection.js';
 export * from './scratch-workspace.js';
 export * from './spawned-server.js';
+export * from './unhandled-rejections.js';

@@ -11,20 +11,32 @@
  * `isConnectionGoneError` — the predicate that decides whether a failed push to
  * a peer is routine teardown or a real fault.
  *
- * It exists because the condition arrives in two unrelated shapes whose typed
- * errors come from different classes and different code enums, so there is no
- * single discriminator to test. Both shapes are pinned here with the exact
- * `vscode-jsonrpc` wording, because the predicate is a **string match** and a
- * library rephrasing is precisely the regression that would silently reclassify
- * every shutdown as an error again.
+ * It exists because the condition arrives in unrelated shapes whose typed errors
+ * come from different classes and different code enums, so there is no single
+ * discriminator to test. Each shape is pinned here with the exact wording its
+ * source uses, because the predicate is mostly a **string match** and a library
+ * rephrasing is precisely the regression that would silently reclassify every
+ * shutdown as an error again. The destroyed-stream case is pinned with Node's
+ * real error rather than a hand-built one, so a Node change to its code or
+ * message reddens here instead of in a teardown log.
  *
  * The negative cases matter as much: a predicate that answers `true` too often
  * downgrades genuine failures to `debug`, which is worse than the noise it was
  * written to remove.
  */
 
+import { PassThrough } from 'node:stream';
+import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { describe, expect, it } from 'vitest';
 import { isConnectionGoneError } from '../../src/util/connection-liveness.js';
+
+function writeAfterDestroy(): Promise<Error> {
+   const stream = new PassThrough();
+   stream.destroy();
+   return new Promise(resolve => {
+      stream.write('late', error => resolve(error ?? new Error('write into a destroyed stream unexpectedly succeeded')));
+   });
+}
 
 describe('isConnectionGoneError', () => {
    it('recognises a synchronous throw from throwIfClosedOrDisposed', () => {
@@ -38,6 +50,19 @@ describe('isConnectionGoneError', () => {
       // not a ConnectionError, which is why a check on the ConnectionError code
       // would miss it.
       expect(isConnectionGoneError(new Error('Pending response rejected since connection got disposed'))).toBe(true);
+   });
+
+   it('recognises a notification written into a destroyed transport', async () => {
+      // The writer rejects with Node's error unchanged, so its code is present.
+      const error = await writeAfterDestroy();
+      expect(isConnectionGoneError(error)).toBe(true);
+   });
+
+   it('recognises a request written into a destroyed transport', async () => {
+      // `sendRequest` rewraps the write failure as a ResponseError that keeps
+      // Node's message and drops its code, so only the phrase can match.
+      const wrapped = new ResponseError(ErrorCodes.MessageWriteError, (await writeAfterDestroy()).message);
+      expect(isConnectionGoneError(wrapped)).toBe(true);
    });
 
    it('is case-insensitive, since the wording is not ours to fix', () => {
@@ -54,6 +79,7 @@ describe('isConnectionGoneError', () => {
       expect(isConnectionGoneError(new Error('applyEdit rejected by the client'))).toBe(false);
       expect(isConnectionGoneError(new Error('Request failed: invalid params'))).toBe(false);
       expect(isConnectionGoneError(undefined)).toBe(false);
+      expect(isConnectionGoneError(Object.assign(new Error('no such file'), { code: 'ENOENT' }))).toBe(false);
    });
 
    it('does not match an unrelated "disposed" that is not about the connection', () => {

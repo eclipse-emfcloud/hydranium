@@ -509,7 +509,7 @@ import { DataServer } from '@hydranium/data-server';
 // was never composed. Reaching for Langium's is the natural mistake and it is
 // silent: the server boots, links and completes, while echo suppression, the
 // didChangeContent debounce and the last-client-close rebuild are all inert.
-import { startLanguageServer } from '@hydranium/core/lsp';
+import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 import { BookstoreDiagramModule } from './glsp/bookstore/diagram-module.js';
 // The TRANSFER root, not the AST one. The data head serialises to the
@@ -523,7 +523,7 @@ import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from './head-ports.js';
 
-const connection = createConnection(ProposedFeatures.all);
+const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createBookstoreServices({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
 

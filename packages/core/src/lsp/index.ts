@@ -9,6 +9,8 @@
 
 export * from './completion/hydranium-completion-provider.js';
 export * from './lsp-latency.js';
+export * from './connection-features.js';
+export * from './diagnostics-connection.js';
 export * from './semantic-token-provider.js';
 export * from './language-module.js';
 export * from './shared-module.js';

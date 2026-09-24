@@ -13,6 +13,7 @@ import {
    type ServiceRequirements
 } from '@hydranium/langium/lsp';
 import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
+import { guardDiagnosticsConnection } from './diagnostics-connection.js';
 
 /**
  * Fail the LSP head's start when its shared module was never composed.
@@ -58,11 +59,17 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
 
 /**
  * The framework's LSP server entry point: {@link assertLspHeadComposed}, then
- * Langium's `startLanguageServer` unchanged. Signature-compatible with
- * Langium's, so it is a drop-in for adopters importing from
- * `@hydranium/core/lsp`.
+ * {@link guardDiagnosticsConnection} on the tree's connection, then Langium's
+ * `startLanguageServer`. Signature-compatible with Langium's, so it is a
+ * drop-in for adopters importing from `@hydranium/core/lsp`. Calling Langium's
+ * directly skips both: the composition check, and the guard without which a
+ * publish racing teardown fails the build that validated the document.
  */
 export function startLanguageServer(services: LangiumSharedServices, serviceRequirements: Partial<ServiceRequirements> = {}): void {
    assertLspHeadComposed(services);
+   const connection = services.lsp.Connection;
+   if (connection) {
+      guardDiagnosticsConnection(connection);
+   }
    startLangiumLanguageServer(services, serviceRequirements);
 }
