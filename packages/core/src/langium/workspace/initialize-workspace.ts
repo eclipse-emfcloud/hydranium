@@ -34,6 +34,14 @@ export interface ProgrammaticInitOptions {
     * Omitted means no locale, which the default renderer resolves as the
     * framework's English. That is the correct answer for a headless tool: it
     * has no reading user to have a language.
+    *
+    * **An IETF language tag, hyphenated — `de`, `de-CH`, `zh-Hant-TW` — and
+    * not the POSIX or Java spelling.** An LSP client is held to that syntax by
+    * the protocol, while a headless caller supplies the string itself and the
+    * obvious source is an environment variable holding `de_DE` or
+    * `en_US.UTF-8`. Neither is a tag, and the string is passed through
+    * unchecked, so a renderer that parses it finds nothing to match and every
+    * message renders in English.
     */
    readonly locale?: Locale;
 }

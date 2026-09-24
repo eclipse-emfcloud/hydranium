@@ -196,6 +196,27 @@ export type Locale = string;
  */
 export type MessageCatalogue = Readonly<Record<string, string>>;
 
+export namespace MessageCatalogue {
+   /**
+    * One catalogue from several, for a renderer whose override supplies entries
+    * over the ones it inherits.
+    *
+    * **Later wins**, so a caller passes the inherited answer before its own.
+    *
+    * **No source at all answers `undefined`, not `{}`.** A renderer holds that
+    * answer as the locale having no catalogue and renders straight through; an
+    * empty object is a catalogue that misses every lookup, so returning one
+    * turns the opt-out into a per-message search that yields the same English.
+    */
+   export function merge(...catalogues: ReadonlyArray<MessageCatalogue | undefined>): MessageCatalogue | undefined {
+      const present = catalogues.filter((catalogue): catalogue is MessageCatalogue => catalogue !== undefined);
+      if (present.length <= 1) {
+         return present[0];
+      }
+      return Object.assign({}, ...present) as MessageCatalogue;
+   }
+}
+
 /**
  * Render on the side that knows the reading user's locale. Omitting
  * `translations` is how an adopter without i18n opts out, and yields the

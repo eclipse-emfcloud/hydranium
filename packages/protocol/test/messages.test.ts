@@ -16,6 +16,7 @@ import {
    hasMessageIdentity,
    interpolate,
    isMessageDeclaration,
+   MessageCatalogue,
    messageData,
    messageError,
    renderFrameworkMessage,
@@ -107,6 +108,41 @@ describe('renderFrameworkMessage', () => {
 
    it('falls back to the English for a code the map does not carry', () => {
       expect(renderFrameworkMessage(reported, { 'test/other': 'unrelated' })).toBe("Name 'Foo.Bar' contains '.'.");
+   });
+});
+
+describe('MessageCatalogue.merge', () => {
+   it('lets a later source win the codes two sources share', () => {
+      const inherited = { 'test/with': 'inherited', 'test/other': 'kept' };
+      const own = { 'test/with': 'own' };
+      expect(MessageCatalogue.merge(inherited, own)).toEqual({ 'test/with': 'own', 'test/other': 'kept' });
+   });
+
+   it('skips an absent source instead of letting it blank the entries around it', () => {
+      const own = { 'test/with': 'own' };
+      expect(MessageCatalogue.merge(undefined, own, undefined)).toEqual(own);
+   });
+
+   it('answers undefined when no source is present, which is what a renderer caches as no catalogue', () => {
+      expect(MessageCatalogue.merge()).toBeUndefined();
+      expect(MessageCatalogue.merge(undefined, undefined)).toBeUndefined();
+   });
+
+   it('treats an empty catalogue as a source rather than an absence', () => {
+      const empty = {};
+      expect(MessageCatalogue.merge(undefined, empty)).toBe(empty);
+      expect(MessageCatalogue.merge({ 'test/with': 'kept' }, empty)).toEqual({ 'test/with': 'kept' });
+   });
+
+   it('returns a lone source as itself rather than a copy of it', () => {
+      const only = { 'test/with': 'own' };
+      expect(MessageCatalogue.merge(undefined, only)).toBe(only);
+   });
+
+   it('leaves its sources unmutated, so a cached catalogue cannot grow entries from a later merge', () => {
+      const inherited = { 'test/with': 'inherited' };
+      MessageCatalogue.merge(inherited, { 'test/other': 'own' });
+      expect(inherited).toEqual({ 'test/with': 'inherited' });
    });
 });
 
