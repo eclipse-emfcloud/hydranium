@@ -22,10 +22,9 @@ import { guardDiagnosticsConnection } from './diagnostics-connection.js';
  * SHARED slot, so the head binds it in `createLspServerSharedModule` — a
  * separate module from `createLspServerLanguageModule`. An adopter who adds
  * only the language module gets a server that boots, links and serves
- * completion, and quietly runs Langium's `DefaultDocumentUpdateHandler`: echo
- * suppression for the server's own writes, the `didChangeContent` debounce
- * and `markNextReason` stamping are all absent, with nothing in the log to say
- * so.
+ * completion, and quietly runs Langium's `DefaultDocumentUpdateHandler`: every
+ * behaviour `HydraniumDocumentUpdateHandler` adds, the editor save gate
+ * included, is absent, with nothing in the log to say so.
  *
  * The type system does not catch it. `createIntegrationServices` returns
  * `inject(...) as unknown as TShared`, so widening `TShared` with

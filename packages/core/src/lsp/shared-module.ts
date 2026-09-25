@@ -28,13 +28,10 @@ import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-hand
  *   (an output channel, a structured logger) override the slot after this
  *   module.
  *
- * - {@link HydraniumDocumentUpdateHandler} wraps `didChangeWatchedFiles` to
- *   suppress echo events for the server's own writes via the shared
- *   `SelfSaveRegistry` slot, debounces `didChangeContent`, and stamps build
- *   reasons through `markNextReason`.
- *   Adopters with their own update-handler subclass should extend
- *   `HydraniumDocumentUpdateHandler` (not Langium's
- *   `DefaultDocumentUpdateHandler`) to preserve those behaviours.
+ * - {@link HydraniumDocumentUpdateHandler} carries the framework's handling of
+ *   the LSP document events. Adopters with their own update-handler subclass
+ *   should extend it (not Langium's `DefaultDocumentUpdateHandler`) to keep
+ *   that handling.
  *
  * **Why this is a shared slot and not a per-language one.** Langium declares
  * `DocumentUpdateHandler` in `LangiumSharedLSPServices` — there is exactly one

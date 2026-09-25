@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Debouncer, type Logger, ObservableValue, type MaybeObservableValue } from '@hydranium/protocol';
+import { Debouncer, Deferred, type Logger, ObservableValue, type MaybeObservableValue } from '@hydranium/protocol';
 import { URI, UriUtils } from '@hydranium/langium';
 import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
@@ -17,7 +17,14 @@ import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { isConnectionGoneError } from '../util/connection-liveness.js';
-import { type DidChangeWatchedFilesParams, type FileEvent, FileChangeType, type TextDocumentChangeEvent } from 'vscode-languageserver';
+import {
+   type DidChangeWatchedFilesParams,
+   type FileEvent,
+   FileChangeType,
+   type TextDocumentChangeEvent,
+   type TextDocumentWillSaveEvent,
+   type TextEdit
+} from 'vscode-languageserver';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 
 export { HYDRANIUM_BUILD_REASONS };
@@ -46,6 +53,17 @@ export interface HydraniumDocumentUpdateHandlerOptions {
     * load tests).
     */
    readonly bypassNonLanguageClientChanges?: boolean;
+   /**
+    * Longest an editor's save waits on the server, in milliseconds, at each of
+    * its two steps: the `willSaveWaitUntil` answer waits for the server's disk
+    * writes of the document already queued, and server writes queued after the
+    * answer wait for the editor's `didSave`. Either wait that runs out is
+    * logged, and the editor's write and the server's can then land in either
+    * order. Default `1000`: VS Code gives up on an answer after about 1.5 s,
+    * and switches the listener off for the session once four answers, over
+    * all documents, timed out or failed.
+    */
+   readonly willSaveGateMs?: number;
 }
 
 /**
@@ -67,6 +85,12 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *     it on the builder via {@link HydraniumDocumentBuilder.markNextReason},
  *     so a subclass that formats build logs can tag its line with the event
  *     that caused the build without per-adopter wiring to capture it.
+ *  4. **Editor save gate** ({@link willSaveDocumentWaitUntil}) — the editor
+ *     writes the file itself, so the server's disk writes of that document
+ *     are ordered around it: the editor's save waits for the ones already
+ *     queued, and the ones queued during its save wait for its `didSave`.
+ *     Both waits are capped by
+ *     {@link HydraniumDocumentUpdateHandlerOptions.willSaveGateMs}.
  *
  * The revert to disk after a document's last close is not dispatched here:
  * the text store runs it for every head, the LSP head included, so a
@@ -122,6 +146,17 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
     */
    protected pendingReason?: string;
 
+   protected readonly willSaveGateMs: number;
+   /**
+    * Per document URI, the release of the hold an editor's save in progress
+    * keeps on the document's disk queue. A second save of the document
+    * releases the first: its hold would otherwise keep the second's answer
+    * waiting until the cap. The key is the document, not the save, so for a
+    * client that sends its next `willSaveWaitUntil` before the previous
+    * `didSave`, that late `didSave` releases the next save's hold.
+    */
+   protected readonly editorSaves = new Map<string, () => void>();
+
    constructor(
       protected readonly services: ServerSharedServices,
       options: HydraniumDocumentUpdateHandlerOptions = {}
@@ -134,6 +169,8 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       this.debounce = ObservableValue.from(options.debounceMs ?? 0);
       this.flushDebouncer = new Debouncer(services.Clock, () => this.flushPending(), { delayMs: this.debounce });
       this.bypassNonLanguageClientChanges = options.bypassNonLanguageClientChanges ?? true;
+      this.willSaveGateMs = options.willSaveGateMs ?? 1000;
+      this.textDocuments.onDidSaveInLanguageClient(event => this.editorSaves.get(event.uri)?.());
       // A change still debounced for a document the store has released would
       // build it once more after the store's own revert: from disk again, or,
       // for a file that never existed, by reading a file that is not there. A
@@ -194,6 +231,79 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             const uris = params.changes.map(change => change.uri).join(', ');
             this.logger.error(`Watched-file update dropped for ${uris}. ${detail}`);
          });
+   }
+
+   /**
+    * Answer an editor's `willSaveWaitUntil` with no edits once the server's
+    * disk writes of the document already queued have landed, or after
+    * {@link willSaveGateMs}, whichever is first. From the moment the queue
+    * reaches this save, disk tasks of the document queued behind it wait for
+    * the editor's `didSave`, reported through
+    * `HydraniumTextDocuments.onDidSaveInLanguageClient`, or for
+    * {@link willSaveGateMs} more.
+    *
+    * The hold is a disk task that waits only for that signal or its timer:
+    * waiting on a build, a save or anything else queued for the document would
+    * wedge its queue. Resolves in every case, since a failed request counts
+    * against the listener in VS Code; Langium drops the request's cancellation,
+    * so an abandoned request still runs to the cap. A hold that runs out is
+    * logged at debug only: an editor skips `didSave` for a save it cancels or
+    * that changed nothing.
+    */
+   willSaveDocumentWaitUntil(event: TextDocumentWillSaveEvent<TextDocument>): Promise<TextEdit[]> {
+      const uri = event.document.uri;
+      this.editorSaves.get(uri)?.();
+      const hold = new Deferred();
+      const release = (): void => {
+         if (this.editorSaves.get(uri) === release) {
+            this.editorSaves.delete(uri);
+         }
+         hold.resolve();
+      };
+      this.editorSaves.set(uri, release);
+      return new Promise<TextEdit[]>(resolve => {
+         const clock = this.services.Clock;
+         const cap = clock.setTimer(() => {
+            this.logger.warn(
+               `willSaveWaitUntil for ${uri} answered after ${this.willSaveGateMs} ms with server writes of it still queued; the editor's save may race them.`
+            );
+            resolve([]);
+         }, this.willSaveGateMs);
+         try {
+            void this.services.workspace.AstDocumentManager.queueDiskTask(uri, async () => {
+               cap.dispose();
+               resolve([]);
+               const bound = clock.setTimer(() => {
+                  this.logger.debug(
+                     `No didSave for ${uri} within ${this.willSaveGateMs} ms; server writes of it no longer wait for the editor's save.`
+                  );
+                  release();
+               }, this.willSaveGateMs);
+               await hold.promise;
+               bound.dispose();
+            });
+         } catch (err) {
+            cap.dispose();
+            this.logger.error(
+               `willSaveWaitUntil for ${uri} answered without waiting. ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
+            );
+            release();
+            resolve([]);
+         }
+      });
+   }
+
+   /**
+    * Present so that Langium advertises `save` and editors send `didSave`;
+    * without it every hold of {@link willSaveDocumentWaitUntil} waits out its
+    * cap. The hold is released on
+    * `HydraniumTextDocuments.onDidSaveInLanguageClient` instead: it fires as
+    * soon as the editor reports the save, while `onDidSave`, and so this
+    * method, follows only once the file has been read back, and not at all
+    * when the file does not hold the store's text.
+    */
+   didSaveDocument(_event: TextDocumentChangeEvent<TextDocument>): void {
+      // Nothing to do; see the doc comment.
    }
 
    /**
