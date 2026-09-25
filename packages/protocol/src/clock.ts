@@ -76,7 +76,29 @@ export interface Clock {
     */
    measure<T>(callback: () => Promise<T>): Promise<Timed<T>>;
    measure<T>(callback: () => T): Timed<T>;
+   /**
+    * Settle with `promise`, or with {@link TIMED_OUT} once `ms` have elapsed
+    * first. A promise that rejects first rejects this one; one that rejects
+    * after the timer is ignored. The timer is disposed the moment `promise`
+    * settles, so a won race leaves nothing scheduled, but `promise` itself
+    * runs on: nothing here can cancel it.
+    *
+    * Unlike VS Code's `raceTimeout`, this settles with a sentinel rather than
+    * `undefined`, so a promise resolving to `undefined` is not taken for a
+    * timeout; the caller branches on the result instead of passing an
+    * `onTimeout`.
+    *
+    * A custom implementation extends {@link SystemClock}, whose race runs over
+    * the subclass's {@link setTimer}.
+    */
+   raceTimer<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT>;
 }
+
+/**
+ * What {@link Clock.raceTimer} settles with when its timer fires first.
+ * Registered under a global key, so two copies of this package agree on it.
+ */
+export const TIMED_OUT = Symbol.for('hydranium/protocol/timed-out');
 
 /**
  * The result of {@link Clock.measure}: a callback's return value paired with
@@ -144,6 +166,10 @@ function unrefTimer(handle: { unref?: () => void }): void {
  * Default {@link Clock}: delegates to the platform's `Date.now`,
  * `performance.now`, and `setTimeout`/`clearTimeout`. Bound everywhere in
  * production; swapped for `makeFakeClock` in tests.
+ *
+ * {@link measure} and {@link raceTimer} run over {@link stopwatch} and
+ * {@link setTimer}, so a clock that extends this one and replaces those
+ * measures and races on its own time, as the test clock does.
  */
 export class SystemClock implements Clock {
    now(): number {
@@ -169,5 +195,35 @@ export class SystemClock implements Clock {
          return (result as Promise<T>).then(value => ({ result: value, elapsedMs: stopwatch.elapsedMs }));
       }
       return { result: result as T, elapsedMs: stopwatch.elapsedMs };
+   }
+
+   /**
+    * The timer settles the race one microtask after it fires. A real timer
+    * runs only once pending resolutions are delivered, while a fake one fires
+    * inside its `advance`, so settling at once would let a promise already
+    * resolved when `advance` runs lose to a timer it beats in production. The
+    * deferral covers only that promise: one that settles through further
+    * chained reactions, such as a `.then` chain, an async function or
+    * `Promise.allSettled`, can still lose to an `advance` in the same turn,
+    * while it wins on the platform's timer. The handlers go on `promise`
+    * before {@link setTimer} runs, so a `setTimer` that throws still leaves
+    * `promise` observed.
+    */
+   raceTimer<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+      return new Promise<T | typeof TIMED_OUT>((resolve, reject) => {
+         // eslint-disable-next-line prefer-const -- with a `const`, a `setTimer` that throws leaves it uninitialised, and the handlers' later read of it is an unhandled ReferenceError
+         let timer: Disposable | undefined;
+         promise.then(
+            value => {
+               timer?.dispose();
+               resolve(value);
+            },
+            (err: unknown) => {
+               timer?.dispose();
+               reject(err);
+            }
+         );
+         timer = this.setTimer(() => void Promise.resolve().then(() => resolve(TIMED_OUT)), ms);
+      });
    }
 }

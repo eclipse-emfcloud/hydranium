@@ -16,8 +16,7 @@ import {
    defaultSocketLaunchOptions
 } from '@eclipse-glsp/server/node.js';
 import { Container, type ContainerModule } from 'inversify';
-import type { Logger } from '@hydranium/protocol';
-import { Deferred } from '@hydranium/langium';
+import { Deferred, type Logger } from '@hydranium/protocol';
 import type * as net from 'node:net';
 import type { IntegratedServer } from '@hydranium/core';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';

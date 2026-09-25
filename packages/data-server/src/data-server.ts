@@ -17,6 +17,7 @@ import {
    messageError,
    ReferenceSource,
    SessionClosedError,
+   TIMED_OUT,
    type CloseModelArgs,
    type HydraniumResponseError,
    type Disposable,
@@ -937,30 +938,23 @@ export class DataServer<
       const uri = isDocumentSource(source) || isSyntheticSource(source) ? UriUtils.toUri(source.uri) : undefined;
       const waitUri = uri && this.services.workspace.LangiumDocuments.hasDocument(uri) ? uri : undefined;
       const stopwatch = this.services.Clock.stopwatch();
-      let timer: Disposable | undefined;
-      const timeout = new Promise<void>((resolve, reject) => {
-         timer = this.services.Clock.setTimer(() => {
-            const elapsedMs = Math.round(stopwatch.elapsedMs);
-            // A per-URI wait resolves off a document-phase notification, so a
-            // missed one strands a wait on a document that HAS reached the
-            // phase. Re-read before failing; the workspace-wide wait has no
-            // equivalent reading and can only reject.
-            const document = waitUri ? this.services.workspace.LangiumDocuments.getDocument(waitUri) : undefined;
-            if (waitUri && document && document.state >= DocumentState.Linked) {
-               this.tracer
-                  .withUri(waitUri.toString())
-                  .warn(`Missed the 'Linked' notification after ${elapsedMs}ms; the document already reached it`);
-               resolve();
-               return;
-            }
-            reject(referenceSettleTimeoutError(elapsedMs));
-         }, this.options.referenceSettleTimeoutMs);
-      });
-      try {
-         await Promise.race([this.services.workspace.DocumentBuilder.waitUntil(DocumentState.Linked, waitUri), timeout]);
-      } finally {
-         timer?.dispose();
+      const linked = this.services.workspace.DocumentBuilder.waitUntil(DocumentState.Linked, waitUri);
+      if ((await this.services.Clock.raceTimer(linked, this.options.referenceSettleTimeoutMs)) !== TIMED_OUT) {
+         return;
       }
+      const elapsedMs = Math.round(stopwatch.elapsedMs);
+      // A per-URI wait resolves off a document-phase notification, so a
+      // missed one strands a wait on a document that HAS reached the
+      // phase. Re-read before failing; the workspace-wide wait has no
+      // equivalent reading and can only reject.
+      const document = waitUri ? this.services.workspace.LangiumDocuments.getDocument(waitUri) : undefined;
+      if (waitUri && document && document.state >= DocumentState.Linked) {
+         this.tracer
+            .withUri(waitUri.toString())
+            .warn(`Missed the 'Linked' notification after ${elapsedMs}ms; the document already reached it`);
+         return;
+      }
+      throw referenceSettleTimeoutError(elapsedMs);
    }
 
    async findReferenceCandidates(ctx: ReferenceContext): Promise<ReferenceCandidate[]> {

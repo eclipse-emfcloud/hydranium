@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Deferred } from '@hydranium/langium';
-import type { Disposable, Logger } from '@hydranium/protocol';
+import { Deferred, type Disposable, type Logger } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '../launcher/integrated-server.js';

@@ -23,6 +23,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
+import { type Clock, SystemClock } from '../../src/clock';
 import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
 import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
@@ -30,7 +31,7 @@ import { DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '..
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol } from '../../src/data';
 import { DuplicateClientIdError, isDuplicateClientIdError, isSessionClosedError } from '../../src/errors';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
-import { tick, waitFor } from '../../src/testing';
+import { makeFakeClock, tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
 import { makeDuplexConnectionPair } from '../../src/testing/node';
 import type { TransferElement } from '../../src/transfer-element';
@@ -225,7 +226,7 @@ interface Harness {
    dispose(): void;
 }
 
-function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new DataEvents<ProbeElement>()): Harness {
+function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new DataEvents<ProbeElement>(), clock?: Clock): Harness {
    const calls: ServerCall[] = [];
    const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
    const port = makeFakeDataPort({
@@ -237,7 +238,8 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
       }
    });
    const connection = new InspectableConnection(port, events, {
-      sessionFactory: boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs)
+      sessionFactory:
+         boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs, clock)
    });
    return {
       connection,
@@ -256,13 +258,21 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
    };
 }
 
-/** A session with a short in-flight bound, handed out through `sessionFactory`. */
+/** A session with its own in-flight bound, on `clock` if given, handed out through `sessionFactory`. */
 class BoundedSession extends DataSession<ProbeElement> {
    protected override readonly settleBeforeCloseMs: number;
+   protected override readonly clock: Clock;
 
-   constructor(clientId: string, host: DataSessionHost<ProbeElement, DataServerProtocol<ProbeElement>>, label: string, boundMs: number) {
+   constructor(
+      clientId: string,
+      host: DataSessionHost<ProbeElement, DataServerProtocol<ProbeElement>>,
+      label: string,
+      boundMs: number,
+      clock: Clock = new SystemClock()
+   ) {
       super(clientId, host, label);
       this.settleBeforeCloseMs = boundMs;
+      this.clock = clock;
    }
 
    /** The server's URI the session keeps per URI it has open. */
@@ -1051,16 +1061,24 @@ describe('DataSession disposal', () => {
       }
    });
 
-   it('stops waiting for a save that never answers after the bound', async () => {
+   it('stops waiting for a save that never answers once the bound passes on its own clock', async () => {
       const save = gate();
-      const { connection, dispose } = harness({ saveGate: save.promise }, 30);
+      const clock = makeFakeClock();
+      // Far longer than the test runs, so only the session clock can end the wait.
+      const boundMs = 60_000;
+      const { connection, dispose } = harness({ saveGate: save.promise }, boundMs, undefined, clock);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
          void panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' }).catch(() => undefined);
+         let settled = false;
+         void panel.whenSavesSettled().then(() => (settled = true));
+         await tick(5);
+         expect(settled).toBe(false);
 
-         await panel.whenSavesSettled();
+         clock.advance(boundMs);
 
+         await waitFor(() => settled, { message: 'the bound on the session clock never released the wait' });
          expect(panel.hasSavesInFlight).toBe(true);
          // Answered before the pair goes, so the server's reply has a stream to land on.
          save.release();

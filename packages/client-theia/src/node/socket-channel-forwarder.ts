@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Clock, SystemClock } from '@hydranium/protocol';
 import { type Channel, Disposable, DisposableCollection, type MessageProvider } from '@theia/core';
 import type * as net from 'node:net';
 import {
@@ -43,7 +44,9 @@ export class SocketChannelForwarder implements Disposable {
 
    constructor(
       protected readonly channel: Channel,
-      protected readonly socket: net.Socket
+      protected readonly socket: net.Socket,
+      /** Times {@link flushTimeoutMs}. */
+      protected readonly clock: Clock = new SystemClock()
    ) {
       const reader = new SocketMessageReader(socket);
       const writer = new SocketMessageWriter(socket);
@@ -75,15 +78,7 @@ export class SocketChannelForwarder implements Disposable {
     * destroying the socket then loses nothing.
     */
    protected async endSocket(connection: MessageConnection): Promise<void> {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const bound = new Promise<void>(resolveBound => {
-         timer = setTimeout(resolveBound, this.flushTimeoutMs);
-      });
-      try {
-         await Promise.race([this.lastWrite, bound]);
-      } finally {
-         clearTimeout(timer);
-      }
+      await this.clock.raceTimer(this.lastWrite, this.flushTimeoutMs);
       connection.dispose();
    }
 

@@ -10,6 +10,7 @@
 import { AbstractLogger, DefaultTracer, type LogLevel, type MemoryReader, SystemClock } from '@hydranium/protocol';
 import { injectable, type interfaces, unmanaged, inject } from '@theia/core/shared/inversify';
 import { type OutputChannel, OutputChannelManager } from '@theia/output/lib/browser/output-channel';
+import { Clock } from '../common/clock';
 
 /**
  * Configuration for a {@link ChannelLogger}, supplied once at bind time via
@@ -94,9 +95,10 @@ const ChannelLoggerBase = Symbol('ChannelLoggerBase');
 
 /**
  * Inversify token for the browser `Tracer` — a {@link DefaultTracer} over
- * the {@link ChannelLogger} (emit sink) + a {@link SystemClock} + a browser
- * heap reader. The browser head has no Langium `services.Tracer` slot, so this
- * is how frontend services that time obtain a tracer: `@inject(ChannelTracer)`.
+ * the {@link ChannelLogger} (emit sink) + the container's {@link Clock}, or a
+ * `SystemClock` when it binds none, + a browser heap reader. The browser head
+ * has no Langium `services.Tracer` slot, so this is how frontend services that
+ * time obtain a tracer: `@inject(ChannelTracer)`.
  * Bound by {@link bindChannelLogger}.
  */
 export const ChannelTracer = Symbol('ChannelTracer');
@@ -134,7 +136,10 @@ export function bindChannelLogger(bind: interfaces.Bind, options: ChannelLoggerO
       return parentName ? base.for(parentName) : base;
    });
    bind(ChannelTracer)
-      .toDynamicValue(ctx => new DefaultTracer(ctx.container.get<ChannelLogger>(ChannelLoggerBase), new SystemClock(), readBrowserMemory))
+      .toDynamicValue(ctx => {
+         const clock = ctx.container.isBound(Clock) ? ctx.container.get<Clock>(Clock) : new SystemClock();
+         return new DefaultTracer(ctx.container.get<ChannelLogger>(ChannelLoggerBase), clock, readBrowserMemory);
+      })
       .inSingletonScope();
 }
 

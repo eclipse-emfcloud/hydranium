@@ -7,14 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { SystemClock, TIMED_OUT } from '@hydranium/protocol';
 import type { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { ILogger } from '@theia/core/lib/common/logger';
 import URI from '@theia/core/lib/common/uri';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import { EditorManager } from '@theia/editor/lib/browser/editor-manager';
 import type { EditorWidget } from '@theia/editor/lib/browser/editor-widget';
 import type { FileResourceVersion } from '@theia/filesystem/lib/browser/file-resource';
 import { FileService, type TextFileContent } from '@theia/filesystem/lib/browser/file-service';
+import { Clock } from '../common/clock';
 
 /**
  * The members of Theia's Monaco editor model {@link EditorDiskSync} reads and
@@ -101,6 +103,8 @@ export class EditorDiskSync implements FrontendApplicationContribution {
    @inject(FileService) protected readonly fileService!: FileService;
    @inject(EditorManager) protected readonly editorManager!: EditorManager;
    @inject(ILogger) protected readonly logger!: ILogger;
+   /** Times {@link readTimeoutMs}: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
    /** Whether an editor's document has failed {@link isResyncableEditorDocument}; warned of once. */
    protected warnedUnsyncable = false;
    /**
@@ -173,15 +177,9 @@ export class EditorDiskSync implements FrontendApplicationContribution {
     * is not read within {@link readTimeoutMs}.
     */
    protected async readFile(document: ResyncableEditorDocument): Promise<TextFileContent | undefined> {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const bound = new Promise<undefined>(resolveBound => {
-         timer = setTimeout(() => resolveBound(undefined), this.readTimeoutMs);
-      });
-      try {
-         return await Promise.race([this.fileService.read(new URI(document.uri)).catch(() => undefined), bound]);
-      } finally {
-         clearTimeout(timer);
-      }
+      const read = this.fileService.read(new URI(document.uri)).catch(() => undefined);
+      const content = await this.clock.raceTimer(read, this.readTimeoutMs);
+      return content === TIMED_OUT ? undefined : content;
    }
 
    /**

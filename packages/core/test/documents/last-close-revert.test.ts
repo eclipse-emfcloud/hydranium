@@ -95,7 +95,8 @@ function makeRig(revertGraceMs?: number, workspaceInitialized: Promise<unknown> 
       trace: () => tracer
    });
    const services = {
-      Clock: { ...clock, now: () => clock.now() + wallOffsetMs },
+      // Layered over the fake clock rather than spread from it, for the same reason.
+      Clock: Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs }),
       Tracer: { for: () => tracer },
       workspace: {
          DocumentUriPolicy: uriPolicy,

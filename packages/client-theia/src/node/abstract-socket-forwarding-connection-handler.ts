@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { SystemClock } from '@hydranium/protocol';
 import {
    type Channel,
    CommandService,
@@ -18,8 +19,9 @@ import {
 } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import * as net from 'node:net';
+import { Clock } from '../common/clock';
 import { SocketChannelForwarder } from './socket-channel-forwarder';
 
 /** Resolved configuration for a {@link AbstractSocketForwardingConnectionHandler}.
@@ -75,6 +77,8 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
    // not the spawned language-server process, so the framework `LspLogger`
    // (which needs the Langium connection/services) is out of reach here.
    @inject(ILogger) protected readonly logger!: ILogger;
+   /** The clock each {@link SocketChannelForwarder} bounds its flush on: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    readonly path: string;
 
@@ -190,7 +194,7 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
     * pre-forward buffer is about to be replayed.
     */
    protected forwardToSocketConnection(clientChannel: Channel, socket: net.Socket): Disposable {
-      return new SocketChannelForwarder(clientChannel, socket);
+      return new SocketChannelForwarder(clientChannel, socket, this.clock);
    }
 
    /**

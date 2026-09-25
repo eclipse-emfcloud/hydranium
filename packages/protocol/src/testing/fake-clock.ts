@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock, type Stopwatch, type Timed } from '../clock';
+import { type Clock, type Stopwatch, SystemClock } from '../clock';
 import { Disposable } from '../util';
 
 /** A {@link Clock} whose time only moves when the test calls {@link FakeClock.advance}. */
@@ -17,9 +17,13 @@ export interface FakeClock extends Clock {
     * whose deadline falls within the window — in chronological order, each at
     * its own deadline (so `now()` inside a callback reads the fire instant, not
     * the advance target). Timers scheduled by a callback fire too if they fall
-    * within the same window.
+    * within the same window. A {@link Clock.raceTimer} over a promise that
+    * settles through a chain still pending loses to the timer, so let that
+    * chain settle before advancing.
     */
    advance(ms: number): void;
+   /** How many {@link Clock.setTimer} timers have neither fired nor been disposed. */
+   pendingTimers(): number;
 }
 
 interface FakeTimer {
@@ -39,68 +43,79 @@ interface FakeTimer {
  *
  * Server-free and DI-free — lives in `@hydranium/protocol/testing` so every
  * head can bind it without pulling in a server package.
+ *
+ * The clock is a `SystemClock` with its time replaced, so its methods live on
+ * its prototype and a spread of it carries none of them. Replace one by
+ * assigning it onto the clock, or layer over the clock with `Object.create`.
  */
 export function makeFakeClock(options: { now?: number } = {}): FakeClock {
-   let current = options.now ?? 0;
-   const timers: FakeTimer[] = [];
+   return new VirtualClock(options.now ?? 0);
+}
 
-   const makeStopwatch = (): Stopwatch => {
-      const start = current;
-      let lastLap = current;
+/**
+ * A `SystemClock` whose time, stopwatches and timers read one virtual axis, so
+ * the `measure` and `raceTimer` it inherits run on that axis too.
+ */
+class VirtualClock extends SystemClock implements FakeClock {
+   protected readonly timers: FakeTimer[] = [];
+
+   constructor(protected current: number) {
+      super();
+   }
+
+   override now(): number {
+      return this.current;
+   }
+
+   override setTimer(callback: () => void, ms: number): Disposable {
+      const timer: FakeTimer = { at: this.current + ms, callback, disposed: false, fired: false };
+      this.timers.push(timer);
+      return Disposable.create(() => {
+         timer.disposed = true;
+      });
+   }
+
+   override stopwatch(): Stopwatch {
+      const read = (): number => this.current;
+      const start = read();
+      let lastLap = start;
       let stopped: number | undefined;
       return {
          get elapsedMs(): number {
-            return (stopped ?? current) - start;
+            return (stopped ?? read()) - start;
          },
          lap(): number {
-            const at = stopped ?? current;
+            const at = stopped ?? read();
             const split = at - lastLap;
             lastLap = at;
             return split;
          },
          stop(): number {
-            if (stopped === undefined) {
-               stopped = current;
-            }
+            stopped ??= read();
             return stopped - start;
          }
       };
-   };
+   }
 
-   return {
-      now: () => current,
-      setTimer(callback: () => void, ms: number): Disposable {
-         const timer: FakeTimer = { at: current + ms, callback, disposed: false, fired: false };
-         timers.push(timer);
-         return Disposable.create(() => {
-            timer.disposed = true;
-         });
-      },
-      stopwatch: makeStopwatch,
-      measure: (<T>(callback: () => T | Promise<T>): Timed<T> | Promise<Timed<T>> => {
-         const stopwatch = makeStopwatch();
-         const result = callback();
-         if (result instanceof Promise) {
-            return (result as Promise<T>).then(value => ({ result: value, elapsedMs: stopwatch.elapsedMs }));
+   pendingTimers(): number {
+      return this.timers.filter(timer => !timer.disposed && !timer.fired).length;
+   }
+
+   advance(ms: number): void {
+      const target = this.current + ms;
+      // Fire due timers one at a time, re-scanning after each so a callback
+      // that schedules a nearer timer still fires within this window.
+      for (;;) {
+         const next = this.timers
+            .filter(timer => !timer.disposed && !timer.fired && timer.at <= target)
+            .sort((left, right) => left.at - right.at)[0];
+         if (!next) {
+            break;
          }
-         return { result: result as T, elapsedMs: stopwatch.elapsedMs };
-      }) as Clock['measure'],
-      advance(ms: number): void {
-         const target = current + ms;
-         // Fire due timers one at a time, re-scanning after each so a callback
-         // that schedules a nearer timer still fires within this window.
-         for (;;) {
-            const next = timers
-               .filter(timer => !timer.disposed && !timer.fired && timer.at <= target)
-               .sort((left, right) => left.at - right.at)[0];
-            if (!next) {
-               break;
-            }
-            current = next.at;
-            next.fired = true;
-            next.callback();
-         }
-         current = target;
+         this.current = next.at;
+         next.fired = true;
+         next.callback();
       }
-   };
+      this.current = target;
+   }
 }

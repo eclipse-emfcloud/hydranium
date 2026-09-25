@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { makeFakeClock, tick } from '@hydranium/protocol/lib/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Channel, type ChannelCloseEvent, Emitter, type MessageProvider, type WriteBuffer } from '@theia/core';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
@@ -79,11 +80,6 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
       }
       await new Promise(resolve => setTimeout(resolve, 5));
    }
-}
-
-/** A forwarder whose flush bound a test can outlast. */
-class BoundedForwarder extends SocketChannelForwarder {
-   protected override readonly flushTimeoutMs = 50;
 }
 
 const REQUEST: Message = { jsonrpc: '2.0', id: 1, method: 'ns/one', params: { value: 'a' } } as Message;
@@ -198,10 +194,15 @@ describe('SocketChannelForwarder', () => {
       // takes a large write whole.
       near.write = (() => true) as typeof near.write;
       const channel = new RecordingChannel();
-      new BoundedForwarder(channel, near);
+      const clock = makeFakeClock();
+      new SocketChannelForwarder(channel, near, clock);
       channel.deliver(REQUEST);
 
       channel.close();
+      clock.advance(9_999);
+      await tick();
+      expect(near.destroyed).toBe(false);
+      clock.advance(1);
 
       await until(() => near.destroyed, 'the socket to be destroyed after the bound');
    });

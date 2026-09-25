@@ -741,6 +741,21 @@ describe('HydraniumDocumentUpdateHandler — editor saves', () => {
       expect(loggedWarnings).toEqual([]);
    });
 
+   it('ends the hold without the debug line once the editor reports its save inside willSaveGateMs', async () => {
+      const clock = makeFakeClock();
+      const loggedDebug: string[] = [];
+      const { handler, queue, editorSaved } = makeHandler({ clock, loggedDebug });
+      await handler.willSaveDocumentWaitUntil(willSave);
+      const serverSave = track(queue(async () => undefined));
+      clock.advance(999);
+      editorSaved();
+      await tick(0);
+      expect(serverSave.settled).toBe(true);
+      clock.advance(1);
+      await tick(0);
+      expect(loggedDebug.filter(line => line.includes(SAVED_URI))).toEqual([]);
+   });
+
    it('holds nothing when the editor reported its save before the queue reached it', async () => {
       const clock = makeFakeClock();
       const { handler, queue, editorSaved } = makeHandler({ clock });
