@@ -17,6 +17,7 @@
   "hydranium/protocol/stale-based-update": "Veraltete Änderung für {uri}: erwartet v{expectedVersion}, der Server ist bei v{actualVersion}",
   "hydranium/data-server/no-active-profile": "Es läuft keine Profiling-Aufzeichnung; rufen Sie zuerst startProfiling auf.",
   "hydranium/glsp-server/diagram-readonly-parse-error": "Schreibgeschützt: Dieses Dokument enthält einen Syntaxfehler. Beheben Sie ihn, um das Diagramm wieder bearbeiten zu können.",
+  "hydranium/glsp-server/diagram-session-refused": "Das Diagramm konnte nicht geöffnet werden: Seine Kennung wird noch von einem anderen Editor verwendet. Schließen Sie das Diagramm und öffnen Sie es erneut.",
   "hydranium/glsp-server/save-target-unknown": "Es konnte nicht ermittelt werden, wohin dieses Modell gespeichert werden soll.",
   "hydranium/glsp-server/source-uri-missing": "Dieses Modell konnte nicht geöffnet werden: Die Anfrage gab kein zu ladendes Dokument an.",
   "order-flow/process/self-transition": "'{step}' kann nicht zu sich selbst übergehen.",

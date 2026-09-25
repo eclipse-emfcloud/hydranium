@@ -12,13 +12,15 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-gl
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import { AstDocument, type ServerSharedServices } from '@hydranium/core';
+import { AstDocument, type ClientSession, type ServerSharedServices } from '@hydranium/core';
 import {
    type BasedOn,
    asSnapshotVersion,
    ConflictError,
+   NO_MATCHING_VERSION,
    type ConflictResolver,
    type ReconcileOutcome,
+   ReconcilingConflictResolver,
    type TransferElement
 } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
@@ -50,7 +52,7 @@ interface FakeDocument {
    uri: { toString(): string };
    state: DocumentState;
    parseResult: { value: AstNode };
-   textDocument?: { version: number };
+   textDocument?: { version: number; getText(): string };
 }
 
 /**
@@ -62,10 +64,9 @@ function toSnapshot(uri: string, document: FakeDocument | undefined): AstDocumen
    return document && AstDocument.create(uri, document.textDocument?.version ?? 0, document.parseResult.value);
 }
 
-interface UpdateCall {
+interface UpdateEntry {
    uri: string;
    model: unknown;
-   clientId: string;
    basedOn: BasedOn;
 }
 
@@ -73,11 +74,21 @@ interface Harness {
    readonly warns: string[];
    readonly debugs: string[];
    readonly documents: Map<string, FakeDocument>;
-   readonly updateCalls: UpdateCall[];
-   throwConflictOnPrimaryUpdate: boolean;
+   /** Every `updateAll` the diagram's session received, one entry list per call. */
+   readonly updateAllCalls: UpdateEntry[][];
+   /** Every call the diagram's session received, in order: `open <uri>` or `updateAll`. */
+   readonly sessionCalls: string[];
+   /** URI whose next write set fails with a `ConflictError`, once. */
+   conflictOn: string | undefined;
+   /** Error the next write set fails with, once. */
+   failNextWrite: Error | undefined;
    nextUpdatedRoot: TestRoot;
    /** Roots `ModelService.validated` answers with, by URI. Absent → rejects. */
    readonly validated: Map<string, TestRoot>;
+   /** The text store's documents; the stub parser turns a text into a root labelled with it. */
+   readonly store: Map<string, { version: number; text: string }>;
+   /** Store documents that are also a built document's text document, by URI. */
+   readonly sharedTextDocuments: Map<string, { version: number; getText(): string }>;
    resolve: (
       baseline: TestComposite,
       attempted: TestComposite,
@@ -85,13 +96,33 @@ interface Harness {
    ) => Promise<ReconcileOutcome<TestComposite>>;
 }
 
+/** A built document whose text is `label`, and the store holding the same text at the same version. */
 function seed(harness: Harness, uri: string, label: string, version: number): void {
    harness.documents.set(uri, {
       uri: { toString: () => uri },
       state: DocumentState.Validated,
       parseResult: { value: makeRoot(label) },
-      textDocument: { version }
+      textDocument: { version, getText: () => label }
    });
+   harness.store.set(uri, { version, text: label });
+}
+
+/**
+ * A built document parsed from `label` at v1 whose text document is the
+ * store's own object, as a rebuilt document's is.
+ */
+function seedSharingStore(harness: Harness, uri: string, label: string): void {
+   harness.store.set(uri, { version: 1, text: label });
+   const root = makeRoot(label);
+   (root as { $cstNode?: unknown }).$cstNode = { root: { fullText: label } };
+   const textDocument = {
+      get version(): number {
+         return harness.store.get(uri)!.version;
+      },
+      getText: () => harness.store.get(uri)!.text
+   };
+   harness.sharedTextDocuments.set(uri, textDocument);
+   harness.documents.set(uri, { uri: { toString: () => uri }, state: DocumentState.Validated, parseResult: { value: root }, textDocument });
 }
 
 @injectable()
@@ -101,19 +132,11 @@ class TestMultiState extends ReconcilingMultiDocumentGlspState<TestRoot, TestPri
    }
 }
 
-/** Fails its secondary write, to exercise the partial-write path. */
+/** Forces secondary writes through the hook. */
 @injectable()
-class FailingSecondaryState extends TestMultiState {
-   protected override persistSecondary(): Promise<void> {
-      return Promise.reject(new Error('disk full'));
-   }
-}
-
-/** Opts secondary writes into the conflict gate — the coarser check the class doc describes. */
-@injectable()
-class GatedSecondaryState extends TestMultiState {
-   protected override secondaryBasedOn(uri: string): BasedOn {
-      return this.snapshotVersionOf(uri) ?? 'anything';
+class ForcedSecondaryState extends TestMultiState {
+   protected override secondaryBasedOn(): BasedOn {
+      return 'anything';
    }
 }
 
@@ -122,10 +145,14 @@ function makeHarness(): Harness {
       warns: [],
       debugs: [],
       documents: new Map(),
-      updateCalls: [],
-      throwConflictOnPrimaryUpdate: false,
+      updateAllCalls: [],
+      sessionCalls: [],
+      conflictOn: undefined,
+      failNextWrite: undefined,
       nextUpdatedRoot: makeRoot('updated'),
       validated: new Map(),
+      store: new Map(),
+      sharedTextDocuments: new Map(),
       resolve: async (_baseline, attempted) => ({ status: 'merged', merged: attempted })
    };
 }
@@ -146,6 +173,15 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
       workspace: {
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
+         },
+         TextDocuments: {
+            get(uri: string): { version: number; getText(): string } | undefined {
+               const stored = harness.store.get(uri);
+               return harness.sharedTextDocuments.get(uri) ?? (stored && { version: stored.version, getText: () => stored.text });
+            }
+         },
+         LangiumDocumentFactory: {
+            fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
          }
       },
       model: {
@@ -158,14 +194,6 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
             waitForDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
-            async update(args: UpdateCall): Promise<{ root: TestRoot }> {
-               harness.updateCalls.push(args);
-               if (args.uri === DIAGRAM_URI && harness.throwConflictOnPrimaryUpdate) {
-                  harness.throwConflictOnPrimaryUpdate = false;
-                  throw new ConflictError(args.uri, 1, 2);
-               }
-               return { root: harness.nextUpdatedRoot };
-            },
             async validated(uri: string): Promise<{ root: TestRoot }> {
                const root = harness.validated.get(uri);
                if (!root) {
@@ -194,7 +222,38 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
    container.bind(ClientId).toConstantValue('test-client');
    container.bind(ModelState).to(stateClass).inSingletonScope();
    container.bind(stateClass).toService(ModelState);
-   return container.get(stateClass);
+   const state = container.get(stateClass);
+   state.modelSession = makeRecordingSession(harness);
+   return state;
+}
+
+/**
+ * The diagram's session as the state sees it: records opens and write sets, and
+ * fails a write set the way `updateAll` does — before anything applies.
+ */
+function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
+   const session = {
+      clientId: 'test-client',
+      async open(uri: string): Promise<void> {
+         harness.sessionCalls.push(`open ${uri}`);
+      },
+      async updateAll(args: { updates: UpdateEntry[] }): Promise<{ root: TestRoot }[]> {
+         harness.sessionCalls.push('updateAll');
+         harness.updateAllCalls.push(args.updates);
+         const failure = harness.failNextWrite;
+         harness.failNextWrite = undefined;
+         if (failure) {
+            throw failure;
+         }
+         const conflicted = args.updates.find(update => update.uri === harness.conflictOn && update.basedOn !== 'anything');
+         if (conflicted) {
+            harness.conflictOn = undefined;
+            throw new ConflictError(conflicted.uri, 1, 2);
+         }
+         return args.updates.map(update => ({ root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri) }));
+      }
+   };
+   return session as unknown as ClientSession<AstNode>;
 }
 
 describe('ReconcilingMultiDocumentGlspState', () => {
@@ -251,6 +310,76 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          expect(state.snapshotVersionOf(OTHER_URI)).toBeUndefined();
       });
 
+      it('records the store version of a document the store holds ahead of the build with the same text', () => {
+         // An editor opening a document gives it a new version before the
+         // rebuild re-stamps the built one; the gate compares against the store.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 0);
+         seed(harness, SEMANTIC_URI, 'semantic', 0);
+         harness.store.set(DIAGRAM_URI, { version: 1, text: 'diagram' });
+         harness.store.set(SEMANTIC_URI, { version: 1, text: 'semantic' });
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.snapshotVersionOf(DIAGRAM_URI)).toBe(1);
+         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(1);
+      });
+
+      it('records the built version of a document whose store text the build has not parsed', () => {
+         // The store's version names text the state never read, so a write
+         // gated on it would overwrite that text.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 0);
+         seed(harness, SEMANTIC_URI, 'semantic', 0);
+         harness.store.set(SEMANTIC_URI, { version: 1, text: 'semantic, edited' });
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(0);
+      });
+
+      it('records a version no write matches when the store has moved past the text the build parsed', () => {
+         // The built document reads its text and version off the store's own
+         // object, so only the syntax tree still says what was parsed.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic, typed' });
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+      });
+
+      it('records a version no write matches for a built document without a syntax tree sharing the store’s object', () => {
+         // Its text is the store's, so it cannot say what was parsed.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
+         delete (harness.documents.get(SEMANTIC_URI)!.parseResult.value as { $cstNode?: unknown }).$cstNode;
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic, typed' });
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+      });
+
+      it('records the store version when the store holds the text the build parsed, as one object', () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic' });
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(2);
+      });
+
       it('refreshes secondary versions on setSourceRoot, so the next command is not gated on a stale number', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
@@ -280,10 +409,9 @@ describe('ReconcilingMultiDocumentGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('writes secondaries first and the primary last, gating only the primary', async () => {
-         // The ordering IS the documented failure-mode choice: a partial write
-         // leaves a semantic edit with no diagram entry (repairable) rather than
-         // a diagram entry pointing at something that does not exist.
+      it('writes every changed document in one updateAll on the diagram session, each gated', async () => {
+         // One call is what makes the set all or none: a conflict on any
+         // document is thrown before any text applies.
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
@@ -299,10 +427,56 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             asSnapshotVersion(4)
          );
 
-         expect(harness.updateCalls.map(call => call.uri)).toEqual([SEMANTIC_URI, DIAGRAM_URI]);
-         expect(harness.updateCalls[0].basedOn).toBe('anything');
-         expect(harness.updateCalls[1].basedOn).toBe(4);
-         expect(harness.updateCalls[1].model).toEqual({ $type: 'TestRoot', label: 'edited' });
+         expect(harness.updateAllCalls).toEqual([
+            [
+               { uri: DIAGRAM_URI, model: { $type: 'TestRoot', label: 'edited' }, basedOn: 4 },
+               // The version the secondary had when the root was read.
+               { uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'edited-semantic' }, basedOn: 9 }
+            ]
+         ]);
+      });
+
+      it('opens every document of the set before writing it', async () => {
+         // `updateAll` opens nothing, so a secondary the storage has not opened
+         // yet would fail the whole set as not open.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         seed(harness, SEMANTIC_URI, 'semantic', 9);
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'diagram' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+            },
+            asSnapshotVersion(4)
+         );
+
+         expect(harness.sessionCalls).toEqual([`open ${SEMANTIC_URI}`, 'updateAll']);
+      });
+
+      it('leaves an unchanged document out of the set and keeps the captured root', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         seed(harness, SEMANTIC_URI, 'semantic', 9);
+         const state = createState(harness);
+         const captured = makeRoot('diagram');
+         state.setSourceRoot(DIAGRAM_URI, captured);
+         state.trackSecondaryDocument(SEMANTIC_URI);
+         state.setSourceRoot(DIAGRAM_URI, captured);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'diagram' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+            },
+            asSnapshotVersion(4)
+         );
+
+         expect(harness.updateAllCalls.map(call => call.map(update => update.uri))).toEqual([[SEMANTIC_URI]]);
+         expect(state.sourceRoot).toBe(captured);
       });
 
       it('defaults basedOn to the state snapshot version when the caller passes none', async () => {
@@ -316,30 +490,48 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          // v4 and not `'anything'`: the parameter is optional only because GLSP's
          // one-argument `JsonModelState.updateSourceModel` has to stay satisfiable,
          // so the default is what decides whether an ungated write is the easy one.
-         expect(harness.updateCalls).toHaveLength(1);
-         expect(harness.updateCalls[0].basedOn).toBe(asSnapshotVersion(4));
+         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual([asSnapshotVersion(4)]);
       });
 
-      it('gates a secondary write when secondaryBasedOn opts in', async () => {
-         // The hook IS the opt-in: the snapshot version was already taken at
-         // trackSecondaryDocument, so the coarser check the class doc describes is
-         // one override rather than a reimplementation of the write call.
+      it('forces every document of the set when the write is based on anything', async () => {
+         // An undo or redo replaying a patch, or a merged retry: the decision to
+         // win covers the whole set, or the secondary's stale gate would refuse
+         // what the reconcile already accepted.
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
-         const state = createState(harness, GatedSecondaryState);
+         const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
             {
                primary: { $type: 'TestRoot', label: 'edited' },
-               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'edited-semantic' } as TestPrimary }
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+            },
+            'anything'
+         );
+
+         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual(['anything', 'anything']);
+      });
+
+      it('forces a secondary when secondaryBasedOn returns anything', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         seed(harness, SEMANTIC_URI, 'semantic', 9);
+         const state = createState(harness, ForcedSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'edited' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
             asSnapshotVersion(4)
          );
 
-         expect(harness.updateCalls.find(call => call.uri === SEMANTIC_URI)?.basedOn).toBe(9);
+         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual([4, 'anything']);
       });
 
       it('captures the primary root the write returned', async () => {
@@ -353,15 +545,14 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          expect(state.sourceRoot.label).toBe('written');
       });
 
-      it('reconciles a primary conflict through the shared orchestration', async () => {
-         // Proves the multi-document state gets the identical conflict handling
-         // rather than a second copy of it: a merged outcome re-persists based
-         // on anything, exactly as the single-document state does.
+      it('reconciles a conflict on a SECONDARY through the shared orchestration', async () => {
+         // A gated secondary is reconciled like the primary: a merged outcome
+         // re-writes the whole set based on anything.
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          harness.validated.set(DIAGRAM_URI, makeRoot('fresh'));
-         harness.throwConflictOnPrimaryUpdate = true;
+         harness.conflictOn = SEMANTIC_URI;
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
@@ -374,17 +565,17 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             asSnapshotVersion(1)
          );
 
-         const primaryWrites = harness.updateCalls.filter(call => call.uri === DIAGRAM_URI);
-         expect(primaryWrites).toHaveLength(2);
-         expect(primaryWrites[0].basedOn).toBe(1);
-         expect(primaryWrites[1].basedOn).toBe('anything');
+         expect(harness.updateAllCalls.map(call => call.map(update => update.basedOn))).toEqual([
+            [1, 1],
+            ['anything', 'anything']
+         ]);
       });
 
       it('drops the edit and resyncs on a conflict outcome', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          harness.validated.set(DIAGRAM_URI, makeRoot('fresh'));
-         harness.throwConflictOnPrimaryUpdate = true;
+         harness.conflictOn = DIAGRAM_URI;
          harness.resolve = async () => ({
             status: 'conflict',
             fresh: { primary: { $type: 'TestRoot', label: 'fresh' }, secondaries: {} }
@@ -394,18 +585,17 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'edited' }, secondaries: {} }, asSnapshotVersion(1));
 
-         expect(harness.updateCalls.filter(call => call.uri === DIAGRAM_URI)).toHaveLength(1);
+         expect(harness.updateAllCalls).toHaveLength(1);
          expect(harness.warns.some(msg => msg.includes('dropping the diagram edit'))).toBe(true);
       });
 
-      it('re-throws a failed SECONDARY write instead of treating it as a conflict', async () => {
-         // The partial-write window made explicit: the secondary fails, the
-         // primary is never attempted, and the error surfaces rather than being
-         // funnelled into conflict reconciliation (which would silently retry).
+      it('re-throws a failed write instead of treating it as a conflict', async () => {
+         // Reconciling would retry a write that failed for another reason.
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
-         const state = createState(harness, FailingSecondaryState);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
@@ -418,7 +608,19 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                asSnapshotVersion(1)
             )
          ).rejects.toThrow('disk full');
-         expect(harness.updateCalls.filter(call => call.uri === DIAGRAM_URI)).toEqual([]);
+         expect(harness.updateAllCalls).toHaveLength(1);
+      });
+
+      it('refuses to write without a session, rather than writing under an id it does not hold', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.modelSession = undefined;
+
+         await expect(
+            state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1))
+         ).rejects.toThrow(/No client session/);
       });
    });
 
@@ -426,7 +628,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
       it('returns undefined when the primary cannot be read, since there is nothing to merge into', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
-         harness.throwConflictOnPrimaryUpdate = true;
+         harness.conflictOn = DIAGRAM_URI;
          // No validated root registered for the primary → refetch fails.
          let refetched: TestComposite | undefined | 'not-called' = 'not-called';
          harness.resolve = async (_baseline, attempted, refetch) => {
@@ -440,15 +642,48 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          expect(refetched).toBeUndefined();
       });
 
+      it('reconciles against the stored text, not a built root an operation handler edited in place', async () => {
+         // Until a rebuild replaces it, the built root already holds the edit
+         // being reconciled, so the replay finds its own edit as a foreign one.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seed(harness, SEMANTIC_URI, 'semantic', 1);
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         const built = harness.documents.get(SEMANTIC_URI)!.parseResult.value as TestRoot;
+         (built as { label: string }).label = 'semantic, edited';
+         harness.validated.set(DIAGRAM_URI, makeRoot('diagram'));
+         harness.validated.set(SEMANTIC_URI, built);
+         harness.conflictOn = SEMANTIC_URI;
+         harness.resolve = (baseline, attempted, refetch) => new ReconcilingConflictResolver().resolve(baseline, attempted, refetch);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'diagram' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'semantic, edited' } as TestPrimary }
+            },
+            asSnapshotVersion(1)
+         );
+
+         expect(harness.updateAllCalls).toEqual([
+            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, basedOn: 1 }],
+            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, basedOn: 'anything' }]
+         ]);
+      });
+
       it('includes settled secondaries and omits unreadable ones', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          seed(harness, OTHER_URI, 'other', 1);
-         harness.validated.set(DIAGRAM_URI, makeRoot('fresh-primary'));
-         harness.validated.set(SEMANTIC_URI, makeRoot('fresh-semantic'));
+         harness.validated.set(DIAGRAM_URI, makeRoot('built-primary'));
+         harness.validated.set(SEMANTIC_URI, makeRoot('built-semantic'));
+         harness.store.set(DIAGRAM_URI, { version: 2, text: 'fresh-primary' });
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'fresh-semantic' });
          // OTHER_URI deliberately has no validated root.
-         harness.throwConflictOnPrimaryUpdate = true;
+         harness.conflictOn = DIAGRAM_URI;
          let refetched: TestComposite | undefined;
          harness.resolve = async (_baseline, attempted, refetch) => {
             refetched = await refetch();

@@ -58,3 +58,6 @@ export function isSnapshotVersion(basedOn: BasedOn): basedOn is SnapshotVersion 
 export function asSnapshotVersion(version: number): SnapshotVersion {
    return version as SnapshotVersion;
 }
+
+/** A snapshot version no write can match, so a write based on it conflicts. */
+export const NO_MATCHING_VERSION: SnapshotVersion = asSnapshotVersion(-1);

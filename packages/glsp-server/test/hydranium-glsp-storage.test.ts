@@ -28,15 +28,16 @@ import {
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import type { ServerSharedServices } from '@hydranium/core';
+import type { ClientSession as ModelClientSession, ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
-import { ReconcilingConflictResolver } from '@hydranium/protocol';
-import { HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
+import { DuplicateClientIdError, ReconcilingConflictResolver, SessionClosedError } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
+import { DIAGRAM_SESSION_REFUSED, HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
 import { type SaveDeliveryPolicy, SaveDeliveryPolicy as SaveDeliveryPolicyToken } from '../src/storage/save-delivery-policy.js';
 
 interface TestRoot extends AstNode {
@@ -50,6 +51,7 @@ class TestState extends AbstractHydraniumGlspState<TestRoot> {
 }
 
 class TestStorage extends HydraniumGlspStorage<TestRoot> {
+   protected override readonly sessionWaitMs = 50;
    public loadCalls: RequestModelAction[] = [];
    public saveCalls: SaveModelAction[] = [];
 
@@ -76,6 +78,62 @@ class TestStorage extends HydraniumGlspStorage<TestRoot> {
    public pushDisposable(d: { dispose(): void }): void {
       this.toDispose.push(d);
    }
+
+   public callFlushWriteSet(primaryUri: string): Promise<void> {
+      return this.flushWriteSet(primaryUri);
+   }
+
+   public callRequireModelSession(): ModelClientSession<AstNode> {
+      return this.requireModelSession();
+   }
+
+   public callAwaitModelSession(): Promise<ModelClientSession<AstNode>> {
+      return this.awaitModelSession();
+   }
+}
+
+/** The diagram's client session as the storage sees it: records what it is asked to do into `calls`, and fails every open with `openError`. */
+function makeRecordingModelSession(clientId: string, calls: string[], openError?: Error): ModelClientSession<AstNode> {
+   const session = {
+      clientId,
+      label: 'diagram',
+      async open(uri: string): Promise<void> {
+         calls.push(`open ${uri}`);
+         if (openError) {
+            throw openError;
+         }
+      },
+      async close(uri: string): Promise<void> {
+         calls.push(`close ${uri}`);
+      },
+      dispose(): void {
+         calls.push('dispose');
+      }
+   };
+   return session as unknown as ModelClientSession<AstNode>;
+}
+
+/**
+ * A `ModelService` double that hands out recording sessions from
+ * `createSession`, recording each call as `createSession <label> <id>`, or
+ * refuses the id when `refuse` is set. `documents` are the URIs `getDocument`
+ * knows.
+ */
+function makeSessionModelService(
+   options: { calls?: string[]; refuse?: boolean; documents?: readonly string[]; openError?: Error } = {}
+): object {
+   const calls = options.calls ?? [];
+   return {
+      snapshot: () => undefined,
+      getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri } : undefined),
+      createSession(label: string, clientId: string): ModelClientSession<AstNode> {
+         calls.push(`createSession ${label} ${clientId}`);
+         if (options.refuse) {
+            throw new DuplicateClientIdError(clientId);
+         }
+         return makeRecordingModelSession(clientId, calls, options.openError);
+      }
+   };
 }
 
 interface ListenerHandle {
@@ -93,7 +151,10 @@ interface CapturedSessionManager extends ClientSessionManager {
 
 function createStorage(
    clientId: string,
-   sharedServices: ServerSharedServices = makeNoopSharedServices<ServerSharedServices>()
+   sharedServices: ServerSharedServices = makeNoopSharedServices<ServerSharedServices>({
+      model: { ModelService: makeSessionModelService() }
+   }),
+   logger: GlspLogger = makeNoopGlspLogger()
 ): { storage: TestStorage; state: TestState; sessions: CapturedSessionManager } {
    const handles: ListenerHandle[] = [];
    const sessions = {
@@ -116,7 +177,7 @@ function createStorage(
    } as unknown as CapturedSessionManager;
 
    const container = new Container();
-   container.bind(GlspLogger).toConstantValue(makeNoopGlspLogger());
+   container.bind(GlspLogger).toConstantValue(logger);
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(sharedServices);
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
    container.bind(HydraniumTypes.ConflictResolver).toConstantValue(new ReconcilingConflictResolver());
@@ -160,6 +221,7 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
    const services = makeNoopSharedServices<ServerSharedServices>({
       model: {
          ModelService: {
+            ...makeSessionModelService(),
             // Read by the state's version capture on every registration; no
             // document exists here, and `undefined` is the same answer a real
             // service gives for an unopened URI.
@@ -188,8 +250,8 @@ class PolicyStorage extends HydraniumGlspStorage<TestRoot> {}
  * {@link SaveDeliveryPolicyToken} only when a policy is given, so the unbound
  * default path is testable.
  *
- * `openUris` is what the flush skips against: a tracked document no client holds
- * has no stored text to save.
+ * `openUris` are the documents the diagram's session has open, which is what
+ * the flush saves; `openElsewhere` are open only in another client.
  *
  * Whether a save reaches disk is `AstDocumentManager.save`'s own decision and is
  * covered where that lives; mocking it here leaves these cases about the write
@@ -200,6 +262,8 @@ function createPolicyStorage(options: {
    save: (uri: string, clientId: string) => Promise<unknown>;
    secondaryUris?: readonly string[];
    openUris?: readonly string[];
+   openElsewhere?: readonly string[];
+   refuseSession?: boolean;
 }): {
    storage: PolicyStorage;
    saveMock: ReturnType<typeof vi.fn>;
@@ -209,14 +273,19 @@ function createPolicyStorage(options: {
    const root: TestRoot = { $type: 'TestRoot' };
    const saveMock = vi.fn(options.save);
    const open = new Set(options.openUris ?? ['file:///x.a', ...(options.secondaryUris ?? [])]);
+   const openElsewhere = new Set(options.openElsewhere ?? []);
    const { logger, lines } = makeCapturingGlspLogger();
    const container = new Container();
    container.bind(GlspLogger).toConstantValue(logger);
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(
       makeNoopSharedServices<ServerSharedServices>({
          workspace: {
-            AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) }
-         }
+            AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
+            TextDocuments: {
+               isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
+            }
+         },
+         model: { ModelService: makeSessionModelService({ refuse: options.refuseSession }) }
       })
    );
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
@@ -264,8 +333,162 @@ describe('HydraniumGlspStorage', () => {
       });
 
       it('skips registration for the GLSP tempId placeholder', () => {
-         const { sessions } = createStorage('tempId');
+         const calls: string[] = [];
+         const { sessions, state } = createStorage(
+            'tempId',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
          expect(sessions.handles).toHaveLength(0);
+         // A throwaway container GLSP builds only to enumerate action kinds:
+         // registering its id would hold the placeholder until the process ends.
+         expect(calls).toEqual([]);
+         expect(state.modelSession).toBeUndefined();
+      });
+
+      it('registers the GLSP client id as a client session and hands it to the state', () => {
+         const calls: string[] = [];
+         const { state } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
+         expect(calls).toEqual(['createSession diagram client-1']);
+         expect(state.modelSession?.clientId).toBe('client-1');
+      });
+
+      it('registers no session for an id another participant holds, and refuses to load', () => {
+         const { storage, state } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ refuse: true }) } })
+         );
+         expect(state.modelSession).toBeUndefined();
+         expect(() => storage.callRequireModelSession()).toThrow(
+            expect.objectContaining({ message: DIAGRAM_SESSION_REFUSED.text, cause: expect.stringContaining('client-1') })
+         );
+      });
+   });
+
+   describe('a refused client id', () => {
+      it('registers the session once the id frees, when it is next needed', () => {
+         const options = { refuse: true };
+         const { storage, state } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService(options) } })
+         );
+         expect(state.modelSession).toBeUndefined();
+
+         options.refuse = false;
+
+         expect(storage.callRequireModelSession().clientId).toBe('client-1');
+         expect(state.modelSession?.clientId).toBe('client-1');
+      });
+   });
+
+   /**
+    * A document that joins the write set is opened through the diagram's
+    * session, and stays open until the diagram's next save after it left: the
+    * diagram's unsaved edits to it are not reverted by leaving.
+    */
+   describe('write-set opens', () => {
+      /** A storage whose session records into `calls`, over a store knowing `documents`, open for the diagram as `open`. */
+      function createOpeningStorage(
+         documents: readonly string[],
+         open: Set<string>,
+         options: { onSave?: (uri: string) => Promise<void>; openError?: Error; logger?: GlspLogger } = {}
+      ): { storage: TestStorage; state: TestState; calls: string[] } {
+         const calls: string[] = [];
+         const services = makeNoopSharedServices<ServerSharedServices>({
+            model: {
+               ModelService: {
+                  ...makeSessionModelService({ calls, documents, openError: options.openError }),
+                  onModelUpdated: () => ({ dispose() {} })
+               }
+            },
+            workspace: {
+               AstDocumentManager: {
+                  save: async (uri: string) => {
+                     calls.push(`save ${uri}`);
+                     await options.onSave?.(uri);
+                  }
+               },
+               TextDocuments: { get: () => undefined, isOpenInClient: (uri: string) => open.has(uri) }
+            }
+         });
+         const { storage, state } = createStorage('client-1', services, options.logger);
+         calls.length = 0;
+         return { storage, state, calls };
+      }
+
+      it('opens a document that joins the write set, and not one that does not exist yet', async () => {
+         const { state, calls } = createOpeningStorage(['file:///a/side.x'], new Set());
+
+         state.trackSecondaryDocument('file:///a/side.x');
+         state.trackSecondaryDocument('file:///a/new.x');
+
+         expect(calls).toEqual(['open file:///a/side.x']);
+      });
+
+      it('keeps a document that leaves the write set open until the next save has saved it', async () => {
+         const open = new Set(['file:///a/side.x']);
+         const { storage, state, calls } = createOpeningStorage(['file:///a/side.x'], open);
+         state.trackSecondaryDocument('file:///a/side.x');
+         calls.length = 0;
+
+         state.untrackSecondaryDocuments();
+         expect(calls).toEqual([]);
+
+         await storage.callFlushWriteSet('file:///a/main.x');
+         expect(calls).toEqual(['save file:///a/side.x', 'close file:///a/side.x']);
+      });
+
+      it('keeps a document that left the write set open when the save failed', async () => {
+         const open = new Set(['file:///a/side.x']);
+         const { storage, state, calls } = createOpeningStorage(['file:///a/side.x'], open, {
+            onSave: () => Promise.reject(new Error('disk full'))
+         });
+         state.trackSecondaryDocument('file:///a/side.x');
+         state.untrackSecondaryDocuments();
+         calls.length = 0;
+
+         await expect(storage.callFlushWriteSet('file:///a/main.x')).rejects.toThrow('disk full');
+         expect(calls).toEqual(['save file:///a/side.x']);
+      });
+
+      it('keeps a document that leaves the write set during the save open for the next save', async () => {
+         // Its text was taken before it left; edits made since are unsaved.
+         const open = new Set(['file:///a/side.x']);
+         const opened = createOpeningStorage(['file:///a/side.x'], open, {
+            onSave: async () => opened.state.untrackSecondaryDocuments()
+         });
+         opened.state.trackSecondaryDocument('file:///a/side.x');
+         opened.calls.length = 0;
+
+         await opened.storage.callFlushWriteSet('file:///a/main.x');
+         expect(opened.calls).toEqual(['save file:///a/side.x']);
+      });
+
+      it('logs an open the ending session refused at debug, not as a warning', async () => {
+         const { logger, lines } = makeCapturingGlspLogger();
+         const { state } = createOpeningStorage(['file:///a/side.x'], new Set(), {
+            openError: new SessionClosedError('client-1'),
+            logger
+         });
+
+         state.trackSecondaryDocument('file:///a/side.x');
+         await waitFor(() => lines.some(line => line.message.includes('Could not open file:///a/side.x')));
+
+         expect(lines.filter(line => line.message.includes('Could not open')).map(line => line.level)).toEqual(['debug']);
+      });
+
+      it('does not close a document that rejoined the write set before the save', async () => {
+         const open = new Set(['file:///a/side.x']);
+         const { storage, state, calls } = createOpeningStorage(['file:///a/side.x'], open);
+         state.trackSecondaryDocument('file:///a/side.x');
+         state.untrackSecondaryDocuments();
+         state.trackSecondaryDocument('file:///a/side.x');
+         calls.length = 0;
+
+         await storage.callFlushWriteSet('file:///a/main.x');
+         expect(calls).toEqual(['save file:///a/side.x']);
       });
    });
 
@@ -400,7 +623,8 @@ describe('HydraniumGlspStorage', () => {
       /** A tree whose renderer serves {@link GLSP_CATALOGUE} at `locale`. */
       function servicesWithLocale(locale: string | undefined): ServerSharedServices {
          const services = makeNoopSharedServices<ServerSharedServices>({
-            MessageRenderer: shared => new GlspCatalogueRenderer(shared)
+            MessageRenderer: shared => new GlspCatalogueRenderer(shared),
+            model: { ModelService: makeSessionModelService() }
          });
          if (locale) {
             services.ServerLocale.accept(locale);
@@ -563,14 +787,35 @@ describe('HydraniumGlspStorage', () => {
          expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a', 'file:///x.layout']);
       });
 
-      it('skips a tracked document no client holds open, which has no stored text to write', async () => {
+      it('skips a tracked document the diagram does not have open, even when another client does', async () => {
+         // The other client's unsaved edits are not the diagram's to persist.
          const { storage, saveMock } = createPolicyStorage({
             save: () => Promise.resolve(),
             secondaryUris: ['file:///x.layout'],
-            openUris: ['file:///x.a']
+            openUris: ['file:///x.a'],
+            openElsewhere: ['file:///x.layout']
          });
          await storage.saveSourceModel(saveAction);
          expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+      });
+
+      it('saves nothing for a diagram that registered no session', async () => {
+         // The client id's opens are then another participant's.
+         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), refuseSession: true });
+         await expect(storage.saveSourceModel(saveAction)).rejects.toThrow(DIAGRAM_SESSION_REFUSED.text);
+         expect(saveMock).not.toHaveBeenCalled();
+      });
+
+      it('calls every save before any of them settles', async () => {
+         // Each save takes its text when called. Called one after another, a
+         // session ending during the first write would close the rest before
+         // their text was taken.
+         const { storage, saveMock } = createPolicyStorage({
+            save: () => new Promise<void>(() => undefined),
+            secondaryUris: ['file:///x.layout']
+         });
+         void storage.saveSourceModel(saveAction);
+         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a', 'file:///x.layout']);
       });
 
       it('saves a primary tracked as its own secondary once', async () => {
@@ -634,6 +879,57 @@ describe('HydraniumGlspStorage', () => {
          storage.pushDisposable({ dispose: () => (disposed += 1) });
          storage.sessionDisposed({ id: 'client-1' } as ClientSession);
          expect(disposed).toBe(1);
+      });
+
+      it('ends the client session once every subscription is drained', () => {
+         // Last, so the closes it causes find the detach listener gone rather
+         // than reporting this teardown as a client detaching.
+         const calls: string[] = [];
+         const { storage } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
+         storage.pushDisposable({ dispose: () => calls.push('subscription') });
+         storage.dispose();
+         expect(calls.slice(1)).toEqual(['subscription', 'dispose']);
+      });
+
+      it('drops the ended session from the state and registers none again', () => {
+         const calls: string[] = [];
+         const { storage, state } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
+         storage.dispose();
+
+         expect(state.modelSession).toBeUndefined();
+         expect(() => storage.callRequireModelSession()).toThrow(SessionClosedError);
+         expect(calls.filter(call => call.startsWith('createSession'))).toHaveLength(1);
+      });
+
+      it('fails a save after dispose as a closed session, not as a held id', async () => {
+         const { storage } = createStorage('client-1');
+         storage.dispose();
+
+         await expect(storage.callFlushWriteSet('file:///a/main.x')).rejects.toThrow(SessionClosedError);
+      });
+
+      it('ends a load still waiting for a held id as a closed session when disposed, and tells no one', async () => {
+         const { storage } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({
+               model: { ModelService: makeSessionModelService({ refuse: true }) },
+               workspace: { TextDocuments: { onDidCloseSession: () => ({ dispose() {} }) } }
+            })
+         );
+         const dispatch = vi.fn(() => Promise.resolve());
+         (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
+
+         const loading = storage.callAwaitModelSession();
+         storage.dispose();
+
+         await expect(loading).rejects.toThrow(SessionClosedError);
+         expect(dispatch).not.toHaveBeenCalled();
       });
 
       it('is idempotent across repeated dispose() calls', () => {

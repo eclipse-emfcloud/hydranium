@@ -12,6 +12,7 @@ import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable, optional } from 'inversify';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
 import {
+   type ClientSession,
    type HydraniumScopeProvider,
    type LanguageTarget,
    type NameProvider,
@@ -26,7 +27,8 @@ import {
    type Disposable,
    type Logger,
    type Tracer,
-   asSnapshotVersion
+   asSnapshotVersion,
+   NO_MATCHING_VERSION
 } from '@hydranium/protocol';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -94,6 +96,33 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /** Narrows {@link DefaultModelState.index} to the framework-extended index type. */
    declare readonly index: HydraniumGlspIndex;
+
+   /**
+    * The client session this diagram works as, registered under `clientId` by
+    * the source-model storage and ended with the GLSP client session.
+    * `undefined` for GLSP's placeholder client, and when the id was held by
+    * another participant, in which case the diagram does not load.
+    *
+    * A write through `ModelService` under `clientId` acts as this session: it
+    * writes only a document the session has open and opens nothing. A one-shot
+    * write to a document outside the write set goes through
+    * {@link ClientSession.withOpen}, and a document the diagram brings into
+    * existence through {@link ClientSession.create}.
+    */
+   modelSession?: ClientSession<AstNode>;
+
+   /**
+    * {@link modelSession}, or a throw without one. A write without a session
+    * must fail: the diagram never loaded or has ended, and a write under
+    * `clientId` would act for whoever holds that id, or open the document for
+    * an id nothing closes.
+    */
+   protected requireModelSession(): ClientSession<AstNode> {
+      if (!this.modelSession) {
+         throw new Error(`No client session is registered for ${this.clientId}; the diagram cannot write`);
+      }
+      return this.modelSession;
+   }
 
    protected _sourceUri!: string;
    protected _sourceRoot!: TRoot;
@@ -267,7 +296,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * Text-document version of {@link basedOn}. Mirrors the server-side
-    * `TextDocuments.version(uri)` counter as of the snapshot.
+    * `TextDocuments.version(uri)` counter as of the snapshot, or is
+    * `NO_MATCHING_VERSION` when the store's text could not be tied to the
+    * root (see {@link readSnapshotVersion}).
     *
     * Falls back to `0` when the document is absent from `LangiumDocuments`
     * when the snapshot is taken — the same observable state callers see for a
@@ -381,10 +412,35 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * answers with the version the write is about to be compared against, so the
     * gate passes unconditionally.
     *
-    * Falls back to v0 for a URI the store does not know, matching what
+    * Falls back to v0 for a URI neither store knows, matching what
     * {@link version} reports for a document that was never opened.
+    *
+    * **The version of the text store, which the gate compares against.**
+    * When the store holds the text the root was parsed from, that is its
+    * version, even while the built document still carries an older number.
+    * When the store holds other text, `NO_MATCHING_VERSION`, so the write
+    * conflicts instead of overwriting text the root never saw: the
+    * reconciling states reconcile it, `FullTextHydraniumGlspState` throws the
+    * `ConflictError`. When the root keeps no syntax tree to read its text
+    * from, the built document's text stands in for it, unless the built
+    * document IS the store's, whose text says nothing about what was parsed;
+    * that also gets `NO_MATCHING_VERSION`.
     */
    protected readSnapshotVersion(uri: string): SnapshotVersion {
+      const document = this.sharedServices.model.ModelService.getDocument(uri);
+      const stored = document && this.sharedServices.workspace.TextDocuments.get(uri);
+      if (stored) {
+         const parsed = document.parseResult.value.$cstNode?.root.fullText;
+         if (parsed !== undefined) {
+            return parsed === stored.getText() ? asSnapshotVersion(stored.version) : NO_MATCHING_VERSION;
+         }
+         if (document.textDocument === stored) {
+            return NO_MATCHING_VERSION;
+         }
+         if (stored.version !== document.textDocument.version && stored.getText() === document.textDocument.getText()) {
+            return asSnapshotVersion(stored.version);
+         }
+      }
       return this.sharedServices.model.ModelService.snapshot(uri)?.version ?? asSnapshotVersion(0);
    }
 
@@ -415,6 +471,28 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       if (root !== undefined && root !== this._sourceRoot) {
          this.setSourceRoot(this._sourceUri, root);
       }
+   }
+
+   /**
+    * The root that `uri`'s text parses to (the text store's, or the built
+    * document's when the store holds none), read once the document has
+    * validated; `undefined` when it cannot be read.
+    *
+    * **Parsed afresh, never the built root.** Operation handlers edit the
+    * built root in place, so until a rebuild replaces it, it already holds
+    * the edit being reconciled, and replaying the edit onto it applies it
+    * twice. The fresh root is parsed, not linked: an encoder hook reading a
+    * reference's `ref` sees `undefined` on it.
+    */
+   protected async readFreshRoot(uri: string): Promise<AstNode | undefined> {
+      const modelService = this.sharedServices.model.ModelService;
+      if (!(await modelService.validated(uri).catch(() => undefined))) {
+         return undefined;
+      }
+      const text = this.sharedServices.workspace.TextDocuments.get(uri)?.getText() ?? modelService.getDocument(uri)?.textDocument.getText();
+      return text === undefined
+         ? undefined
+         : this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri)).parseResult.value;
    }
 
    /**

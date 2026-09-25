@@ -10,7 +10,8 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type BasedOn, type TransferElement } from '@hydranium/protocol';
+import { type ClientSession } from '@hydranium/core';
+import { type BasedOn, type TransferElement, type TransferUpdateAllArgs } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -44,36 +45,22 @@ export interface MultiDocumentSourceModel<TPrimary extends TransferElement = Tra
  * defines them over the primary plus the secondary write set registered through
  * {@link AbstractHydraniumGlspState.trackSecondaryDocument}.
  *
- * **Writes are NOT atomic, deliberately, and the window is real.** Each document
- * goes through its own `ModelService.update`, so a failure after the first write
- * has landed leaves the set inconsistent on disk. There is no multi-document
- * transaction to lean on: `WorkspaceLock` serialises builds but does not roll
- * back, and the document store commits per URI. An adopter that cannot accept the
- * window should not span documents in one operation.
+ * **The write set is written all or none.** {@link persist} hands every
+ * changed document to one `ClientSession.updateAll` on the diagram's session,
+ * so a conflict on any document leaves every document of the set as it was,
+ * and write order carries no meaning.
  *
- * **What makes the window tolerable is write ORDER, and the rule is
- * referenced-before-referencing** — not "secondaries first" as such. Write the
- * document whose content the others point AT before the documents that point at
- * it, so a partial write leaves an unreferenced element (inert, and the direction
- * an integrity rule can repair) rather than a reference to something that does
- * not exist (a linking error). {@link persist} implements that as
- * secondaries-then-primary, which is correct for the common shape where the
- * primary is the DIAGRAM and the semantics it references are secondaries: the
- * user opened the diagram, so it is also the document the conflict gate should
- * guard. **An adopter whose primary is the referenced document — a semantic file
- * as the diagram source, with layout in a secondary — has the ordering backwards
- * and must override {@link persist} to write the primary first.** Overriding it
- * is the supported route; the base order is a default for the common case, not an
- * invariant of the class.
+ * **Every document of the set is gated.** The primary on the caller's
+ * `basedOn`, each secondary on {@link secondaryBasedOn}, by default the version
+ * it had when the source root was last read. A conflict on any of them is
+ * reconciled against the whole write set. A write based on `'anything'` — a
+ * merged retry, an undo or redo replaying a patch — forces every document of
+ * the set.
  *
- * **The conflict gate covers the primary only.** Secondaries are written without
- * a based-on version, so a concurrent foreign edit to one is overwritten rather
- * than reconciled. Gating them too would need a per-document reconcile whose
- * outcomes can disagree (merge one, conflict another) with no way to un-write the
- * merged one — the atomicity problem again, one layer up. An adopter that wants
- * a coarser check overrides {@link secondaryBasedOn} to return the version
- * {@link AbstractHydraniumGlspState.snapshotVersionOf} already holds, and takes
- * on the partial-write window named there.
+ * A secondary is written only while the diagram's session has it open. The
+ * storage opens it as it joins the write set, and {@link openForWrite} opens it
+ * again before each write; an adopter whose write set can name a document that
+ * does not exist yet overrides {@link openForWrite} to create it.
  */
 @injectable()
 export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary extends TransferElement = TransferElement>
@@ -137,8 +124,9 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
 
    /**
     * Persist the whole write set, then capture the resulting primary root. On a
-    * `ConflictError` from the primary, reconcile via the injected policy exactly
-    * as the single-document state does — the orchestration is shared.
+    * `ConflictError` from any document of the set, reconcile via the injected
+    * policy exactly as the single-document state does — the orchestration is
+    * shared.
     */
    async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn = this.basedOn): Promise<void> {
       return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, basedOn, {
@@ -155,23 +143,34 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    }
 
    /**
-    * Write hook — secondaries first (ungated), primary last (gated on
-    * `basedOn`). The order is the failure-mode choice documented on the
-    * class, not incidental: override this when the primary is the document the
-    * others REFERENCE, since then this order writes the references first.
+    * Write hook — every document of `model` that changed, opened first through
+    * {@link openForWrite}, in one `updateAll` on the diagram's session: the
+    * primary gated on `basedOn`, each secondary on {@link secondaryBasedOn}, or
+    * every document on `'anything'` when `basedOn` is `'anything'`. Resolves to
+    * the primary's root, the one already captured when the primary did not
+    * change. A write that bypasses `updateAll` gives up the all-or-none
+    * guarantee the class describes. Throws without a session
+    * ({@link requireModelSession}).
     */
    protected async persist(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn): Promise<{ root: TRoot }> {
+      const primaryChanged = this.hasChanged(this.baseline?.primary, model.primary);
+      const updates: TransferUpdateAllArgs<TransferElement>['updates'] = primaryChanged
+         ? [{ uri: this._sourceUri, model: model.primary, basedOn }]
+         : [];
       for (const [uri, secondary] of Object.entries(model.secondaries)) {
          if (this.hasChanged(this.baseline?.secondaries[uri], secondary)) {
-            await this.persistSecondary(uri, secondary);
+            updates.push({ uri, model: secondary, basedOn: basedOn === 'anything' ? 'anything' : this.secondaryBasedOn(uri) });
          }
       }
-      if (!this.hasChanged(this.baseline?.primary, model.primary)) {
-         // Nothing to write, so nothing to gate either — return the root already
-         // captured rather than round-tripping the document for no reason.
+      if (updates.length === 0) {
          return { root: this._sourceRoot };
       }
-      return this.persistPrimary(model.primary, basedOn);
+      const session = this.requireModelSession();
+      for (const update of updates) {
+         await this.openForWrite(session, update.uri);
+      }
+      const documents = await session.updateAll({ updates });
+      return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot };
    }
 
    /**
@@ -179,12 +178,12 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * document, and therefore needs writing.
     *
     * **Skipping unchanged documents is correctness, not an optimisation.** A
-    * write goes through `ModelService.update`, which re-serializes from the AST —
-    * so writing a document that did not change still rewrites its text in the
-    * serializer's own layout. Persisting the whole write set unconditionally
-    * therefore means a pure layout drag reflows the semantic file, a change the
-    * user never asked for and would struggle to attribute. Comments survive that
-    * rewrite, but the hand-formatting around them does not.
+    * write re-serializes from the AST, so writing a document that did not
+    * change still rewrites its text in the serializer's own layout. Persisting
+    * the whole write set unconditionally therefore means a pure layout drag
+    * reflows the semantic file, a change the user never asked for and would
+    * struggle to attribute. Comments survive that rewrite, but the
+    * hand-formatting around them does not.
     *
     * Compared by serialised form. Both sides come from the same encoder walking
     * the same shape, so key order is stable and a string compare is sound here;
@@ -194,73 +193,49 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       return baseline === undefined || JSON.stringify(baseline) !== JSON.stringify(candidate);
    }
 
-   /** Write the primary document, opting into the conflict gate unless `basedOn` is `'anything'`. */
-   protected async persistPrimary(model: TPrimary, basedOn: BasedOn): Promise<{ root: TRoot }> {
-      const document = await this.sharedServices.model.ModelService.update({
-         uri: this._sourceUri,
-         model,
-         clientId: this.clientId,
-         basedOn
-      });
-      return document as unknown as { root: TRoot };
-   }
-
    /**
-    * Write one secondary document, gated on whatever {@link secondaryBasedOn}
-    * returns. Override alongside {@link persistPrimary} when the round-trip
-    * differs per document role — a layout file and a semantic file need not
-    * share a serializer.
+    * Make sure the diagram's session has `uri` open before the write set is
+    * written. Default: open it, a no-op for a document the session already
+    * has open. Override to create a document the write set names before it
+    * exists, through `session.create`: `updateAll` opens nothing.
     */
-   protected async persistSecondary(uri: string, model: TransferElement): Promise<void> {
-      await this.sharedServices.model.ModelService.update({
-         uri,
-         model,
-         clientId: this.clientId,
-         basedOn: this.secondaryBasedOn(uri)
-      });
+   protected openForWrite(session: ClientSession<AstNode>, uri: string): Promise<void> {
+      return session.open(uri);
    }
 
    /**
-    * What a secondary write declares it was based on. Default `'anything'` —
-    * ungated, because gating the whole set needs a per-document reconcile whose
-    * outcomes can disagree, with no way to un-write an already-merged sibling.
-    *
-    * **The hook exists so that opting in is an override rather than a
-    * reimplementation.** The state already holds what such a check needs
-    * ({@link AbstractHydraniumGlspState.snapshotVersionOf}), and returning that
-    * value here is the whole opt-in; without it the only place to put the
-    * comparison is a copy of {@link persistSecondary}, which then has to be kept
-    * in step with the framework's write call.
-    *
-    * **Opting in buys a conflict report and costs atomicity.** A gated secondary
-    * throws mid-set, after earlier secondaries have already been written, and if
-    * the reconcile then drops the edit those writes stay. Weigh that against the
-    * default, which lets a foreign edit to a secondary be overwritten silently.
+    * What a secondary write declares it was based on. Default: the version the
+    * secondary had when the source root was last read
+    * ({@link AbstractHydraniumGlspState.snapshotVersionOf}), so a foreign edit
+    * to it since is reported as a conflict and reconciled rather than
+    * overwritten; `'anything'` for a secondary with no recorded version.
+    * Return `'anything'` to force secondary writes.
     */
-   protected secondaryBasedOn(_uri: string): BasedOn {
-      return 'anything';
+   protected secondaryBasedOn(uri: string): BasedOn {
+      return this.snapshotVersionOf(uri) ?? 'anything';
    }
 
    /**
-    * Refetch hook — the current settled projection across the write set, used by
-    * the conflict resolver to replay the user's intent against fresh state.
+    * Refetch hook — the current projection across the write set, each document
+    * read through {@link AbstractHydraniumGlspState.readFreshRoot}, used by the
+    * conflict resolver to replay the user's intent against fresh state.
     * Returns `undefined` when the PRIMARY cannot be read, since a reconcile
     * without it has nothing to merge into; an unreadable secondary is omitted the
     * same way {@link sourceModel} omits one.
     */
    protected async refetch(): Promise<MultiDocumentSourceModel<TPrimary> | undefined> {
-      const fresh = await this.sharedServices.model.ModelService.validated(this._sourceUri).catch(() => undefined);
+      const fresh = await this.readFreshRoot(this._sourceUri);
       if (!fresh) {
          return undefined;
       }
       const secondaries: Record<string, TransferElement> = {};
       for (const uri of this.secondaryUris) {
-         const settled = await this.sharedServices.model.ModelService.validated(uri).catch(() => undefined);
-         if (settled) {
-            secondaries[uri] = this.projectRoot(settled.root as unknown as AstNode);
+         const root = await this.readFreshRoot(uri);
+         if (root) {
+            secondaries[uri] = this.projectRoot(root);
          }
       }
-      return { primary: this.projectRoot(fresh.root as unknown as AstNode) as TPrimary, secondaries };
+      return { primary: this.projectRoot<TPrimary>(fresh), secondaries };
    }
 
    /** Project a currently-loaded document's root, or `undefined` when it is not loaded. */

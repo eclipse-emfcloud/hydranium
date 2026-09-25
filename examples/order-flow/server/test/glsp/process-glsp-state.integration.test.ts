@@ -33,10 +33,9 @@
  * where the difference between the branches is visible and where an adopter's
  * user sees it: a dropped edit leaves the foreign text standing in the
  * `.process` file AND leaves the `.layout` file untouched, while a merge leaves
- * both intents in both files. Asserting the pair is what pins
- * `OrderFlowGlspState.persist` writing the PRIMARY first: the gated document
- * throws before any secondary write, so a dropped edit cannot leave the layout
- * file half-edited.
+ * both intents in both files. Asserting the pair is what pins the write set
+ * going through one `updateAll`: the conflict is thrown before any document of
+ * the set applies, so a dropped edit cannot leave the layout file half-edited.
  *
  * Two of the four branches are NOT reachable from here, and that is structural
  * rather than an omission:
@@ -195,10 +194,10 @@ describe('order-flow .process glsp state — a foreign write between baseline an
       // `conflict`: the foreign edit stands and the delete is gone.
       expect(diagram.text()).toContain('task Pick reads Order.status');
       expect(diagram.text()).toContain('transition Pick -> Ship');
-      // The layout secondary was never written either. That is the payoff of
-      // `OrderFlowGlspState.persist` writing the primary FIRST: the gated
-      // document throws before any secondary write, so the pair cannot end up
-      // with the layout entry deleted for a flow node that still exists.
+      // The layout secondary was never written either: the write set goes
+      // through one `updateAll`, which throws before any document applies, so
+      // the pair cannot end up with the layout entry deleted for a flow node
+      // that still exists.
       expect(diagram.layoutText()).toContain('node Pick at 440, 200');
       // And the state resynced onto the foreign content instead of keeping the
       // orphaned root the handler mutated — which is what lets the user's next
@@ -212,8 +211,9 @@ describe('order-flow .process glsp state — a foreign write between baseline an
       const capturedVersion = diagram.harness.state.version;
 
       // A task the diagram has never seen. The create it races against produces
-      // only `add` ops, which carry no `test` guard, so the user's intent replays
-      // on top of the refetched state instead of colliding with it.
+      // only `add` ops of values the foreign write did not add, so the user's
+      // intent replays on top of the refetched state instead of colliding with
+      // it.
       await diagram.foreignWrite(
          diagram.text().replace('   transition Pay -> PaymentOk', '   task Refund reads Order.id\n   transition Pay -> PaymentOk')
       );

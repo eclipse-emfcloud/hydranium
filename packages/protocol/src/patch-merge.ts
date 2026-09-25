@@ -7,7 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { applyPatch, compare, deepClone, getValueByPointer, type Operation as JsonPatchOperation } from 'fast-json-patch';
+import {
+   _areEquals,
+   applyPatch,
+   compare,
+   deepClone,
+   getValueByPointer,
+   type Operation as JsonPatchOperation,
+   unescapePathComponent
+} from 'fast-json-patch';
 
 /**
  * Augment a user-intent JSON patch (computed `baseline → attempted`) with
@@ -22,8 +30,9 @@ import { applyPatch, compare, deepClone, getValueByPointer, type Operation as Js
  * The caller treats that as a real field-level conflict (drop + refetch) rather
  * than silently clobbering the foreign edit.
  *
- * `add` ops are left unguarded: the path is new, so there is no baseline value
- * to test against, and add-vs-add overlaps are out of scope for this floor.
+ * `add` ops get no `test` op: the path is new, so there is no baseline value
+ * to test. {@link reconcileByPatchReplay} checks them against the fresh state
+ * instead; a caller applying this patch itself does not get that check.
  *
  * Used behind the framework's `ConflictError` contract by every reconcile
  * path — the GLSP recording command's undo/redo and forward-write, via
@@ -67,7 +76,7 @@ export type ReconcileOutcome<T> =
         status: 'no-op';
      }
    | {
-        /** A guarded `test` op tripped: user and foreign writer touched one path. */
+        /** User and foreign writer changed one path, or both added the same element or key. */
         status: 'conflict';
         /**
          * The server's current root, refetched and unmodified — the user's
@@ -95,8 +104,9 @@ export type ReconcileOutcome<T> =
  * - `unavailable` — the refetch produced nothing; caller falls back.
  * - `merged` — the foreign writer touched only paths the user did not; the
  *   merged root carries both intents.
- * - `conflict` — a same-path divergence tripped a `test` op; caller drops the
- *   write and surfaces `fresh`.
+ * - `conflict` — a same-path divergence tripped a `test` op, or an `add`
+ *   collides with one the foreign writer made; caller drops the write and
+ *   surfaces `fresh`.
  *
  * I/O is the caller's: `refetch` supplies the current root, and applying the
  * `merged` result (update vs save, re-baseline, UI refresh) stays at the call
@@ -115,11 +125,55 @@ export async function reconcileByPatchReplay<T extends object>(
    if (!fresh) {
       return { status: 'unavailable' };
    }
+   if (addsCollide(baseline, fresh, userPatch)) {
+      return { status: 'conflict', fresh };
+   }
    try {
       const merged = applyPatch(deepClone(fresh), augmentWithTestOps(baseline, userPatch), true).newDocument;
       return { status: 'merged', merged };
    } catch {
       return { status: 'conflict', fresh };
+   }
+}
+
+/**
+ * Whether an `add` of `userPatch` collides with one the foreign writer made:
+ * it inserts a value into an array that `fresh` holds more often than the
+ * baseline did, or it adds an object key that `fresh` already holds.
+ *
+ * Replayed, the first inserts the value a second time and the second replaces
+ * the foreign value. Identical values conflict rather than being skipped:
+ * skipping drops one of two additions that merely happen to be equal.
+ */
+function addsCollide(baseline: object, fresh: object, userPatch: readonly JsonPatchOperation[]): boolean {
+   // Through JSON, as `compare` clones the add values: an undefined-valued key
+   // in `fresh` would otherwise make an equal element count as another.
+   const comparable = JSON.parse(JSON.stringify(fresh)) as object;
+   return userPatch.some(op => {
+      if (op.op !== 'add') {
+         return false;
+      }
+      const cut = op.path.lastIndexOf('/');
+      const before = valueAt(baseline, op.path.slice(0, cut));
+      const now = valueAt(comparable, op.path.slice(0, cut));
+      if (Array.isArray(before)) {
+         return Array.isArray(now) && occurrences(now, op.value) > occurrences(before, op.value);
+      }
+      return typeof now === 'object' && now !== null && Object.hasOwn(now, unescapePathComponent(op.path.slice(cut + 1)));
+   });
+}
+
+/** How many elements of `array` deeply equal `value`, whatever their key order. */
+function occurrences(array: readonly unknown[], value: unknown): number {
+   return array.filter(element => _areEquals(element, value)).length;
+}
+
+/** The value at `pointer`, or `undefined` when a step of it is missing. */
+function valueAt(document: object, pointer: string): unknown {
+   try {
+      return getValueByPointer(document, pointer);
+   } catch {
+      return undefined;
    }
 }
 

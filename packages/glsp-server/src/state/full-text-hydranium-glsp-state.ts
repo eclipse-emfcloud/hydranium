@@ -32,9 +32,9 @@ export interface FullTextSourceModel {
  *   `serializer.Serializer` reached via `sharedServices.ServiceRegistry`
  *   (so multi-grammar workspaces route to the right serializer). `MaybePromise`
  *   because serialization may be async; the sync fast path is preserved.
- * - {@link updateSourceModel} pushes the text back through
- *   `ModelService.update` (which accepts a raw text payload) and captures the
- *   re-parsed root, gated on the caller's `basedOn`.
+ * - {@link updateSourceModel} pushes the text back through the diagram's
+ *   session (`update` accepts a raw text payload) and captures the re-parsed
+ *   root, gated on the caller's `basedOn`; it throws without a session.
  *
  * No `baseline` / conflict reconcile: a whole-document model has exactly one
  * field, so every concurrent edit is a same-field collision and undo / redo
@@ -53,12 +53,7 @@ export class FullTextHydraniumGlspState<TRoot extends AstNode>
    }
 
    async updateSourceModel(model: FullTextSourceModel, basedOn: BasedOn = this.basedOn): Promise<void> {
-      const document = await this.sharedServices.model.ModelService.update({
-         uri: this._sourceUri,
-         model: model.text,
-         clientId: this.clientId,
-         basedOn
-      });
+      const document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, basedOn });
       this.setSourceRoot(this._sourceUri, document.root as TRoot);
    }
 }

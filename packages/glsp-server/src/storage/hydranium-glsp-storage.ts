@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { MarkersReason, SetMarkersAction, StatusAction } from '@eclipse-glsp/protocol';
+import { MarkersReason, MessageAction, SetMarkersAction, StatusAction } from '@eclipse-glsp/protocol';
 import {
    type Action,
    ActionDispatcher,
@@ -31,11 +31,24 @@ import {
    type SourceModelStorage,
    TEMPORARY_CLIENT_ID
 } from '@eclipse-glsp/server';
-import { Debouncer, defineMessage, DisposableCollection } from '@hydranium/protocol';
+import {
+   Debouncer,
+   defineMessage,
+   DisposableCollection,
+   isDuplicateClientIdError,
+   isSessionClosedError,
+   SessionClosedError
+} from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { AstDocument, type AstDocumentSavedEvent, type AstDocumentUpdatedEvent, type ServerSharedServices } from '@hydranium/core';
+import {
+   AstDocument,
+   type AstDocumentSavedEvent,
+   type AstDocumentUpdatedEvent,
+   type ClientSession as ModelClientSession,
+   type ServerSharedServices
+} from '@hydranium/core';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-glsp-submission-handler.js';
@@ -93,6 +106,21 @@ export const DIAGRAM_READONLY_PARSE_ERROR = defineMessage(
    'Read-only: this document has a syntax error. Fix it to edit the diagram again.'
 );
 
+/**
+ * The diagram's GLSP client id is still live as another participant's client
+ * id once the load has waited for it to free, so the diagram does not load.
+ *
+ * Rendered at the raise site, as {@link SAVE_TARGET_UNKNOWN} is and for the
+ * same reason, and dispatched to the client as a message of its own: a model
+ * request fails as a rejection whose detail is the English cause, which no user
+ * sees. It names the recovery: a host that numbers its diagram clients gives a
+ * reopened diagram a fresh id.
+ */
+export const DIAGRAM_SESSION_REFUSED = defineMessage(
+   'hydranium/glsp-server/diagram-session-refused',
+   'Could not open this diagram: its identifier is still in use by another editor. Close the diagram and open it again.'
+);
+
 /** Window (ms) over which back-to-back external rebuilds collapse into one resubmit. */
 const EXTERNAL_SUBMIT_DEBOUNCE_MS = 250;
 
@@ -144,11 +172,21 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
  * whole flow, and select a {@link SaveDeliveryPolicy} via the bound option to
  * tune how {@link saveSourceModel} delivers its result.
  *
- * **Default `saveSourceModel` flow.** Flushes the stored text of the primary and
- * every tracked secondary via `AstDocumentManager.save`, with no serializer in
- * the path — the update path already put the settled text in the store. The
- * bound {@link SaveDeliveryPolicy} (default {@link DEFAULT_SAVE_DELIVERY_POLICY},
- * `await`) decides await-vs-fire-and-forget and failure handling.
+ * **One client session per GLSP client session.** `init` registers the GLSP
+ * client id as a client session ({@link registerModelSession}) and hands it to
+ * the state as `modelSession`. The primary is opened through it on load, and
+ * every document that joins the write set as it joins
+ * ({@link openSecondary}); a document that leaves the write set stays open
+ * until the next save, so leaving never reverts the diagram's unsaved edits to
+ * it. Disposing the storage ends the session, which closes everything it has
+ * open.
+ *
+ * **Default `saveSourceModel` flow.** Flushes the stored text of every
+ * document the diagram's session has open via `AstDocumentManager.save`, with
+ * no serializer in the path — the update path already put the settled text in
+ * the store. The bound {@link SaveDeliveryPolicy} (default
+ * {@link DEFAULT_SAVE_DELIVERY_POLICY}, `await`) decides
+ * await-vs-fire-and-forget and failure handling.
  *
  * **tempId filter.** GLSP's `DefaultGlobalActionProvider` spins up a
  * throwaway per-diagram-type container with upstream's {@link TEMPORARY_CLIENT_ID}
@@ -159,9 +197,9 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
  * **Lifecycle ordering.** `init` runs after DI resolution and parks the
  * secondary-write-set watch, which outlives any single load.
  * {@link sessionDisposed} calls {@link dispose}, which drains
- * {@link toDispose} idempotently. Every transient subscription created in
- * {@link doLoadSourceModel} is parked on {@link toDispose} so the drain catches
- * them on client-detach.
+ * {@link toDispose} idempotently and then ends the client session. Every
+ * transient subscription created in {@link doLoadSourceModel} is parked on
+ * {@link toDispose} so the drain catches them on client-detach.
  */
 @injectable()
 export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
@@ -207,6 +245,25 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected readonly secondarySubscriptions = new Map<string, Disposable>();
 
    /**
+    * Documents that left the write set since the last save. They stay open in
+    * the diagram's session until that save has persisted them, and are closed
+    * after it: closing a document as it leaves would revert the diagram's
+    * unsaved edits to it where the diagram was its last client.
+    */
+   protected readonly departedSecondaries = new Set<string>();
+
+   /**
+    * How long a load waits for a client id another participant holds to free
+    * before refusing. A reloaded client can reconnect under its old id before
+    * the server has noticed the old connection close, which ends that
+    * connection's sessions a moment later.
+    */
+   protected readonly sessionWaitMs: number = 2_000;
+
+   /** Set by {@link dispose}; a disposed storage registers no session again. */
+   protected disposed = false;
+
+   /**
     * Whether an external resubmit has ever been dispatched. Gates the
     * keep-the-last-valid-GModel branch, which needs to know a canvas is already
     * standing — not what is on it. The content comparison that decides whether a
@@ -235,12 +292,109 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.state.clientId === TEMPORARY_CLIENT_ID) {
          return;
       }
+      this.state.modelSession = this.registerModelSession();
       this.sessionManager.addListener(this, this.state.clientId);
       // Watched for this storage's whole lifetime rather than per load. The load
       // flow is a documented override point, so a subscription parked there would
       // go with it — and the write set is discovered by operation handlers, which
       // run long after any load.
       this.toDispose.push(this.state.onSecondaryUrisChanged(() => this.reconcileSecondarySubscriptions()));
+   }
+
+   /**
+    * Register the diagram's client session under the GLSP client id, or
+    * `undefined` when another participant holds that id, which is logged.
+    *
+    * The diagram then refuses to load ({@link requireModelSession}). Taking
+    * the id over would end the other participant's session under it, and
+    * working without a session would share that participant's opens and
+    * echoes, so its close would take the diagram's documents with it.
+    */
+   protected registerModelSession(): ModelClientSession<AstNode> | undefined {
+      try {
+         return this.sharedServices.model.ModelService.createSession('diagram', this.state.clientId);
+      } catch (error: unknown) {
+         if (!isDuplicateClientIdError(error)) {
+            throw error;
+         }
+         this.logger.warn(`Client id ${this.state.clientId} is held by another participant: this diagram has no session yet`);
+         return undefined;
+      }
+   }
+
+   /**
+    * The diagram's client session, registering it again when the id was held
+    * earlier. Throws `SessionClosedError` once the storage is disposed, and the
+    * refusal when the id is still held.
+    */
+   protected requireModelSession(): ModelClientSession<AstNode> {
+      if (this.disposed) {
+         throw new SessionClosedError(
+            this.state.clientId,
+            `The diagram of ${this.state.clientId} has closed; its client session has ended`
+         );
+      }
+      if (!this.state.modelSession) {
+         this.state.modelSession = this.registerModelSession();
+      }
+      const session = this.state.modelSession;
+      if (!session) {
+         throw new GLSPServerError(
+            this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_SESSION_REFUSED),
+            `clientId=${this.state.clientId} is still held by another participant, so this diagram has no client session`
+         );
+      }
+      return session;
+   }
+
+   /**
+    * {@link requireModelSession} for the load: while the id is held, wait up to
+    * {@link sessionWaitMs} for its holder to end before refusing, and tell the
+    * user when it does not.
+    */
+   protected async awaitModelSession(): Promise<ModelClientSession<AstNode>> {
+      if (!this.state.modelSession && !this.disposed) {
+         this.state.modelSession = this.registerModelSession();
+      }
+      if (!this.state.modelSession && !this.disposed) {
+         await this.waitForSessionEnd(this.state.clientId, this.sessionWaitMs);
+      }
+      try {
+         return this.requireModelSession();
+      } catch (error: unknown) {
+         // A diagram closed while it waited has no client left to tell.
+         if (isSessionClosedError(error)) {
+            throw error;
+         }
+         this.logger.error(`Client id ${this.state.clientId} is still held by another participant: this diagram does not load`);
+         this.actionDispatcher
+            .dispatch(
+               MessageAction.create(this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_SESSION_REFUSED), { severity: 'ERROR' })
+            )
+            .catch((dispatchError: unknown) =>
+               this.logger.warn(`Could not tell the client the diagram was refused: ${String(dispatchError)}`)
+            );
+         throw error;
+      }
+   }
+
+   /** Resolve once the client session under `clientId` ends, or after `timeoutMs`. */
+   protected waitForSessionEnd(clientId: string, timeoutMs: number): Promise<void> {
+      return new Promise<void>(resolve => {
+         const subscriptions = new DisposableCollection();
+         const done = (): void => {
+            subscriptions.dispose();
+            resolve();
+         };
+         subscriptions.push(this.sharedServices.Clock.setTimer(done, timeoutMs));
+         subscriptions.push(
+            this.sharedServices.workspace.TextDocuments.onDidCloseSession(event => {
+               if (event.clientId === clientId) {
+                  done();
+               }
+            })
+         );
+      });
    }
 
    /**
@@ -258,8 +412,8 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
 
       // Open FIRST: a workspace-scanned-but-never-didOpened document rebuilds here,
       // so the capture below settles on a built root rather than a transient
-      // mid-rebuild one.
-      this.toDispose.push(await modelService.open({ uri: rootUri, clientId: this.state.clientId }));
+      // mid-rebuild one. Closed when the session ends.
+      await (await this.awaitModelSession()).open(rootUri);
 
       // GLSP's sessionDisposed is unreliable on Theia tab-close; dispose on client
       // detach so reopens don't accumulate stale onModelUpdated listeners.
@@ -339,16 +493,42 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          if (!current.has(uri)) {
             subscription.dispose();
             this.secondarySubscriptions.delete(uri);
+            this.departedSecondaries.add(uri);
          }
       }
       for (const uri of current) {
          if (!this.secondarySubscriptions.has(uri)) {
+            this.departedSecondaries.delete(uri);
             this.secondarySubscriptions.set(
                uri,
                this.sharedServices.model.ModelService.onModelUpdated(uri, event => this.handleSecondaryUpdated(uri, event))
             );
+            this.openSecondary(uri);
          }
       }
+   }
+
+   /**
+    * Open a document that joined the write set through the diagram's session,
+    * where it stays open until the diagram's next save after it leaves the set,
+    * or the diagram's end. A document that does not exist yet is left to the
+    * write that creates it, and a failed open is logged: the write that needs
+    * the document opens it again and fails there.
+    */
+   protected openSecondary(uri: string): void {
+      const session = this.state.modelSession;
+      if (!session || !this.sharedServices.model.ModelService.getDocument(uri)) {
+         return;
+      }
+      session.open(uri).catch((error: unknown) => {
+         const detail = `Could not open ${uri} for ${this.state.clientId}: ${error instanceof Error ? error.message : String(error)}`;
+         // A session ending while the open reads is the diagram closing.
+         if (isSessionClosedError(error)) {
+            this.logger.debug(detail);
+         } else {
+            this.logger.warn(detail);
+         }
+      });
    }
 
    /**
@@ -606,23 +786,24 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Default save flow: persist the store's current text for every document this
-    * diagram owns.
+    * Default save flow: persist the store's current text for every document the
+    * diagram's session has open.
     *
     * **A save persists, it does not author.** Every diagram gesture already
     * reached the store through `ModelService.update`, so the store holds the
     * settled text and disk is the only thing behind. Re-serializing from the AST
     * here cannot improve on that text and can only damage it: a serializer
-    * normalises formatting and carries no comments, so a save would reflow and
-    * strip a document nothing changed — which is what a pure bounds drag does to
-    * the semantic file when only its layout moved.
+    * normalises formatting, and the comments the write path carries over keep
+    * none of the hand-formatting around them, so a save would reflow a document
+    * nothing changed — which is what a pure bounds drag does to the semantic
+    * file when only its layout moved.
     *
-    * **The write set is the primary plus every tracked secondary**
-    * (`AbstractHydraniumGlspState.trackSecondaryDocument`), so a document the
-    * diagram wrote is persisted whether or not it is the one the client named.
-    * The primary is flushed first, then secondaries in tracking order. A
-    * document no client holds open is skipped — there is no stored text to
-    * persist.
+    * **What is saved is the primary, every tracked secondary
+    * (`AbstractHydraniumGlspState.trackSecondaryDocument`) and every document
+    * that left the write set since the last save**, so a document the diagram
+    * wrote is persisted whether or not it is the one the client named. One the
+    * diagram's session does not have open is skipped, even when another client
+    * has it open: that client's unsaved edits are not the diagram's to persist.
     *
     * **A save therefore names documents the gesture did not aim at**, which is
     * why an unchanged one is not rewritten even though the user asked for a
@@ -664,18 +845,33 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Save the stored text of `primaryUri` and every tracked secondary.
+    * Save the stored text of `primaryUri`, every tracked secondary and every
+    * document that left the write set since the last save, each only where
+    * the diagram's session has it open; then close those that left.
     *
     * Deduplicated, because a state that tracks its own primary as a secondary
     * would otherwise save it twice and fire two save notifications for one
-    * save. A document no client holds open is skipped: there is no stored text
-    * to persist, and `AstDocumentManager.save` throws on one.
+    * save. Every save is called in one synchronous step, so each takes its text
+    * before anything can close a document of the set: saved one after another,
+    * a GLSP session ending during the first write closes the rest unsaved.
     */
    protected async flushWriteSet(primaryUri: string): Promise<void> {
+      // Refused like the load: without a session the client id's opens are
+      // another participant's, and this would save them.
+      this.requireModelSession();
       const documents = this.sharedServices.workspace.AstDocumentManager;
-      for (const target of new Set([primaryUri, ...this.state.secondaryUris])) {
-         if (documents.isOpen(target)) {
-            await documents.save(target, this.state.clientId);
+      const textDocuments = this.sharedServices.workspace.TextDocuments;
+      const clientId = this.state.clientId;
+      // Taken with the targets: a document leaving the set during the writes
+      // was not saved by them, and stays open for the next save.
+      const departed = [...this.departedSecondaries];
+      const targets = [...new Set([primaryUri, ...this.state.secondaryUris, ...departed])].filter(uri =>
+         textDocuments.isOpenInClient(uri, clientId)
+      );
+      await Promise.all(targets.map(target => documents.save(target, clientId)));
+      for (const uri of departed) {
+         if (this.departedSecondaries.delete(uri) && uri !== this.state.sourceUri) {
+            await this.state.modelSession?.close(uri);
          }
       }
    }
@@ -789,10 +985,14 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Cancel any pending resubmit and drain every subscription — those registered
+    * Cancel any pending resubmit, drain every subscription — those registered
     * during {@link doLoadSourceModel} and the per-secondary ones, which live
-    * outside {@link toDispose} because they come and go with the write set.
+    * outside {@link toDispose} because they come and go with the write set —
+    * and end the diagram's client session, closing everything it has open.
     * Idempotent.
+    *
+    * The session ends last, once the detach listener is gone: its closes would
+    * otherwise report this storage's own teardown as a client detaching.
     */
    dispose(): void {
       this.resubmitDebouncer?.dispose();
@@ -801,5 +1001,8 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       }
       this.secondarySubscriptions.clear();
       this.toDispose.dispose();
+      this.disposed = true;
+      this.state.modelSession?.dispose();
+      this.state.modelSession = undefined;
    }
 }

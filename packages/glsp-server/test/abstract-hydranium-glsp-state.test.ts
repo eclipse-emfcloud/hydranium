@@ -141,6 +141,7 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
          }
       },
       workspace: {
+         TextDocuments: { get: () => undefined },
          LangiumDocuments: {
             getDocument(uri: { toString(): string }): FakeDocument | undefined {
                return harness.documents.get(uri.toString());
