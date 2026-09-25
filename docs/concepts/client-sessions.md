@@ -329,6 +329,42 @@ resolves when that one lands, and rejects with its error when it fails. The
 framework binds the manager without options, so turning this on means binding
 `AstDocumentManager` to a `DefaultAstDocumentManager` constructed with them.
 
+## Editor saves
+
+An editor behind the LSP head writes the file itself; the server hears of the
+save through `willSaveWaitUntil` before the write and `didSave` after it, and
+advertises both. The editor's save joins the file's disk queue:
+
+- The answer to `willSaveWaitUntil`, which carries no edits, waits for the
+  server's writes of the file already queued, so the editor writes after them.
+- From the moment the queue reaches the editor's save, a server write of the
+  file queued behind it waits for the editor's `didSave`, so it lands after
+  the editor's write.
+
+Each wait is capped by `willSaveGateMs` in
+`HydraniumDocumentUpdateHandlerOptions`, default 1000 ms. An answer whose cap
+runs out is logged at warn level. A `didSave` that does not come within the cap
+is logged at debug level only, since an editor sends none for a save it
+cancels or that changed nothing. The answer never fails: VS Code gives up on
+an answer after about 1.5 s, and stops asking for the rest of the session once
+four answers, over all documents, timed out or failed; Theia waits without a
+limit. Langium drops the request's cancellation, so an answer the editor
+stopped waiting for still waits out its cap.
+
+`didSave` fires `TextDocuments.onDidSaveInLanguageClient` for every editor
+save, which releases the hold. The store then reads the file back through its
+disk queue, after any server write queued behind the hold, and compares it with
+the document's current text. Only when they match does it fire `onDidSave`
+under `language-client`, as any save does under its client's id: the data head
+broadcasts it as a save, and a diagram whose document it is marks its save
+done. The editor saves its own buffer, which lags the store while another
+client's edit is on its way to it; the file, not the editor, tells whether the
+shared document is on disk, and a check of the file needs no saved text from the
+client. When the file differs, or cannot be read, the save reached disk only:
+no `onDidSave` fires, so a diagram keeps its save pending and data clients keep
+their unsaved state until the next save of the document. A file changed again
+between the editor's write and the read also counts as differing.
+
 ## Last close
 
 When the last client with a document open closes it, the text store releases the
@@ -450,6 +486,17 @@ connection.
   system provider writes a staging file first, so after a crash disk holds the
   old file or the new one, except for a hard-linked file, which is written in
   place and can be torn. Nothing calls `fsync`, so a power loss is not covered.
+- An editor save whose wait runs past `willSaveGateMs`, or whose `didSave`
+  comes later than that, can land before or after a server write of the same
+  file. The cap that ran out is logged.
+- VS Code stops sending `willSaveWaitUntil` for the session after four failed
+  or timed-out answers; the editor's saves then no longer wait for the
+  server's writes. The 1000 ms default stays under its timeout.
+- A server write of a file queued before the editor's save always lands
+  first, so the editor then saves over a file newer than its buffer, which VS
+  Code reports as a newer file on disk and Theia as out of sync. The gate only
+  makes that order certain: the conflict follows whenever the server's write
+  lands first.
 - With the default grace of `0`, a client that reconnects after a lost
   connection finds its sole-client documents reverted: other sessions see the
   revert, and the reconnecting session reports its unsaved edits lost.

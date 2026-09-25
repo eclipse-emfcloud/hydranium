@@ -94,6 +94,11 @@ export interface HydraniumTextDocumentsOptions<T extends TextDocument = TextDocu
    readonly revertGraceMs?: number;
 }
 
+/** Delivered by {@link HydraniumTextDocuments.onDidSaveInLanguageClient}. */
+export interface LanguageClientSavedEvent {
+   readonly uri: string;
+}
+
 /** Delivered by {@link HydraniumTextDocuments.onDidCloseLastOpen}. */
 export interface LastOpenClosedEvent {
    readonly uri: CanonicalUri;
@@ -390,6 +395,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    /** See {@link HydraniumTextDocumentsOptions.revertGraceMs}. */
    protected readonly revertGraceMs: number;
    protected readonly lastOpenClosedEmitter = new Emitter<LastOpenClosedEvent>();
+   protected readonly languageClientSavedEmitter = new Emitter<LanguageClientSavedEvent>();
 
    constructor(
       protected services: ServerSharedServices,
@@ -505,7 +511,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       );
       disposables.push(
          connection.onDidSaveTextDocument((event: DidSaveTextDocumentParams) => {
-            this.notifyDidSaveTextDocument(event);
+            void this.notifyLanguageClientSave(event);
          })
       );
       return disposables;
@@ -817,12 +823,64 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       }
    }
 
+   /**
+    * Handle a save the language client reports: fire
+    * {@link onDidSaveInLanguageClient}, then announce it on {@link onDidSave}
+    * only once the file read back from disk holds the store's current text.
+    */
+   protected async notifyLanguageClientSave(event: DidSaveTextDocumentParams): Promise<void> {
+      const syncedDocument = this.__syncedDocuments.get(this.documentKey(event.textDocument.uri));
+      if (syncedDocument === undefined) {
+         return;
+      }
+      const uri = syncedDocument.uri;
+      this.languageClientSavedEmitter.fire(Object.freeze({ uri }));
+      // `onDidSave` tells its listeners that the shared document is on disk: a
+      // diagram marks its save done, the data head broadcasts a save and its
+      // clients drop their dirty state. The editor wrote its own buffer,
+      // which lags the store while another client's edit is still on its way
+      // to it, so only the file says whether that holds. Read it rather than
+      // trust the editor: `didSave` carries text only for a client that
+      // honours `includeText`, and asking for it means rewriting Langium's
+      // initialize answer, which advertises `save` as a Boolean. The read goes
+      // through the disk queue and waits on nothing but the provider, so it
+      // follows a server save queued meanwhile. A file changed again between
+      // the editor's write and this read compares unequal and takes the safe
+      // side. A save not announced leaves every other client dirty, which is
+      // true of the store's text: a diagram keeps its save pending, and data
+      // clients keep their unsaved state until the next save of the document.
+      let onDisk: string | undefined;
+      try {
+         onDisk = await this.services.workspace.AstDocumentManager.queueDiskTask(uri, () =>
+            this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(uri))
+         );
+      } catch (err: unknown) {
+         this.tracer
+            .with(uri)
+            .debug(`Editor save not announced: reading the file back failed. ${err instanceof Error ? err.message : String(err)}`);
+         return;
+      }
+      // An editor that saves and then closes releases the document while the
+      // read is under way; its save is still a save of the text it held.
+      const document = this.__syncedDocuments.get(this.documentKey(uri)) ?? syncedDocument;
+      if (onDisk !== document.getText()) {
+         this.tracer.with(uri).debug(`Editor save not announced: the file does not hold the text of version ${document.version}`);
+         return;
+      }
+      this.announceSave(document, LANGUAGE_CLIENT_ID);
+   }
+
    public notifyDidSaveTextDocument(event: DidSaveTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const syncedDocument = this.__syncedDocuments.get(this.documentKey(event.textDocument.uri));
       if (syncedDocument !== undefined) {
-         this.log(syncedDocument.uri, `Saved synced document: ${syncedDocument.version} by ${this.formatClientId(clientId)}`);
-         this.__onDidSave.fire(Object.freeze({ document: syncedDocument, clientId }));
+         this.announceSave(syncedDocument, clientId);
       }
+   }
+
+   /** Fire {@link onDidSave} for `document`, which need not be synced any more. */
+   protected announceSave(document: T, clientId: string): void {
+      this.log(document.uri, `Saved synced document: ${document.version} by ${this.formatClientId(clientId)}`);
+      this.__onDidSave.fire(Object.freeze({ document, clientId }));
    }
 
    public notifyDidOpenTextDocument(event: DidOpenTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
@@ -1201,6 +1259,15 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    get onDidCloseLastOpen(): Event<LastOpenClosedEvent> {
       return this.lastOpenClosedEmitter.event;
+   }
+
+   /**
+    * Fires for every save the language client reports of a document it has
+    * open: the editor has written the file. {@link onDidSave} follows only
+    * when the file holds the store's text.
+    */
+   get onDidSaveInLanguageClient(): Event<LanguageClientSavedEvent> {
+      return this.languageClientSavedEmitter.event;
    }
 
    /**

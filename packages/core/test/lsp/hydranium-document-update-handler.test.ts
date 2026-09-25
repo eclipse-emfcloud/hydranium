@@ -7,14 +7,23 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock, type ObservableValue, SystemClock } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/testing';
+import { type Clock, Deferred, type ObservableValue, SystemClock } from '@hydranium/protocol';
+import { makeFakeClock, tick } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
-import { type DidChangeWatchedFilesParams, Emitter, FileChangeType, type TextDocumentChangeEvent } from 'vscode-languageserver';
+import {
+   type DidChangeWatchedFilesParams,
+   Emitter,
+   FileChangeType,
+   type TextDocumentChangeEvent,
+   type TextDocumentWillSaveEvent
+} from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { HydraniumDocumentUpdateHandler } from '../../src/lsp/hydranium-document-update-handler.js';
+import {
+   HydraniumDocumentUpdateHandler,
+   type HydraniumDocumentUpdateHandlerOptions
+} from '../../src/lsp/hydranium-document-update-handler.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
@@ -99,6 +108,12 @@ interface ServicesStubOptions {
    /** Drives `TextDocuments.onDidCloseLastOpen`. */
    lastOpenClosed?: Emitter<{ uri: string }>;
    loggedErrors?: string[];
+   loggedWarnings?: string[];
+   loggedDebug?: string[];
+   /** Drives `TextDocuments.onDidSaveInLanguageClient`. */
+   languageClientSaved?: Emitter<{ uri: string }>;
+   /** Drives `AstDocumentManager.queueDiskTask`. Defaults to a per-URI chain, as the real manager queues. */
+   queueDiskTask?: <T>(uri: string, task: () => Promise<T>) => Promise<T>;
    /** Clock bound on the `Clock` slot. Pass a `makeFakeClock()` to drive the debounce timer; defaults to a real `SystemClock`. */
    clock?: Clock;
    /**
@@ -117,6 +132,18 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
    const selfSaveRegistered = opts.selfSaveRegistered ?? (() => false);
    const markNextReasonCalls = opts.markNextReasonCalls;
    const loggedErrors = opts.loggedErrors;
+   const loggedWarnings = opts.loggedWarnings;
+   const diskQueues = new Map<string, Promise<unknown>>();
+   const queueDiskTask =
+      opts.queueDiskTask ??
+      (<T>(uri: string, task: () => Promise<T>): Promise<T> => {
+         const result = (diskQueues.get(uri) ?? Promise.resolve()).then(task);
+         diskQueues.set(
+            uri,
+            result.catch(() => undefined)
+         );
+         return result;
+      });
    // `DefaultDocumentUpdateHandler` constructor subscribes to
    // `services.lsp.LanguageServer.onInitialize` / `onInitialized` — stub
    // both as no-op subscribers so construction completes.
@@ -127,7 +154,9 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
       // `clock.advance(...)`; non-timer tests use the real SystemClock default.
       Clock: opts.clock ?? new SystemClock(),
       Logger: {
-         error: (msg: string) => loggedErrors?.push(msg)
+         error: (msg: string) => loggedErrors?.push(msg),
+         warn: (msg: string) => loggedWarnings?.push(msg),
+         debug: (msg: string) => opts.loggedDebug?.push(msg)
       },
       Tracer: makeNoopTracer(),
       lsp: {
@@ -140,8 +169,13 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
             markNextReason: (reason: string | undefined) => markNextReasonCalls?.push(reason)
          },
          WorkspaceLock: { write: (cb: (token: unknown) => unknown) => cb(undefined) },
-         TextDocuments: { getAuthor, onDidCloseLastOpen: (opts.lastOpenClosed ?? new Emitter<{ uri: string }>()).event },
+         TextDocuments: {
+            getAuthor,
+            onDidCloseLastOpen: (opts.lastOpenClosed ?? new Emitter<{ uri: string }>()).event,
+            onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event
+         },
          SelfSaveRegistry: { isRegistered: selfSaveRegistered },
+         AstDocumentManager: { queueDiskTask },
          // The handler reads the file mtime through the FileSystemProvider
          // seam, so these tests need no filesystem at all; the Node provider's
          // own stat behaviour is covered by its own tests.
@@ -583,5 +617,148 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
       expect(filtered.changes[0].uri).toEqual(WATCHED_URI);
       // No mtime means the registry cannot be keyed, so the change passes.
       expect(matchesCalled).toBe(false);
+   });
+});
+
+describe('HydraniumDocumentUpdateHandler — editor saves', () => {
+   const SAVED_URI = 'file:///saved.a';
+   const willSave = { document: { uri: SAVED_URI }, reason: 1 } as unknown as TextDocumentWillSaveEvent<TextDocument>;
+
+   /** Settle `promise` into a flag the test can read without awaiting it. */
+   function track(promise: Promise<unknown>): { settled: boolean; value?: unknown } {
+      const state: { settled: boolean; value?: unknown } = { settled: false };
+      void promise.then(value => {
+         state.settled = true;
+         state.value = value;
+      });
+      return state;
+   }
+
+   function makeHandler(
+      opts: ServicesStubOptions = {},
+      handlerOptions: HydraniumDocumentUpdateHandlerOptions = {}
+   ): {
+      handler: HydraniumDocumentUpdateHandler;
+      queue: <T>(task: () => Promise<T>) => Promise<T>;
+      editorSaved: () => void;
+   } {
+      const languageClientSaved = new Emitter<{ uri: string }>();
+      const services = makeServicesStub({ clock: makeFakeClock(), languageClientSaved, ...opts });
+      const handler = new HydraniumDocumentUpdateHandler(services, handlerOptions);
+      const queue = <T>(task: () => Promise<T>): Promise<T> => services.workspace.AstDocumentManager.queueDiskTask(SAVED_URI, task);
+      return { handler, queue, editorSaved: () => languageClientSaved.fire({ uri: SAVED_URI }) };
+   }
+
+   it('answers willSaveWaitUntil with no edits only once the disk tasks already queued for the document have settled', async () => {
+      const { handler, queue } = makeHandler();
+      const serverSave = new Deferred();
+      void queue(() => serverSave.promise);
+      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      serverSave.resolve();
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+   });
+
+   it('answers after willSaveGateMs when a queued disk task outlasts it, and warns that the cap fired', async () => {
+      const clock = makeFakeClock();
+      const loggedWarnings: string[] = [];
+      const { handler, queue } = makeHandler({ clock, loggedWarnings });
+      void queue(() => new Deferred().promise);
+      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      clock.advance(999);
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      clock.advance(1);
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+      expect(loggedWarnings.some(line => line.includes(SAVED_URI) && /willSaveWaitUntil/.test(line))).toBe(true);
+   });
+
+   it('takes the cap from the willSaveGateMs option', async () => {
+      const clock = makeFakeClock();
+      const { handler, queue } = makeHandler({ clock }, { willSaveGateMs: 200 });
+      void queue(() => new Deferred().promise);
+      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      clock.advance(200);
+      await tick(0);
+      expect(answer.settled).toBe(true);
+   });
+
+   it('holds disk tasks queued after the answer until the editor reports its save', async () => {
+      const { handler, queue, editorSaved } = makeHandler();
+      await handler.willSaveDocumentWaitUntil(willSave);
+      const serverSave = track(queue(async () => 'written'));
+      await tick(0);
+      expect(serverSave.settled).toBe(false);
+      editorSaved();
+      await tick(0);
+      expect(serverSave).toEqual({ settled: true, value: 'written' });
+   });
+
+   it('releases the hold after willSaveGateMs when the editor never reports its save, logging it at debug', async () => {
+      const clock = makeFakeClock();
+      const loggedDebug: string[] = [];
+      const loggedWarnings: string[] = [];
+      const { handler, queue } = makeHandler({ clock, loggedDebug, loggedWarnings });
+      await handler.willSaveDocumentWaitUntil(willSave);
+      const serverSave = track(queue(async () => undefined));
+      clock.advance(999);
+      await tick(0);
+      expect(serverSave.settled).toBe(false);
+      clock.advance(1);
+      await tick(0);
+      expect(serverSave.settled).toBe(true);
+      expect(loggedDebug.some(line => line.includes(SAVED_URI) && /didSave/.test(line))).toBe(true);
+      expect(loggedWarnings).toEqual([]);
+   });
+
+   it('holds nothing when the editor reported its save before the queue reached it', async () => {
+      const clock = makeFakeClock();
+      const { handler, queue, editorSaved } = makeHandler({ clock });
+      const serverSave = new Deferred();
+      void queue(() => serverSave.promise);
+      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      clock.advance(1000);
+      await tick(0);
+      expect(answer.settled).toBe(true);
+      editorSaved();
+      serverSave.resolve();
+      const later = track(queue(async () => undefined));
+      await tick(0);
+      expect(later.settled).toBe(true);
+   });
+
+   it('answers a second willSaveWaitUntil of the document at once, releasing the first save that never reported', async () => {
+      const { handler } = makeHandler();
+      await handler.willSaveDocumentWaitUntil(willSave);
+      const second = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      await tick(0);
+      expect(second).toEqual({ settled: true, value: [] });
+   });
+
+   it('holds disk tasks queued after a second willSaveWaitUntil under the second save', async () => {
+      const { handler, queue, editorSaved } = makeHandler();
+      await handler.willSaveDocumentWaitUntil(willSave);
+      await handler.willSaveDocumentWaitUntil(willSave);
+      const serverSave = track(queue(async () => undefined));
+      await tick(0);
+      expect(serverSave.settled).toBe(false);
+      editorSaved();
+      await tick(0);
+      expect(serverSave.settled).toBe(true);
+   });
+
+   it('answers with no edits instead of failing when the disk queue cannot be reached', async () => {
+      const loggedErrors: string[] = [];
+      const { handler } = makeHandler({
+         loggedErrors,
+         queueDiskTask: () => {
+            throw new Error('queue gone');
+         }
+      });
+      await expect(handler.willSaveDocumentWaitUntil(willSave)).resolves.toEqual([]);
+      expect(loggedErrors.some(line => line.includes('queue gone'))).toBe(true);
    });
 });
