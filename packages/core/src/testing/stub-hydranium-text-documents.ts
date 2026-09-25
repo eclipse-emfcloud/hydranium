@@ -12,6 +12,7 @@ import type { ApplyWorkspaceEditResult } from 'vscode-languageserver';
 import { Disposable } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
+import { ClientSessionRegistry } from '../documents/client-session-registry.js';
 import type { ClientTextDocumentChangeEvent, HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 
 /** Snapshot of an open document tracked by the stub. */
@@ -27,9 +28,11 @@ export interface StubTextDocumentEntry {
  * reads from on test paths — the content channel
  * (`notifyDidChangeTextDocument` / `applyContentChange` / `version` /
  * `getAuthor`), the open-state probes (`isOpenInLanguageClient` /
- * `isOpenInAnyClient` / `openDocuments`), the push channel to the language
- * client (`applyEditToLanguageClient` / `stagePendingContent`) and the
- * save / close notifications — plus test-only helpers:
+ * `isOpenInAnyClient` / `isOpenInClient` / `openDocuments`), the push channel
+ * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
+ * the save / close notifications, and the client-session table
+ * (`registerSession` / `closeSession` / `onDidCloseSession` and the open
+ * options), which is a real `ClientSessionRegistry` — plus test-only helpers:
  *
  * - {@link seedOpen} — pre-populate an open document without firing change
  *   events. Use to set up a baseline version before exercising an `update`.
@@ -69,6 +72,12 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'applyEditToLanguageClient'
    | 'stagePendingContent'
    | 'openDocuments'
+   | 'isOpenInClient'
+   | 'registerSession'
+   | 'closeSession'
+   | 'onDidCloseSession'
+   | 'openOptions'
+   | 'setOpenOptions'
 > {
    /**
     * Stub-tailored read accessor. Returns just the surface the framework's
@@ -93,7 +102,13 @@ export interface StubHydraniumTextDocuments extends Pick<
    seedOpenInLanguageClient(uri: string): void;
    /** Synchronously deliver `onDidClose` to subscribers. */
    fireClose(uri: string, clientId: string): void;
-   /** Drop recorded state. Useful for `beforeEach` resets. */
+   /**
+    * Drop recorded state. Useful for `beforeEach` resets.
+    *
+    * Sessions end without announcing it, so a model service built on this
+    * stub still holds the handles it started before the reset. Build a fresh
+    * service after a reset rather than reusing one across it.
+    */
    reset(): void;
    readonly changes: readonly StubTextDocumentEntry[];
    readonly saves: readonly { uri: string; clientId: string }[];
@@ -125,8 +140,13 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    let applyEditHandler: (uri: string, text: string) => ApplyWorkspaceEditResult | undefined = () => ({ applied: true });
    const saveListeners: Array<(event: { document: { uri: string }; clientId: string }) => void> = [];
    const closeListeners: Array<(event: ClientTextDocumentChangeEvent<TextDocument>) => void> = [];
+   // The real registry, so the session table, the opens, the closing state and
+   // the open options behave as the store's do. The stub's plain-string keys
+   // stand in for canonical URIs (one stub-boundary cast, like `fireClose`).
+   const sessions = new ClientSessionRegistry();
+   const key = (uri: string): CanonicalUri => uri as CanonicalUri;
 
-   return {
+   const stub: StubHydraniumTextDocuments = {
       get changes() {
          return changes;
       },
@@ -207,21 +227,37 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       isOpenInAnyClient(uri) {
          return docs.has(uri) || languageClientOpen.has(uri);
       },
+      isOpenInClient(uri, clientId) {
+         return sessions.isOpenIn(key(uri), clientId);
+      },
+      registerSession(clientId) {
+         sessions.register(clientId);
+      },
+      closeSession(clientId) {
+         if (!sessions.isRegistered(clientId)) {
+            return;
+         }
+         try {
+            for (const uri of sessions.beginClose(clientId)) {
+               stub.fireClose(uri, clientId);
+            }
+         } finally {
+            sessions.unregister(clientId);
+         }
+      },
+      get onDidCloseSession() {
+         return sessions.onDidCloseSession;
+      },
+      openOptions(uri, clientId) {
+         return sessions.openOptions(key(uri), clientId);
+      },
+      setOpenOptions(uri, clientId, options) {
+         sessions.setOpenOptions(key(uri), clientId, options);
+      },
       openDocuments() {
-         // Merge the two seeding channels: `seedOpen` records the holding client
-         // on the doc entry, `seedOpenInLanguageClient` marks the LSP client.
-         const clientsByUri = new Map<string, Set<string>>();
-         for (const [uri, entry] of docs) {
-            clientsByUri.set(uri, new Set([entry.clientId]));
-         }
-         for (const uri of languageClientOpen) {
-            const clients = clientsByUri.get(uri) ?? new Set<string>();
-            clients.add(LANGUAGE_CLIENT_ID);
-            clientsByUri.set(uri, clients);
-         }
-         // The real store keys by canonical identity; the stub's plain-string
-         // keys stand in for it (single stub-boundary cast, like `fireClose`).
-         return [...clientsByUri].map(([uri, clients]) => ({ uri: uri as CanonicalUri, clients: [...clients] }));
+         // From the registry that also answers `isOpenInClient`, which both
+         // seeding channels feed, so the two never disagree about an open.
+         return sessions.openDocuments();
       },
       setApplyEditHandler(handler) {
          applyEditHandler = handler;
@@ -234,9 +270,11 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          staged.push({ uri, text });
       },
       seedOpen(uri, text, clientId) {
+         sessions.addOpen(key(uri), clientId);
          docs.set(uri, { uri, version: 1, text, clientId });
       },
       seedOpenInLanguageClient(uri) {
+         sessions.addOpen(key(uri), LANGUAGE_CLIENT_ID);
          languageClientOpen.add(uri);
       },
       fireClose(uri, clientId) {
@@ -247,6 +285,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          if (holder && holder.clientId === clientId) {
             docs.delete(uri);
          }
+         sessions.removeOpen(key(uri), clientId);
          if (clientId === LANGUAGE_CLIENT_ID) {
             languageClientOpen.delete(uri);
          }
@@ -265,6 +304,11 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          saveListeners.length = 0;
          closeListeners.length = 0;
          applyEditHandler = () => ({ applied: true });
+         // Cleared in place rather than replaced: a model service built on the
+         // stub subscribed to `onDidCloseSession` once, and a new registry would
+         // leave that subscription on one nothing fires.
+         sessions.clear();
       }
    };
+   return stub;
 }

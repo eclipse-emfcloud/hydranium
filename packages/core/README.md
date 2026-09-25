@@ -27,7 +27,9 @@ and so does every other head package (`@hydranium/data-server`,
   `HydraniumTextDocuments`, `WritableFileSystemProvider` and `SelfSaveRegistry`
   generalise the LSP document lifecycle to several co-editing heads, so an edit
   made on one surface is observable on the others without a head-to-head
-  synchronisation protocol.
+  synchronisation protocol. A participant works through a `ClientSession` from
+  `ModelService.createSession`, which writes only what it has open; see
+  [client sessions](../../docs/concepts/client-sessions.md).
 - **The projection the non-LSP heads build on:** `ModelService` (the in-process
   workspace facade), `TransferEncoder` (AST → transfer model), and the
   `Serializer` slot.

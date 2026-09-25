@@ -304,3 +304,67 @@ describe('makeStubHydraniumTextDocuments — save and reset', () => {
       expect(await stub.applyEditToLanguageClient(URI_ONE, 'pushed')).toEqual({ applied: true });
    });
 });
+
+describe('makeStubHydraniumTextDocuments — client sessions', () => {
+   it('keeps a session-closed subscription across reset, as a model service built on the stub holds one', () => {
+      const stub = makeStubHydraniumTextDocuments();
+      const closed: string[] = [];
+      stub.onDidCloseSession(event => closed.push(event.clientId));
+
+      stub.reset();
+      stub.registerSession('s');
+      stub.closeSession('s');
+
+      expect(closed).toEqual(['s']);
+   });
+
+   it('refuses, like the real store, an open issued for a session while it is being closed', () => {
+      const stub = makeStubHydraniumTextDocuments();
+      const real = realStore();
+      const refusedBy: string[] = [];
+      stub.registerSession('s');
+      real.registerSession('s');
+      stub.seedOpen(URI_ONE, 'one', 's');
+      openInReal(real, URI_ONE, 'one', 's');
+      stub.onDidClose(() => {
+         try {
+            stub.seedOpen(URI_TWO, 'two', 's');
+         } catch {
+            refusedBy.push('stub');
+         }
+      });
+      real.onDidClose(() => {
+         try {
+            openInReal(real, URI_TWO, 'two', 's');
+         } catch {
+            refusedBy.push('real');
+         }
+      });
+
+      stub.closeSession('s');
+      real.closeSession('s');
+
+      expect(refusedBy).toEqual(['stub', 'real']);
+   });
+
+   it('lists in openDocuments exactly the opens isOpenInClient reports', () => {
+      const stub = makeStubHydraniumTextDocuments();
+      stub.notifyDidChangeTextDocument({ textDocument: { uri: URI_ONE, version: 1 }, contentChanges: [{ text: 'x' }] }, 'wire');
+      stub.seedOpen(URI_TWO, 'two', 'holder');
+      stub.applyContentChange(URI_TWO, 'two edited', 'writer');
+      stub.seedOpen(URI_TWO, 'two', 'second');
+
+      const listed = stub.openDocuments().flatMap(document => document.clients.map(clientId => `${clientId} ${document.uri}`));
+      const reported = [
+         ['wire', URI_ONE],
+         ['holder', URI_TWO],
+         ['writer', URI_TWO],
+         ['second', URI_TWO]
+      ]
+         .filter(([clientId, uri]) => stub.isOpenInClient(uri, clientId))
+         .map(([clientId, uri]) => `${clientId} ${uri}`);
+
+      expect(listed.sort()).toEqual(reported.sort());
+      expect(listed.sort()).toEqual([`holder ${URI_TWO}`, `second ${URI_TWO}`]);
+   });
+});

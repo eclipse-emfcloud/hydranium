@@ -34,7 +34,10 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import { labelPhaseListener } from '../document-builder/labeled-phase-listener.js';
 import { LANGUAGE_CLIENT_ID } from '../../documents/client-ids.js';
+import { DocumentNotOpenError } from '../../documents/client-session-errors.js';
+import { type OpenOptions } from '../../documents/client-session-registry.js';
 import { type ServerSharedServices } from '../module.js';
+import { type ClientSession, DefaultClientSession } from './client-session.js';
 
 /**
  * The undo-stack entry for a server-authored write pushed to the editor.
@@ -274,6 +277,21 @@ export interface ModelService<
    onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
    onModelSaved(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void): Disposable;
    onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
+
+   /**
+    * Start a client session. The id defaults to `label#` plus a random UUID;
+    * a fixed `clientId` is taken as given. Throws `DuplicateClientIdError` when
+    * the id is reserved by the framework, held by another live session, or has
+    * documents open under it as a client that is not a session.
+    *
+    * `TOpenOptions` types the options the session's `open` takes.
+    */
+   createSession<TOpenOptions extends OpenOptions = OpenOptions>(
+      label?: string,
+      clientId?: string
+   ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
+   /** The live session started under `clientId`, or `undefined` once it has ended or was never started. */
+   getSession(clientId: string): ClientSession<TAst, TDiagnostic, TTransfer> | undefined;
 }
 
 export class DefaultModelService<
@@ -317,6 +335,20 @@ export class DefaultModelService<
     */
    protected readonly syncChains = new Map<string, Promise<void>>();
    protected readonly pendingSync = new Map<string, string>();
+
+   /**
+    * The live sessions this service started, by client id. {@link update}
+    * reads it to tell a session's write, which must find its document open,
+    * from a write under a plain client id, which opens it.
+    */
+   protected readonly sessions = new Map<string, ClientSession<TAst, TDiagnostic, TTransfer>>();
+   /**
+    * Drops an ended session from {@link sessions}. Subscribed by the first
+    * {@link createSession} rather than at construction, so a services tree with
+    * no text store, or one that knows nothing of sessions, still constructs
+    * this service.
+    */
+   protected sessionCloseListener?: Disposable;
 
    /**
     * Workspace-level readiness gate. Resolves when the framework has
@@ -681,8 +713,19 @@ export class DefaultModelService<
     * with vN's specific settled snapshot, intermediate-phase
     * observability, slow-warn / hard-timeout behaviour) override this
     * method.
+    *
+    * **Upsert, except for a session.** Under a plain client id the write opens
+    * the document for that client first, creating it from the payload when no
+    * file exists. Under the id of a live session from {@link createSession} it
+    * opens nothing, and fails with `DocumentNotOpenError` unless the session
+    * has the URI open at the moment the text is applied.
     */
    async update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+      // Read before the first await, while the call is still the caller's: a
+      // session that ends during the serialise would otherwise read as a plain
+      // client id here, and the write would open the document for an id no
+      // session owns any more and land there.
+      const bySession = this.sessions.has(args.clientId);
       const stopwatch = this.slowUpdateWarn !== undefined ? this.services.Clock.stopwatch() : undefined;
       // Per-stage self-time breakdown of the update/reconcile chain (serialise →
       // open → apply → rebuild), opt-in at debug — the default path skips the
@@ -739,8 +782,20 @@ export class DefaultModelService<
          throw new ConflictError(uri, args.basedOn, currentVersion);
       }
       const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
-      await run('open', () => this.open({ uri, clientId: args.clientId, text }));
-      const appliedVersion = await run('apply', () => this.services.workspace.AstDocumentManager.update(uri, text, args.clientId));
+      if (!bySession) {
+         await run('open', () => this.open({ uri, clientId: args.clientId, text }));
+      }
+      const appliedVersion = await run('apply', () => {
+         // A session's write never opens its document. The check sits in the
+         // same synchronous step as the apply: made before the serialize await
+         // instead, it passes for a write whose session closes the document
+         // during that await, and the write then lands on a document the
+         // session no longer has open.
+         if (bySession && !this.services.workspace.TextDocuments.isOpenInClient(uri, args.clientId)) {
+            throw new DocumentNotOpenError(uri, args.clientId);
+         }
+         return this.services.workspace.AstDocumentManager.update(uri, text, args.clientId);
+      });
       // Dispatch through the public `rebuild` (which re-canonicalizes the already-
       // canonical `uri` once, idempotently) rather than `rebuildCanonical`, so an
       // adopter `rebuild` override stays in the update path. The redundant call is
@@ -904,6 +959,55 @@ export class DefaultModelService<
     */
    getDocument(uri: string): LangiumDocument | undefined {
       return this.services.workspace.AstDocumentManager.getDocument(uri);
+   }
+
+   // ============================================================
+   // Client sessions
+   // ============================================================
+
+   createSession<TOpenOptions extends OpenOptions = OpenOptions>(
+      label?: string,
+      clientId?: string
+   ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
+      const sessionLabel = label ?? 'session';
+      const id = clientId ?? `${sessionLabel}#${globalThis.crypto.randomUUID()}`;
+      const textDocuments = this.services.workspace.TextDocuments;
+      textDocuments.registerSession(id);
+      this.sessionCloseListener ??= textDocuments.onDidCloseSession(event => {
+         // Also reached when the store ends a session directly; disposing the
+         // handle makes its later calls fail rather than write under an id
+         // this service no longer treats as a session.
+         this.sessions.get(event.clientId)?.dispose();
+         this.sessions.delete(event.clientId);
+      });
+      let session: ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
+      try {
+         session = this.newSession<TOpenOptions>(id, sessionLabel);
+      } catch (err: unknown) {
+         textDocuments.closeSession(id);
+         throw err;
+      }
+      this.sessions.set(id, session);
+      return session;
+   }
+
+   getSession(clientId: string): ClientSession<TAst, TDiagnostic, TTransfer> | undefined {
+      return this.sessions.get(clientId);
+   }
+
+   /**
+    * Build the handle for a session {@link createSession} has already
+    * registered. The override point for a custom session class; narrow the
+    * return type to it.
+    *
+    * Registration and the uniqueness check have already happened when this
+    * runs, so an override cannot skip them.
+    */
+   protected newSession<TOpenOptions extends OpenOptions = OpenOptions>(
+      clientId: string,
+      label: string
+   ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
+      return new DefaultClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>(this, this.services, clientId, label);
    }
 
    // ============================================================

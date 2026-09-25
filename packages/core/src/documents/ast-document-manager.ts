@@ -274,6 +274,12 @@ export class DefaultAstDocumentManager<
       this.textDocuments.onDidClose(event => this.close({ clientId: event.clientId, uri: event.document.uri }));
       this.documentBuilder.onUpdate((changed, deleted) => {
          this.lastUpdate = { changed, deleted };
+         // The only place a deletion is observable: `DocumentBuilder.update`
+         // removes a deleted document before it builds anything, so no phase
+         // listener ever sees it.
+         for (const uri of deleted) {
+            this.textDocuments.notifyDocumentDeleted(uri.toString());
+         }
       });
       // Content transitions for CLOSED documents bypass the text store: the
       // last-close revert and watched-file changes rebuild from disk into a
