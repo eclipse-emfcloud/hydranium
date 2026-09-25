@@ -347,6 +347,13 @@ class RecordingTextDocuments {
       this.stagedContent.push({ uri, text });
    }
 
+   /** Every disk baseline the service records, in order. */
+   readonly diskBaselines: { uri: string; text: string | undefined }[] = [];
+
+   updateDiskBaseline(uri: string, text: string | undefined): void {
+      this.diskBaselines.push({ uri, text });
+   }
+
    /**
     * `undefined` is the truthful answer for a stub holding no version sequence —
     * the same one the real store gives for a URI it never tracked — so these
@@ -939,6 +946,20 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
       expect(diskTasks).toEqual(['file:///held.fake']);
       expect(fileSystemProvider.outsideDiskQueue).toEqual([]);
       expect(textDocuments.stagedContent).toEqual([]);
+   });
+
+   it("records the repair it writes to a held file as that file's disk baseline, and no other", async () => {
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+      textDocuments.held.set('file:///held.fake', td);
+
+      await probe.syncCorrectionsNow(td, 'moved on');
+      expect(textDocuments.diskBaselines).toEqual([]);
+      await probe.syncCorrectionsNow(td, 'saved');
+
+      expect(textDocuments.diskBaselines).toEqual([{ uri: 'file:///held.fake', text: 'corrected' }]);
    });
 
    it('writes nothing when an edit lands while disk is being read', async () => {

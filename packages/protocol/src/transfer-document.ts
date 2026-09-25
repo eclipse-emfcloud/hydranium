@@ -43,6 +43,14 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
     */
    root?: TTransfer;
    diagnostics: TDiagnostic[];
+   /**
+    * Whether the server holds text for this document that its file does not,
+    * as the server last knew the file: set on every document a data server
+    * answers or sends that the server holds, and absent otherwise. A change
+    * after this snapshot arrives as `onDocumentDirtyChanged` to a client
+    * watching the document.
+    */
+   dirty?: boolean;
 }
 
 /**

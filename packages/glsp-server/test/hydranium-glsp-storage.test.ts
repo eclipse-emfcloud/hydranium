@@ -10,6 +10,7 @@
 import { type Marker, MarkersReason, SetMarkersAction } from '@eclipse-glsp/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import {
+   type Action,
    ActionDispatcher,
    ClientId,
    type ClientSession,
@@ -23,7 +24,8 @@ import {
    ModelSubmissionHandler,
    RequestModelAction,
    SOURCE_URI_ARG,
-   SaveModelAction
+   SaveModelAction,
+   SetDirtyStateAction
 } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container } from 'inversify';
@@ -35,7 +37,7 @@ import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } fr
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
-import { DuplicateClientIdError, ReconcilingConflictResolver, SessionClosedError } from '@hydranium/protocol';
+import { DuplicateClientIdError, ReconcilingConflictResolver, SessionClosedError, asCanonicalUri } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { DIAGRAM_SESSION_REFUSED, HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
 import { type SaveDeliveryPolicy, SaveDeliveryPolicy as SaveDeliveryPolicyToken } from '../src/storage/save-delivery-policy.js';
@@ -242,7 +244,12 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
 }
 
 /** Storage that keeps the base {@link HydraniumGlspStorage.saveSourceModel} so the policy branches are exercised. */
-class PolicyStorage extends HydraniumGlspStorage<TestRoot> {}
+class PolicyStorage extends HydraniumGlspStorage<TestRoot> {
+   /** Deliver a dirty flip of `uri`, as the text store does. */
+   dirtyChanged(uri: string, dirty: boolean): void {
+      this.handleDirtyChanged({ uri: asCanonicalUri(uri), dirty });
+   }
+}
 
 /**
  * Build a {@link PolicyStorage} over a mock `AstDocumentManager.save` and a stub
@@ -269,6 +276,8 @@ function createPolicyStorage(options: {
    saveMock: ReturnType<typeof vi.fn>;
    root: TestRoot;
    lines: CapturedGlspLine[];
+   /** The dirty states the storage dispatched, as `isDirty reason`. */
+   dirtyStates: string[];
 } {
    const root: TestRoot = { $type: 'TestRoot' };
    const saveMock = vi.fn(options.save);
@@ -294,15 +303,21 @@ function createPolicyStorage(options: {
       removeListener() {},
       getSession: () => undefined
    } as unknown as ClientSessionManager);
+   const dirtyStates: string[] = [];
    container.bind(ActionDispatcher).toConstantValue({
-      dispatch: () => Promise.resolve(),
+      dispatch: (action: Action) => {
+         if (SetDirtyStateAction.is(action)) {
+            dirtyStates.push(`${action.isDirty} ${action.reason ?? 'none'}`);
+         }
+         return Promise.resolve();
+      },
       dispatchAll: () => Promise.resolve(undefined)
    } as unknown as ActionDispatcher);
    container.bind(ModelSubmissionHandler).toConstantValue({
       hasPendingInitialRequest: () => false,
       submitModel: () => Promise.resolve([])
    } as unknown as ModelSubmissionHandler);
-   container.bind(CommandStack).toConstantValue({ saveIsDone() {} } as unknown as CommandStack);
+   container.bind(CommandStack).toConstantValue({ saveIsDone() {}, isDirty: true } as unknown as CommandStack);
    container.bind(ModelState).toConstantValue({
       clientId: 'client-1',
       sourceRoot: root,
@@ -318,7 +333,7 @@ function createPolicyStorage(options: {
    // `lines` is a live reference — the storage surfaces failures through the
    // GLSP logger after the returned promise settles, so tests filter it at
    // assertion time (a getter would snapshot empty at destructure time).
-   return { storage: container.get(PolicyStorage), saveMock, root, lines };
+   return { storage: container.get(PolicyStorage), saveMock, root, lines, dirtyStates };
 }
 
 const saveAction = { kind: 'saveModel', fileUri: 'file:///x.a' } as unknown as SaveModelAction;
@@ -861,6 +876,66 @@ describe('HydraniumGlspStorage', () => {
          };
          // Caught and logged, never rethrown.
          expect(await logged()).toBe(true);
+      });
+   });
+
+   describe('saveSourceModel — dirty state', () => {
+      // GLSP's save handler sends the dirty state, reason save, once the save
+      // settles, and GLSP's client keeps a dirty state only when it changes:
+      // the save's own flip sent first, reason external, leaves the save's
+      // answer changing nothing, and a saveable waiting for it times out.
+      it('sends no dirty state for a flip during its own awaited save', async () => {
+         let finish!: () => void;
+         const { storage, dirtyStates } = createPolicyStorage({ save: () => new Promise<void>(resolve => (finish = resolve)) });
+
+         const saving = storage.saveSourceModel(saveAction);
+         storage.dirtyChanged('file:///x.a', false);
+         finish();
+         await saving;
+
+         expect(dirtyStates).toEqual([]);
+      });
+
+      it('sends the dirty state once a failed save settles, since GLSP then sends none', async () => {
+         let fail!: (error: Error) => void;
+         const { storage, dirtyStates } = createPolicyStorage({
+            save: () => new Promise<void>((_resolve, reject) => (fail = reject))
+         });
+
+         const saving = storage.saveSourceModel(saveAction);
+         storage.dirtyChanged('file:///x.a', true);
+         expect(dirtyStates).toEqual([]);
+         fail(new Error('disk full'));
+
+         await expect(saving).rejects.toThrow('disk full');
+         expect(dirtyStates).toEqual(['true external']);
+      });
+
+      it('ends its hold when a flush override throws before it returns a promise', async () => {
+         const { storage, dirtyStates } = createPolicyStorage({ save: () => Promise.resolve() });
+         Object.assign(storage, {
+            flushWriteSet: () => {
+               throw new Error('flush refused');
+            }
+         });
+
+         await expect(Promise.resolve().then(() => storage.saveSourceModel(saveAction))).rejects.toThrow('flush refused');
+         storage.dirtyChanged('file:///x.a', true);
+
+         expect(dirtyStates).toEqual(['true external', 'true external']);
+      });
+
+      it('sends a flip outside its own save, and one during a save it does not wait for', async () => {
+         const { storage, dirtyStates } = createPolicyStorage({
+            policy: { kind: 'fire-and-forget' },
+            save: () => new Promise<void>(() => undefined)
+         });
+         storage.dirtyChanged('file:///x.a', true);
+
+         storage.saveSourceModel(saveAction);
+         storage.dirtyChanged('file:///x.a', false);
+
+         expect(dirtyStates).toEqual(['true external', 'true external']);
       });
    });
 

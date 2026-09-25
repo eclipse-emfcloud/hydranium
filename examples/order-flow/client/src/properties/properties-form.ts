@@ -33,6 +33,7 @@ import {
    PROPERTIES_DISCONNECTED,
    PROPERTIES_NO_DOCUMENT,
    PROPERTIES_NO_FIELDS,
+   PROPERTIES_UNSAVED,
    PROPERTIES_WRITE_CONFLICT,
    PROPERTIES_WRITE_FAILED,
    PROPERTIES_WRITE_MERGED,
@@ -122,6 +123,8 @@ const OUTCOME_KINDS: Partial<Record<SetFieldOutcome['status'], string>> = {
 
 export class PropertiesForm {
    protected readonly heading: HTMLHeadingElement;
+   /** Says the document holds text its file does not; see {@link setDirty}. */
+   protected readonly unsavedNote: HTMLDivElement;
    protected readonly fieldsHost: HTMLDivElement;
    protected readonly status: HTMLDivElement;
    protected readonly diagnosticsHost: HTMLUListElement;
@@ -152,12 +155,19 @@ export class PropertiesForm {
    ) {
       this.renderMessage = options.renderMessage ?? (message => renderFrameworkMessage(message));
       this.heading = this.createElement(options.headingLevel ?? 'h1');
+      this.unsavedNote = this.createElement('div');
+      this.unsavedNote.className = 'unsaved';
+      // A status region: a screen reader announces the note when it appears,
+      // which a hidden toggle alone does not make it do.
+      this.unsavedNote.setAttribute('role', 'status');
+      this.unsavedNote.textContent = this.text(PROPERTIES_UNSAVED);
+      this.unsavedNote.hidden = true;
       this.fieldsHost = this.createElement('div');
       this.status = this.createElement('div');
       this.status.className = 'status';
       this.diagnosticsHost = this.createElement('ul');
       this.diagnosticsHost.className = 'diagnostics';
-      root.append(this.heading, this.fieldsHost, this.status, this.diagnosticsHost);
+      root.append(this.heading, this.unsavedNote, this.fieldsHost, this.status, this.diagnosticsHost);
       this.heading.textContent = this.text(PROPERTIES_NO_DOCUMENT);
    }
 
@@ -188,6 +198,16 @@ export class PropertiesForm {
    /** The document this form is showing, for the heading. */
    setTitle(label: string | undefined): void {
       this.heading.textContent = label ?? this.text(PROPERTIES_NO_DOCUMENT);
+   }
+
+   /**
+    * Show whether the document holds changes that are not on disk yet, this
+    * panel's or anyone else's. The panel has no save of its own: any client
+    * saves the same document, an editor or a diagram included, and the note
+    * goes when one does.
+    */
+   setDirty(dirty: boolean): void {
+      this.unsavedNote.hidden = !dirty;
    }
 
    /**

@@ -447,7 +447,14 @@ export class DefaultAstDocumentManager<
       }
       if (!this.isOpen(args.uri)) {
          const textDocument = await this.createDocumentFromTextOrFileSystem(args.uri, args.languageId, args.version, args.text);
+         const creates = !this.isOpen(args.uri);
          this.textDocuments.notifyDidOpenTextDocument({ textDocument }, args.clientId);
+         if (creates && args.text !== undefined) {
+            // Text the caller supplies was not read from the file, so no file
+            // is assumed: the document is dirty until its first save, whatever
+            // the file holds.
+            this.textDocuments.updateDiskBaseline(args.uri, undefined);
+         }
       }
       return Disposable.create(() => this.close(args));
    }

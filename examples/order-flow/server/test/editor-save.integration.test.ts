@@ -16,8 +16,7 @@
  * observable, and the file the editor "writes" is written by the test between
  * the answer and the `didSave`, as an editor does. A save is announced only
  * once the file read back holds the store's text; the tests observe that on
- * `ModelService.onModelSaved`, the subscription a diagram marks its save done
- * on.
+ * `ModelService.onModelSaved`.
  */
 
 import { serverSharedFactory } from '@hydranium/core';
@@ -35,7 +34,9 @@ import { tick, waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+   DidChangeWatchedFilesNotification,
    DidSaveTextDocumentNotification,
+   FileChangeType,
    type InitializeResult,
    type TextDocumentSyncOptions,
    TextDocumentSaveReason,
@@ -274,5 +275,32 @@ describe('an editor save', () => {
       await expect(willSave(harness, uri)).resolves.toEqual([]);
       await didSave(harness, uri);
       await waitFor(() => savedBy.includes('language-client'), { timeoutMs: 500 });
+   });
+});
+
+describe('the disk baseline of an editor-held document', () => {
+   it('is the file an editor save left, so a save of the shared text turns the document clean', async () => {
+      const { harness, uri, services } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const reported = watchReports(services);
+      expect(textDocuments.isDirty(uri)).toBe(true);
+      await expect(willSave(harness, uri)).resolves.toEqual([]);
+
+      workspace!.write(FILE, SERVER_TEXT);
+      await didSave(harness, uri);
+      await readBackDone(services, uri, reported);
+
+      expect(textDocuments.isDirty(uri)).toBe(false);
+   });
+
+   it('is the file a watched change reports, written by another process', async () => {
+      const { harness, uri, services } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      expect(textDocuments.isDirty(uri)).toBe(true);
+
+      workspace!.write(FILE, SERVER_TEXT);
+      await harness.client.sendNotification(DidChangeWatchedFilesNotification.type, { changes: [{ uri, type: FileChangeType.Changed }] });
+
+      await waitFor(() => !textDocuments.isDirty(uri), { timeoutMs: 1000 });
    });
 });

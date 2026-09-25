@@ -15,6 +15,7 @@ import {
    type DataServerProtocol,
    type ProjectsChangedEvent,
    type TransferDocumentDeletedEvent,
+   type TransferDocumentDirtyChangedEvent,
    type TransferDocumentSavedEvent,
    type TransferDocumentsBuiltEvent,
    type TransferDocumentUpdatedEvent
@@ -89,6 +90,8 @@ export interface DataServerHarness<
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
    /** Captured `onDocumentSaved` events. */
    readonly saves: ReadonlyArray<TransferDocumentSavedEvent<TTransfer, TDiagnostic>>;
+   /** Captured `onDocumentDirtyChanged` events. */
+   readonly dirtyChanges: ReadonlyArray<TransferDocumentDirtyChangedEvent>;
    /** Captured `onDocumentDeleted` events. */
    readonly deletions: ReadonlyArray<TransferDocumentDeletedEvent>;
    /** Captured `onDocumentsBuilt` events, one per build that had unwatched documents. */
@@ -129,6 +132,7 @@ export function makeDataServerHarness<
       client: localClient,
       updates: events,
       saves,
+      dirtyChanges,
       deletions,
       builds,
       projectsChanges
@@ -149,6 +153,7 @@ export function makeDataServerHarness<
       pair,
       events,
       saves,
+      dirtyChanges,
       deletions,
       builds,
       projectsChanges,

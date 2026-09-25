@@ -286,6 +286,37 @@ describe('order-flow properties model', () => {
       await expect(model.setField('nodes', 'nope')).rejects.toThrow(/not an editable field/);
    });
 
+   it('opens dirty on a document another client holds unsaved', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const other = sharedServices!.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.update({ uri, model: `${sharedServices!.workspace.TextDocuments.get(uri)!.getText()}\n`, basedOn: 'anything' });
+      // Pinned, so only what the open read can make it dirty.
+      const model = pinnedModel();
+
+      await model.open(uri);
+
+      expect(model.dirty).toBe(true);
+   });
+
+   it("follows the document's dirty state: its own write, then another client's save", async () => {
+      const model = followingModel();
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      await model.open(uri);
+      const flips: boolean[] = [];
+      model.onDidChangeDirty(() => flips.push(model.dirty));
+      expect(model.dirty).toBe(false);
+
+      await model.setField('name', 'Fulfilment');
+      expect(model.dirty).toBe(true);
+      const other = sharedServices!.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.save({ uri, model: sharedServices!.workspace.TextDocuments.get(uri)!.getText(), basedOn: 'anything' });
+
+      await waitFor(() => !model.dirty, { message: 'the save by another client never reached the model' });
+      expect(flips).toEqual([true, false]);
+   });
+
    it('does not fire a second change for its own echo', async () => {
       // What echo filtering actually buys a properties view. The echo's CONTENT
       // equals the write response the model already adopted, so no assertion on

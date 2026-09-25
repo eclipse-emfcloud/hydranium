@@ -16,6 +16,7 @@ import type { ReferenceCandidate, ReferenceTarget } from '../model-service/refer
 import type {
    ProjectsChangedEvent,
    TransferDocumentDeletedEvent,
+   TransferDocumentDirtyChangedEvent,
    TransferDocumentSavedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent
@@ -328,6 +329,17 @@ export interface DocumentClientProtocol<TTransfer extends TransferElement, TDiag
     * codepath, not a subscription codepath).
     */
    onDocumentSaved(event: TransferDocumentSavedEvent<TTransfer, TDiagnostic>): void;
+
+   /**
+    * Delivered when a subscribed document's text starts or stops differing
+    * from its file, as the server last knew it. Gated like
+    * {@link onDocumentSaved}; the answer at any one moment is the `dirty` of
+    * the documents the server sends. After a reconnect, a `DataSession`
+    * delivers here the answer of each document it restored, when that differs
+    * from the last this client was told: the flips while the connection was
+    * down reached no one.
+    */
+   onDocumentDirtyChanged(event: TransferDocumentDirtyChangedEvent): void;
 
    /**
     * Delivered when a document's backing file was removed. Separate from

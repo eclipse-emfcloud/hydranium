@@ -402,17 +402,78 @@ stopped waiting for still waits out its cap.
 
 `didSave` fires `TextDocuments.onDidSaveInLanguageClient` for every editor
 save, which releases the hold. The store then reads the file back through its
-disk queue, after any server write queued behind the hold, and compares it with
-the document's current text. Only when they match does it fire `onDidSave`
-under `language-client`, as any save does under its client's id: the data head
-broadcasts it as a save, and a diagram whose document it is marks its save
-done. The editor saves its own buffer, which lags the store while another
-client's edit is on its way to it; the file, not the editor, tells whether the
-shared document is on disk, and a check of the file needs no saved text from the
-client. When the file differs, or cannot be read, the save reached disk only:
-no `onDidSave` fires, so a diagram keeps its save pending and data clients keep
-their unsaved state until the next save of the document. A file changed again
-between the editor's write and the read also counts as differing.
+disk queue, after any server write queued behind the hold. Only when it holds
+the document's current text does the store fire `onDidSave` under
+`language-client`, as any save does under its client's id, and the data head
+broadcasts it as a save. The editor saves its own buffer, which lags the store
+while another client's edit is on its way to it; the file, not the editor,
+tells whether the shared document is on disk, and a check of the file needs no
+saved text from the client. When the file differs, or cannot be read, the save
+reached disk only and no `onDidSave` fires. A file changed again between the
+editor's write and the read also counts as differing.
+
+## Dirty state
+
+For each document a client has open, the text store keeps the text the server
+last knew the file to hold, and `TextDocuments.isDirty(uri)` answers whether
+the document's text differs from it. That text moves only where the server
+reads or writes the file:
+
+- a first open takes the text it opened with: the file for a session, the
+  buffer for an editor. `create`, and any open given its text, has no file, so
+  such a document is dirty until its first save, and a document opened on
+  content the integrity service staged is dirty too;
+- a server save takes the text it wrote, or found the file already holding;
+- an editor save takes the file the store reads back, whether or not it holds
+  the document's text;
+- a watched-file change the server did not write takes the file, read through
+  its disk queue, and no file when it cannot be read;
+- an integrity repair written to a file some client holds takes the repair.
+
+A document released after its last close is not dirty, and a dirty one
+announces the change. `TextDocuments.onDidChangeDirty` fires on each change of
+the answer, and `updateDiskBaseline(uri, text)` records a write your own code
+made; a save your code announces through `notifyDidSaveTextDocument` with its
+text moves the baseline too.
+
+Over the data head, every transfer document the head sends that it holds
+carries the current answer as `dirty`, and a watcher is sent
+`onDocumentDirtyChanged({ uri, dirty })` on each change;
+`DataEvents.onDidChangeDocumentDirty` fans it out. After a reconnect, a
+`DataSession` reads each document it restores once its watch is in place, and
+tells the connection's client the answer where it differs from the last one
+the client was told since its open, so a flip while the connection was down
+reaches it.
+
+A diagram's dirty state is the same answer over every document the diagram's
+session has open, read by `HydraniumGlspCommandStack`, and its storage sends
+the client each change, so one the diagram did not make reaches it too. While
+a save of the diagram's own is awaited, the storage sends nothing: GLSP's save
+handler sends the state once the save is done, reason `save`, and GLSP's own
+saveable waits for that answer. An editor keeps a dirty flag of its own, since
+LSP has none to send it.
+
+In Theia, bind `EditorDiskSync` from `@hydranium/client-theia/browser` as a
+`FrontendApplicationContribution`. A server save of a document an editor shows
+unsaved writes the editor's text, and Theia keeps the editor dirty; its next
+save applies the editor's pending edits to that file a second time, since its
+check that the file is unchanged passes when the size is. Before each save of
+an editor, `EditorDiskSync` reads the file, and when it holds the text the
+editor held as the save began, drops the edits pending then and has the save
+expect the file's version. The save goes on and writes only what changed
+after that point, such as a save participant's trim of trailing whitespace,
+onto the file. Save All relies on that check: it saves a diagram and an editor
+on the same file one after the other, faster than the file watcher reports
+the diagram's write. A file that cannot be read within a second leaves the
+save to Theia as it is. A watched change to the editor's text marks it clean
+too, once any save of it in flight has finished.
+
+Beside it, rebind Theia's `FileService` to `HydraniumFileService` from the same
+entry. It refuses an editor's incremental save once the file's mtime is past
+the one the editor read, whatever the size, and the editor then writes its
+whole text, through Theia's own check. That covers the save `EditorDiskSync`
+leaves alone because the file holds neither the editor's text nor the text it
+read.
 
 ## Last close
 
@@ -557,6 +618,25 @@ connection.
 - A client that reconnects after the revert grace has run out finds its
   sole-client documents reverted: other sessions see the revert, and the
   reconnecting session reports its unsaved edits lost.
+- The disk baseline moves only when the server reads or writes the file, or a
+  watcher reports a change, so it trails a write by another process until the
+  watcher's report; a server without an LSP head has no watcher. The integrity
+  service reads the file before its repair write for that reason.
+- Every first open by an editor takes its buffer as the file's text, so a
+  buffer it never saved counts as clean. That includes a language-server
+  restart: the language client opens each dirty buffer again, and the diagram
+  and the data clients then show those documents clean while the editor shows
+  them dirty.
+- VS Code keeps an editor dirty when the file changes to the text it shows;
+  its next save writes the same bytes. There is no VS Code counterpart of
+  `EditorDiskSync`.
+- `EditorDiskSync` takes the editor's text as the save calls its will-save
+  listeners. Theia runs its save participants one after another, each behind
+  an await, and its first one awaits before it edits, so none has changed the
+  buffer by then. A participant ordered ahead of it that edits before its first
+  await makes the save apply every pending edit again, unless
+  `HydraniumFileService` is bound, which has the save write the whole text,
+  or ask when the file's size changed.
 
 ## Logs
 

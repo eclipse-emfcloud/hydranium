@@ -820,3 +820,58 @@ describe('AstDocumentManager disk queue', () => {
       });
    });
 });
+
+describe('AstDocumentManager disk baseline', () => {
+   it('opens clean on text it read from the file, and dirty on text it was given', async () => {
+      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      backWithDisk(fileSystem, new Map([[URI_A, 'on disk\n']]));
+
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext' });
+      await manager.open({ uri: URI_B, clientId: 'c1', languageId: 'plaintext', text: 'created\n' });
+
+      expect(textDocuments.isDirty(URI_A)).toBe(false);
+      expect(textDocuments.isDirty(URI_B)).toBe(true);
+   });
+
+   it('takes the written text as the baseline before the save is announced', async () => {
+      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      backWithDisk(fileSystem, new Map());
+      await openForSave(manager, URI_A, 'created\n');
+      const dirtyWhenAnnounced: boolean[] = [];
+      manager.onSave(URI_A, () => {
+         dirtyWhenAnnounced.push(textDocuments.isDirty(URI_A));
+      });
+
+      await manager.save(URI_A, 'c1');
+      await tick(0);
+
+      expect(dirtyWhenAnnounced).toEqual([false]);
+   });
+
+   it('takes the text of a save whose write was skipped because the file held it', async () => {
+      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      backWithDisk(fileSystem, new Map([[URI_A, 'on disk\n']]));
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext' });
+      await manager.update(URI_A, 'edited\n', 'c1');
+      backWithDisk(fileSystem, new Map([[URI_A, 'edited\n']]));
+
+      await manager.save(URI_A, 'c1');
+
+      expect(fileSystem.writes).toEqual([]);
+      expect(textDocuments.isDirty(URI_A)).toBe(false);
+   });
+
+   it('stays dirty when an edit lands after the save took its text', async () => {
+      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      const { parkWrites } = backWithDisk(fileSystem, new Map());
+      await openForSave(manager, URI_A, 'saved\n');
+      const releaseWrites = parkWrites();
+      const saving = manager.save(URI_A, 'c1');
+      await manager.update(URI_A, 'newer\n', 'c1');
+
+      releaseWrites();
+      await saving;
+
+      expect(textDocuments.isDirty(URI_A)).toBe(true);
+   });
+});

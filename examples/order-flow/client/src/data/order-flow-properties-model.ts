@@ -89,6 +89,15 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    protected readonly changeEmitter = new Emitter<void>();
    /** Fires whenever {@link fields} or {@link diagnostics} may have changed. */
    readonly onDidChange: Event<void> = this.changeEmitter.event;
+   protected readonly dirtyEmitter = new Emitter<void>();
+   /**
+    * Fires whenever {@link dirty} changes. Apart from {@link onDidChange}
+    * because a save changes no field, and a host redrawing its fields on it
+    * would redraw for nothing.
+    */
+   readonly onDidChangeDirty: Event<void> = this.dirtyEmitter.event;
+   /** See {@link dirty}. */
+   protected dirtyState = false;
 
    /** The current server snapshot — the base every write is authored against. */
    protected snapshot?: TransferDocument<TTransfer>;
@@ -103,7 +112,12 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       // document, so there is no snapshot to adopt — only one to drop.
       this.subscriptions = [
          events.onDidUpdateDocument(event => this.handleDocumentUpdated(event)),
-         events.onDidDeleteDocument(event => this.handleDocumentDeleted(event))
+         events.onDidDeleteDocument(event => this.handleDocumentDeleted(event)),
+         events.onDidChangeDocumentDirty(event => {
+            if (!this.disposed && event.uri === this.snapshot?.uri) {
+               this.setDirty(event.dirty);
+            }
+         })
       ];
    }
 
@@ -138,6 +152,19 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          }
       }
       return fields;
+   }
+
+   /**
+    * Whether the server holds text for the open document that its file does
+    * not: an edit from this panel or anyone else not yet saved by anyone.
+    * `false` with nothing open.
+    *
+    * Read from the last document the server sent and from its dirty
+    * notifications, whichever came last. The watch starts after the open, so
+    * a change in between reaches only the second read of {@link open}.
+    */
+   get dirty(): boolean {
+      return this.dirtyState;
    }
 
    /**
@@ -188,6 +215,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       this.snapshot = await this.session.openDocument({ uri });
       const server = await this.session.connected();
       this.snapshot = await server.getModelDocument({ uri, includeDiagnostics: true });
+      this.setDirty(this.snapshot.dirty);
       this.changeEmitter.fire(undefined);
    }
 
@@ -255,6 +283,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          return;
       }
       this.snapshot = undefined;
+      this.setDirty(false);
       await this.session.closeDocument({ uri: open.uri });
       this.changeEmitter.fire(undefined);
    }
@@ -266,6 +295,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       this.disposed = true;
       this.subscriptions.forEach(subscription => subscription.dispose());
       this.changeEmitter.dispose();
+      this.dirtyEmitter.dispose();
       this.snapshot = undefined;
    }
 
@@ -325,6 +355,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          return;
       }
       this.snapshot = undefined;
+      this.setDirty(false);
       this.changeEmitter.fire(undefined);
    }
 
@@ -349,7 +380,16 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    /** Take `document` as the new base and tell listeners. */
    protected adopt(document: TransferDocument<TTransfer>): void {
       this.snapshot = document;
+      this.setDirty(document.dirty);
       this.changeEmitter.fire(undefined);
+   }
+
+   /** Take `dirty` unless the server left it out, and tell listeners of a change. */
+   protected setDirty(dirty: boolean | undefined): void {
+      if (dirty !== undefined && dirty !== this.dirtyState) {
+         this.dirtyState = dirty;
+         this.dirtyEmitter.fire(undefined);
+      }
    }
 
    protected assertLive(): void {

@@ -13,6 +13,7 @@ import type {
    ProjectsChangedEvent,
    TransferDiagnostic,
    TransferDocumentDeletedEvent,
+   TransferDocumentDirtyChangedEvent,
    TransferDocumentSavedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
@@ -48,6 +49,10 @@ export class EmitterDataClient<
    /** Fires for each inbound {@link onDocumentSaved} notification. */
    readonly onDidSaveDocument: Event<TransferDocumentSavedEvent<TTransfer, TDiagnostic>> = this.onDocumentSavedEmitter.event;
 
+   protected readonly onDocumentDirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
+   /** Fires for each inbound {@link onDocumentDirtyChanged} notification. */
+   readonly onDidChangeDocumentDirty: Event<TransferDocumentDirtyChangedEvent> = this.onDocumentDirtyChangedEmitter.event;
+
    protected readonly onDocumentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
    /** Fires for each inbound {@link onDocumentDeleted} notification. */
    readonly onDidDeleteDocument: Event<TransferDocumentDeletedEvent> = this.onDocumentDeletedEmitter.event;
@@ -66,6 +71,10 @@ export class EmitterDataClient<
 
    onDocumentSaved(event: TransferDocumentSavedEvent<TTransfer, TDiagnostic>): void {
       this.onDocumentSavedEmitter.fire(event);
+   }
+
+   onDocumentDirtyChanged(event: TransferDocumentDirtyChangedEvent): void {
+      this.onDocumentDirtyChangedEmitter.fire(event);
    }
 
    onDocumentDeleted(event: TransferDocumentDeletedEvent): void {

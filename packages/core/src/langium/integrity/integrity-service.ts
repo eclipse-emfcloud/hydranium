@@ -461,18 +461,14 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     *   authority, and those heads read the correction from the settled build.
     *   In silent mode it is also written to disk when the text it was computed
     *   from is what disk holds, since the repair is then the only difference;
-    *   otherwise it waits for the next save. Editor mode always waits, and a
-    *   repair of text the holder never changed then differs from disk with
-    *   nothing marking it unsaved.
+    *   otherwise it waits for the next save. Editor mode always waits, and the
+    *   repair leaves the document dirty until a save.
     * - **Closed, silent mode** → write to disk directly (disk is authoritative).
     * - **Closed, editor mode** → stage so the next open picks it up via applyEdit.
     *
     * A held URI is not closed. Writing it as one persists the holder's unsaved
     * edits with the repair, and staging it leaves text no open reads, because
-    * only a first open consumes the stage. Leaving every held repair to a save
-    * is not enough either: a data or GLSP head marks only its own edits unsaved,
-    * so a repair of text it never changed would leave disk and store apart with
-    * nothing showing it.
+    * only a first open consumes the stage.
     *
     * `parsedFrom` is the text the repaired AST was parsed from. Without it a
     * held URI's repair is left to the next save.
@@ -548,6 +544,10 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             this.tracer.with(document.uri).debug(`Held document unreadable on disk, repair left to the next save: ${String(error)}`);
             return;
          }
+         // The file itself, not the store's disk baseline: the baseline moves
+         // only when the server hears of a change, so it can still hold the
+         // parsed text after another process rewrote the file and before the
+         // watcher reports it, and this write would then replace that change.
          if (onDisk !== parsedFrom) {
             return;
          }
@@ -556,6 +556,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             return;
          }
          await this.fileSystemProvider.writeFile(uri, repaired);
+         this.textDocuments.updateDiskBaseline(document.uri, repaired);
       });
    }
 

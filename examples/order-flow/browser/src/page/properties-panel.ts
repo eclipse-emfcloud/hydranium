@@ -83,6 +83,7 @@ export class PropertiesPanel {
          }
       );
       this.model.onDidChange(() => this.render());
+      this.model.onDidChangeDirty(() => this.form.setDirty(this.model.dirty));
    }
 
    /** The document this panel is showing, for a host that saves what is in front of the reader. */

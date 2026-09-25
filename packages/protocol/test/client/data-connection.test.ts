@@ -56,8 +56,8 @@ const URI_B = 'file:///b.x';
 const URI_C = 'file:///c.x';
 const MODEL = { $type: 'TypeOne' } as const;
 
-function document(uri: string, version = 1): unknown {
-   return { uri, version, root: { $type: 'TypeOne' }, diagnostics: [] };
+function document(uri: string, version = 1, dirty?: boolean): unknown {
+   return { uri, version, root: { $type: 'TypeOne' }, diagnostics: [], ...(dirty !== undefined ? { dirty } : {}) };
 }
 
 /** A promise a test releases by hand, for holding a server handler open. */
@@ -95,6 +95,17 @@ interface ServerBehaviour {
    /** Refuse every registration as a duplicate id. */
    refuseSessions?: boolean;
    failWatch?: boolean;
+   /** Per URI, the `dirty` an open and a read answer with; absent, they carry none. */
+   dirty?: Map<string, boolean>;
+   /** Runs as a watch arrives, before it answers. */
+   beforeWatch?: (uri: string) => void;
+   /** URIs whose open fails. */
+   failOpens?: Set<string>;
+   /**
+    * The URI an answer names for the URI a call named, as a server keys its
+    * documents; absent, the one the call named.
+    */
+   canonical?: (uri: string) => string;
 }
 
 /**
@@ -117,6 +128,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          ...(args.updates !== undefined ? { updates: args.updates.map(update => ({ uri: update.uri, basedOn: update.basedOn })) } : {})
       });
    };
+   const answered = (uri: string): string => behaviour.canonical?.(uri) ?? uri;
    const target = {
       waitForReady: async (): Promise<void> => {
          await behaviour.readyGate;
@@ -134,14 +146,23 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       openModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('open', args);
          await behaviour.openGate;
-         return document(args.uri, behaviour.versions?.get(args.uri) ?? calls.filter(call => call.method === 'open').length);
+         if (behaviour.failOpens?.has(args.uri)) {
+            throw new Error('open refused');
+         }
+         return document(
+            answered(args.uri),
+            behaviour.versions?.get(args.uri) ?? calls.filter(call => call.method === 'open').length,
+            behaviour.dirty?.get(args.uri)
+         );
       },
+      getModelDocument: async (args: { uri: string }): Promise<unknown> => document(answered(args.uri), 1, behaviour.dirty?.get(args.uri)),
       createModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('create', args);
-         return document(args.uri);
+         return document(answered(args.uri));
       },
       watchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
          record('watch', args);
+         behaviour.beforeWatch?.(args.uri);
          if (behaviour.failWatch) {
             throw new Error('watch refused');
          }
@@ -152,16 +173,16 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       updateModelDocument: async (args: { uri: string; clientId: string; basedOn: unknown; model: unknown }): Promise<unknown> => {
          record('update', args);
          await behaviour.updateGate;
-         return document(args.uri, behaviour.versions?.get(args.uri) ?? 1);
+         return document(answered(args.uri), behaviour.versions?.get(args.uri) ?? 1);
       },
       updateModelDocuments: async (args: { clientId: string; updates: { uri: string; basedOn: unknown }[] }): Promise<unknown> => {
          record('updates', args);
-         return args.updates.map(update => document(update.uri, behaviour.versions?.get(update.uri) ?? 1));
+         return args.updates.map(update => document(answered(update.uri), behaviour.versions?.get(update.uri) ?? 1));
       },
       saveModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('save', args);
          await behaviour.saveGate;
-         return document(args.uri);
+         return document(answered(args.uri));
       }
    };
    bindRpcMethods(
@@ -172,6 +193,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          'createSession',
          'closeSession',
          'openModelDocument',
+         'getModelDocument',
          'createModelDocument',
          'watchModelDocument',
          'closeModelDocument',
@@ -183,16 +205,27 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
    );
 }
 
+/** A connection that shows what it recorded of the dirty states its client was told. */
+class InspectableConnection extends DataConnection<ProbeElement> {
+   get toldDirty(): ReadonlyMap<string, boolean> {
+      return this.dirtyStates;
+   }
+}
+
 interface Harness {
-   readonly connection: DataConnection<ProbeElement>;
+   readonly connection: InspectableConnection;
+   /** The connection's client. */
+   readonly events: DataEvents<ProbeElement>;
    readonly calls: ServerCall[];
    readonly port: FakeDataPort;
    /** Drop the current transport, as a host does when its connection dies. */
    dropTransport(): void;
+   /** Send the client a dirty flip over the current transport, as a server does. */
+   notifyDirty(uri: string, dirty: boolean): Promise<void>;
    dispose(): void;
 }
 
-function harness(behaviour: ServerBehaviour = {}, boundMs?: number): Harness {
+function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new DataEvents<ProbeElement>()): Harness {
    const calls: ServerCall[] = [];
    const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
    const port = makeFakeDataPort({
@@ -203,17 +236,19 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number): Harness {
          return pair.right;
       }
    });
-   const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>(), {
+   const connection = new InspectableConnection(port, events, {
       sessionFactory: boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs)
    });
    return {
       connection,
+      events,
       calls,
       port,
       dropTransport: () => {
          port.fireDispose();
          pairs.at(-1)?.dispose();
       },
+      notifyDirty: (uri, dirty) => pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDirtyChanged`, { uri, dirty }),
       dispose: () => {
          connection.dispose();
          pairs.forEach(pair => pair.dispose());
@@ -229,6 +264,19 @@ class BoundedSession extends DataSession<ProbeElement> {
       super(clientId, host, label);
       this.settleBeforeCloseMs = boundMs;
    }
+
+   /** The server's URI the session keeps per URI it has open. */
+   get serverUrisKept(): ReadonlyMap<string, string> {
+      return this.serverUris;
+   }
+}
+
+/** The server's URIs `session`, a {@link BoundedSession}, keeps. */
+function serverUrisOf(session: DataSession<ProbeElement>): ReadonlyMap<string, string> {
+   if (!(session instanceof BoundedSession)) {
+      throw new Error('not a BoundedSession');
+   }
+   return session.serverUrisKept;
 }
 
 const of = (calls: readonly ServerCall[], ...methods: Method[]): ServerCall[] => calls.filter(call => methods.includes(call.method));
@@ -646,6 +694,10 @@ describe('DataSession after a dropped connection', () => {
             'open:panel',
             'watch:panel'
          ]);
+         // The restore reads the dirty state after the watch. A request still
+         // queued when the harness tears the pair down fails its write outside
+         // any caller, as an unhandled rejection.
+         await panel.connected();
       } finally {
          dispose();
       }
@@ -725,6 +777,35 @@ describe('DataSession after a dropped connection', () => {
          await panel.connected();
 
          expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the URI the last open of a document named until it closes, fails to re-open, or the session detaches', async () => {
+      const behaviour: ServerBehaviour = { canonical: uri => `${uri}#served` };
+      const { connection, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         await panel.openDocument({ uri: URI_C });
+
+         await panel.closeDocument({ uri: URI_A });
+         expect([...serverUrisOf(panel)]).toEqual([
+            [URI_B, `${URI_B}#served`],
+            [URI_C, `${URI_C}#served`]
+         ]);
+
+         // The re-open names another URI, which replaces the first.
+         behaviour.failOpens = new Set([URI_C]);
+         behaviour.canonical = uri => `${uri}#moved`;
+         dropTransport();
+         await panel.connected();
+         expect([...serverUrisOf(panel)]).toEqual([[URI_B, `${URI_B}#moved`]]);
+
+         panel.detach();
+         expect(serverUrisOf(panel).size).toBe(0);
       } finally {
          dispose();
       }
@@ -986,6 +1067,180 @@ describe('DataSession disposal', () => {
          await waitFor(() => !panel.hasSavesInFlight);
       } finally {
          save.release();
+         dispose();
+      }
+   });
+});
+
+describe('DataSession restore and the dirty state', () => {
+   /** The dirty flips `events` delivers, as `uri dirty`. */
+   function dirtyFlips(events: DataEvents<ProbeElement>): string[] {
+      const flips: string[] = [];
+      events.onDidChangeDocumentDirty(event => flips.push(`${event.uri} ${event.dirty}`));
+      return flips;
+   }
+
+   it('tells the client of a flip made while the connection was down', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]) };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.dirty!.set(URI_A, true);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1);
+
+         // The server reverted the document when the connection dropped, and
+         // no one on the connection heard it.
+         behaviour.dirty!.set(URI_A, false);
+         dropTransport();
+         await panel.connected();
+
+         expect(flips).toEqual([`${URI_A} true`, `${URI_A} false`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client of a flip between the re-open and the watch', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]) };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.dirty!.set(URI_A, true);
+         await notifyDirty(URI_A, true);
+         behaviour.dirty!.set(URI_A, false);
+         await notifyDirty(URI_A, false);
+         await waitFor(() => flips.length === 2);
+
+         // The re-open answers clean, and an edit lands before the watch, so
+         // no notification reports it.
+         behaviour.beforeWatch = uri => behaviour.dirty!.set(uri, true);
+         dropTransport();
+         await panel.connected();
+
+         expect(flips).toEqual([`${URI_A} true`, `${URI_A} false`, `${URI_A} true`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing when the restored answer is the last it was told', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]) };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.dirty!.set(URI_A, true);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1);
+
+         dropTransport();
+         await panel.connected();
+         await tick();
+
+         expect(flips).toEqual([`${URI_A} true`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client the restored answer when nothing reached it since its last open', async () => {
+      // The client last heard dirty before the close; the open after it
+      // answered clean to its caller alone, so what it heard says nothing now.
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]) };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.dirty!.set(URI_A, true);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1);
+         await panel.closeDocument({ uri: URI_A });
+         behaviour.dirty!.set(URI_A, false);
+         await panel.openDocument({ uri: URI_A });
+
+         behaviour.dirty!.set(URI_A, true);
+         dropTransport();
+         await panel.connected();
+
+         expect(flips).toEqual([`${URI_A} true`, `${URI_A} true`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('forgets what the client was told of a document once it closes', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]) };
+      const { connection, notifyDirty, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await notifyDirty(URI_A, true);
+         await waitFor(() => connection.toldDirty.has(URI_A));
+
+         await panel.closeDocument({ uri: URI_A });
+
+         expect(connection.toldDirty.has(URI_A)).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('forgets what the client was told of a document closed under another spelling of its URI', async () => {
+      const spelled = 'file:///C:/ws/a.x';
+      const canonical = 'file:///c%3A/ws/a.x';
+      const behaviour: ServerBehaviour = {
+         dirty: new Map([[canonical, true]]),
+         canonical: uri => (uri === spelled ? canonical : uri)
+      };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         const other = connection.createSession('other', 'other');
+         await other.openDocument({ uri: canonical });
+         await panel.openDocument({ uri: spelled });
+         await notifyDirty(canonical, true);
+         await waitFor(() => flips.length === 1);
+
+         await panel.closeDocument({ uri: spelled });
+         expect(connection.toldDirty.has(canonical)).toBe(false);
+
+         // A close leaves nothing to restore, so the other session's restore
+         // tells the client the state again.
+         dropTransport();
+         await other.connected();
+         expect(flips).toEqual([`${canonical} true`, `${canonical} true`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps a document restored whose dirty state the client throws on', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, true]]) };
+      const events = new DataEvents<ProbeElement>();
+      events.onDocumentDirtyChanged = () => {
+         throw new Error('listener failed');
+      };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, undefined, events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         dropTransport();
+         await panel.connected();
+         await waitFor(() => of(calls, 'open').length === 2);
+
+         // Still open: the next reconnect re-opens it once more.
+         dropTransport();
+         await panel.connected();
+         await waitFor(() => of(calls, 'open').length === 3);
+      } finally {
          dispose();
       }
    });

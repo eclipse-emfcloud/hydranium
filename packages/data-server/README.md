@@ -27,7 +27,9 @@ Installed by the server process that already composes
 - **Push notifications instead of polling:** `onDocumentUpdated` when a
   subscribed document reaches the configured build phase
   (`DataServerOptions.subscriptionPhase`, `DocumentState.Validated` by default),
-  `onDocumentSaved` on a separate channel, `onDocumentDeleted` on a third (a
+  `onDocumentSaved` on a separate channel, `onDocumentDirtyChanged` when a
+  subscribed document starts or stops differing from its file (every document
+  the head sends also carries its current `dirty`), `onDocumentDeleted` (a
   deleted document has no built state to carry, and the build-phase path never
   runs for one), `onDocumentsBuilt` once per build for the documents nobody
   watches — chiefly those rebuilt as a cascade, which no filesystem watcher can

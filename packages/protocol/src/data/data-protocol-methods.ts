@@ -66,6 +66,7 @@ export const REFERENCE_SERVER_PROTOCOL_METHODS = [
 export const DOCUMENT_CLIENT_PROTOCOL_METHODS = [
    'onDocumentUpdated',
    'onDocumentSaved',
+   'onDocumentDirtyChanged',
    'onDocumentDeleted',
    'onDocumentsBuilt'
 ] as const satisfies ReadonlyArray<keyof DocumentClientProtocol<TransferElement> & string>;

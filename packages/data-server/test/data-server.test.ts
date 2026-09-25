@@ -32,7 +32,7 @@ import {
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol
 } from '@hydranium/protocol/data';
-import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
+import { type FakeClock, makeCapturingDataClient, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import {
    IntegrityService,
@@ -389,23 +389,9 @@ describe('DataServer', () => {
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
 
          const savedEvents: { uri: string; sourceClientId: string }[] = [];
-         const localClient: DataClientProtocol<FakeRoot, FakeDiagnostic> = {
-            onDocumentUpdated(): void {
-               // not exercised by this test
-            },
-            onDocumentSaved(event): void {
-               savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
-            },
-            onDocumentDeleted(): void {
-               // not exercised
-            },
-            onDocumentsBuilt(): void {
-               // not exercised
-            },
-            onProjectsChanged(): void {
-               // not exercised
-            }
-         };
+         const { client: localClient } = makeCapturingDataClient<FakeRoot, FakeDiagnostic>({
+            onDocumentSaved: event => void savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId })
+         });
          const pair = makeDuplexConnectionPair();
          new TestDataServer(pair.left, bundle.services);
          const proxy = createRpcProxy<DataServerProtocol<FakeRoot, FakeDiagnostic>, DataClientProtocol<FakeRoot, FakeDiagnostic>>(
@@ -465,23 +451,9 @@ describe('DataServer', () => {
          bundle.documents.set(REAL, { $type: 'FakeRoot', name: 'initial' });
 
          const savedEvents: { uri: string; sourceClientId: string }[] = [];
-         const localClient: DataClientProtocol<FakeRoot, FakeDiagnostic> = {
-            onDocumentUpdated(): void {
-               /* not exercised */
-            },
-            onDocumentSaved(event): void {
-               savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
-            },
-            onDocumentDeleted(): void {
-               /* not exercised */
-            },
-            onDocumentsBuilt(): void {
-               /* not exercised */
-            },
-            onProjectsChanged(): void {
-               /* not exercised */
-            }
-         };
+         const { client: localClient } = makeCapturingDataClient<FakeRoot, FakeDiagnostic>({
+            onDocumentSaved: event => void savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId })
+         });
          const pair = makeDuplexConnectionPair();
          new TestDataServer(pair.left, bundle.services);
          const proxy = createRpcProxy<DataServerProtocol<FakeRoot, FakeDiagnostic>, DataClientProtocol<FakeRoot, FakeDiagnostic>>(
@@ -901,6 +873,55 @@ describe('DataServer', () => {
       });
    });
 
+   describe('dirty state', () => {
+      it('sends a dirty flip of a watched document, and none of one nobody on the connection watches', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         bundle.textDocuments.seedOpen(URI_B, 'name:b', 'other');
+         const { proxy, dirtyChanges, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'editor-1' });
+
+            bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
+            bundle.textDocuments.applyContentChange(URI_B, 'name:edited', 'other');
+            bundle.textDocuments.updateDiskBaseline(URI_A, 'name:edited');
+
+            await waitFor(() => dirtyChanges.length === 2);
+            expect(dirtyChanges).toEqual([
+               { uri: URI_A, dirty: true },
+               { uri: URI_A, dirty: false }
+            ]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it("stamps the store's answer on every document it answers with", async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         bundle.documents.set(URI_B, { $type: 'FakeRoot', name: 'b' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'editor-1' });
+            bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'editor-1' });
+            const updated = await proxy.updateModelDocument({
+               uri: URI_A,
+               clientId: 'editor-1',
+               model: { $type: 'FakeRoot', name: 'edited' },
+               basedOn: 'anything'
+            });
+            const read = await proxy.getModelDocument({ uri: URI_A });
+            const closed = await proxy.getModelDocument({ uri: URI_B });
+
+            expect([opened.dirty, updated.dirty, read.dirty, closed.dirty]).toEqual([false, true, true, false]);
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
    describe('revert-on-close broadcast', () => {
       it('broadcasts the rebuild after the LAST client closed an unsubscribed document, attributed to the revert author', async () => {
          const bundle = buildBundle();
@@ -1031,23 +1052,9 @@ describe('DataServer', () => {
          const removedSnapshot = { id: 'p0', referenceName: 'p0', version: '0.9.0', dependencies: [] as readonly string[] };
 
          const projectEvents: { project: { id: string }; reason: string }[] = [];
-         const localClient: DataClientProtocol<FakeRoot, FakeDiagnostic> = {
-            onDocumentUpdated(): void {
-               // not exercised by this test
-            },
-            onDocumentSaved(): void {
-               // not exercised by this test
-            },
-            onDocumentDeleted(): void {
-               // not exercised by this test
-            },
-            onDocumentsBuilt(): void {
-               // not exercised by this test
-            },
-            onProjectsChanged(event): void {
-               projectEvents.push({ project: { id: event.project.id }, reason: event.reason });
-            }
-         };
+         const { client: localClient } = makeCapturingDataClient<FakeRoot, FakeDiagnostic>({
+            onProjectsChanged: event => void projectEvents.push({ project: { id: event.project.id }, reason: event.reason })
+         });
          const pair = makeDuplexConnectionPair();
          new TestDataServer(pair.left, bundle.services);
          // Bind the local client's notification handlers inbound; the returned

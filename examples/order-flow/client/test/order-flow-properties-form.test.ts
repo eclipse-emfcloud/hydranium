@@ -11,7 +11,7 @@ import type { ResolvedMessage } from '@hydranium/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SetFieldOutcome } from '../src/data/order-flow-properties-model';
 import { PropertiesForm } from '../src/properties/properties-form';
-import { PROPERTIES_WRITE_FAILED } from '../src/properties/properties-messages';
+import { PROPERTIES_UNSAVED, PROPERTIES_WRITE_FAILED } from '../src/properties/properties-messages';
 
 /**
  * The form's failure path, driven without a DOM.
@@ -123,6 +123,10 @@ class TestableForm extends PropertiesForm {
       return this.status.textContent;
    }
 
+   unsaved(): StubElement {
+      return this.unsavedNote as unknown as StubElement;
+   }
+
    /** The wrapper drawn for `name`, so a test can read what was marked on it. */
    fieldOf(name: string): StubElement {
       const input = this.inputs.get(name) as unknown as StubElement | undefined;
@@ -152,6 +156,25 @@ function makeForm(setField: (name: string, value: string) => Promise<SetFieldOut
    });
    return { form, reported };
 }
+
+describe('PropertiesForm unsaved note', () => {
+   it('shows the note while the document is dirty, and hides it again', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      expect(form.unsaved().hidden).toBe(true);
+
+      form.setDirty(true);
+      expect(form.unsaved().hidden).toBe(false);
+      expect(form.unsaved().textContent).toBe(PROPERTIES_UNSAVED.text);
+      form.setDirty(false);
+
+      expect(form.unsaved().hidden).toBe(true);
+   });
+
+   it('is a status region, so a screen reader announces it when it appears', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      expect(form.unsaved().attributes.role).toBe('status');
+   });
+});
 
 describe('PropertiesForm write failures', () => {
    let failure: Error;

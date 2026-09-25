@@ -189,6 +189,7 @@ describe('DataServerProtocol — type contract', () => {
       const CLIENT_METHOD_COVERAGE: Record<keyof DocumentClientProtocol<FakeRoot>, true> = {
          onDocumentUpdated: true,
          onDocumentSaved: true,
+         onDocumentDirtyChanged: true,
          onDocumentDeleted: true,
          onDocumentsBuilt: true
       };

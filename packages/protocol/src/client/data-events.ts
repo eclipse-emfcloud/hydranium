@@ -12,6 +12,7 @@ import type {
    DataClientProtocol,
    ProjectsChangedEvent,
    TransferDocumentDeletedEvent,
+   TransferDocumentDirtyChangedEvent,
    TransferDocumentSavedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent
@@ -47,6 +48,7 @@ export class DataEvents<
 > implements DataClientProtocol<TTransfer, TDiagnostic, TProject> {
    protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>();
    protected readonly documentSavedEmitter = new Emitter<TransferDocumentSavedEvent<TTransfer, TDiagnostic>>();
+   protected readonly documentDirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
    protected readonly documentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
    protected readonly documentsBuiltEmitter = new Emitter<TransferDocumentsBuiltEvent>();
    protected readonly projectsChangedEmitter = new Emitter<ProjectsChangedEvent<TProject>>();
@@ -55,6 +57,8 @@ export class DataEvents<
    readonly onDidUpdateDocument: Event<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>> = this.documentUpdatedEmitter.event;
    /** A watched document was persisted to disk. */
    readonly onDidSaveDocument: Event<TransferDocumentSavedEvent<TTransfer, TDiagnostic>> = this.documentSavedEmitter.event;
+   /** A watched document's text started or stopped differing from its file. */
+   readonly onDidChangeDocumentDirty: Event<TransferDocumentDirtyChangedEvent> = this.documentDirtyChangedEmitter.event;
    /** A document's backing file was removed, watched or not. Any watch survives. */
    readonly onDidDeleteDocument: Event<TransferDocumentDeletedEvent> = this.documentDeletedEmitter.event;
    /** Documents built that nobody watches — re-read anything derived from them. */
@@ -72,6 +76,10 @@ export class DataEvents<
       this.documentSavedEmitter.fire(event);
    }
 
+   onDocumentDirtyChanged(event: TransferDocumentDirtyChangedEvent): void {
+      this.documentDirtyChangedEmitter.fire(event);
+   }
+
    onDocumentDeleted(event: TransferDocumentDeletedEvent): void {
       this.documentDeletedEmitter.fire(event);
    }
@@ -87,6 +95,7 @@ export class DataEvents<
    dispose(): void {
       this.documentUpdatedEmitter.dispose();
       this.documentSavedEmitter.dispose();
+      this.documentDirtyChangedEmitter.dispose();
       this.documentDeletedEmitter.dispose();
       this.documentsBuiltEmitter.dispose();
       this.projectsChangedEmitter.dispose();

@@ -190,7 +190,12 @@ describe('makeDataServerHarness — the capture arrays', () => {
          harness.pair.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}${method}`, updated(URI_ONE));
       }
       const total = (): number =>
-         harness.events.length + harness.saves.length + harness.deletions.length + harness.builds.length + harness.projectsChanges.length;
+         harness.events.length +
+         harness.saves.length +
+         harness.dirtyChanges.length +
+         harness.deletions.length +
+         harness.builds.length +
+         harness.projectsChanges.length;
       await waitFor(() => total() === DATA_CLIENT_PROTOCOL_METHODS.length);
 
       expect(total()).toBe(DATA_CLIENT_PROTOCOL_METHODS.length);

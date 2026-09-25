@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
-import type { DataServerProtocol, DiagnosticOf } from '../data';
+import type { DataServerProtocol, DiagnosticOf, TransferDocumentDirtyChangedEvent } from '../data';
 import { SessionClosedError } from '../errors';
 import type { SnapshotVersion } from '../model-service/based-on';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
@@ -108,6 +108,18 @@ export interface DataSessionHost<TTransfer extends TransferElement, TServer exte
    connected(): Promise<RpcProxy<TServer>>;
    /** Surface a failure no caller is waiting on, such as restoring a document after a reconnect. */
    reportError?(error: unknown, reported: ResolvedMessage): void;
+   /**
+    * Tell the connection's client the dirty state a restore read, unless it
+    * is what the client was last told of the URI since the URI's last open.
+    */
+   restoreDirty?(event: TransferDocumentDirtyChangedEvent): void;
+   /**
+    * Forget what the client was told of `uri`'s dirty state: an open just
+    * made answered its caller afresh, and the client heard none of it, or a
+    * close leaves nothing to restore. Forgetting a URI another session still
+    * has open costs at most one repeat of a state the client already has.
+    */
+   forgetDirty?(uri: string): void;
 }
 
 /**
@@ -140,8 +152,9 @@ export type DataSessionFactory<TTransfer extends TransferElement, TServer extend
  * otherwise reach the server after it, and fail as not open.
  *
  * After the connection drops, the session registers again under the same id,
- * re-opens and re-watches what it had open, and reports the documents whose
- * unsaved edits did not survive; see {@link restore}. The connection does this at
+ * re-opens and re-watches what it had open, tells the client of their dirty
+ * state where it changed, and reports the documents whose unsaved edits did
+ * not survive; see {@link restore}. The connection does this at
  * once for a session with documents open, and any session's next call does it
  * too.
  *
@@ -167,6 +180,12 @@ export class DataSession<
    protected readonly settleBeforeCloseMs: number = 10_000;
    /** URIs this session has open, re-opened after a reconnect. */
    protected readonly openUris = new Set<string>();
+   /**
+    * Per URI in {@link openUris}, the URI the server's last answer to its open
+    * or re-open named. The server keys its notifications by it, and so does
+    * the host's record of what its client was told.
+    */
+   protected readonly serverUris = new Map<string, string>();
    /**
     * Per URI, how many opens of it this session has under way. Such a URI
     * counts as open for {@link withOpenDocument}, which would otherwise close
@@ -296,6 +315,10 @@ export class DataSession<
          throw error;
       }
       this.openUris.add(uri);
+      this.serverUris.set(uri, document.uri);
+      // Keyed as the server keys its notifications, which may not be how the
+      // caller spelled the URI.
+      this.host.forgetDirty?.(document.uri);
       return document;
    }
 
@@ -310,8 +333,11 @@ export class DataSession<
       // Forgotten before the close is sent, so a reconnect in between does not
       // re-open a document the caller has closed; after the wait, so an open
       // of it that was still in flight does not record it again.
+      const serverUri = this.serverUris.get(args.uri) ?? args.uri;
       this.openUris.delete(args.uri);
+      this.serverUris.delete(args.uri);
       this.unsavedWrites.delete(args.uri);
+      this.host.forgetDirty?.(serverUri);
       const server = await this.connected();
       await server.closeModelDocument({ ...args, clientId: this.clientId });
    }
@@ -456,6 +482,7 @@ export class DataSession<
    detach(): void {
       this.detached = true;
       this.openUris.clear();
+      this.serverUris.clear();
       this.unsavedWrites.clear();
       if (!this.disposed) {
          this.disposed = true;
@@ -510,6 +537,11 @@ export class DataSession<
     * naming every document whose unsaved text is gone, whose record is then
     * dropped, and one per document that could not be re-opened, which is
     * forgotten.
+    *
+    * Each document's dirty state goes to the host too, read once the watch is
+    * in place: a flip while the connection was down, or between the re-open
+    * and the watch, reached no one, and the re-open's own answer misses the
+    * second.
     */
    protected async restore(server: RpcProxy<TServer>): Promise<void> {
       const lost: string[] = [];
@@ -517,6 +549,20 @@ export class DataSession<
          try {
             const document = await server.openModelDocument({ uri, clientId: this.clientId });
             await server.watchModelDocument({ uri, clientId: this.clientId });
+            if (this.openUris.has(uri)) {
+               this.serverUris.set(uri, document.uri);
+            }
+            // A failed read leaves the client's dirty state as it was; the
+            // document is restored all the same.
+            const current = await server.getModelDocument({ uri }).catch(() => undefined);
+            if (current?.dirty !== undefined) {
+               try {
+                  this.host.restoreDirty?.({ uri: current.uri, dirty: current.dirty });
+               } catch {
+                  // The client's listener failed, not the restore: the server
+                  // has the document open and watched, so it stays restored.
+               }
+            }
             const written = this.unsavedWrites.get(uri);
             if (written !== undefined && written !== document.version) {
                lost.push(uri);
@@ -524,6 +570,7 @@ export class DataSession<
             }
          } catch (error: unknown) {
             this.openUris.delete(uri);
+            this.serverUris.delete(uri);
             this.unsavedWrites.delete(uri);
             this.host.reportError?.(error, resolve(DATA_SESSION_RESTORE_FAILED, { uri, detail: describeError(error) }));
          }

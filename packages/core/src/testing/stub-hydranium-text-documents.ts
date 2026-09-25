@@ -13,7 +13,12 @@ import { Disposable, Emitter } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
 import { ClientSessionRegistry } from '../documents/client-session-registry.js';
-import type { ClientTextDocumentChangeEvent, HydraniumTextDocuments, LastOpenClosedEvent } from '../documents/hydranium-text-documents.js';
+import type {
+   ClientTextDocumentChangeEvent,
+   DocumentDirtyChangedEvent,
+   HydraniumTextDocuments,
+   LastOpenClosedEvent
+} from '../documents/hydranium-text-documents.js';
 
 /** Snapshot of an open document tracked by the stub. */
 export interface StubTextDocumentEntry {
@@ -31,7 +36,9 @@ export interface StubTextDocumentEntry {
  * `isOpenInAnyClient` / `isOpenInClient` / `isRevertPending` /
  * `openDocuments`), the push channel
  * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
- * the save / close notifications, and the client-session table
+ * the save / close notifications, the dirty state (`isDirty` /
+ * `onDidChangeDirty` / `updateDiskBaseline`, against a baseline {@link seedOpen}
+ * sets and a save that carries its text moves), and the client-session table
  * (`registerSession` / `closeSession` / `onDidCloseSession`), which is a real
  * `ClientSessionRegistry` — plus test-only helpers:
  *
@@ -80,6 +87,9 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'closeSession'
    | 'onDidCloseSession'
    | 'onDidCloseLastOpen'
+   | 'isDirty'
+   | 'onDidChangeDirty'
+   | 'updateDiskBaseline'
 > {
    /**
     * Stub-tailored read accessor. Returns just the surface the framework's
@@ -98,7 +108,7 @@ export interface StubHydraniumTextDocuments extends Pick<
    onDidSave(listener: (event: { document: { uri: string }; clientId: string }) => void): Disposable;
    /** Real-shaped close subscription — listener gets {@link ClientTextDocumentChangeEvent}. */
    onDidClose(listener: (event: ClientTextDocumentChangeEvent<TextDocument>) => void): Disposable;
-   /** Pre-populate an open document without firing change events. */
+   /** Pre-populate an open document without firing change events; `text` is also its disk baseline. */
    seedOpen(uri: string, text: string, clientId: string): void;
    /** Mark `uri` as open in the LSP textual language client (drives {@link isOpenInLanguageClient}). */
    seedOpenInLanguageClient(uri: string): void;
@@ -152,6 +162,23 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    const sessions = new ClientSessionRegistry();
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
    const lastOpenClosed = new Emitter<LastOpenClosedEvent>();
+   const baselines = new Map<string, string | undefined>();
+   const dirty = new Set<string>();
+   const dirtyChanged = new Emitter<DocumentDirtyChangedEvent>();
+   // As the real store: dirty while held with text other than the baseline,
+   // announced only when the answer changes.
+   const refreshDirty = (uri: string): void => {
+      const held = docs.get(uri);
+      const now = held !== undefined && held.text !== baselines.get(uri);
+      if (now !== dirty.has(uri)) {
+         if (now) {
+            dirty.add(uri);
+         } else {
+            dirty.delete(uri);
+         }
+         dirtyChanged.fire({ uri: key(uri), dirty: now });
+      }
+   };
 
    const stub: StubHydraniumTextDocuments = {
       get changes() {
@@ -186,6 +213,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          }
          docs.set(event.textDocument.uri, next);
          changes.push(next);
+         refreshDirty(event.textDocument.uri);
       },
       applyContentChange(uri, text, clientId) {
          const existing = docs.get(uri);
@@ -199,9 +227,13 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          const next: StubTextDocumentEntry = changed ? { uri, version: existing.version + 1, text, clientId } : existing;
          docs.set(uri, next);
          changes.push({ uri, version: next.version, text, clientId });
+         refreshDirty(uri);
          return next.version;
       },
       notifyDidSaveTextDocument(event, clientId) {
+         if (event.text !== undefined) {
+            stub.updateDiskBaseline(event.textDocument.uri, event.text);
+         }
          saves.push({ uri: event.textDocument.uri, clientId });
          for (const listener of saveListeners.slice()) {
             listener({ document: { uri: event.textDocument.uri }, clientId });
@@ -264,6 +296,18 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       get onDidCloseLastOpen() {
          return lastOpenClosed.event;
       },
+      isDirty(uri) {
+         return dirty.has(uri);
+      },
+      get onDidChangeDirty() {
+         return dirtyChanged.event;
+      },
+      updateDiskBaseline(uri, text) {
+         if (docs.has(uri)) {
+            baselines.set(uri, text);
+            refreshDirty(uri);
+         }
+      },
       openDocuments() {
          // From the registry that also answers `isOpenInClient`, which both
          // seeding channels feed, so the two never disagree about an open.
@@ -282,6 +326,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       seedOpen(uri, text, clientId) {
          sessions.addOpen(key(uri), clientId);
          docs.set(uri, { uri, version: 1, text, clientId });
+         baselines.set(uri, text);
       },
       seedOpenInLanguageClient(uri) {
          sessions.addOpen(key(uri), LANGUAGE_CLIENT_ID);
@@ -294,6 +339,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          const holder = docs.get(uri);
          if (holder && holder.clientId === clientId) {
             docs.delete(uri);
+            refreshDirty(uri);
          }
          const removed = sessions.removeOpen(key(uri), clientId);
          if (clientId === LANGUAGE_CLIENT_ID) {
@@ -314,6 +360,8 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          languageClientOpen.clear();
          appliedEdits.length = 0;
          staged.length = 0;
+         baselines.clear();
+         dirty.clear();
          saveListeners.length = 0;
          closeListeners.length = 0;
          applyEditHandler = () => ({ applied: true });
