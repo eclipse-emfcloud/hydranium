@@ -114,6 +114,103 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
    }
 }
 
+/**
+ * JSON-RPC code for {@link SessionClosedError}, beside {@link CONFLICT_ERROR_CODE}
+ * and for the same reason: the code survives reconstruction, the class does not.
+ */
+export const SESSION_CLOSED_ERROR_CODE = 1004;
+/** JSON-RPC code for {@link DocumentNotOpenError}. */
+export const DOCUMENT_NOT_OPEN_ERROR_CODE = 1005;
+/** JSON-RPC code for {@link DuplicateClientIdError}. */
+export const DUPLICATE_CLIENT_ID_ERROR_CODE = 1006;
+
+/**
+ * Thrown by every call on a client session after it ended, and by an open that
+ * was still in flight when its session ended.
+ *
+ * The message names the client id, so it is addressed to whoever composes the
+ * system rather than to an end user, and carries no message identity. A client
+ * recognises it after an RPC with {@link isSessionClosedError}.
+ */
+export class SessionClosedError extends ResponseError<{ readonly clientId: string }> {
+   /** `message` replaces the default sentence, for a caller that knows more than that the session is gone. */
+   constructor(clientId: string, message = `Client session ${clientId} is closed`) {
+      super(SESSION_CLOSED_ERROR_CODE, message, { clientId });
+      this.name = 'SessionClosedError';
+      // `ResponseError` resets the prototype to its own; see `ConflictError`.
+      Object.setPrototypeOf(this, SessionClosedError.prototype);
+   }
+
+   get clientId(): string {
+      return this.data!.clientId;
+   }
+}
+
+/**
+ * Thrown when a client session writes a document it does not have open.
+ *
+ * A session writes only what it has open, so this is the answer both to a write
+ * that never opened and to one whose open was closed underneath it — by the
+ * session itself, or by the document being deleted.
+ */
+export class DocumentNotOpenError extends ResponseError<{ readonly uri: string; readonly clientId: string }> {
+   constructor(uri: string, clientId: string) {
+      super(DOCUMENT_NOT_OPEN_ERROR_CODE, `Document ${uri} is not open in client session ${clientId}`, { uri, clientId });
+      this.name = 'DocumentNotOpenError';
+      Object.setPrototypeOf(this, DocumentNotOpenError.prototype);
+   }
+
+   get uri(): string {
+      return this.data!.uri;
+   }
+
+   get clientId(): string {
+      return this.data!.clientId;
+   }
+}
+
+/**
+ * Thrown when a client session is started under an id that is already live in
+ * the process, or that the framework reserves for itself.
+ *
+ * Ids are unique process-wide because the id is also the author label on every
+ * version and the key a client recognises its own echoes by; two participants
+ * sharing one would each take the other's writes for their own.
+ */
+export class DuplicateClientIdError extends ResponseError<{ readonly clientId: string }> {
+   constructor(clientId: string) {
+      super(DUPLICATE_CLIENT_ID_ERROR_CODE, `Client id ${clientId} is already in use`, { clientId });
+      this.name = 'DuplicateClientIdError';
+      Object.setPrototypeOf(this, DuplicateClientIdError.prototype);
+   }
+
+   get clientId(): string {
+      return this.data!.clientId;
+   }
+}
+
+/**
+ * Whether `error` is a {@link SessionClosedError}: by name in-process, by code
+ * after an RPC, where it arrives as a plain `ResponseError`.
+ */
+export function isSessionClosedError(error: unknown): error is SessionClosedError {
+   return hasErrorIdentity(error, 'SessionClosedError', SESSION_CLOSED_ERROR_CODE);
+}
+
+/** Whether `error` is a {@link DocumentNotOpenError}; see {@link isSessionClosedError}. */
+export function isDocumentNotOpenError(error: unknown): error is DocumentNotOpenError {
+   return hasErrorIdentity(error, 'DocumentNotOpenError', DOCUMENT_NOT_OPEN_ERROR_CODE);
+}
+
+/** Whether `error` is a {@link DuplicateClientIdError}; see {@link isSessionClosedError}. */
+export function isDuplicateClientIdError(error: unknown): error is DuplicateClientIdError {
+   return hasErrorIdentity(error, 'DuplicateClientIdError', DUPLICATE_CLIENT_ID_ERROR_CODE);
+}
+
+function hasErrorIdentity(error: unknown, name: string, code: number): boolean {
+   return error instanceof Error && (error.name === name || (error as Partial<ResponseError<unknown>>).code === code);
+}
+
 /** Marker substring present in every {@link ConflictError} message, used by
  *  {@link isConflictError} as a fallback when a transport re-wraps the error
  *  and drops the JSON-RPC code. */

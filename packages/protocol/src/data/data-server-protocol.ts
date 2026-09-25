@@ -21,11 +21,15 @@ import type {
    TransferDocumentUpdatedEvent
 } from './events';
 import type {
+   CloseSessionArgs,
+   CreateModelDocumentArgs,
+   CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
    TransferSaveDocumentArgs,
    WatchModelDocumentArgs,
-   TransferUpdateDocumentArgs
+   TransferUpdateDocumentArgs,
+   TransferUpdateDocumentsArgs
 } from './requests';
 
 /**
@@ -45,6 +49,49 @@ import type {
  * a pure single-document consumer can compose only this fragment.
  */
 export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic = TransferDiagnostic> {
+   /**
+    * Register `args.clientId` as a client session owned by this connection.
+    * Rejects with a `DuplicateClientIdError` code when the id is live anywhere
+    * in the server process or reserved by the framework.
+    *
+    * A request carrying a registered id acts as that session: it writes only
+    * what the session has open, failing with a `DocumentNotOpenError` code
+    * otherwise, and opens nothing implicitly; its open reads the file and takes
+    * no `languageId`, `version` or `text` seed. A request carrying an id that is
+    * not registered keeps the per-client behaviour described on each method.
+    * The session ends with {@link closeSession} or when the connection closes,
+    * and either closes every document it has open.
+    *
+    * A registration carrying the `resumeToken` an earlier registration of the
+    * same id carried ends that session first, from any connection, so a client
+    * whose connection dropped can register again before the server notices.
+    */
+   createSession(args: CreateSessionArgs): Promise<void>;
+
+   /**
+    * End a session this connection registered: close every document it has
+    * open, drop its watches, and free its id. A no-op for an id this
+    * connection did not register.
+    */
+   closeSession(args: CloseSessionArgs): Promise<void>;
+
+   /**
+    * Create a document with `args.text`, open for the session, and return it
+    * as {@link openModelDocument} does. It reaches disk with the first save.
+    * Fails when the file exists or any client has the URI open, and with a
+    * `SessionClosedError` code when `args.clientId` is not a session
+    * registered on this connection.
+    */
+   createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+
+   /**
+    * Write several documents the session has open, all or none: a conflict or
+    * a document not open fails the whole set before any text applies.
+    * Resolves to the documents in the order given. Only for a session
+    * registered on this connection.
+    */
+   updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]>;
+
    /**
     * Open a document for an editor session and return its current state.
     * Registers `(uri, clientId)` with the multi-client document manager

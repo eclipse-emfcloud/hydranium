@@ -23,9 +23,11 @@ interface StubCalls {
    getModelDocument: Array<{ uri: string }>;
    saveModelDocument: TransferSaveDocumentArgs<FakeRoot>[];
    updateModelDocument: TransferUpdateDocumentArgs<FakeRoot>[];
+   /** The document calls in arrival order, as `method clientId uri`. */
+   sequence: string[];
 }
 
-function makeStubProxy(calls: StubCalls): DataServerProtocol<FakeRoot> {
+function makeStubProxy(calls: StubCalls, options: { failSave?: boolean; failClose?: boolean } = {}): DataServerProtocol<FakeRoot> {
    return {
       async getModelDocument(args) {
          calls.getModelDocument.push(args);
@@ -37,13 +39,29 @@ function makeStubProxy(calls: StubCalls): DataServerProtocol<FakeRoot> {
       },
       async saveModelDocument(args) {
          calls.saveModelDocument.push(args);
+         calls.sequence.push(`save ${args.clientId} ${args.uri}`);
+         if (options.failSave) {
+            throw new Error('disk refused');
+         }
          return TransferDocument.create<FakeRoot>(args.uri, 1, {
             $type: 'FakeRoot',
             name: typeof args.model === 'string' ? args.model : 'structured'
          });
       },
-      openModelDocument: () => Promise.reject(new Error('not exercised')),
-      closeModelDocument: () => Promise.reject(new Error('not exercised')),
+      async openModelDocument(args) {
+         calls.sequence.push(`open ${args.clientId} ${args.uri} ${args.text ?? ''}`);
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' });
+      },
+      async closeModelDocument(args) {
+         calls.sequence.push(`close ${args.clientId} ${args.uri}`);
+         if (options.failClose) {
+            throw new Error('close refused');
+         }
+      },
+      createSession: () => Promise.reject(new Error('not exercised')),
+      closeSession: () => Promise.reject(new Error('not exercised')),
+      createModelDocument: () => Promise.reject(new Error('not exercised')),
+      updateModelDocuments: () => Promise.reject(new Error('not exercised')),
       watchModelDocument: () => Promise.reject(new Error('not exercised')),
       unwatchModelDocument: () => Promise.reject(new Error('not exercised')),
       getProjects: () => Promise.reject(new Error('not exercised')),
@@ -53,7 +71,7 @@ function makeStubProxy(calls: StubCalls): DataServerProtocol<FakeRoot> {
 }
 
 function emptyCalls(): StubCalls {
-   return { getModelDocument: [], saveModelDocument: [], updateModelDocument: [] };
+   return { getModelDocument: [], saveModelDocument: [], updateModelDocument: [], sequence: [] };
 }
 
 describe('runQuery', () => {
@@ -91,6 +109,49 @@ describe('runSave', () => {
       expect(written).toHaveLength(1);
       const parsed = JSON.parse(written[0]);
       expect(parsed.root.name).toBe('name:literal');
+   });
+
+   it('opens the document with the content before saving, and closes it afterwards, also when the save fails', async () => {
+      // Opened with the content as its seed, so a file that does not exist yet
+      // is created from it rather than read from disk.
+      const saved = emptyCalls();
+      await runSave({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/A.fake',
+         content: 'name:literal',
+         write: () => undefined,
+         __proxyForTest: makeStubProxy(saved)
+      });
+      const failed = emptyCalls();
+      await expect(
+         runSave({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            content: 'name:literal',
+            write: () => undefined,
+            __proxyForTest: makeStubProxy(failed, { failSave: true })
+         })
+      ).rejects.toThrow('disk refused');
+
+      const expected = [
+         'open hydranium-cli file:///workspace/A.fake name:literal',
+         'save hydranium-cli file:///workspace/A.fake',
+         'close hydranium-cli file:///workspace/A.fake'
+      ];
+      expect(saved.sequence).toEqual(expected);
+      expect(failed.sequence).toEqual(expected);
+   });
+
+   it("reports a failed save's error, not the failing close after it", async () => {
+      await expect(
+         runSave({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            content: 'name:literal',
+            write: () => undefined,
+            __proxyForTest: makeStubProxy(emptyCalls(), { failSave: true, failClose: true })
+         })
+      ).rejects.toThrow('disk refused');
    });
 
    it('reads content from @<file> via the injected reader', async () => {

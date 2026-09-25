@@ -144,18 +144,16 @@ lifecycle to a multi-client scenario:
   URIs then receive the normal disk-backed close rebuild; non-file URIs remain
   indexed for adopter-controlled lifecycle handling.
 
-Data-server clients pair an `openModelDocument` hold with a
-`watchModelDocument` subscription when they need streamed build events. Closing
-the document releases both the hold and its matching watch. A session disposing
-while its connection remains usable sends best-effort closes for its holds; a
-connection shutdown is drained by the server itself, so teardown does not send
-RPC over the closing wire.
+A data-server client's `DataSession` is a client session registered over its
+connection (see [Client sessions](client-sessions.md)). It pairs an
+`openModelDocument` with a `watchModelDocument` subscription, and closing the
+document releases both. Disposing the session ends it on the server, which
+closes everything it has open; a connection shutdown ends every session on it
+from the server side, so teardown does not send RPC over the closing wire.
 
-These operations have deliberate failure semantics. If an open snapshot fails,
-the newly acquired hold is released; if that cleanup fails, it remains recorded
-for connection teardown to retry. If watch registration fails, the session rolls
-back the open it just acquired. A failed close stays tracked until a later retry,
-so a transient transport failure does not turn into an unowned server hold.
+If an open's snapshot fails, the open it made is closed again. If watch
+registration fails, the session closes the document it just opened. A close
+that fails leaves the document open until the session ends.
 
 Saving is a separate boundary: [`ModelService.save`](../../packages/core/src/langium/model-service/model-service.ts)
 builds through the update path, then

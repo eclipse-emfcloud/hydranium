@@ -27,14 +27,13 @@ import { requireElement } from './dom.js';
 import { pageTranslations } from './page-nls.js';
 
 /**
- * This panel's identity on the data head.
- *
- * Distinct from the id the page's own reports use, because the server keys every
- * hold and watch per `(uri, clientId)` and matches an inbound update against it
- * to decide whether the change is this participant's own echo. Two participants
- * sharing one id read each other's writes as their own and ignore them.
+ * The label of this panel's session on the data head. `createSession` mints the
+ * id from it, so the panel's id differs from the page's own session's: the
+ * server keys every open and watch per `(uri, clientId)` and matches an inbound
+ * update against it to decide whether the change is this participant's own
+ * echo.
  */
-export const PROPERTIES_CLIENT_ID = 'order-flow-browser-properties';
+export const PROPERTIES_SESSION_LABEL = 'order-flow-browser-properties';
 
 /**
  * The transfer root, left at the framework's own bound.

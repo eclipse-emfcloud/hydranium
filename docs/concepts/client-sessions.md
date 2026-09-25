@@ -43,6 +43,7 @@ before `newSession` runs, so an override cannot skip either.
 | `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
 | `create(uri, text)` | Create a document with `text` and open it; fails if the file exists or any client, the session included, has the URI open |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
+| `updateAll({ updates })` | Write several documents the session has open, all or none |
 | `close(uri)` | Close this session's open of `uri` |
 | `withOpen(uri, fn)` | Open, run `fn`, and close again when `fn` settles, unless the session already had `uri` open |
 | `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
@@ -92,10 +93,139 @@ that closes the document while it is being built gets `DocumentNotOpenError`,
 and nothing is written. Once the text is taken, the write completes even if the
 session closes the document or ends.
 
+## `updateAll`
+
+`updateAll({ updates })` writes several documents in one step. Every document is
+serialised first; then the open check and the `basedOn` gate run for every
+document and every text applies, in one synchronous step. A `ConflictError` or
+`DocumentNotOpenError` for any document of the set is thrown before any text
+applies, so a set never ends half-written. It resolves to the rebuilt
+documents in the order given, and refuses a set that names one document twice.
+`ModelService.updateAll({ clientId, updates })` does the same for any client
+id: it opens nothing, so the id must have every URI open.
+
+The step relies on `AstDocumentManager.update` applying its text before its
+first await, as the framework's does. An override that awaits before applying
+lets another write land between two documents of the set.
+
+## Writes by a client id that is not a session
+
 `ModelService.update` and `ModelService.save` called with a client id that is
 not a live session keep their older behaviour. They open the document for that
 id first, and create it from the payload when no file exists; nothing closes
 that open until the caller does.
+
+## Errors on the wire
+
+`SessionClosedError`, `DocumentNotOpenError` and `DuplicateClientIdError` are
+defined in `@hydranium/protocol` and re-exported from `@hydranium/core`. Like
+`ConflictError`, each is a JSON-RPC `ResponseError` with its own code
+(`SESSION_CLOSED_ERROR_CODE`, `DOCUMENT_NOT_OPEN_ERROR_CODE`,
+`DUPLICATE_CLIENT_ID_ERROR_CODE`) and its fields in `data`, since the class
+does not survive the trip to a client and the code, message and data do. A
+client recognises them with
+`isSessionClosedError`, `isDocumentNotOpenError` and `isDuplicateClientIdError`,
+never with `instanceof`.
+
+## Over the data head
+
+A data-server connection registers sessions with `createSession({ clientId,
+label })`, which fails with the `DuplicateClientIdError` code for an id live
+anywhere in the server process. The one exception is `resumeToken`: a
+registration carrying the token an earlier registration of the same id carried
+ends that session, as its connection closing would, and registers the id
+afresh. It lets a client whose connection dropped register again before the
+server has noticed the drop. The token guards against colliding with that
+session; it is not a secret, since the wire carries no authentication, and a
+takeover ends the old session even when its connection is still alive.
+
+The session belongs to the connection: a request carrying its id acts as that
+session, so its `updateModelDocument` and `saveModelDocument` write only what
+it has open and open nothing. `openModelDocument` opens for the session,
+keeping the request's `options` as the open's options; a session's open takes
+no `languageId`, `version` or `text` seed: it reads the file, or joins the text
+another client already has open.
+`closeModelDocument` closes the session's open and its watch.
+
+`createModelDocument({ uri, clientId, text })` and
+`updateModelDocuments({ clientId, updates })` exist for sessions only; they are
+`create` and `updateAll` over the wire, and fail with the `SessionClosedError`
+code, and a message saying so, for an id the connection never registered.
+
+`closeSession({ clientId })` ends the session: it closes everything the session
+has open, drops its watches on the connection, and frees the id. When the
+connection closes, every session it registered ends the same way. Either way a
+later request under the id from that connection fails rather than opening
+anything, until the connection registers the id again. A request carrying an
+id that is not a registered session keeps the per-client behaviour described
+above.
+
+## `DataSession`
+
+On the client, `DataConnection.createSession(label?, clientId?)` returns a
+`DataSession`, the client side of such a session. It is synchronous: the id
+defaults to the label, a `#` and a random UUID, the registration is sent at
+once, and every call of the session waits for it. When the server refuses the
+registration, every call of the session rejects with its error. A fixed id is
+taken as given; the framework's reserved ids and an id another live session on
+the connection holds are refused at once.
+
+<!-- snippet-preamble
+import type { TransferElement } from '@hydranium/protocol';
+import type { DataConnection } from '@hydranium/protocol/client';
+declare const connection: DataConnection<TransferElement>;
+declare const uri: string;
+declare const model: string;
+-->
+
+```ts
+const form = connection.createSession('form');
+await form.withOpenDocument({ uri }, opened => form.saveDocument({ uri, model, basedOn: opened.version }));
+```
+
+| Member | Meaning |
+| --- | --- |
+| `openDocument(args)` | Open and watch the document, in that order, returning the opened snapshot |
+| `createDocument({ uri, text })` | Create a document open and watched for the session |
+| `updateDocument(args)` / `saveDocument(args)` | Write, or write and persist, a document the session has open |
+| `updateDocuments({ updates })` | Write several documents the session has open, all or none |
+| `closeDocument(args)` | Close the document and its watch |
+| `withOpenDocument(args, fn)` | Open, run `fn` with the snapshot, and close again, unless the session already had the document open |
+| `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
+| `dispose()` | End the session on the server, which closes everything it has open |
+| `reconnect()` | After the connection dropped, register again and restore now rather than on the next call; the connection calls it for every session with documents open |
+
+`closeDocument` and `dispose` first wait for the session's calls still in
+flight on the document, or on any document for `dispose`, up to ten seconds, so
+a save sent just before a close reaches the server first. A client that
+registers a session without `DataSession` and sends a close without awaiting
+its save gets the `DocumentNotOpenError` code for the save.
+
+When the connection drops, the connection registers every session with
+documents open again at once, under the same id and with the resume token the
+session has kept since it was created, so the server ends the old session if
+it has not noticed the drop yet. A session with nothing open registers again
+on its next call. The session then re-opens and re-watches every document it
+had open. It does not send its unsaved edits again:
+
+- A document whose re-opened version is the version the session's last write
+  was answered with still holds that write, and nothing is reported.
+- Any other version means the document's version moved on since the
+  session's last unsaved write: another client edited it, even while the
+  session was still connected, the server reverted it to disk when the
+  session's open closed as the document's last, or the server restarted. The
+  session reports these documents once, through the connection's error sink,
+  with the message `DATA_SESSION_UNSAVED_LOST`, and forgets their unsaved
+  edits; they stay open.
+
+A document that cannot be re-opened is reported with the message
+`DATA_SESSION_RESTORE_FAILED`, and forgotten. Where the server reverts a
+document on its last close, it does so at once on a lost connection too, so a
+session that was a document's only client loses its unsaved edits in any
+reconnect, and is told so.
+
+To hand out a subclass of `DataSession`, pass `sessionFactory` in the
+connection's options.
 
 ## Disk writes
 

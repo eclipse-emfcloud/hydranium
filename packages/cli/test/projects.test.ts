@@ -25,6 +25,10 @@ function makeStubProxy(
    projects: ReadonlyArray<{ id: string; referenceName: string; version?: string; dependencies?: readonly string[] }>
 ): DataServerProtocol<FakeRoot> {
    return {
+      createSession: () => Promise.reject(new Error('not exercised')),
+      closeSession: () => Promise.reject(new Error('not exercised')),
+      createModelDocument: () => Promise.reject(new Error('not exercised')),
+      updateModelDocuments: () => Promise.reject(new Error('not exercised')),
       openModelDocument: () => Promise.reject(new Error('not exercised')),
       closeModelDocument: () => Promise.reject(new Error('not exercised')),
       getModelDocument: () => Promise.reject(new Error('not exercised')),

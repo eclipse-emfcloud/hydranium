@@ -64,7 +64,8 @@ const URI_A = 'file:///a.x';
 
 async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Root, WidenedServer>): Promise<void> {
    // Accepted: the adopter's own field reaches the wrapper it was declared for.
-   const opened = await widened.openDocument({ uri: URI_A, extra: 'open-field' });
+   // Not on open, which takes only the URI and the open's options.
+   const opened = await widened.openDocument({ uri: URI_A, options: { mode: 'compact' } });
    await widened.closeDocument({ uri: URI_A, extra: 'close-field' });
    await widened.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' });
 
@@ -74,12 +75,12 @@ async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Roo
    void ruleId;
 
    // Accepted: the default instantiation still takes the framework's own fields.
-   await plain.openDocument({ uri: URI_A, languageId: 'plaintext' });
    await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: asSnapshotVersion(1) });
 
-   // @ts-expect-error the default server declares no `extra`, so reading the
-   // arguments off the server must not have loosened them into taking anything
-   await plain.openDocument({ uri: URI_A, extra: 'open-field' });
+   // @ts-expect-error a session's open reads the file, so it takes no seed
+   await plain.openDocument({ uri: URI_A, languageId: 'plaintext' });
+   // @ts-expect-error nor an adopter's open field, which the server's session path ignores
+   await widened.openDocument({ uri: URI_A, extra: 'open-field' });
    // @ts-expect-error same, on the save path. `basedOn` is supplied so the only
    // thing wrong with this call is `extra` — a missing required field would
    // satisfy the directive too, and it cannot report which error it absorbed.

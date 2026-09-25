@@ -21,6 +21,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+   type CloseSessionArgs,
+   type CreateModelDocumentArgs,
+   type CreateSessionArgs,
+   type TransferUpdateDocumentsArgs,
    DATA_SERVER_PATH,
    DATA_SERVER_PROTOCOL_METHODS,
    DATA_SERVER_WIRE_PREFIX,
@@ -62,6 +66,20 @@ function makeDocument(uri: string, root: FakeRoot): TransferDocument<FakeRoot> {
  */
 function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
    return {
+      async createSession(_args: CreateSessionArgs) {
+         // No registry in the fake: every id is a session.
+      },
+      async closeSession(_args: CloseSessionArgs) {
+         // Counterpart to createSession — no-op in the fake.
+      },
+      async createModelDocument(args: CreateModelDocumentArgs) {
+         return makeDocument(args.uri, FakeRoot.make(args.text));
+      },
+      async updateModelDocuments(args: TransferUpdateDocumentsArgs<FakeRoot>) {
+         return args.updates.map(update =>
+            makeDocument(update.uri, typeof update.model === 'string' ? FakeRoot.make(update.model) : update.model)
+         );
+      },
       async openModelDocument(args: OpenModelArgs) {
          return makeDocument(args.uri, FakeRoot.make('opened'));
       },

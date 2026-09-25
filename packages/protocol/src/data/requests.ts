@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { TransferSaveArgs, TransferUpdateArgs } from '../model-service/args';
+import type { TransferSaveArgs, TransferUpdateAllArgs, TransferUpdateArgs } from '../model-service/args';
 
 /** Get the current state of a single document. The server returns the latest built version. */
 export interface GetModelDocumentArgs {
@@ -50,6 +50,40 @@ export type TransferUpdateDocumentArgs<TTransfer> = TransferUpdateArgs<TTransfer
 
 /** Persist a document to disk. Wire-side projection of {@link TransferSaveArgs}. */
 export type TransferSaveDocumentArgs<TTransfer> = TransferSaveArgs<TTransfer>;
+
+/** Register a client session on the connection. */
+export interface CreateSessionArgs {
+   /** The session's id, minted by the client; unique in the server process while the session is live. */
+   clientId: string;
+   /** What the participant is; kept as the server session's `label`. */
+   label?: string;
+   /**
+    * A token the client keeps for the session's lifetime. It is no secret: the
+    * wire carries no authentication. A later `createSession` for the same id
+    * carrying the same token, from any connection, ends the session it names
+    * and registers the id afresh, so a client whose connection dropped before
+    * the server noticed can register again. Without it the id stays refused
+    * until the server notices.
+    */
+   resumeToken?: string;
+}
+
+/** End a client session registered on the connection. */
+export interface CloseSessionArgs {
+   clientId: string;
+}
+
+/** Create a document that exists nowhere yet, open for the session creating it. */
+export interface CreateModelDocumentArgs {
+   uri: string;
+   /** A live session registered on the connection. */
+   clientId: string;
+   /** The document's initial content; it reaches disk with the first save. */
+   text: string;
+}
+
+/** Write several documents a session has open, all or none. Wire-side projection of {@link TransferUpdateAllArgs}. */
+export type TransferUpdateDocumentsArgs<TTransfer> = TransferUpdateAllArgs<TTransfer>;
 
 /**
  * Identifies a per-document watch on the data server. Shared by both

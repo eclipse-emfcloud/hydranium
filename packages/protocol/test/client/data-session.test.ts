@@ -68,6 +68,8 @@ function echoingServer(connection: MessageConnection): Record<string, unknown[]>
    };
    const target = {
       waitForReady: async (): Promise<void> => undefined,
+      createSession: async (): Promise<void> => undefined,
+      closeSession: async (): Promise<void> => undefined,
       openModelDocument: record('open'),
       watchModelDocument: record('watch'),
       closeModelDocument: record('close'),
@@ -77,7 +79,16 @@ function echoingServer(connection: MessageConnection): Record<string, unknown[]>
    bindRpcMethods(
       connection,
       target,
-      ['waitForReady', 'openModelDocument', 'watchModelDocument', 'closeModelDocument', 'updateModelDocument', 'saveModelDocument'],
+      [
+         'waitForReady',
+         'createSession',
+         'closeSession',
+         'openModelDocument',
+         'watchModelDocument',
+         'closeModelDocument',
+         'updateModelDocument',
+         'saveModelDocument'
+      ],
       { methodNamespace: DATA_SERVER_WIRE_PREFIX }
    );
    return received;
@@ -103,25 +114,10 @@ function harness<TServer extends DataServerProtocol<ProbeElement, DiagnosticOf<T
 }
 
 describe('DataSession over a widened server', () => {
-   it('carries an adopter open field through to the wire', async () => {
-      const { connection, received, dispose } = harness<WidenedServer>();
-      try {
-         const panel = connection.createSession('panel');
-
-         await panel.openDocument({ uri: URI_A, extra: 'open-field' });
-
-         expect(received.open).toEqual([{ uri: URI_A, clientId: 'panel', extra: 'open-field' }]);
-         // The order the wrapper exists for survives the widening.
-         expect(received.watch).toEqual([{ uri: URI_A, clientId: 'panel' }]);
-      } finally {
-         dispose();
-      }
-   });
-
    it('carries an adopter save field through to the wire', async () => {
       const { connection, received, dispose } = harness<WidenedServer>();
       try {
-         const panel = connection.createSession('panel');
+         const panel = connection.createSession('panel', 'panel');
 
          await panel.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' });
 
@@ -136,7 +132,7 @@ describe('DataSession over a widened server', () => {
    it('carries an adopter close field through to the wire', async () => {
       const { connection, received, dispose } = harness<WidenedServer>();
       try {
-         const panel = connection.createSession('panel');
+         const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
 
          await panel.closeDocument({ uri: URI_A, extra: 'close-field' });
@@ -150,7 +146,7 @@ describe('DataSession over a widened server', () => {
    it('stamps its own clientId on a write carrying an adopter field', async () => {
       const { connection, received, dispose } = harness<WidenedServer>();
       try {
-         const panel = connection.createSession('panel');
+         const panel = connection.createSession('panel', 'panel');
 
          await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: 'anything' });
 

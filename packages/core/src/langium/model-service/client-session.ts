@@ -7,7 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type MaybePromise, type TransferElement, type TransferSaveArgs, type TransferUpdateArgs } from '@hydranium/protocol';
+import {
+   type MaybePromise,
+   type TransferElement,
+   type TransferSaveArgs,
+   type TransferUpdateAllArgs,
+   type TransferUpdateArgs
+} from '@hydranium/protocol';
 import { type AstNode, UriUtils } from '@hydranium/langium';
 import { type CancellationToken } from 'vscode-languageserver';
 import { type AstDocument } from '../../documents/ast-document-manager.js';
@@ -58,6 +64,15 @@ export interface ClientSession<
     */
    create(uri: string, text: string): Promise<void>;
    update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   /**
+    * Write several documents this session has open, all or none: a
+    * `ConflictError` or `DocumentNotOpenError` for any of them is thrown before
+    * any text applies. Resolves to the rebuilt documents, in the order given.
+    */
+   updateAll(
+      args: Omit<TransferUpdateAllArgs<TTransfer>, 'clientId'>,
+      cancelToken?: CancellationToken
+   ): Promise<AstDocument<TAst, TDiagnostic>[]>;
    /** Write `args.model` as {@link update} does, then persist the document. */
    save(args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    /** Close this session's open of `uri`, at once. A no-op when it does not have `uri` open. */
@@ -120,6 +135,14 @@ export class DefaultClientSession<
    update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.modelService.update({ ...args, clientId: this.clientId }, cancelToken);
+   }
+
+   updateAll(
+      args: Omit<TransferUpdateAllArgs<TTransfer>, 'clientId'>,
+      cancelToken?: CancellationToken
+   ): Promise<AstDocument<TAst, TDiagnostic>[]> {
+      this.assertLive();
+      return this.modelService.updateAll({ ...args, clientId: this.clientId }, cancelToken);
    }
 
    save(args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {

@@ -35,13 +35,15 @@
 import { flakyNetworkControlClient } from '@hydranium/core/testing/playwright';
 import { expect, test } from '@playwright/test';
 import { type TheiaApp, TheiaAppLoader, TheiaWorkspace } from '@theia/playwright';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { openPropertiesPanel, PROPERTIES_PANEL as PANEL, selectFile } from '../e2e/order-flow-app.mjs';
 import { BACKEND_LOG, CONTROL_URL } from './reconnect-ports.mjs';
 
 const WORKSPACE_SOURCE = path.resolve(import.meta.dirname, '..', '..', '..', 'workspace');
 const PROCESS_FILE = 'orders/fulfillment.process';
+const DOMAIN_FILE = 'orders/orders.domain';
+const OTHER_PROCESS_FILE = 'orders/returns.process';
 
 const proxy = flakyNetworkControlClient(CONTROL_URL);
 
@@ -137,6 +139,51 @@ test.describe.serial('An order-flow model survives a reconnect', () => {
 
       await expectWriteToReachServer('AfterStaleSocketReaped');
       await repair();
+   });
+
+   test('the panel follows a change made elsewhere after a reconnect, with no action of its own', async () => {
+      // The panel only watches, so it hears the change only if its watch
+      // outlived the outage. This outage keeps the data channel, so the watch
+      // survives on it; a lost channel, which the panel's session has to be
+      // restored from, is not exercised here. The change is to the domain file
+      // a process references, made on disk: renaming the entity breaks the
+      // process's reference, and only a watcher of the process hears that.
+      //
+      // A process the panel never wrote. A dependent's rebuild is reported as
+      // authored by whoever wrote its current version, so for the process the
+      // earlier steps edited the panel would take the report for its own echo
+      // and ignore it, reconnect or not.
+      await selectFile(app, OTHER_PROCESS_FILE);
+      await expect(app.page.locator(`${PANEL} input#field-name`)).toHaveValue('Returns', { timeout: 60_000 });
+      expect(await proxy.break()).toContain('broken');
+      await waitForBackendReachable();
+      const domain = path.join(app.workspace.path, DOMAIN_FILE);
+      const original = readFileSync(domain, 'utf-8');
+      const broken = original.replace('entity Order {', 'entity RenamedAfterReconnect {');
+      const diagnostics = app.page.locator(`${PANEL} .diagnostics li`);
+
+      try {
+         // The restore runs once the channel is back, which the test cannot
+         // observe, and a change made before the panel watches again is never
+         // reported to it. So the change is toggled until the panel reports
+         // it: each toggle changes the process's diagnostics, which is what a
+         // rebuild has to do to be reported at all.
+         let breakNext = true;
+         await expect
+            .poll(
+               async () => {
+                  writeFileSync(domain, breakNext ? broken : original);
+                  breakNext = !breakNext;
+                  await app.page.waitForTimeout(2_000);
+                  return (await diagnostics.allTextContents()).some(text => text.includes('Order'));
+               },
+               { timeout: 60_000, intervals: [0] }
+            )
+            .toBe(true);
+      } finally {
+         writeFileSync(domain, original);
+      }
+      await expect(diagnostics).toHaveCount(0, { timeout: 60_000 });
    });
 
    test('the server refused the stale socket rather than acting on it', async () => {

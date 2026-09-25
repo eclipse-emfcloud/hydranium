@@ -9,7 +9,21 @@
 
 import { describe, expect, it } from 'vitest';
 import { ResponseError } from 'vscode-jsonrpc';
-import { CONFLICT_ERROR_CODE, ConflictError, STALE_BASED_UPDATE, isConflictError } from '../src/errors';
+import {
+   CONFLICT_ERROR_CODE,
+   ConflictError,
+   DOCUMENT_NOT_OPEN_ERROR_CODE,
+   DUPLICATE_CLIENT_ID_ERROR_CODE,
+   DocumentNotOpenError,
+   DuplicateClientIdError,
+   SESSION_CLOSED_ERROR_CODE,
+   STALE_BASED_UPDATE,
+   SessionClosedError,
+   isConflictError,
+   isDocumentNotOpenError,
+   isDuplicateClientIdError,
+   isSessionClosedError
+} from '../src/errors';
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
 
 describe('ConflictError', () => {
@@ -66,6 +80,62 @@ describe('ConflictError', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
       expect(error).toBeInstanceOf(ResponseError);
    });
+});
+
+describe('client session errors', () => {
+   const cases = [
+      {
+         name: 'SessionClosedError',
+         make: () => new SessionClosedError('form#1'),
+         code: SESSION_CLOSED_ERROR_CODE,
+         guard: isSessionClosedError,
+         data: { clientId: 'form#1' }
+      },
+      {
+         name: 'DocumentNotOpenError',
+         make: () => new DocumentNotOpenError('file:///a.x', 'form#1'),
+         code: DOCUMENT_NOT_OPEN_ERROR_CODE,
+         guard: isDocumentNotOpenError,
+         data: { uri: 'file:///a.x', clientId: 'form#1' }
+      },
+      {
+         name: 'DuplicateClientIdError',
+         make: () => new DuplicateClientIdError('form#1'),
+         code: DUPLICATE_CLIENT_ID_ERROR_CODE,
+         guard: isDuplicateClientIdError,
+         data: { clientId: 'form#1' }
+      }
+   ] as const;
+
+   it('gives each a distinct code outside the JSON-RPC reserved range and apart from the conflict code', () => {
+      const codes = [CONFLICT_ERROR_CODE, ...cases.map(entry => entry.code)];
+      expect(new Set(codes).size).toBe(codes.length);
+      for (const code of codes) {
+         expect(code < -32768 || code > -32000).toBe(true);
+      }
+   });
+
+   for (const entry of cases) {
+      it(`${entry.name} carries its code, name and fields on the JSON-RPC envelope`, () => {
+         const error = entry.make();
+         expect(error).toBeInstanceOf(ResponseError);
+         expect(error.code).toBe(entry.code);
+         expect(error.name).toBe(entry.name);
+         expect(error.data).toEqual(entry.data);
+         for (const [field, value] of Object.entries(entry.data)) {
+            expect((error as unknown as Record<string, unknown>)[field]).toBe(value);
+         }
+      });
+
+      it(`${entry.name} is recognised in-process and after reconstruction, and nothing else is`, () => {
+         expect(entry.guard(entry.make())).toBe(true);
+         // What a client holds after an RPC: a plain ResponseError with the code.
+         expect(entry.guard(new ResponseError(entry.code, 'transport-wrapped', entry.data))).toBe(true);
+         expect(entry.guard(new ConflictError('file:///a.x', 1, 2))).toBe(false);
+         expect(entry.guard(new Error('boom'))).toBe(false);
+         expect(entry.guard(undefined)).toBe(false);
+      });
+   }
 });
 
 describe('isConflictError', () => {

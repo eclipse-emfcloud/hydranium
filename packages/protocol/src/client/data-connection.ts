@@ -19,11 +19,14 @@ import {
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
-import { DataSession } from './data-session';
+import { DataSession, type DataSessionFactory } from './data-session';
 import { RpcConnection, type RpcConnectionLifecycle } from './rpc-connection';
 
 /** Options for {@link DataConnection}. */
-export interface DataConnectionOptions extends RpcConnectionLifecycle {
+export interface DataConnectionOptions<
+   TTransfer extends TransferElement = TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> extends RpcConnectionLifecycle {
    /**
     * Wire namespace the server is addressed under. Defaults to the
     * framework's {@link DATA_SERVER_WIRE_PREFIX}, which is what an unmodified
@@ -32,10 +35,16 @@ export interface DataConnectionOptions extends RpcConnectionLifecycle {
     * "Unhandled method" rather than failing at wire-up.
     */
    readonly methodNamespace?: string;
+   /** Builds the sessions `createSession` hands out. Defaults to a plain {@link DataSession}. */
+   readonly sessionFactory?: DataSessionFactory<TTransfer, TServer>;
 }
 
 /** {@link DataConnectionOptions} for a client that does not speak {@link DataClientProtocol}. */
-export interface DataConnectionOptionsWithMethods<TClient extends object> extends DataConnectionOptions {
+export interface DataConnectionOptionsWithMethods<
+   TClient extends object,
+   TTransfer extends TransferElement = TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> extends DataConnectionOptions<TTransfer, TServer> {
    /**
     * Method names of the client to bind as inbound handlers. Declare it
     * `as const satisfies ReadonlyArray<keyof YourClient & string>` so the list
@@ -52,10 +61,14 @@ export interface DataConnectionOptionsWithMethods<TClient extends object> extend
  * request/response-only client binding the default list fails at wire-up. The
  * conditional turns that into a compile error.
  */
-export type DataConnectionArgs<TTransfer extends TransferElement, TClient extends object> =
+export type DataConnectionArgs<
+   TTransfer extends TransferElement,
+   TClient extends object,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> =
    TClient extends DataClientProtocol<TTransfer>
-      ? [options?: DataConnectionOptions & Partial<DataConnectionOptionsWithMethods<TClient>>]
-      : [options: DataConnectionOptionsWithMethods<TClient>];
+      ? [options?: DataConnectionOptions<TTransfer, TServer> & Partial<DataConnectionOptionsWithMethods<TClient, TTransfer, TServer>>]
+      : [options: DataConnectionOptionsWithMethods<TClient, TTransfer, TServer>];
 
 /**
  * A {@link RpcConnection} to the data head, carrying as many participants as
@@ -63,7 +76,7 @@ export type DataConnectionArgs<TTransfer extends TransferElement, TClient extend
  *
  * Document operations live on the participants rather than here: they carry a
  * `clientId`, which identifies a participant rather than a wire, and the server
- * keys its holds and watches per `(uri, clientId)`. Two parties sharing one
+ * keys its opens and watches per `(uri, clientId)`. Two parties sharing one
  * identity cannot tell each other's writes from their own echoes.
  *
  * Generic over the transfer root so this file names no grammar. An adopter
@@ -76,21 +89,12 @@ export class DataConnection<
    TClient extends object = DataClientProtocol<TTransfer>
 > extends RpcConnection<TServer, TClient> {
    protected readonly sessions = new Set<DataSession<TTransfer, TServer>>();
-   /**
-    * Holds a disposed session could not release, keyed `clientId` + `uri` so a
-    * repeated handover does not queue the same close twice.
-    *
-    * Retried on this connection's own activity rather than on a timer: every
-    * session operation asks for the proxy, so a shared connection with anything
-    * else going on supplies the occasions, and one with nothing going on has
-    * nobody whose documents the stale hold could affect.
-    */
-   protected readonly orphanedHolds = new Map<string, { readonly uri: string; readonly clientId: string }>();
-   /** Guards {@link releaseOrphanedHolds} against re-entering through its own proxy lookup. */
-   protected releasingOrphans = false;
+   protected readonly sessionFactory: DataSessionFactory<TTransfer, TServer>;
 
-   constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient>) {
-      const [options = {}] = rest as [(DataConnectionOptions & Partial<DataConnectionOptionsWithMethods<TClient>>)?];
+   constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient, TServer>) {
+      const [options = {}] = rest as [
+         (DataConnectionOptions<TTransfer, TServer> & Partial<DataConnectionOptionsWithMethods<TClient, TTransfer, TServer>>)?
+      ];
       super(port, client, {
          methodNamespace: options.methodNamespace ?? DATA_SERVER_WIRE_PREFIX,
          // The default is reachable only where `TClient` satisfies
@@ -99,131 +103,77 @@ export class DataConnection<
          clientMethods: options.clientMethods ?? (DATA_CLIENT_PROTOCOL_METHODS as unknown as readonly (keyof TClient & string)[]),
          lifecycle: options
       });
+      this.sessionFactory =
+         options.sessionFactory ?? ((clientId, host, label) => new DataSession<TTransfer, TServer>(clientId, host, label));
    }
 
    /**
-    * Mint a participant on this connection under `clientId`.
-    *
-    * `clientId` must be distinct per participant and stable for its lifetime:
-    * it keys the server's per-`(uri, clientId)` hold and watch, and it is the
-    * echo key an inbound `onDocumentUpdated` is matched against.
+    * Start a participant on this connection, registered with the server under a
+    * fresh id, `label` plus `#` plus a random UUID, or under `clientId` when
+    * given. Synchronous: the registration is sent at once, and the session's
+    * calls wait for it. The server refuses an id live anywhere in its process,
+    * and every call of that session then rejects with a
+    * `DuplicateClientIdError` code.
     *
     * Throws for an id in {@link FRAMEWORK_CLIENT_IDS} — those are authors the
     * SERVER emits rather than participants, so a session holding one would read
-    * the framework's own broadcasts as its own echoes and drop them. Nothing
-    * about that fails on its own: the document simply stops following, which
-    * looks like a dead connection.
-    *
-    * Throws, too, for an id a LIVE session on this connection already holds.
-    * Per-document membership is a set of client ids, so two participants
-    * sharing one collapse to a single hold and the first close releases it
-    * under the survivor, which then stops receiving updates for a document it
-    * is still showing. A constant bound once per participant KIND — one per
-    * widget class rather than per instance — satisfies the type and violates
-    * this.
-    *
-    * And throws for an id whose previous session left a hold this connection is
-    * still trying to release. That release closes `(uri, clientId)`, so an id
-    * reissued while it is outstanding can have the new participant's hold closed
-    * out from under it. The id frees itself as soon as the release lands.
-    *
-    * The checks span this connection only, so a head several connections reach
-    * can still be addressed twice under one id.
+    * the framework's own broadcasts as its own echoes and drop them — and for
+    * an id a live session on this connection already holds.
     */
-   createSession(clientId: string): DataSession<TTransfer, TServer> {
+   createSession(label = 'session', clientId?: string): DataSession<TTransfer, TServer> {
       this.assertLive();
-      if (FRAMEWORK_CLIENT_IDS.includes(clientId)) {
-         throw new Error(`clientId '${clientId}' is reserved by the framework and cannot identify a participant`);
+      const id = clientId ?? `${label}#${globalThis.crypto.randomUUID()}`;
+      if (FRAMEWORK_CLIENT_IDS.includes(id)) {
+         throw new Error(`clientId '${id}' is reserved by the framework and cannot identify a participant`);
       }
-      if ([...this.sessions].some(session => session.clientId === clientId)) {
-         throw new Error(`clientId '${clientId}' already identifies a live participant on this connection`);
+      if ([...this.sessions].some(session => session.clientId === id)) {
+         throw new Error(`clientId '${id}' already identifies a live participant on this connection`);
       }
-      if ([...this.orphanedHolds.values()].some(hold => hold.clientId === clientId)) {
-         // A retry is still outstanding for this id, and it closes
-         // `(uri, clientId)` — which the server keys one hold per. Handing the
-         // id over now lets that close land on the NEW participant's hold
-         // instead, taking a document away from a session that opened it
-         // successfully. Nothing about that fails on its own: the document
-         // simply stops following, and the close that did it was issued for a
-         // participant already gone.
-         //
-         // Attempted first, so an id whose release has become possible is free
-         // by the next call rather than waiting for other traffic.
-         void this.releaseOrphanedHolds();
-         throw new Error(`clientId '${clientId}' has an unreleased hold on this connection and cannot identify a new participant yet`);
-      }
-      const session = new DataSession<TTransfer, TServer>(clientId, {
-         connected: async () => {
-            const server = await this.connected();
-            // Unawaited: a session's own operation must not wait on, or fail
-            // for, the release of a hold another participant abandoned.
-            void this.releaseOrphanedHolds();
-            return server;
+      const session = this.sessionFactory(
+         id,
+         {
+            connected: () => this.connected(),
+            releaseSession: released => this.sessions.delete(released),
+            reportError: (error, reported) => this.reportError(error, reported)
          },
-         releaseSession: released => this.sessions.delete(released),
-         orphanHold: (uri, holder) => this.orphanHold(uri, holder)
-      });
+         label
+      );
       this.sessions.add(session);
+      // A failure reaches the session's own calls, which wait for the same
+      // registration; caught here only so it is not also reported unhandled.
+      session.connected().catch(() => undefined);
       return session;
    }
 
    /**
-    * Take over a `(uri, clientId)` hold a disposed session could not release.
-    *
-    * One attempt is made straight away, since whatever refused the session's
-    * close may already be over; a refusal leaves the entry for the next
-    * operation on this connection to retry.
+    * After the transport dropped, reconnect on the next macrotask for the
+    * sessions with documents open, so they re-watch and follow their documents
+    * again without waiting for a call of their own; a session with nothing
+    * open restores on its next call. Nothing is scheduled once this connection
+    * is disposed, which drops its generation too.
     */
-   protected orphanHold(uri: string, clientId: string): void {
-      this.orphanedHolds.set(`${clientId}\u0000${uri}`, { uri, clientId });
-      void this.releaseOrphanedHolds();
-   }
-
-   /**
-    * Try to close every hold handed over by a disposed session, keeping the ones
-    * the server still refuses.
-    *
-    * Errors are swallowed per entry: this runs off another participant's
-    * operation, which has no interest in an unrelated release and no caller to
-    * surface it to. A hold that survives every attempt is released by the
-    * server's connection-close cleanup.
-    */
-   protected async releaseOrphanedHolds(): Promise<void> {
-      if (this.releasingOrphans || this.orphanedHolds.size === 0 || this.disposed) {
-         return;
-      }
-      this.releasingOrphans = true;
-      try {
-         const server = await this.connected();
-         for (const [key, hold] of [...this.orphanedHolds]) {
-            try {
-               await server.closeModelDocument({ uri: hold.uri, clientId: hold.clientId });
-               this.orphanedHolds.delete(key);
-            } catch {
-               // Kept for the next occasion.
+   protected override dropGeneration(): void {
+      const dropped = this.generation !== undefined;
+      super.dropGeneration();
+      if (dropped && !this.disposed) {
+         setTimeout(() => {
+            if (!this.disposed) {
+               this.sessions.forEach(session => session.reconnect());
             }
-         }
-      } catch {
-         // No proxy to release through; the entries wait for one.
-      } finally {
-         this.releasingOrphans = false;
+         }, 0);
       }
    }
 
    /**
-    * Sessions are detached rather than disposed: the server releases every hold
-    * on a connection it sees close, so closing each document first sends
-    * requests over a connection this call is about to dispose.
+    * Sessions are detached rather than disposed: the server ends every session
+    * on a connection it sees close, so ending each one first sends requests
+    * over a connection this call is about to dispose.
     */
    override dispose(): void {
       for (const session of [...this.sessions]) {
          session.detach();
       }
       this.sessions.clear();
-      // Dropped rather than closed, for the same reason the sessions detach: the
-      // server releases every hold on a connection it sees close, and the close
-      // would travel over the connection being disposed.
-      this.orphanedHolds.clear();
       super.dispose();
    }
 }
@@ -250,7 +200,7 @@ export class DataConnectionWithEvents<
    /** Server pushes, fanned out to as many local listeners as the host has. */
    readonly events: DataEvents<TTransfer, DiagnosticOf<TServer>, ProjectOf<TServer>>;
 
-   constructor(port: DataPort, options?: DataConnectionOptions) {
+   constructor(port: DataPort, options?: DataConnectionOptions<TTransfer, TServer>) {
       // Built as a local because `this` is unavailable before `super`, then
       // read back onto the field.
       const events = new DataEvents<TTransfer, DiagnosticOf<TServer>, ProjectOf<TServer>>();

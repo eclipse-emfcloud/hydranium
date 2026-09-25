@@ -16,6 +16,7 @@ import {
    isSyntheticSource,
    messageError,
    ReferenceSource,
+   SessionClosedError,
    type CloseModelArgs,
    type HydraniumResponseError,
    type Disposable,
@@ -46,13 +47,17 @@ import {
    type StartProfilingArgs,
    type StopProfilingArgs,
    type WriteServerHeapSnapshotArgs,
+   type CloseSessionArgs,
+   type CreateModelDocumentArgs,
+   type CreateSessionArgs,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
    type TransferDocumentSavedEvent,
    type TransferDocumentUpdatedEvent,
-   type TransferUpdateDocumentArgs
+   type TransferUpdateDocumentArgs,
+   type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
 import { REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
@@ -99,6 +104,7 @@ export const referenceSettleTimeoutError = (elapsedMs: number): HydraniumRespons
 
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './diagnostics-provider.js';
 import type {
+   ClientSession,
    ClientTextDocumentChangeEvent,
    HydraniumLanguageServices,
    LogNameOptions,
@@ -149,6 +155,18 @@ function fingerprintHash(parts: readonly string[]): string {
    const low = (h1 >>> 0).toString(16).padStart(8, '0');
    return high + low;
 }
+
+/**
+ * A session a data connection registered with a resume token, and how to end
+ * it from another connection. See {@link DataServer.resumableSessions}.
+ */
+export interface ResumableSession {
+   readonly token: string;
+   /** End the session as its connection closing would. */
+   readonly end: () => void;
+}
+
+const resumableByModelService = new WeakMap<object, Map<string, ResumableSession>>();
 
 /**
  * Which observable state {@link DataServer.computeDocumentFingerprint} hashes to
@@ -410,17 +428,26 @@ export class DataServer<
    /** Subscription bookkeeping: URI → set of clientIds that subscribed for that URI. */
    protected readonly subscriptions = new Map<string, Set<string>>();
    /**
-    * Open-document bookkeeping: URI → set of clientIds that opened it over THIS
-    * connection.
+    * Open-document bookkeeping for client ids that are NOT sessions: URI → set
+    * of clientIds that opened it over THIS connection.
     *
-    * Kept because the document store releases a client's hold only from an
+    * Kept because the document store releases such a client's open only from an
     * explicit close, and a client that dies without closing would otherwise keep
     * the document open forever — resident, and with its last-close revert
-    * suppressed. The store has no notion of which connection a clientId reached
-    * it over, so the connection-scoped set has to live here; teaching it a client
-    * identity is the more robust and much larger alternative.
+    * suppressed. A session needs none of this: {@link sessions} ends it, and
+    * ending it closes everything it has open.
     */
    protected readonly openedDocuments = new Map<string, Set<string>>();
+   /**
+    * The client sessions this connection registered, by client id. A request
+    * carrying one of these ids acts as that session.
+    *
+    * Entries stay after {@link dispose} has ended their sessions, so a request
+    * still running from before the connection closed reaches the ended handle
+    * and fails, rather than taking the per-client path and opening a document
+    * nothing would close.
+    */
+   protected readonly clientSessions = new Map<string, ClientSession<AstNode, AstDiagnostic, TTransfer>>();
    /** Typed client proxy — sends `data-server/on*` notifications back over the same wire. */
    protected readonly clientProxy: DataClientProtocol<TTransfer, TDiagnostic, TProject>;
    protected readonly disposables = new DisposableCollection();
@@ -565,9 +592,10 @@ export class DataServer<
     * handlers and every listener — and clear the subscription map and the
     * per-URI emission-fingerprint cache, so a long-lived shared services
     * bundle does not retain per-connection memory after the connection
-    * closes. Also closes every document still open over this connection (see
-    * {@link closeOpenDocuments}), which is the SHARED store's state rather than
-    * this server's and so outlives the connection unless released here.
+    * closes. Also ends every session this connection registered and closes
+    * every document still open over it (see {@link closeOpenDocuments}), which
+    * is the SHARED store's state rather than this server's and so outlives the
+    * connection unless released here.
     *
     * Idempotent: subsequent calls are no-ops. Self-fires on
     * `connection.onClose` so adopters who don't hold a reference still
@@ -588,6 +616,9 @@ export class DataServer<
       // revert broadcast for a connection that is already gone.
       this.disposables.dispose();
       this.closeOpenDocuments();
+      for (const [clientId, session] of this.clientSessions) {
+         this.endSession(clientId, session);
+      }
       this.subscriptions.clear();
       this.lastEmittedFingerprint.clear();
       this.pendingRevertBroadcasts.clear();
@@ -604,7 +635,108 @@ export class DataServer<
    // settled-phase choice, etc.) override on the ModelService subclass —
    // no override on DataServer is needed.
 
+   async createSession(args: CreateSessionArgs): Promise<void> {
+      // After teardown nothing would ever end a session registered now, and its
+      // id would stay taken for the life of the process.
+      if (this.disposed) {
+         throw new SessionClosedError(args.clientId);
+      }
+      const resumable = this.resumableSessions();
+      const previous = resumable.get(args.clientId);
+      if (previous && args.resumeToken !== undefined && previous.token === args.resumeToken) {
+         previous.end();
+      }
+      const session = this.modelService.createSession(args.label, args.clientId);
+      this.clientSessions.set(args.clientId, session);
+      if (args.resumeToken !== undefined) {
+         resumable.set(args.clientId, { token: args.resumeToken, end: () => this.endSession(args.clientId, session) });
+      }
+   }
+
+   /**
+    * End a session this connection registered. The ended handle stays in
+    * {@link clientSessions}, as it does after {@link dispose}, so a request for
+    * the id still arriving fails rather than taking the per-client path and
+    * opening a document nothing would close.
+    */
+   async closeSession(args: CloseSessionArgs): Promise<void> {
+      const session = this.clientSessions.get(args.clientId);
+      if (session) {
+         this.endSession(args.clientId, session);
+      }
+   }
+
+   /** End `session`, registered here under `clientId`, and drop its watches on this connection. */
+   protected endSession(clientId: string, session: ClientSession<AstNode, AstDiagnostic, TTransfer>): void {
+      for (const [uri, watchers] of this.subscriptions) {
+         if (watchers.delete(clientId) && watchers.size === 0) {
+            this.subscriptions.delete(uri);
+            this.lastEmittedFingerprint.delete(uri);
+         }
+      }
+      session.dispose();
+   }
+
+   /**
+    * The resumable sessions of this services tree, by client id, across all of
+    * its data connections: a client resumes on another connection than the one
+    * that registered it. An entry leaves when its session ends, by any path, so
+    * it keeps no ended connection alive.
+    *
+    * A takeover by resume token ends the old session even when its connection
+    * is still alive, so two clients that shared an id and its token would end
+    * each other's sessions. And the token is a guard against colliding with a
+    * session the server has not yet seen end, not a secret: the wire carries no
+    * authentication, and a peer that learns the token can end the session.
+    */
+   protected resumableSessions(): Map<string, ResumableSession> {
+      let sessions = resumableByModelService.get(this.modelService);
+      if (!sessions) {
+         const created = new Map<string, ResumableSession>();
+         // Subscribed once per services tree, and never disposed: it lives as
+         // long as the text store it listens to.
+         this.services.workspace.TextDocuments.onDidCloseSession(event => created.delete(event.clientId));
+         resumableByModelService.set(this.modelService, created);
+         sessions = created;
+      }
+      return sessions;
+   }
+
+   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      const session = this.requireSession(args.clientId);
+      await session.create(args.uri, args.text);
+      return this.openedSnapshot(args.uri, () => session.close(args.uri));
+   }
+
+   async updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]> {
+      const astDocuments = await this.requireSession(args.clientId).updateAll(args);
+      return astDocuments.map(
+         astDocument =>
+            this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>
+      );
+   }
+
+   /**
+    * The session this connection registered under `clientId`, for the methods
+    * that exist only for sessions. An id that is not one has no per-client path
+    * to fall back to, so it fails with the closed-session code.
+    */
+   protected requireSession(clientId: string): ClientSession<AstNode, AstDiagnostic, TTransfer> {
+      const session = this.clientSessions.get(clientId);
+      if (!session) {
+         throw new SessionClosedError(clientId, `Client session ${clientId} was never registered on this connection`);
+      }
+      return session;
+   }
+
    async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      const session = this.clientSessions.get(args.clientId);
+      if (session) {
+         const wasOpen = this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId);
+         await session.open(args.uri, args.options);
+         // A repeat open keeps the earlier one, which is still in use.
+         return this.openedSnapshot(args.uri, wasOpen ? undefined : () => session.close(args.uri));
+      }
       // Register the editor session (idempotent — an already-open document is
       // attached without rebuilding), then return a fresh snapshot at the
       // configured target phase. Subsequent build-phase events arrive via
@@ -659,11 +791,36 @@ export class DataServer<
       return { ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(args.uri)) };
    }
 
+   /**
+    * The snapshot a session's open or create answers with, versioned as
+    * {@link openModelDocument}'s is. When the read fails, `rollback` undoes the
+    * open this call made before the failure is rethrown: the caller sees no
+    * open, so nothing on its side would ever close it.
+    */
+   protected async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      let document: TransferDocument<TTransfer, TDiagnostic>;
+      try {
+         document = await this.getModelDocument({ uri });
+      } catch (error: unknown) {
+         // The open's failure is the one the caller needs, not the cleanup's.
+         await rollback?.().catch(() => undefined);
+         throw error;
+      }
+      return { ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) };
+   }
+
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
       // Closing a session also releases its watch for (uri, clientId) — a
       // forgotten unwatch would otherwise leak phase-event dispatch until the
       // connection closes. Idempotent: a close without a prior watch is a no-op.
       await this.unwatchModelDocument({ uri: args.uri, clientId: args.clientId });
+      // Through the handle, so a close under an ended session fails as that
+      // session's calls do, and a session class's own close is honoured.
+      const session = this.clientSessions.get(args.clientId);
+      if (session) {
+         await session.close(args.uri);
+         return;
+      }
       this.forgetOpenDocument(args.uri, args.clientId);
       await this.modelService.close(args);
    }
@@ -725,12 +882,14 @@ export class DataServer<
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.modelService.update(args);
+      const session = this.clientSessions.get(args.clientId);
+      const astDocument = await (session ? session.update(args) : this.modelService.update(args));
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.modelService.save(args);
+      const session = this.clientSessions.get(args.clientId);
+      const astDocument = await (session ? session.save(args) : this.modelService.save(args));
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 

@@ -20,6 +20,10 @@ import type {
 
 /** Request-method names on {@link DocumentServerProtocol}. */
 export const DOCUMENT_SERVER_PROTOCOL_METHODS = [
+   'createSession',
+   'closeSession',
+   'createModelDocument',
+   'updateModelDocuments',
    'openModelDocument',
    'closeModelDocument',
    'getModelDocument',

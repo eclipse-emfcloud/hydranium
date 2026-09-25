@@ -37,6 +37,13 @@ const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
 const CONFLICT_GATE = 'updateModelDocument arms the conflict gate on a based-on snapshot version';
+const SESSION_IDS = 'createSession refuses an id already live, and frees it once the session ends';
+const SESSION_WRITE = 'a session writes only a document it has open';
+const CLOSE_SESSION = 'closeSession closes every document the session had open';
+const CREATE = 'createModelDocument creates a document open for the session';
+const SET = 'updateModelDocuments writes a set all or none';
+const SESSION_SAVE = 'a session saves only a document it has open';
+const CONNECTION_END = 'ending a connection ends its sessions';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -50,6 +57,7 @@ function batteryOver(defects: CanaryDefects = {}): ConformanceCheck[] {
    const connect = (): DataConformanceDriver<CanaryRoot, TransferDiagnostic> => server;
    return buildDataChecks<CanaryRoot, TransferDiagnostic>({
       connect,
+      connectSibling: () => server.connectSibling(),
       languages: [CANARY_FIXTURE],
       expectsProjects: true
    });
@@ -91,12 +99,18 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({})).toEqual([]);
    });
 
-   it('plans exactly the eleven checks the must-fail cases below name', () => {
+   it('passes every check against a server that ends a closed connection’s sessions a moment late', async () => {
+      // A server behind a socket refuses the id until it has read the close,
+      // which is not a defect; the connection-end check has to wait it out.
+      expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
+   });
+
+   it('plans exactly the eighteen checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(11);
+      expect(titles).toHaveLength(18);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -108,9 +122,16 @@ describe('the /data battery discriminates', () => {
          CONFLICT_GATE,
          SUBSCRIPTION,
          CASCADE,
-         FOLDER_CANDIDATES
+         FOLDER_CANDIDATES,
+         SESSION_IDS,
+         SESSION_WRITE,
+         CLOSE_SESSION,
+         CREATE,
+         SET,
+         SESSION_SAVE,
+         CONNECTION_END
       ];
-      expect(matching(titles, covered)).toHaveLength(11);
+      expect(matching(titles, covered)).toHaveLength(18);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -123,11 +144,11 @@ describe('the /data battery discriminates', () => {
       { label: 'a readiness call that rejects', defects: { readyRejects: true }, expected: [READY] },
       { label: 'a transfer root with a blank $type', defects: { blankRootType: true }, expected: [VALID_ENVELOPE] },
       {
-         // Also the gate: it compares the version the envelope reported, so a
+         // Also every check writing on a version the envelope reported, so a
          // head that cannot report a whole one cannot be based on it either.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, CONFLICT_GATE]
+         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       { label: 'an invalid model reported clean', defects: { cleanInvalid: true }, expected: [INVALID_DIAGNOSTICS] },
@@ -138,12 +159,17 @@ describe('the /data battery discriminates', () => {
       },
       {
          // Also the gate, and necessarily: a head that stores no edit never
-         // advances a version, so nothing a caller holds can go stale.
+         // advances a version, so nothing a caller holds can go stale. And the
+         // set check, whose current set carries an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET]
       },
-      { label: 'a write accepted whatever version it claims', defects: { ungatedWrites: true }, expected: [CONFLICT_GATE] },
+      {
+         label: 'a write accepted whatever version it claims',
+         defects: { ungatedWrites: true },
+         expected: [CONFLICT_GATE, SET]
+      },
       { label: 'a subscription that registers nothing', defects: { silentSubscriptions: true }, expected: [SUBSCRIPTION] },
       { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] },
       { label: 'a cascade rebuild reported to nobody', defects: { silentCascade: true }, expected: [CASCADE] },
@@ -152,7 +178,29 @@ describe('the /data battery discriminates', () => {
          label: 'a picker answering nothing for a source whose URI names no file',
          defects: { noCandidatesAtFolder: true },
          expected: [FOLDER_CANDIDATES]
-      }
+      },
+      { label: 'a live session id accepted a second time', defects: { sessionIdsReused: true }, expected: [SESSION_IDS] },
+      {
+         // Also the close check, which observes the end through a new session
+         // under the same id.
+         label: 'an ended session id never freed',
+         defects: { sessionIdsKept: true },
+         expected: [SESSION_IDS, CLOSE_SESSION]
+      },
+      {
+         // Also the close check: the new session under the ended one's id then
+         // writes by opening implicitly, which is what that check refuses.
+         label: 'a session write opening its document implicitly',
+         defects: { implicitSessionOpen: true },
+         expected: [SESSION_WRITE, CLOSE_SESSION, SESSION_SAVE, CONNECTION_END]
+      },
+      { label: 'a session close that leaves the document open', defects: { closeKeepsOpen: true }, expected: [SESSION_WRITE] },
+      { label: 'opens that outlive their session', defects: { sessionOpensSurviveEnd: true }, expected: [CLOSE_SESSION] },
+      { label: 'a create that replaces an existing document', defects: { createOverwrites: true }, expected: [CREATE] },
+      { label: 'a create that leaves the document closed', defects: { createLeavesClosed: true }, expected: [CREATE] },
+      { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
+      { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
+      { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] }
    ];
 
    for (const canary of canaries) {

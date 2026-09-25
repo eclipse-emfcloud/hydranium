@@ -38,6 +38,8 @@
 import {
    asSnapshotVersion,
    ConflictError,
+   DocumentNotOpenError,
+   DuplicateClientIdError,
    isDocumentSource,
    isSnapshotVersion,
    isSyntheticSource,
@@ -53,12 +55,16 @@ import type {
    TransferElement
 } from '@hydranium/protocol';
 import type {
+   CloseSessionArgs,
+   CreateModelDocumentArgs,
+   CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
    TransferSaveDocumentArgs,
    TransferUpdateDocumentArgs,
+   TransferUpdateDocumentsArgs,
    WatchModelDocumentArgs
 } from '@hydranium/protocol/data';
 import type { LanguageFixture } from '../src/model.js';
@@ -165,6 +171,31 @@ export interface CanaryDefects {
     * back empty and the dialog never opens.
     */
    readonly noCandidatesAtFolder?: boolean;
+   /** `createSession` accepts an id a live session already holds. */
+   readonly sessionIdsReused?: boolean;
+   /** `closeSession` leaves the id taken, so it can never identify a session again. */
+   readonly sessionIdsKept?: boolean;
+   /** A session's write of a document it has not opened opens it, as a plain client's does. */
+   readonly implicitSessionOpen?: boolean;
+   /** `closeModelDocument` leaves the session's open in place. */
+   readonly closeKeepsOpen?: boolean;
+   /** `closeSession` frees the id but keeps its opens, which a new session under it then inherits. */
+   readonly sessionOpensSurviveEnd?: boolean;
+   /** `createModelDocument` replaces a document that exists instead of refusing it. */
+   readonly createOverwrites?: boolean;
+   /** `createModelDocument` creates the document without opening it for the session. */
+   readonly createLeavesClosed?: boolean;
+   /** `updateModelDocuments` checks and applies one document at a time, so a later stale one leaves the earlier applied. */
+   readonly partialSets?: boolean;
+   /** A session's save of a document it has not opened opens it. */
+   readonly saveOpensImplicitly?: boolean;
+   /** Closing a connection leaves its sessions live. */
+   readonly sessionsOutliveConnection?: boolean;
+   /**
+    * Not a defect: closing a connection ends its sessions only a moment later,
+    * as a server behind a socket does once it has read the close.
+    */
+   readonly endsSessionsLate?: boolean;
 }
 
 interface StoredDocument {
@@ -188,6 +219,12 @@ export class CanaryDataServer {
 
    private readonly documents = new Map<string, StoredDocument>();
    private readonly watched = new Set<string>();
+   /** Live session ids, and the URIs each has open. */
+   private readonly sessions = new Map<string, Set<string>>();
+   /** Opens left behind by an ended session, under `sessionOpensSurviveEnd`. */
+   private readonly orphanedOpens = new Map<string, Set<string>>();
+   /** Ids `closeSession` failed to free, under `sessionIdsKept`. */
+   private readonly keptIds = new Set<string>();
 
    constructor(private readonly defects: CanaryDefects = {}) {}
 
@@ -232,9 +269,22 @@ export class CanaryDataServer {
       throw new Error('the canary server does not implement findNextName');
    }
 
+   /** A second connection to this server: shares its state, and closing it ends nothing. */
+   connectSibling(): CanaryDataServer {
+      return Object.assign(Object.create(this) as CanaryDataServer, { dispose: () => undefined });
+   }
+
    dispose(): void {
       this.documents.clear();
       this.watched.clear();
+      if (this.defects.endsSessionsLate) {
+         const sessions = [...this.sessions.keys()];
+         setTimeout(() => sessions.forEach(clientId => this.sessions.delete(clientId)), 50);
+      } else if (!this.defects.sessionsOutliveConnection) {
+         this.sessions.clear();
+      }
+      this.orphanedOpens.clear();
+      this.keptIds.clear();
    }
 
    async getProjects(): Promise<readonly Project[]> {
@@ -267,18 +317,87 @@ export class CanaryDataServer {
       return this.envelope(args.uri);
    }
 
-   async updateModelDocument(args: TransferUpdateDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
-      const text = typeof args.model === 'string' ? args.model : args.model.text;
-      const existing = this.documents.get(args.uri);
-      // The conflict gate, which is the property the based-on check probes. An
-      // unknown URI answers v0, so a write claiming a version against a document
-      // that does not exist is stale rather than unchecked.
-      if (!this.defects.ungatedWrites && isSnapshotVersion(args.basedOn)) {
-         const current = existing?.version ?? 0;
-         if (current !== args.basedOn) {
-            throw new ConflictError(args.uri, args.basedOn, current);
+   async createSession(args: CreateSessionArgs): Promise<void> {
+      if ((this.sessions.has(args.clientId) && !this.defects.sessionIdsReused) || this.keptIds.has(args.clientId)) {
+         throw new DuplicateClientIdError(args.clientId);
+      }
+      const inherited = this.orphanedOpens.get(args.clientId);
+      this.orphanedOpens.delete(args.clientId);
+      this.sessions.set(args.clientId, inherited ?? new Set<string>());
+   }
+
+   async closeSession(args: CloseSessionArgs): Promise<void> {
+      const opens = this.sessions.get(args.clientId);
+      this.sessions.delete(args.clientId);
+      if (opens && this.defects.sessionOpensSurviveEnd) {
+         this.orphanedOpens.set(args.clientId, opens);
+      }
+      if (this.defects.sessionIdsKept) {
+         this.keptIds.add(args.clientId);
+      }
+   }
+
+   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+      const opens = this.sessions.get(args.clientId);
+      if (!opens) {
+         throw new Error(`${args.clientId} is not a session`);
+      }
+      if (this.documents.has(args.uri) && !this.defects.createOverwrites) {
+         throw new Error(`Cannot create ${args.uri}: the file exists`);
+      }
+      this.documents.set(args.uri, { text: args.text, version: (this.documents.get(args.uri)?.version ?? 0) + 1 });
+      if (!this.defects.createLeavesClosed) {
+         opens.add(args.uri);
+      }
+      return this.envelope(args.uri);
+   }
+
+   async updateModelDocuments(args: TransferUpdateDocumentsArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>[]> {
+      if (!this.defects.partialSets) {
+         // Every check before any apply; the per-document write repeats them
+         // harmlessly.
+         for (const update of args.updates) {
+            this.assertSessionMayWrite(args.clientId, update.uri);
+            this.assertBasedOn(update.uri, update.basedOn);
          }
       }
+      const documents: TransferDocument<CanaryRoot, TransferDiagnostic>[] = [];
+      for (const update of args.updates) {
+         documents.push(await this.updateModelDocument({ ...update, clientId: args.clientId }));
+      }
+      return documents;
+   }
+
+   /** A live session writes only what it has open; any other id writes as a plain client. */
+   private assertSessionMayWrite(clientId: string, uri: string): void {
+      const opens = this.sessions.get(clientId);
+      if (!opens || opens.has(uri)) {
+         return;
+      }
+      if (this.defects.implicitSessionOpen) {
+         opens.add(uri);
+         return;
+      }
+      throw new DocumentNotOpenError(uri, clientId);
+   }
+
+   private assertBasedOn(uri: string, basedOn: TransferUpdateDocumentArgs<CanaryRoot>['basedOn']): void {
+      // An unknown URI answers v0, so a write claiming a version against a
+      // document that does not exist is stale rather than unchecked.
+      if (!this.defects.ungatedWrites && isSnapshotVersion(basedOn)) {
+         const current = this.documents.get(uri)?.version ?? 0;
+         if (current !== basedOn) {
+            throw new ConflictError(uri, basedOn, current);
+         }
+      }
+   }
+
+   async updateModelDocument(args: TransferUpdateDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+      this.assertSessionMayWrite(args.clientId, args.uri);
+      const text = typeof args.model === 'string' ? args.model : args.model.text;
+      const existing = this.documents.get(args.uri);
+      // The conflict gate, which is the property the based-on check probes.
+      this.assertBasedOn(args.uri, args.basedOn);
       // An edit is any update that follows the first one for this URI, which is
       // the only notion of "edit" a fake with no grammar can hold.
       const isEdit = existing !== undefined;
@@ -311,14 +430,22 @@ export class CanaryDataServer {
    }
 
    async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+      this.sessions.get(args.clientId)?.add(args.uri);
       return this.envelope(args.uri);
    }
 
-   async closeModelDocument(_args: CloseModelArgs): Promise<void> {
-      // Nothing to release: the canary holds no per-client state.
+   async closeModelDocument(args: CloseModelArgs): Promise<void> {
+      // A plain client's close releases nothing: the canary keeps no per-client
+      // state outside sessions.
+      if (!this.defects.closeKeepsOpen) {
+         this.sessions.get(args.clientId)?.delete(args.uri);
+      }
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+      if (this.defects.saveOpensImplicitly) {
+         this.sessions.get(args.clientId)?.add(args.uri);
+      }
       return this.updateModelDocument(args);
    }
 

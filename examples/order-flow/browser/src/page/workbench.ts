@@ -88,7 +88,7 @@ import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco
 import { applyPageLocale, localeUrl, type PageLocale, PAGE_LOCALES, rememberLocale } from './page-nls.js';
 import { rememberPreference, storedPreference } from './preferences.js';
 import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
-import { PROPERTIES_CLIENT_ID, PropertiesPanel } from './properties-panel.js';
+import { PROPERTIES_SESSION_LABEL, PropertiesPanel } from './properties-panel.js';
 import { publishReport, ReportDetail } from './report-detail.js';
 import { wireResponsiveLayout } from './responsive.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
@@ -509,15 +509,13 @@ function bootstrapWorker(): WorkerChannels {
 type OrderFlowDataServer = DataServerProtocol<OrderFlowTransferRoot> & DataServerDiagnosticsProtocol;
 
 /**
- * The page's own participant, alongside whatever else takes a session.
- *
- * This and `PROPERTIES_CLIENT_ID` are two participants on ONE connection, and
- * they are two different strings on purpose: an id names a participant rather
- * than a wire, so sharing one would collapse both onto a single hold and make
- * each read the other's writes as its own echo. `createSession` throws on the
- * second rather than letting either happen quietly.
+ * The label of the page's own participant, alongside whatever else takes a
+ * session. `createSession` mints the id from it, the label plus a random UUID,
+ * so the page and the properties panel are two participants on ONE connection
+ * and neither reads the other's writes as its own echo. The server logs the
+ * session under that id, so its lines start with this label.
  */
-const PAGE_CLIENT_ID = 'order-flow-browser-page';
+const PAGE_SESSION_LABEL = 'order-flow-browser-page';
 
 /**
  * One connection for the whole page, not one per read.
@@ -532,7 +530,7 @@ const PAGE_CLIENT_ID = 'order-flow-browser-page';
  */
 function openDataHead(dataPort: MessagePort): DataHead {
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(new WorkerDataPort(dataPort));
-   return { connection, session: connection.createSession(PAGE_CLIENT_ID) };
+   return { connection, session: connection.createSession(PAGE_SESSION_LABEL) };
 }
 
 /** The connection plus the page's own session on it. */
@@ -678,6 +676,10 @@ async function watchLayoutThroughDataHead({ session, connection }: DataHead): Pr
  * Sequential, not concurrent: each save runs a serialize / apply / rebuild chain
  * over the shared store, and two of those interleaved would have the second
  * rebuild racing the first document's settle for no gain on two files.
+ *
+ * Each save runs inside `withOpenDocument`, because the page's session writes
+ * only what it has open and the dirty documents are the editors', not the
+ * session's. A document the session already had open stays open afterwards.
  */
 async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, editors: EditorArea, only?: string): Promise<void> {
    // Filtered from the same dirty set the button uses rather than read another
@@ -695,7 +697,9 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, edit
          // a snapshot version: it is Monaco's alternative-version id for the local
          // buffer, which counts keystrokes in this page and has no relation to
          // the server's text-document counter the gate compares against.
-         await dataHead.session.saveDocument({ uri: document.uri, model: document.text, basedOn: 'anything' });
+         await dataHead.session.withOpenDocument({ uri: document.uri }, () =>
+            dataHead.session.saveDocument({ uri: document.uri, model: document.text, basedOn: 'anything' })
+         );
          // Marked one at a time, so a failure part-way through leaves the
          // documents it never reached dirty and a second press retries exactly
          // those.
@@ -1006,7 +1010,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // The SECOND participant on the one connection, and the reason the page needs
    // sessions at all: it holds its own documents open and reads its own writes
    // back as echoes rather than as foreign edits.
-   properties.panel = new PropertiesPanel(dataHead.connection.createSession(PROPERTIES_CLIENT_ID), dataHead.connection.events);
+   properties.panel = new PropertiesPanel(dataHead.connection.createSession(PROPERTIES_SESSION_LABEL), dataHead.connection.events);
 
    // The panel's first document is established by FOCUSING one, not by opening
    // it directly: an initial document chosen here would be a second answer to

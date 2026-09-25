@@ -25,30 +25,40 @@ const fixture: LanguageFixture = {
 const connect = (): DataConformanceDriver<TransferElement> => {
    throw new Error('connect must not be called when only inspecting the plan');
 };
+const connectSibling = connect;
 
 describe('buildDataChecks', () => {
-   it('plans three server-level checks plus eight grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, languages: [fixture] })).toHaveLength(11);
-      expect(buildDataChecks({ connect, languages: [fixture, fixture] })).toHaveLength(19);
+   it('plans the connection-end check but skips it, with a named reason, without connectSibling', () => {
+      // Known when the battery is planned, so a head that cannot open a second
+      // connection reads as an opt-out rather than as a pass.
+      const skipped = buildDataChecks({ connect, languages: [fixture], expectsProjects: true }).filter(check => check.body === undefined);
+      expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('ending a connection ends its sessions')]);
+      expect(skipped[0].skipReason).toContain('`connectSibling`');
+   });
+
+   it('plans four server-level checks plus fourteen grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, connectSibling, languages: [fixture] })).toHaveLength(18);
+      expect(buildDataChecks({ connect, connectSibling, languages: [fixture, fixture] })).toHaveLength(32);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
-      const checks = buildDataChecks({ connect, languages: [fixture], expectsProjects: true });
+      const checks = buildDataChecks({ connect, connectSibling, languages: [fixture], expectsProjects: true });
       expect(checks.every(check => typeof check.body === 'function')).toBe(true);
    });
 
-   it('plans the same checks without an edit, but skips the four that need one', () => {
+   it('plans the same checks without an edit, but skips the five that need one', () => {
       // The checks are still PLANNED — reported as skipped with a reason —
       // rather than silently absent, which is what distinguishes an opt-out
       // from lost coverage.
       const { edit: _edit, ...withoutEdit } = fixture;
-      const checks = buildDataChecks({ connect, languages: [withoutEdit], expectsProjects: true });
+      const checks = buildDataChecks({ connect, connectSibling, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(11);
+      expect(checks).toHaveLength(18);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
          expect.stringContaining('updateModelDocument arms the conflict gate'),
+         expect.stringContaining('updateModelDocuments writes a set all or none'),
          expect.stringContaining('editing a document reports its unwatched dependent as built'),
          expect.stringContaining('subscribe + update delivers an onDocumentUpdated event')
       ]);
@@ -60,9 +70,9 @@ describe('buildDataChecks', () => {
       // out, and the check reports skipped rather than being absent — so an
       // opt-out stays distinguishable from lost coverage.
       const { referenceQuery: _query, ...withoutQuery } = fixture;
-      const checks = buildDataChecks({ connect, languages: [withoutQuery], expectsProjects: true });
+      const checks = buildDataChecks({ connect, connectSibling, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(11);
+      expect(checks).toHaveLength(18);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
@@ -74,7 +84,7 @@ describe('buildDataChecks', () => {
       // `[]` is the documented answer for a head with no project tier, so the
       // emptiness claim is the adopter's to make. Without it the check must
       // report SKIPPED — passing vacuously is the defect this guards.
-      const checks = buildDataChecks({ connect, languages: [fixture] });
+      const checks = buildDataChecks({ connect, connectSibling, languages: [fixture] });
       const skipped = checks.filter(check => check.body === undefined);
 
       expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('getProjects answers at least one project')]);
@@ -83,19 +93,21 @@ describe('buildDataChecks', () => {
 
    it('leaves the checks that do not need an edit runnable without one', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
-      const runnable = buildDataChecks({ connect, languages: [withoutEdit], expectsProjects: true }).filter(
+      const runnable = buildDataChecks({ connect, connectSibling, languages: [withoutEdit], expectsProjects: true }).filter(
          check => typeof check.body === 'function'
       );
-      // getProjects shape, getProjects non-empty and waitForReady separately,
-      // plus valid-envelope, invalid-diagnostics, the diagnostic-params check
+      // getProjects shape, getProjects non-empty, createSession and
+      // waitForReady separately, plus valid-envelope, invalid-diagnostics, the
+      // diagnostic-params check, the session write, save, connection-end, close
+      // and create checks
       // and the folder-URI reference query — none of which needs an edit. The
-      // cascade check needs one, so it is not among them even though this
-      // fixture supplies a `dependent`.
-      expect(runnable).toHaveLength(7);
+      // cascade and set checks need one, so they are not among them even
+      // though this fixture supplies a `dependent`.
+      expect(runnable).toHaveLength(13);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {
-      const serverLevel = buildDataChecks({ connect, languages: [fixture, fixture], expectsProjects: true }).filter(check =>
+      const serverLevel = buildDataChecks({ connect, connectSibling, languages: [fixture, fixture], expectsProjects: true }).filter(check =>
          check.title.includes('getProjects')
       );
       expect(serverLevel.map(check => check.title)).toEqual([

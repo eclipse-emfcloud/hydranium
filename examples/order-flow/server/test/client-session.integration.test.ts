@@ -26,6 +26,7 @@ import {
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
+import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -262,6 +263,143 @@ describe('ClientSession writes', () => {
    });
 });
 
+/** `modelToText` is protected; the updateAll race tests step into it by name. */
+type ModelToText = (uri: string, model: unknown, cancelToken?: unknown) => Promise<string>;
+
+/**
+ * Run `intervene` once, when the service starts serialising a document whose URI
+ * ends with `file`, before that serialisation continues: a write that has passed
+ * its door check and has not applied yet.
+ */
+function interveneWhileSerialising(harness: OrderFlowHarness, file: string, intervene: () => Promise<unknown>): void {
+   const models = harness.shared.model.ModelService as unknown as { modelToText: ModelToText };
+   const modelToText = models.modelToText.bind(models);
+   let done = false;
+   models.modelToText = async (uri, model, cancelToken) => {
+      if (!done && uri.endsWith(file)) {
+         done = true;
+         await intervene();
+      }
+      return modelToText(uri, model, cancelToken);
+   };
+}
+
+describe('ClientSession.updateAll', () => {
+   it('applies every document of the set and rebuilds each', async () => {
+      const { harness, uri, otherUri } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+
+      const documents = await session.updateAll({
+         updates: [
+            { uri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(uri)) },
+            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(otherUri)) }
+         ]
+      });
+
+      expect(documents.map(document => document.uri)).toEqual([uri, otherUri]);
+      expect(documents.every(document => document.root !== undefined)).toBe(true);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(textDocuments.get(otherUri)?.getText()).toBe(EDITED);
+   });
+
+   it('applies nothing, and serialises nothing, when a later document of the set is stale', async () => {
+      const { harness, uri, otherUri } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+      const before = textDocuments.version(uri);
+      let serialised = 0;
+      interveneWhileSerialising(harness, FILE, async () => {
+         serialised++;
+      });
+
+      const write = session.updateAll({
+         updates: [
+            { uri, model: EDITED, basedOn: asSnapshotVersion(before) },
+            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(otherUri) + 5) }
+         ]
+      });
+
+      await expect(write).rejects.toSatisfy(isConflictError);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.version(uri)).toBe(before);
+      expect(serialised).toBe(0);
+   });
+
+   it('applies nothing when another write overtakes a later document while the set is serialised', async () => {
+      // The door check passes for both documents; only a check in the step that
+      // applies them can see the foreign write that landed in between.
+      const { harness, uri, otherUri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = models.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+      const before = textDocuments.version(uri);
+      const otherBefore = textDocuments.version(otherUri);
+      interveneWhileSerialising(harness, OTHER_FILE, () =>
+         models.update({ uri: otherUri, clientId: 'bystander', model: `${CLEAN}\n`, basedOn: 'anything' })
+      );
+
+      const write = session.updateAll({
+         updates: [
+            { uri, model: EDITED, basedOn: asSnapshotVersion(before) },
+            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(otherBefore) }
+         ]
+      });
+
+      await expect(write).rejects.toSatisfy(isConflictError);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.version(uri)).toBe(before);
+      expect(textDocuments.get(otherUri)?.getText()).toBe(`${CLEAN}\n`);
+   });
+
+   it('applies nothing when the session closes a later document while the set is serialised', async () => {
+      const { harness, uri, otherUri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      // A bystander keeps the other document in the store, so the write fails
+      // for want of the session's open rather than for want of a document.
+      await models.open({ uri: otherUri, clientId: 'bystander' });
+      const session = models.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+      interveneWhileSerialising(harness, OTHER_FILE, () => session.close(otherUri));
+
+      const write = session.updateAll({
+         updates: [
+            { uri, model: EDITED, basedOn: 'anything' },
+            { uri: otherUri, model: EDITED, basedOn: 'anything' }
+         ]
+      });
+
+      await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.get(otherUri)?.getText()).toBe(CLEAN);
+   });
+
+   it('refuses a set naming one document twice, before applying anything', async () => {
+      const { harness, uri } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('diagram');
+      await session.open(uri);
+
+      await expect(
+         session.updateAll({
+            updates: [
+               { uri, model: EDITED, basedOn: 'anything' },
+               { uri, model: `${EDITED}\n`, basedOn: 'anything' }
+            ]
+         })
+      ).rejects.toThrow(/more than once/);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+   });
+});
+
 describe('ClientSession open and close', () => {
    it('stores the options of the first open and keeps them across a repeat open', async () => {
       const { harness, uri } = await boot();
@@ -383,14 +521,19 @@ describe('ClientSession open and close', () => {
          return readFile(target);
       };
       const old = models.createSession('form', 'form-1');
-      const pending = old.open(uri);
+      // Settled into its outcome at once: it rejects before `freshOpen`
+      // resolves, and a handler attached after that await is attached late.
+      const pending = old.open(uri).then(
+         () => undefined,
+         (error: unknown) => error
+      );
       old.dispose();
       const fresh = models.createSession('form', 'form-1');
       const freshOpen = fresh.open(uri);
       release();
 
       await freshOpen;
-      await expect(pending).rejects.toBeInstanceOf(SessionClosedError);
+      expect(await pending).toBeInstanceOf(SessionClosedError);
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, 'form-1')).toBe(true);
    });
 

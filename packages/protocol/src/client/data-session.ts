@@ -8,9 +8,34 @@
  ********************************************************************************/
 
 import type { DataServerProtocol, DiagnosticOf } from '../data';
+import type { SnapshotVersion } from '../model-service/based-on';
+import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
+import type { OpenModelArgs } from '../model-server';
+import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
 import type { TransferDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
+
+/**
+ * A session could not re-open a document it had open after its connection
+ * dropped.
+ */
+export const DATA_SESSION_RESTORE_FAILED = defineMessage(
+   'hydranium/protocol/data-session-restore-failed',
+   'Could not restore {uri} after reconnecting to the data server: {detail}'
+);
+
+/**
+ * A session re-opened documents after its connection dropped whose version had
+ * moved on since the session's last unsaved write to them: another client
+ * edited them, even while the session was still connected, the server reverted
+ * them to what is on disk, or the server restarted. The session's unsaved edits
+ * may be gone.
+ */
+export const DATA_SESSION_UNSAVED_LOST = defineMessage(
+   'hydranium/protocol/data-session-unsaved-lost',
+   'Unsaved changes to {uris} may have been lost when the connection to the data server dropped.'
+);
 
 /**
  * What one of `TServer`'s document methods takes, minus the `clientId` a
@@ -23,11 +48,22 @@ import type { TransferElement } from '../transfer-element';
  */
 export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Parameters<TMethod>[0], 'clientId'>;
 
-/** Open a document through a session; the session supplies `clientId`. */
+/**
+ * Open a document through a session; the session supplies `clientId`. Only the
+ * URI and the open's options: a session's open reads the file, and the server
+ * ignores the seeds a per-client open can carry, so accepting them here would
+ * let a caller believe they took effect.
+ */
 export type DataSessionOpenArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = DataSessionArgs<TServer['openModelDocument']>;
+> = Pick<OpenModelArgs, 'uri' | 'options'>;
+
+/** Create a document through a session; the session supplies `clientId`. */
+export type DataSessionCreateArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['createModelDocument']>;
 
 /** Close a document through a session; the session supplies `clientId`. */
 export type DataSessionCloseArgs<
@@ -40,6 +76,12 @@ export type DataSessionUpdateArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = DataSessionArgs<TServer['updateModelDocument']>;
+
+/** Update several documents at once through a session; the session supplies `clientId`. */
+export type DataSessionUpdatesArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['updateModelDocuments']>;
 
 /** Persist a document through a session; the session supplies `clientId`. */
 export type DataSessionSaveArgs<
@@ -54,57 +96,53 @@ export type DataSessionDocument<
 > = TransferDocument<TTransfer, DiagnosticOf<TServer>>;
 
 /**
- * The {@link DataSession.openDocument} calls running against one URI, and
- * whether any of them has taken a server hold that no open has claimed yet.
- *
- * One record per URI rather than per call, because the hold is per
- * `(uri, clientId)`: the server has one, however many opens are in flight, so
- * one flag is the accurate model of it.
- */
-export interface OpeningDocument {
-   /** Opens still running for this URI. The last one out answers for the hold. */
-   inFlight: number;
-   /** An open succeeded, and no open has since claimed the hold via `openUris`. */
-   holdTaken: boolean;
-}
-
-/**
  * What a {@link DataSession} needs from the connection that minted it.
  *
  * Narrower than the connection itself so the dependency points one way:
  * `DataConnection` constructs sessions, and nothing here imports it back.
  */
 export interface DataSessionHost<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>>> {
+   /** The connected, READY proxy of the current connection; a new object after each reconnect. */
    connected(): Promise<RpcProxy<TServer>>;
    releaseSession(session: DataSession<TTransfer, TServer>): void;
-   /**
-    * Take over a `(uri, clientId)` hold a session could not release, so it is
-    * retried while the wire is still up.
-    *
-    * A session that has been disposed has already drained and will not read its
-    * own tracking again, so a close it issues and the server refuses leaves the
-    * hold with nobody to answer for it. The host outlives every session it
-    * mints, which is what makes it the one thing that still can.
-    *
-    * Optional so a host predating it keeps working; without it such a hold falls
-    * to the server's connection-close cleanup, which on a shared connection is
-    * as long as every other participant's session.
-    */
-   orphanHold?(uri: string, clientId: string): void;
+   /** Surface a failure no caller is waiting on, such as restoring a document after a reconnect. */
+   reportError?(error: unknown, reported: ResolvedMessage): void;
 }
 
 /**
- * One participant on a data connection: a properties panel, a tree, a
- * form editor.
+ * Builds the session `DataConnection.createSession` hands out, for an adopter
+ * that extends {@link DataSession}. The connection has minted `clientId` and
+ * checked it by then.
+ */
+export type DataSessionFactory<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>>> = (
+   clientId: string,
+   host: DataSessionHost<TTransfer, TServer>,
+   label: string
+) => DataSession<TTransfer, TServer>;
+
+/**
+ * One participant on a data connection: a properties panel, a tree, a form
+ * editor. The client side of a server client session, registered over the
+ * wire under {@link clientId}.
  *
- * The server keys every hold and watch per `(uri, clientId)`, so the identity
- * belongs to the participant rather than to the wire — several sessions share
- * one connection, and two participants forced to share one identity cannot
- * distinguish each other's writes from their own echoes.
+ * The session writes only what it has open: the server refuses its update or
+ * save of a document it has not opened with a `DocumentNotOpenError` code.
+ * Every call waits for the registration, so the first can be issued at once.
  *
  * Every document operation stamps {@link clientId} itself. A caller that
  * passed its own could pass another participant's, and the server would
- * attribute the write and release the hold accordingly.
+ * attribute the write and close the document accordingly.
+ *
+ * {@link closeDocument} and {@link dispose} first wait, up to
+ * {@link settleBeforeCloseMs}, for this session's calls still in flight on the
+ * URI, or on any URI for `dispose`: a save sent just before its close would
+ * otherwise reach the server after it, and fail as not open.
+ *
+ * After the connection drops, the session registers again under the same id,
+ * re-opens and re-watches what it had open, and reports the documents whose
+ * unsaved edits did not survive; see {@link restore}. The connection does this at
+ * once for a session with documents open, and any session's next call does it
+ * too.
  *
  * Generic over the transfer root so this file names no grammar.
  *
@@ -119,41 +157,74 @@ export class DataSession<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > {
-   /** URIs this session holds open, so {@link dispose} can release exactly those. */
+   /**
+    * How long {@link closeDocument} and {@link dispose} wait for this session's
+    * calls in flight before closing anyway. Long, because the wait only runs
+    * out when a call hangs, and a close sent while a save is still running
+    * fails that save.
+    */
+   protected readonly settleBeforeCloseMs: number = 10_000;
+   /** URIs this session has open, re-opened after a reconnect. */
    protected readonly openUris = new Set<string>();
    /**
-    * The in-flight {@link openDocument} group per URI, while one is running.
-    *
-    * A hold is one per `(uri, clientId)`, and {@link openUris} is filled only
-    * once an open has fully returned — so overlapping opens of one URI all read
-    * it as unheld and all believe the hold is theirs to release. Tracking the
-    * group lets the last of them answer for it once, knowing what the rest did.
+    * Per URI, how many opens of it this session has under way. Such a URI
+    * counts as open for {@link withOpenDocument}, which would otherwise close
+    * it under the open that is still being made.
     */
-   protected readonly openingUris = new Map<string, OpeningDocument>();
+   protected readonly openingUris = new Map<string, number>();
+   /**
+    * Per URI written since its last save, the version the server answered this
+    * session's last write with; see {@link restore}.
+    */
+   protected readonly unsavedWrites = new Map<string, SnapshotVersion>();
+   /** Per URI, this session's calls still in flight on it, which a close waits for. */
+   protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
+   /**
+    * Sent with every registration, so the server lets this session register
+    * its id again while the dropped connection's session is still live there:
+    * a server that has not yet noticed the drop would otherwise refuse the id
+    * as a duplicate until it does.
+    */
+   protected readonly resumeToken: string = globalThis.crypto.randomUUID();
+   /** The proxy the session is registered on; another one means the connection was replaced. */
+   protected registeredOn?: RpcProxy<TServer>;
+   protected registration?: Promise<void>;
    protected disposed = false;
    /**
     * Disposed through {@link detach} rather than {@link dispose}, so nothing may
-    * be sent. Folding it into {@link disposed} costs {@link openDocument} the
-    * distinction, and its close would then go out on a detached session.
+    * be sent. Folding it into {@link disposed} would send the session's close
+    * over a connection that is going away.
     */
    protected detached = false;
 
    constructor(
       readonly clientId: string,
-      protected readonly host: DataSessionHost<TTransfer, TServer>
+      protected readonly host: DataSessionHost<TTransfer, TServer>,
+      readonly label: string
    ) {}
 
    /**
-    * The connected, READY server proxy, for protocol methods this session does
-    * not wrap — the ones carrying no `clientId`, so no identity can be got
-    * wrong through them.
+    * The connected, READY server proxy once this session is registered on it,
+    * for protocol methods this session does not wrap. The proxy stamps
+    * nothing: pass this session's {@link clientId} to any method that carries
+    * one.
     */
    async connected(): Promise<RpcProxy<TServer>> {
       // `async` so a disposed session REJECTS rather than throwing
       // synchronously: the connection's own `connected` rejects, and a caller
       // reaching for `.catch` on one of them would not catch the other.
       this.assertLive();
-      return this.host.connected();
+      const server = await this.host.connected();
+      // Again after the wait: a session disposed meanwhile must not register,
+      // since its dispose found nothing registered to end.
+      this.assertLive();
+      if (this.registeredOn !== server) {
+         const reconnected = this.registeredOn !== undefined;
+         this.registeredOn = server;
+         this.registration = this.register(server, reconnected);
+      }
+      await this.registration;
+      return server;
    }
 
    /**
@@ -166,138 +237,125 @@ export class DataSession<
     * baseline, and the first phase event after the open arrives as a spurious
     * `'changed'` — which a widget that resets its in-memory root to the server
     * view misreads as a concurrent third-party write, losing whatever the user
-    * had typed. Nothing about the wrong order fails loudly, so it is encoded
-    * here rather than documented and re-derived.
+    * had typed.
     *
     * Note that the returned snapshot's empty `diagnostics` does not mean
     * valid: `open` settles at the integrity landmark, not at validation.
     * Validity arrives asynchronously on `onDocumentUpdated`, or synchronously
     * from `getModelDocument({ includeDiagnostics: true })`.
-    *
-    * A dispose landing between the two awaits is handled here rather than in
-    * {@link dispose}, which cannot release a hold that does not exist yet: it
-    * reads {@link openUris}, and this method fills it only once both calls have
-    * returned. Left to `dispose`, the hold and its watch outlive the participant
-    * and go only when the connection closes.
-    *
-    * A watch that REJECTS is the same problem arriving by a different door: the
-    * open already took a hold, and the caller sees only a failed open, so
-    * nothing on its side will ever issue the close.
-    *
-    * Which call releases it is decided by {@link finishOpening} rather than by
-    * the one that failed, because a hold is per `(uri, clientId)` and any number
-    * of this session's opens share it. A failing open that closed on its own
-    * behalf would revoke a peer's; one that deferred to a peer would leak the
-    * hold whenever that peer fails at its OWN open, having then taken no hold to
-    * roll back and having no rollback path to run. Making the last open for the
-    * URI answer for it is the only rule that holds in both directions.
     */
-   async openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      const server = await this.connected();
-      const opening = this.beginOpening(args.uri);
-      try {
-         const document = await server.openModelDocument({ ...args, clientId: this.clientId });
-         // From here a hold exists. It belongs to the URI rather than to this
-         // call, so the flag lives on the shared per-URI record.
-         opening.holdTaken = true;
-         await server.watchModelDocument({ uri: args.uri, clientId: this.clientId });
-         if (this.disposed) {
-            // Registering the URI BEFORE the open, so `dispose` could close on
-            // intent, is NOT the same fix and can invert into the leak it is meant
-            // to prevent: the close would then be issued while the open is still in
-            // flight, and a peer that does not serialise the two can complete the
-            // close first, after which the open re-registers the hold. Closing
-            // strictly after the open has resolved is the only ordering with no
-            // losing interleaving.
-            if (!this.detached) {
-               void server.closeModelDocument({ uri: args.uri, clientId: this.clientId }).catch(() => undefined);
-            }
-            // Answered for here, so the group's own release sends no second one.
-            opening.holdTaken = false;
-            // Returned rather than thrown: the caller that reaches this window is
-            // one that never awaited the open, so a rejection here surfaces as an
-            // unhandled one against a participant already gone.
-            return document;
-         }
-         this.openUris.add(args.uri);
-         return document;
-      } finally {
-         await this.finishOpening(args.uri, server);
-      }
-   }
-
-   /** Join (or start) the in-flight group for `uri`, counting this call into it. */
-   protected beginOpening(uri: string): OpeningDocument {
-      const opening = this.openingUris.get(uri) ?? { inFlight: 0, holdTaken: false };
-      opening.inFlight += 1;
-      this.openingUris.set(uri, opening);
-      return opening;
-   }
-
-   /**
-    * Count this call out of the in-flight group for `uri` and, if it was the
-    * last one, answer for whatever hold the group took.
-    *
-    * The last call is the only one that can see the group's whole outcome, which
-    * is what makes it the right one to decide. A hold that some open took and no
-    * open claimed — `openUris` is the claim — belongs to nobody, and closing it
-    * here is the only release that will ever be issued for it.
-    */
-   protected async finishOpening(uri: string, server: RpcProxy<TServer>): Promise<void> {
-      const opening = this.openingUris.get(uri);
-      if (opening === undefined) {
-         return;
-      }
-      opening.inFlight -= 1;
-      if (opening.inFlight > 0) {
-         return;
-      }
-      this.openingUris.delete(uri);
-      // `detached` means the wire is going away and the server's connection-close
-      // cleanup owns the release, so a close here would travel over a connection
-      // that is already leaving. A claimed URI is one an open is keeping.
-      if (!opening.holdTaken || this.detached || this.openUris.has(uri)) {
-         return;
-      }
-      await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => {
-         // Hand it to `dispose` while there is still a `dispose` to come. Once
-         // that has run it has already drained `openUris` and will not read it
-         // again, so tracking would read as handled while nothing released it —
-         // there the host is the owner, being the one thing that outlives this
-         // session and can still reach the server.
-         if (this.disposed) {
-            this.host.orphanHold?.(uri, this.clientId);
-         } else {
-            this.openUris.add(uri);
-         }
+   openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+      return this.trackOpen(args.uri, async () => {
+         const server = await this.connected();
+         return this.watchOpened(server, args.uri, await server.openModelDocument({ ...args, clientId: this.clientId }));
       });
    }
 
    /**
-    * Close `args.uri`. The server unwatches implicitly, so this is the dual of
-    * {@link openDocument} and needs no separate unwatch.
+    * Create a document that exists nowhere yet, open and watched for this
+    * session; it reaches disk with the first {@link saveDocument}. The server
+    * refuses a URI that exists on disk or that any client has open.
+    */
+   createDocument(args: DataSessionCreateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+      return this.trackOpen(args.uri, async () => {
+         const server = await this.connected();
+         return this.watchOpened(server, args.uri, await server.createModelDocument({ ...args, clientId: this.clientId }));
+      });
+   }
+
+   /**
+    * Watch a document this session just opened, and record it as open. A
+    * failed watch closes it again: the caller sees a failed open and so would
+    * never close it.
+    */
+   protected async watchOpened(
+      server: RpcProxy<TServer>,
+      uri: string,
+      document: DataSessionDocument<TTransfer, TServer>
+   ): Promise<DataSessionDocument<TTransfer, TServer>> {
+      try {
+         await server.watchModelDocument({ uri, clientId: this.clientId });
+      } catch (error: unknown) {
+         await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
+         throw error;
+      }
+      this.openUris.add(uri);
+      return document;
+   }
+
+   /**
+    * Close `args.uri`, once this session's calls on it have settled or
+    * {@link settleBeforeCloseMs} has passed. The server unwatches implicitly,
+    * so this is the dual of {@link openDocument} and needs no separate unwatch.
     */
    async closeDocument(args: DataSessionCloseArgs<TTransfer, TServer>): Promise<void> {
+      this.assertLive();
+      await this.settle(this.inFlight.get(args.uri));
+      // Forgotten before the close is sent, so a reconnect in between does not
+      // re-open a document the caller has closed; after the wait, so an open
+      // of it that was still in flight does not record it again.
+      this.openUris.delete(args.uri);
+      this.unsavedWrites.delete(args.uri);
       const server = await this.connected();
       await server.closeModelDocument({ ...args, clientId: this.clientId });
-      // Untracked only once the close has actually landed. Dropping it first
-      // gives a FAILED close the same effect as a successful one: the hold
-      // survives on the server and `dispose` no longer knows to retry it.
-      // A `dispose` racing this therefore closes the same URI twice, which the
-      // server answers as a no-op for a client that no longer holds it.
-      this.openUris.delete(args.uri);
    }
 
-   /** Write `args.model` back as this session. */
-   async updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      const server = await this.connected();
-      return server.updateModelDocument({ ...args, clientId: this.clientId });
+   /**
+    * Open `args.uri`, run `fn` with the opened snapshot, and close it once
+    * `fn` settles, whether it returned or threw. A URI this session already
+    * had open, or is still opening through another call, stays open: the close
+    * undoes only the open this call made.
+    */
+   async withOpenDocument<T>(
+      args: DataSessionOpenArgs<TTransfer, TServer>,
+      fn: (document: DataSessionDocument<TTransfer, TServer>) => MaybePromise<T>
+   ): Promise<T> {
+      const alreadyOpen = this.openUris.has(args.uri) || this.openingUris.has(args.uri);
+      const document = await this.openDocument(args);
+      try {
+         return await fn(document);
+      } finally {
+         if (!alreadyOpen && !this.disposed) {
+            await this.closeDocument({ uri: args.uri } as DataSessionCloseArgs<TTransfer, TServer>);
+         }
+      }
    }
 
-   /** Persist `args.model` to disk as this session. */
-   async saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      const server = await this.connected();
-      return server.saveModelDocument({ ...args, clientId: this.clientId });
+   /** Write `args.model` back as this session. The session must have `args.uri` open. */
+   updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+      return this.track([args.uri], async () => {
+         const server = await this.connected();
+         const document = await server.updateModelDocument({ ...args, clientId: this.clientId });
+         this.unsavedWrites.set(args.uri, document.version);
+         return document;
+      });
+   }
+
+   /**
+    * Write several documents this session has open, all or none: the server
+    * refuses the whole set, before any text applies, when one is stale or not
+    * open. Resolves to the documents in the order given.
+    */
+   updateDocuments(args: DataSessionUpdatesArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>[]> {
+      return this.track(
+         args.updates.map(update => update.uri),
+         async () => {
+            const server = await this.connected();
+            const documents = await server.updateModelDocuments({ ...args, clientId: this.clientId });
+            args.updates.forEach((update, i) => this.unsavedWrites.set(update.uri, documents[i].version));
+            return documents;
+         }
+      );
+   }
+
+   /** Persist `args.model` to disk as this session. The session must have `args.uri` open. */
+   saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+      return this.track([args.uri], async () => {
+         const server = await this.connected();
+         const document = await server.saveModelDocument({ ...args, clientId: this.clientId });
+         this.unsavedWrites.delete(args.uri);
+         return document;
+      });
    }
 
    /**
@@ -312,41 +370,154 @@ export class DataSession<
    }
 
    /**
-    * Release this session's holds and detach it from the connection.
-    * Idempotent, and leaves the connection usable by its other sessions.
+    * End the session: detach it from the connection at once, and once its
+    * calls in flight have settled or {@link settleBeforeCloseMs} has passed,
+    * end it on the server, which closes everything it has open. Idempotent,
+    * and leaves the connection usable by its other sessions.
     *
-    * The closes are fired without being awaited, because a `Disposable` cannot
-    * be: a host disposing a widget has nowhere to put the promise. A close
-    * that fails is no worse than the leak this exists to prevent, so the
-    * rejection is swallowed rather than surfaced from a teardown.
+    * Every later call rejects. The server close is not awaited, because a
+    * `Disposable` cannot be; a close that fails leaves the session to the
+    * server's connection-close cleanup.
     */
    dispose(): void {
       if (this.disposed) {
          return;
       }
       this.disposed = true;
-      const uris = [...this.openUris];
-      this.openUris.clear();
       this.host.releaseSession(this);
-      for (const uri of uris) {
-         void this.host
-            .connected()
-            .then(server => server.closeModelDocument({ uri, clientId: this.clientId }))
-            .catch(() => undefined);
-      }
+      const pending = [...this.inFlight.values()].flatMap(calls => [...calls]);
+      void (async () => {
+         await this.settle(pending);
+         await this.registration;
+         // The proxy the session registered on, never a fresh connection: a
+         // connection that dropped already ended the session on the server.
+         if (!this.detached && this.registeredOn) {
+            await this.registeredOn.closeSession({ clientId: this.clientId });
+         }
+      })().catch(() => undefined);
    }
 
    /**
     * Come off the connection because it is going away.
     *
-    * Sends no close, unlike {@link dispose}: the server releases every hold on
-    * a connection it sees close, and the close would travel over the very
+    * Sends nothing, unlike {@link dispose}: the server ends every session on a
+    * connection it sees close, and the close would travel over the very
     * connection being disposed.
     */
    detach(): void {
       this.disposed = true;
       this.detached = true;
       this.openUris.clear();
+      this.unsavedWrites.clear();
+   }
+
+   /**
+    * Register again and restore now, after the connection dropped, instead of
+    * on the next call. A no-op for a session with nothing open, which the next
+    * call restores anyway. A failure is left to that next call, which meets it
+    * again.
+    */
+   reconnect(): void {
+      if (!this.disposed && this.openUris.size > 0) {
+         this.connected().catch(() => undefined);
+      }
+   }
+
+   /**
+    * Register on `server`, and after a reconnect restore what the ended session
+    * had. Calls issued meanwhile wait for this.
+    */
+   protected async register(server: RpcProxy<TServer>, reconnected: boolean): Promise<void> {
+      await server.createSession({ clientId: this.clientId, label: this.label, resumeToken: this.resumeToken });
+      if (reconnected) {
+         await this.restore(server);
+      }
+   }
+
+   /**
+    * Re-open and re-watch every document the session had open, and tell the
+    * host which of them lost what the session wrote since their last save.
+    *
+    * The unsaved text is not sent again. A document whose re-opened version is
+    * the one the session's last write was answered with still holds that
+    * write. Any other version means the text changed after that write:
+    * another client edited it, even while the session was still connected;
+    * the server reverted it to disk when the session's open closed as the
+    * document's last; or the server restarted and numbers versions afresh.
+    * Re-sending based on the write's own version then always conflicts, and
+    * based on the re-opened version it would overwrite whatever changed, so
+    * neither is done.
+    *
+    * No caller is waiting, so both outcomes go through the host: one report
+    * naming every document whose unsaved text is gone, whose record is then
+    * dropped, and one per document that could not be re-opened, which is
+    * forgotten.
+    */
+   protected async restore(server: RpcProxy<TServer>): Promise<void> {
+      const lost: string[] = [];
+      for (const uri of [...this.openUris]) {
+         try {
+            const document = await server.openModelDocument({ uri, clientId: this.clientId });
+            await server.watchModelDocument({ uri, clientId: this.clientId });
+            const written = this.unsavedWrites.get(uri);
+            if (written !== undefined && written !== document.version) {
+               lost.push(uri);
+               this.unsavedWrites.delete(uri);
+            }
+         } catch (error: unknown) {
+            this.openUris.delete(uri);
+            this.unsavedWrites.delete(uri);
+            this.host.reportError?.(error, resolve(DATA_SESSION_RESTORE_FAILED, { uri, detail: describeError(error) }));
+         }
+      }
+      if (lost.length > 0) {
+         const reported = resolve(DATA_SESSION_UNSAVED_LOST, { uris: lost.join(', ') });
+         this.host.reportError?.(new Error(reported.text), reported);
+      }
+   }
+
+   /** Run `call`, counted as in flight on each of `uris` until it settles. */
+   protected track<T>(uris: readonly string[], call: () => Promise<T>): Promise<T> {
+      const running = call();
+      for (const uri of uris) {
+         this.inFlight.set(uri, (this.inFlight.get(uri) ?? new Set<Promise<unknown>>()).add(running));
+      }
+      const done = (): void => uris.forEach(uri => this.inFlight.get(uri)?.delete(running));
+      running.then(done, done);
+      return running;
+   }
+
+   /** {@link track} an open of `uri`, counted in {@link openingUris} until it settles. */
+   protected trackOpen<T>(uri: string, call: () => Promise<T>): Promise<T> {
+      this.openingUris.set(uri, (this.openingUris.get(uri) ?? 0) + 1);
+      const done = (): void => {
+         const remaining = (this.openingUris.get(uri) ?? 1) - 1;
+         if (remaining > 0) {
+            this.openingUris.set(uri, remaining);
+         } else {
+            this.openingUris.delete(uri);
+         }
+      };
+      const running = this.track([uri], call);
+      running.then(done, done);
+      return running;
+   }
+
+   /** Wait until `calls` have settled, or {@link settleBeforeCloseMs} has passed. */
+   protected async settle(calls: Iterable<Promise<unknown>> | undefined): Promise<void> {
+      const pending = [...(calls ?? [])];
+      if (pending.length === 0) {
+         return;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const bound = new Promise<void>(resolveBound => {
+         timer = setTimeout(resolveBound, this.settleBeforeCloseMs);
+      });
+      try {
+         await Promise.race([Promise.allSettled(pending), bound]);
+      } finally {
+         clearTimeout(timer);
+      }
    }
 
    protected assertLive(): void {

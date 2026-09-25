@@ -33,24 +33,12 @@ import { OrderFlowDataConnection } from './order-flow-data-connection';
 type OrderFlowTransferRoot = TransferElement;
 
 /**
- * This panel's identity on the data head.
- *
- * Distinct from the framework's own sentinels (`'language-client'`,
- * `'unknown'`, `'revert-on-close'`) and from the VS Code panel's id, because it
- * keys the server's per-`(uri, clientId)` hold and watch, and is the echo key
- * an inbound `onDocumentUpdated` is matched against.
- *
- * **A constant is the whole identity only because this widget is a SINGLETON
- * view** — it takes a fixed `id`, so Theia keeps one instance and the constant
- * can name exactly one participant. Copy the shape into a widget the host can
- * open twice and it stops being true: the two instances would share a hold that
- * the first close releases under the survivor, which then stops receiving
- * updates for a document it is still showing. A participant with more than one
- * instance needs an id per INSTANCE — the widget id plus an ordinal, minted
- * once and kept for its lifetime. `createSession` throws on the second
- * otherwise, which is how that mistake surfaces.
+ * The label of this panel's session on the data head. `createSession` mints the
+ * id from it, the label plus a random UUID, so each instance is its own
+ * participant: the id keys the server's per-`(uri, clientId)` open and watch,
+ * and is the echo key an inbound `onDocumentUpdated` is matched against.
  */
-const ORDER_FLOW_PROPERTIES_CLIENT_ID = 'order-flow-theia-properties';
+const ORDER_FLOW_PROPERTIES_SESSION_LABEL = 'order-flow-theia-properties';
 
 /**
  * The order-flow properties panel as a Theia `PropertyViewContentWidget`.
@@ -92,7 +80,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       this.addClass('order-flow-properties');
       this.node.tabIndex = 0;
 
-      const session = this.dataConnection.createSession(ORDER_FLOW_PROPERTIES_CLIENT_ID);
+      const session = this.dataConnection.createSession(ORDER_FLOW_PROPERTIES_SESSION_LABEL);
       this.model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, this.dataConnection.events);
 
       const host = document.createElement('div');
