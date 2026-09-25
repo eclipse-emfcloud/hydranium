@@ -331,6 +331,49 @@ describe('ModelService conflict gating', () => {
    });
 });
 
+describe('ModelService conflict gating under concurrency', () => {
+   const appliedTexts = (bundle: ReturnType<typeof makeTestServices<FakeRoot>>): string[] =>
+      bundle.textDocuments.changes.map(change => change.text).filter(text => text.startsWith('name:'));
+
+   it('rejects the second of two same-version updates with the stock service and a string payload', async () => {
+      const { bundle, service } = buildConflictBundle(3);
+      const results = await Promise.allSettled([
+         service.update({ uri: URI_A, clientId: 'editor-1', model: 'name:first\n', basedOn: asSnapshotVersion(3) }),
+         service.update({ uri: URI_A, clientId: 'editor-2', model: 'name:second\n', basedOn: asSnapshotVersion(3) })
+      ]);
+      expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+      expect(appliedTexts(bundle)).toEqual(['name:first\n']);
+   });
+
+   it('applies a based-on write that creates a URI the store has never seen', async () => {
+      // The upsert's own open assigns the version from the incoming text, so a
+      // gate re-checked at apply sees a number the caller's write produced.
+      const { bundle, service } = buildConflictBundle(3);
+      const coldUri = 'file:///never-seen.fake';
+
+      await service.update({ uri: coldUri, clientId: 'editor-1', model: 'name:cold\n', basedOn: asSnapshotVersion(0) });
+
+      expect(bundle.textDocuments.get(coldUri)?.getText()).toBe('name:cold\n');
+   });
+
+   it('rejects the second of two based-on writes that both found the URI new', async () => {
+      // Both find no document at the door; the first open creates it, the
+      // second only attaches, so the second's write is not the one that made
+      // the version.
+      const { bundle, service } = buildConflictBundle(3);
+      const coldUri = 'file:///never-seen.fake';
+
+      const results = await Promise.allSettled([
+         service.update({ uri: coldUri, clientId: 'editor-1', model: 'name:first\n', basedOn: asSnapshotVersion(0) }),
+         service.update({ uri: coldUri, clientId: 'editor-2', model: 'name:second\n', basedOn: asSnapshotVersion(0) })
+      ]);
+
+      expect(results[0].status).toBe('fulfilled');
+      expect(results[1].status === 'rejected' && isConflictError(results[1].reason)).toBe(true);
+      expect(bundle.textDocuments.get(coldUri)?.getText()).toBe('name:first\n');
+   });
+});
+
 describe('ModelService AST envelopes', () => {
    it('waitForDocumentState returns an AstDocument that carries the text-document version', async () => {
       const { bundle, service } = buildConflictBundle(7);

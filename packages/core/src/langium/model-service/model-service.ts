@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   type BasedOn,
    type CanonicalUri,
    type CloseModelArgs,
    ConflictError,
@@ -774,13 +775,11 @@ export class DefaultModelService<
       // reason to close a document it never asked to open. Serialisation is
       // held back too; it is the adopter's code and need not be side-effect
       // free.
-      const currentVersion = this.services.workspace.TextDocuments.version(uri);
-      if (isSnapshotVersion(args.basedOn) && currentVersion !== args.basedOn) {
-         // Distinct from the post-build "superseded" debug line below: this is a
-         // based-on-stale rejection (the write never applies), not two writes racing.
-         this.tracer.debug(`Conflict on ${uri}: based-on v${args.basedOn} stale, server at v${currentVersion}`);
-         throw new ConflictError(uri, args.basedOn, currentVersion);
-      }
+      const textDocuments = this.services.workspace.TextDocuments;
+      this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
+      // Whether this call's own open is the one that creates the document, read
+      // in the same step as the check above so no other open can land between.
+      const opensCold = !bySession && textDocuments.get(uri) === undefined;
       const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
       if (!bySession) {
          await run('open', () => this.open({ uri, clientId: args.clientId, text }));
@@ -791,8 +790,16 @@ export class DefaultModelService<
          // instead, it passes for a write whose session closes the document
          // during that await, and the write then lands on a document the
          // session no longer has open.
-         if (bySession && !this.services.workspace.TextDocuments.isOpenInClient(uri, args.clientId)) {
+         if (bySession && !textDocuments.isOpenInClient(uri, args.clientId)) {
             throw new DocumentNotOpenError(uri, args.clientId);
+         }
+         // The gate again, in the same step as the apply: two writes based on
+         // one version both pass the check at the door while they serialise,
+         // and without this both apply. The version a cold open assigned from
+         // this write's own text is not a conflict; the store holding exactly
+         // that text is how it shows.
+         if (!(opensCold && textDocuments.get(uri)?.getText() === text)) {
+            this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
          }
          return this.services.workspace.AstDocumentManager.update(uri, text, args.clientId);
       });
@@ -821,6 +828,23 @@ export class DefaultModelService<
    }
 
    /**
+    * Throw {@link ConflictError} when `basedOn` names a version other than
+    * `currentVersion`. {@link update} calls it at the door and again in the
+    * synchronous step that applies the text, and has to call it synchronously
+    * there: a check separated from the apply by an await lets two writes based
+    * on one version both apply.
+    */
+   protected checkBasedOn(uri: string, basedOn: BasedOn, currentVersion: number): void {
+      if (isSnapshotVersion(basedOn) && currentVersion !== basedOn) {
+         // Distinct from the post-build "superseded" debug line in `update`: this
+         // is a based-on-stale rejection (the write never applies), not two
+         // writes racing.
+         this.tracer.debug(`Conflict on ${uri}: based-on v${basedOn} stale, server at v${currentVersion}`);
+         throw new ConflictError(uri, basedOn, currentVersion);
+      }
+   }
+
+   /**
     * Persist `uri` to disk. Same content-change + settled-phase flow as
     * {@link update}, then writes via the
     * `WritableFileSystemProvider` and notifies the multi-client
@@ -828,8 +852,16 @@ export class DefaultModelService<
     * the `onDidSave` event regardless of who originated the persist).
     *
     * Returns the post-save AST snapshot.
+    *
+    * Under the id of a live session the save also fails with
+    * `DocumentNotOpenError` when the session closes the URI while the text is
+    * being built, and writes nothing. Once the manager has taken the text, the
+    * write completes whatever the session does next.
     */
    async save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+      // Read before the first await, as in `update`: a session that ends during
+      // the rebuild would otherwise read as a plain client id below.
+      const bySession = this.sessions.has(args.clientId);
       // Dispatch through `update` (not its internals) so an adopter `update`
       // override — version-matched resolution, etc. — applies to saves too.
       const doc = await this.update(args, cancelToken);
@@ -837,6 +869,12 @@ export class DefaultModelService<
       // the canonical (real) path follows any symlink to the same file, and the
       // `onDidSave` keys the one canonical registration.
       const uri = this.uriPolicy.canonicalUri(args.uri);
+      // In the same synchronous step as the manager taking the text: checked
+      // any earlier, a session that closes the URI during the rebuild still has
+      // the shared text, other clients' edits included, written in its name.
+      if (bySession && !this.services.workspace.TextDocuments.isOpenInClient(uri, args.clientId)) {
+         throw new DocumentNotOpenError(uri, args.clientId);
+      }
       await this.services.workspace.AstDocumentManager.save(uri, args.clientId);
       return doc;
    }

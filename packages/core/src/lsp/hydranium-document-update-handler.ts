@@ -133,7 +133,10 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
     */
    protected pendingReason?: string;
 
-   constructor(services: ServerSharedServices, options: HydraniumDocumentUpdateHandlerOptions = {}) {
+   constructor(
+      protected readonly services: ServerSharedServices,
+      options: HydraniumDocumentUpdateHandlerOptions = {}
+   ) {
       super(services);
       this.logger = services.Logger;
       this.selfSaveRegistry = services.workspace.SelfSaveRegistry;
@@ -201,6 +204,11 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
     *
     * Per-client closes (where other clients still hold the URI) are
     * suppressed via {@link HydraniumTextDocuments.isOpenInAnyClient}.
+    *
+    * The dispatch waits for the URI's disk queue to drain, because the rebuild
+    * re-reads the file: dispatched while a save is still queued, it reads the
+    * text from before that save, and the document reverts past it. A client
+    * that opens the URI meanwhile holds the text, so no revert follows.
     */
    didCloseDocument(change: TextDocumentChangeEvent<TextDocument>): void {
       if (this.textDocuments.isOpenInAnyClient(change.document.uri)) {
@@ -210,9 +218,19 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       if (uri.scheme !== 'file') {
          return;
       }
-      this.nextReason = HYDRANIUM_BUILD_REASONS.didClose;
-      this.immediateFlush = true;
-      this.fireDocumentUpdate([uri], []);
+      this.services.workspace.AstDocumentManager.queueDiskTask(change.document.uri, async () => undefined)
+         .then(() => {
+            if (this.textDocuments.isOpenInAnyClient(change.document.uri)) {
+               return;
+            }
+            this.nextReason = HYDRANIUM_BUILD_REASONS.didClose;
+            this.immediateFlush = true;
+            this.fireDocumentUpdate([uri], []);
+         })
+         .catch((err: unknown) => {
+            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+            this.logger.error(`Revert on last close dropped for ${change.document.uri}. ${detail}`);
+         });
    }
 
    override didChangeWatchedFiles(params: DidChangeWatchedFilesParams): void {

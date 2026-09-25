@@ -30,10 +30,11 @@
  * objects the store does and does not know about.
  */
 
-import { DefaultIntegrityService, HydraniumTextDocuments } from '@hydranium/core';
+import { DefaultIntegrityService, HydraniumTextDocuments, INTEGRITY_CLIENT_ID } from '@hydranium/core';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
-import { asSnapshotVersion } from '@hydranium/protocol';
+import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
+import { tick } from '@hydranium/protocol/testing';
 import { readFileSync, writeFileSync } from 'node:fs';
 import type { ApplyWorkspaceEditParams, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -392,6 +393,46 @@ for (const syncMode of ['editor', 'silent'] as const) {
          expect(onDisk()).toBe(held);
       });
 
+      it('is a new version authored by integrity, which a write based on the unrepaired version conflicts with', async () => {
+         const harness = await bootCapturing(syncMode, workspace => workspace.write(FILE, CLEAN));
+         const workspace = scratch!.workspace;
+         const uri = URI.file(workspace.resolve(FILE));
+         const uriString = uri.toString();
+         const textDocuments = harness.shared.workspace.TextDocuments;
+         const modelService = harness.shared.model.ModelService;
+         const sources: string[] = [];
+         harness.shared.workspace.AstDocumentManager.onUpdate(uriString, event => sources.push(event.sourceClientId));
+
+         await modelService.open({ uri: uriString, clientId: 'data-client' });
+         await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
+         const opened = textDocuments.version(uriString);
+
+         const repaired = await modelService.update({
+            uri: uriString,
+            clientId: 'data-client',
+            model: DUPLICATES,
+            basedOn: asSnapshotVersion(opened)
+         });
+         await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
+
+         expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
+         expect(textDocuments.getAuthor(uriString, opened + 1)).toBe('data-client');
+         expect(textDocuments.getAuthor(uriString, opened + 2)).toBe(INTEGRITY_CLIENT_ID);
+         expect(textDocuments.version(uriString)).toBe(opened + 2);
+         expect(repaired.version).toBe(opened + 2);
+         // What an echo filter reads: the build that carries the repair is not
+         // the writing client's own.
+         expect(sources.at(-1)).toBe(INTEGRITY_CLIENT_ID);
+
+         const stale = modelService.update({
+            uri: uriString,
+            clientId: 'data-client',
+            model: DUPLICATES,
+            basedOn: asSnapshotVersion(opened + 1)
+         });
+         await expect(stale).rejects.toSatisfy(isConflictError);
+      });
+
       it('reaches disk in silent mode when the store held nothing unsaved', async () => {
          // A repair the holder did not author: the defect reached disk without
          // the server seeing it, and the first open repairs it. Nothing the
@@ -435,8 +476,9 @@ describe('a silent repair of a held URI whose source is what disk holds', () => 
    it('is not written over an edit saved while disk was being read', async () => {
       // The write depends on a disk read, and a save does not wait for the
       // build that repair belongs to: a diagram flush saves straight through the
-      // manager. An edit and its save landing in that gap are newer than the
-      // repair, and disk must keep them.
+      // manager. An edit and its save issued in that gap are newer than the
+      // repair, and disk must keep them: the save waits in the disk queue until
+      // the repair's read, compare and write are done.
       const harness = await bootCapturing('silent', workspace => workspace.write(FILE, CLEAN));
       const workspace = scratch!.workspace;
       const uri = URI.file(workspace.resolve(FILE));
@@ -445,6 +487,7 @@ describe('a silent repair of a held URI whose source is what disk holds', () => 
       const manager = harness.shared.workspace.AstDocumentManager;
       writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
 
+      let saved: Promise<void> | undefined;
       afterRead = async target => {
          // The integrity pass's read, not the one `open` makes before the store
          // has the document.
@@ -452,16 +495,19 @@ describe('a silent repair of a held URI whose source is what disk holds', () => 
             return;
          }
          afterRead = undefined;
-         manager.update(uriString, SAVED_EDIT, 'data-client');
-         await manager.save(uriString, 'data-client');
+         await manager.update(uriString, SAVED_EDIT, 'data-client');
+         saved = manager.save(uriString, 'data-client');
+         // Long enough for a save that does not wait in the queue to land here.
+         await tick(50);
       };
       // `Validated` for the document follows the integrity passes of the build
       // `open` drives; the builder-wide wait then covers the one the edit drives.
       await harness.shared.model.ModelService.open({ uri: uriString, clientId: 'data-client' });
       await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
       await harness.shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+      await saved;
 
-      // The edit and its save did land inside the gap.
+      // The edit and its save were issued inside the gap.
       expect(afterRead).toBeUndefined();
       expect(textDocuments.get(uriString)?.getText()).toBe(SAVED_EDIT);
       expect(readFileSync(workspace.resolve(FILE), 'utf8')).toBe(SAVED_EDIT);

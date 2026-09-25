@@ -109,6 +109,8 @@ interface ServicesStubOptions {
     * assertion would pass even if the handler bypassed this seam entirely.
     */
    mtimeMs?: (uri: URI) => Promise<number | undefined>;
+   /** Drives `AstDocumentManager.queueDiskTask`. Defaults to an idle queue that runs the task at once. */
+   queueDiskTask?: (uri: string, task: () => Promise<unknown>) => Promise<unknown>;
 }
 
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
@@ -147,6 +149,9 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          // own stat behaviour is covered by its own tests.
          FileSystemProvider: {
             mtimeMs: opts.mtimeMs ?? (async () => STUB_MTIME_MS)
+         },
+         AstDocumentManager: {
+            queueDiskTask: opts.queueDiskTask ?? ((_uri: string, task: () => Promise<unknown>) => task())
          }
       }
    } as unknown as ServerSharedServices;
@@ -394,27 +399,91 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       expect(markNextReasonCalls).toEqual(['didChangeWatchedFiles']);
    });
 
-   it('didCloseDocument dispatches update([uri], []) on last close of a file: URI', () => {
+   it('didCloseDocument dispatches update([uri], []) on last close of a file: URI', async () => {
       // Observes the rebuild TRIGGER, not the disk re-read: Langium's
       // `factory.update` handles the latter downstream, consulting the
       // LSP-tracked open-docs map first and falling back to the
       // FileSystemProvider when absent — which is the case on last close.
       const handler = new CapturingHandler(makeServicesStub({ isOpenInAnyClient: () => false }));
       handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
+      await flushMicrotasks();
       expect(handler.dispatchCalls).toHaveLength(1);
       expect(handler.dispatchCalls[0].changed.map(u => u.toString())).toEqual(['file:///a.a']);
       expect(handler.dispatchCalls[0].deleted).toEqual([]);
    });
 
-   it('didCloseDocument bypasses debouncing — dispatches synchronously even with a debounce window', () => {
+   it('didCloseDocument bypasses debouncing — dispatches without waiting for a debounce window', async () => {
       // Pins the `immediateFlush = true` stamp in didCloseDocument: with a
-      // non-zero window the dispatch would otherwise be scheduled on the timer,
-      // not fired synchronously. The close must rebuild immediately so the
-      // LangiumDocument refreshes from disk before the next consumer reads it.
+      // non-zero window the dispatch would otherwise be scheduled on the timer.
+      // The close must rebuild immediately so the LangiumDocument refreshes
+      // from disk before the next consumer reads it.
       const clock = makeFakeClock();
       const handler = new CapturingHandler(makeServicesStub({ isOpenInAnyClient: () => false, clock }), { debounceMs: 50 });
       handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
-      expect(handler.dispatchCalls).toHaveLength(1); // synchronous, not waiting for the timer
+      await flushMicrotasks();
+      expect(handler.dispatchCalls).toHaveLength(1); // the fake clock never advanced
+   });
+
+   it("didCloseDocument dispatches only once the URI's disk queue has drained", async () => {
+      // The rebuild re-reads the file, so a save still queued for it would be
+      // read around: the document would revert to the text before that save.
+      let drain: () => void = () => undefined;
+      const drained = new Promise<void>(resolve => {
+         drain = resolve;
+      });
+      const queued: string[] = [];
+      const handler = new CapturingHandler(
+         makeServicesStub({
+            isOpenInAnyClient: () => false,
+            queueDiskTask: (uri, task) => {
+               queued.push(uri);
+               return drained.then(task);
+            }
+         })
+      );
+      handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
+      await flushMicrotasks();
+      expect(queued).toEqual(['file:///a.a']);
+      expect(handler.dispatchCalls).toEqual([]);
+
+      drain();
+      await flushMicrotasks();
+      expect(handler.dispatchCalls.map(call => call.changed.map(uri => uri.toString()))).toEqual([['file:///a.a']]);
+   });
+
+   it('didCloseDocument does not revert a URI a client opened while the queue drained', async () => {
+      // That client holds the text now; a revert would rebuild over it from disk.
+      let open = false;
+      let drain: () => void = () => undefined;
+      const drained = new Promise<void>(resolve => {
+         drain = resolve;
+      });
+      const handler = new CapturingHandler(
+         makeServicesStub({ isOpenInAnyClient: () => open, queueDiskTask: (_uri, task) => drained.then(task) })
+      );
+      handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
+      open = true;
+      drain();
+      await flushMicrotasks();
+
+      expect(handler.dispatchCalls).toEqual([]);
+   });
+
+   it('didCloseDocument logs a revert that fails behind the queue', async () => {
+      const loggedErrors: string[] = [];
+      const handler = new CapturingHandler(
+         makeServicesStub({
+            isOpenInAnyClient: () => false,
+            loggedErrors,
+            queueDiskTask: async () => {
+               throw new Error('queue broke');
+            }
+         })
+      );
+      handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
+      await flushMicrotasks();
+
+      expect(loggedErrors.some(message => message.includes('file:///a.a') && message.includes('queue broke'))).toBe(true);
    });
 
    it('didCloseDocument suppresses dispatch when other clients still hold the URI', () => {
@@ -444,10 +513,8 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       const services = makeServicesStub({ markNextReasonCalls, isOpenInAnyClient: () => false });
       const handler = new HydraniumDocumentUpdateHandler(services);
       handler.didCloseDocument({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
-      // Dispatch is microtask-deferred via workspaceManager.ready.then(...).
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      // Dispatch is microtask-deferred behind the disk queue and workspaceManager.ready.
+      await flushMicrotasks();
       expect(markNextReasonCalls).toEqual(['didClose']);
    });
 

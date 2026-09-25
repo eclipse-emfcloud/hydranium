@@ -97,11 +97,13 @@ The transitions that change the owner are explicit:
   request is still in flight, so settlement alone does not prove the visible
   editor has applied the edit. A rejected edit invalidates the shadow for a
   position-independent retry.
-- **Save and last close** are separate transitions. `save` persists the
-  current store text. The last close removes the shared entry and editor
-  shadow and retains the content-version sequence. A file URI then gets a
-  disk-backed rebuild; the default close handler leaves non-file documents in
-  the index for the adopter to manage.
+- **Save and last close** are separate transitions. `save` takes the current
+  store text and writes it through the file's disk queue, in the order saves
+  were called. The last close removes the shared entry and editor shadow and
+  retains the content-version sequence. A file URI then gets a disk-backed
+  rebuild once its disk queue has drained, and a reopen reads the file in that
+  queue, after any save still writing; the default close handler leaves
+  non-file documents in the index for the adopter to manage.
 
 The open-document repair tests in the order-flow example exercise the normal
 and separately constructed paths in both sync modes, for a URI an editor

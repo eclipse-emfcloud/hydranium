@@ -368,9 +368,11 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
 
-      // Keep the same version so HydraniumTextDocuments doesn't reject subsequent client edits.
-      // Use manager.update so the `instanceof FullTextDocument` gate in the bare
-      // `TextDocument.update` doesn't trip on adopter-custom text-document types.
+      // A committed repair is a new version; a document no client has open keeps
+      // its number here, and the re-versioning below moves it once the build
+      // has reconciled. Through the store's `update`, so the `instanceof
+      // FullTextDocument` gate in the bare `TextDocument.update` does not trip
+      // on adopter-custom text-document types.
       const textDocument =
          commit.status === 'committed' ? commit.document : this.textDocuments.update(document.textDocument, [{ text: newText }], version);
 
@@ -504,8 +506,13 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
 
       // Closed files, silent mode: write to disk directly.
       if (this.syncMode === 'silent') {
+         const repaired = document.getText();
          // Async write so the integrity pass does not block the event loop on a slow filesystem.
-         await this.fileSystemProvider.writeFile(UriUtils.toUri(document.uri), document.getText());
+         // In the URI's disk queue, behind any save already queued: written
+         // beside one, the older repair can land last and stay on disk.
+         await this.services.shared.workspace.AstDocumentManager.queueDiskTask(document.uri, () =>
+            this.fileSystemProvider.writeFile(UriUtils.toUri(document.uri), repaired)
+         );
          return;
       }
 
@@ -518,32 +525,35 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * the text the repair was computed from — so the write carries the repair
     * and nothing a holder could still discard.
     *
-    * The store is compared again once the read returns, and the write is
-    * skipped if it no longer holds the repair. A save does not wait for the
-    * build this repair belongs to, so an edit and its save can land while the
-    * read is pending; writing the older repair then would overwrite a saved
-    * edit on disk. The skipped repair loses nothing: the edit drives a build
-    * of its own, and a save writes the store's text. A file that cannot be read
-    * is left alone too: there is no evidence it matches.
+    * The read, the compare and the write run as one task in the URI's disk
+    * queue, so no save of the file lands between them. The store is compared
+    * again once the read returns, and the write is skipped if it no longer
+    * holds the repair: an edit does not wait for the queue, and writing the
+    * older repair then puts text on disk that no participant holds. The
+    * skipped repair loses nothing: the edit drives a build of its own, and a
+    * save writes the store's text. A file that cannot be read is left alone
+    * too: there is no evidence it matches.
     */
    protected async persistIfDiskMatches(document: TextDocument, parsedFrom: string): Promise<void> {
       const uri = UriUtils.toUri(document.uri);
       const repaired = document.getText();
-      let onDisk: string;
-      try {
-         onDisk = await this.fileSystemProvider.readFile(uri);
-      } catch (error: unknown) {
-         this.tracer.with(document.uri).debug(`Held document unreadable on disk, repair left to the next save: ${String(error)}`);
-         return;
-      }
-      if (onDisk !== parsedFrom) {
-         return;
-      }
-      if (this.textDocuments.get(document.uri)?.getText() !== repaired) {
-         this.tracer.with(document.uri).debug('Held document changed while disk was read, repair left to that change');
-         return;
-      }
-      await this.fileSystemProvider.writeFile(uri, repaired);
+      await this.services.shared.workspace.AstDocumentManager.queueDiskTask(document.uri, async () => {
+         let onDisk: string;
+         try {
+            onDisk = await this.fileSystemProvider.readFile(uri);
+         } catch (error: unknown) {
+            this.tracer.with(document.uri).debug(`Held document unreadable on disk, repair left to the next save: ${String(error)}`);
+            return;
+         }
+         if (onDisk !== parsedFrom) {
+            return;
+         }
+         if (this.textDocuments.get(document.uri)?.getText() !== repaired) {
+            this.tracer.with(document.uri).debug('Held document changed while disk was read, repair left to that change');
+            return;
+         }
+         await this.fileSystemProvider.writeFile(uri, repaired);
+      });
    }
 
    /**

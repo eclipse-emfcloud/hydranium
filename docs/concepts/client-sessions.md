@@ -79,15 +79,50 @@ before the update applies gets `DocumentNotOpenError` for the update, and the
 document is not reopened behind it.
 
 The `basedOn` gate works as it does for any write, and a stale write still fails
-with `ConflictError`.
+with `ConflictError`. It is checked again in the step that applies the text, so
+of two writes based on one version, the second fails. An integrity repair of an
+open document is a new version authored by `integrity`: a write based on the
+version before the repair fails, and `isOwnEcho` is false for the update that
+carries the repair.
 
 A save persists the document's current text, which includes unsaved edits other
-participants have made to it: there is one shared text per document.
+participants have made to it: there is one shared text per document. The save
+checks the open once more when it takes that text, after the rebuild: a session
+that closes the document while it is being built gets `DocumentNotOpenError`,
+and nothing is written. Once the text is taken, the write completes even if the
+session closes the document or ends.
 
 `ModelService.update` and `ModelService.save` called with a client id that is
 not a live session keep their older behaviour. They open the document for that
 id first, and create it from the payload when no file exists; nothing closes
 that open until the caller does.
+
+## Disk writes
+
+Every disk access of a file the framework makes on the server goes through one
+queue per file, whichever session, head or service makes it. Each save takes
+its text when it is called and writes in the order it was called, so the file
+ends with the newest saved text. Files do not wait for one another, and updates
+do not wait for the queue. A build waits only for its own repair write, which
+queues behind earlier saves of that file.
+
+Code of your own that writes a file the framework also saves runs its write
+through `AstDocumentManager.queueDiskTask` to stay in that order. The task must
+not await a build, a save, another queued task or an open of a document no
+client has open, for the same file: what it waits for queues behind it, and the
+file's queue stops for good.
+
+With `coalesceSaves` set in `AstDocumentManagerOptions`, a save still waiting
+behind another is skipped when a newer save of the same file queues behind it.
+The skipped save announces nothing and takes the newer save's outcome: it
+resolves when that one lands, and rejects with its error when it fails. The
+framework binds the manager without options, so turning this on means binding
+`AstDocumentManager` to a `DefaultAstDocumentManager` constructed with them.
+
+The language server reverts a file to what is on disk when its last client
+closes it. The revert waits for the file's queue to drain first, so a save
+issued before the close is not reverted past; a client that opens the file
+meanwhile keeps its text, and no revert follows.
 
 ## `withOpen`
 

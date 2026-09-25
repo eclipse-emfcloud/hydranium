@@ -25,7 +25,7 @@ import {
    type ServerSharedServices,
    SessionClosedError
 } from '@hydranium/core';
-import { type AstNode, URI } from '@hydranium/langium';
+import { type AstNode, DocumentState, URI } from '@hydranium/langium';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -212,6 +212,45 @@ describe('ClientSession writes', () => {
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
       expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
       expect(textDocuments.openDocuments()).toEqual([]);
+   });
+
+   it('fails a save whose open closed after its text applied, before the save took the text, and writes nothing', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      // Another client keeps the document in the store, so a save that skipped
+      // the check would find text to write.
+      await models.open({ uri, clientId: 'bystander' });
+      const session = models.createSession('form');
+      await session.open(uri);
+      // The rebuild of the applied text parses it before the save goes on.
+      harness.shared.workspace.DocumentBuilder.onDocumentPhase(DocumentState.Parsed, document => {
+         if (document.textDocument.getText() === EDITED) {
+            void session.close(uri);
+         }
+      });
+
+      await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
+   });
+
+   it('fails a save whose session ended after its text applied, and writes nothing', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      await models.open({ uri, clientId: 'bystander' });
+      const session = models.createSession('form');
+      await session.open(uri);
+      harness.shared.workspace.DocumentBuilder.onDocumentPhase(DocumentState.Parsed, document => {
+         if (document.textDocument.getText() === EDITED) {
+            session.dispose();
+         }
+      });
+
+      await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+
+      expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
    });
 
    it('keeps the flat update an upsert for an id that is not a session', async () => {
