@@ -32,8 +32,8 @@ export interface StubTextDocumentEntry {
  * `openDocuments`), the push channel
  * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
  * the save / close notifications, and the client-session table
- * (`registerSession` / `closeSession` / `onDidCloseSession` and the open
- * options), which is a real `ClientSessionRegistry` — plus test-only helpers:
+ * (`registerSession` / `closeSession` / `onDidCloseSession`), which is a real
+ * `ClientSessionRegistry` — plus test-only helpers:
  *
  * - {@link seedOpen} — pre-populate an open document without firing change
  *   events. Use to set up a baseline version before exercising an `update`.
@@ -80,8 +80,6 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'closeSession'
    | 'onDidCloseSession'
    | 'onDidCloseLastOpen'
-   | 'openOptions'
-   | 'setOpenOptions'
 > {
    /**
     * Stub-tailored read accessor. Returns just the surface the framework's
@@ -148,8 +146,8 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    let applyEditHandler: (uri: string, text: string) => ApplyWorkspaceEditResult | undefined = () => ({ applied: true });
    const saveListeners: Array<(event: { document: { uri: string }; clientId: string }) => void> = [];
    const closeListeners: Array<(event: ClientTextDocumentChangeEvent<TextDocument>) => void> = [];
-   // The real registry, so the session table, the opens, the closing state and
-   // the open options behave as the store's do. The stub's plain-string keys
+   // The real registry, so the session table, the opens and the closing state
+   // behave as the store's do. The stub's plain-string keys
    // stand in for canonical URIs (one stub-boundary cast, like `fireClose`).
    const sessions = new ClientSessionRegistry();
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
@@ -265,12 +263,6 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       },
       get onDidCloseLastOpen() {
          return lastOpenClosed.event;
-      },
-      openOptions(uri, clientId) {
-         return sessions.openOptions(key(uri), clientId);
-      },
-      setOpenOptions(uri, clientId, options) {
-         sessions.setOpenOptions(key(uri), clientId, options);
       },
       openDocuments() {
          // From the registry that also answers `isOpenInClient`, which both

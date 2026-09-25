@@ -12,10 +12,11 @@ import {
    type CanonicalUri,
    asSnapshotVersion,
    ConflictError,
+   DefaultTracer,
    isConflictError,
    Logger,
-   type TransferElement,
-   type Tracer
+   NoopLogger,
+   type TransferElement
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
@@ -23,7 +24,7 @@ import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hy
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
-import { DocumentNotOpenError } from '../../../src/documents/client-session-errors.js';
+import { DocumentNotOpenError, DuplicateClientIdError } from '../../../src/documents/client-session-errors.js';
 import { type ClientSession } from '../../../src/langium/model-service/client-session.js';
 import { DefaultModelService, type ModelService } from '../../../src/langium/model-service/model-service.js';
 import { type ServerSharedServices } from '../../../src/langium/module.js';
@@ -55,15 +56,6 @@ const URI_A = 'file:///A.fake';
  */
 class DelayedModelService<TAst extends AstNode> extends DefaultModelService<TAst> {
    protected delayMs = 0;
-
-   /**
-    * The derived tracer the service actually calls. `Tracer.for` returns a NEW
-    * instance, so a spy installed on the bundle's shared slot never sees the
-    * service's own calls.
-    */
-   get boundTracer(): Tracer {
-      return this.tracer;
-   }
 
    setDelay(ms: number): void {
       this.delayMs = ms;
@@ -103,21 +95,48 @@ function openSession<TTransfer extends TransferElement = TransferElement>(
    return session;
 }
 
-function buildService(slowUpdateWarnMs?: number): {
+/** A captured line with the logger component it was emitted under. */
+interface AttributedLine extends CapturedLine {
+   readonly component: string | undefined;
+}
+
+/** A capturing logger that also records each line's component, which `makeCapturingLogger` drops. */
+function makeAttributingLogger(): { logger: Logger; lines: AttributedLine[] } {
+   const lines: AttributedLine[] = [];
+   class Attributing extends NoopLogger {
+      protected override emit(level: AttributedLine['level'], _label: string, message: string): void {
+         lines.push({ level, message, component: this.component });
+      }
+      protected override derive(component: string): this {
+         return new Attributing(component) as this;
+      }
+   }
+   return { logger: new Attributing(), lines };
+}
+
+/**
+ * The service is bound on the `model.ModelService` slot: the session factory
+ * builds its sessions over that slot, so a service constructed beside it would
+ * not see its sessions' rebuilds.
+ */
+function buildService(
+   slowUpdateWarnMs?: number,
+   logName?: string
+): {
    service: DelayedModelService<FakeRoot>;
    session: ClientSession<FakeRoot>;
-   lines: CapturedLine[];
+   lines: AttributedLine[];
 } {
-   const { logger, lines } = makeCapturingLogger();
+   const { logger, lines } = makeAttributingLogger();
    const clock = makeFakeClock();
-   // Bind the capturing logger so the service's `Tracer.for('ModelService')`
-   // derivation emits (timing + warn lines) into `lines`.
    const bundle = makeTestServices<FakeRoot>({
       clock,
       logger,
-      seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
+      modelService: services => new DelayedModelService<FakeRoot>(services),
+      clientSessionFactoryOptions: { slowUpdateWarnMs, logName }
    });
-   const service = new DelayedModelService<FakeRoot>(bundle.services, { slowUpdateWarnMs });
+   const service = bundle.modelService as DelayedModelService<FakeRoot>;
    return { service, session: openSession(service, bundle.textDocuments, 'test-client'), lines };
 }
 
@@ -210,6 +229,30 @@ describe('ModelService slow-warn', () => {
       expect(warns[0].message).toContain('client=test-client');
    });
 
+   it('logs under the ClientSession tracer, with the client id in a bracket of its own', async () => {
+      const { service, session, lines } = buildService(5);
+      service.setDelay(20);
+      await session.update(updateArgs);
+      const warn = lines.find(line => line.level === 'warn');
+      expect(warn?.component).toMatch(/^ClientSession\] \[test-client(\]|$)/);
+   });
+
+   it("logs under the factory's logName when one is set", async () => {
+      const { service, session, lines } = buildService(5, 'Sessions');
+      service.setDelay(20);
+      await session.update(updateArgs);
+      const warn = lines.find(line => line.level === 'warn');
+      expect(warn?.component).toMatch(/^Sessions\] \[test-client(\]|$)/);
+   });
+
+   it('warns on every update at a threshold of 0, which is set rather than off', async () => {
+      const { session, lines } = buildService(0);
+      await session.update(updateArgs);
+      const warns = lines.filter(line => line.level === 'warn');
+      expect(warns).toHaveLength(1);
+      expect(warns[0].message).toMatch(/Slow update: \d+ms ≥ 0ms/);
+   });
+
    it('does not warn when elapsed is below the configured threshold', async () => {
       const { session, lines } = buildService(10_000);
       // No delay — update should complete in single-digit milliseconds.
@@ -226,8 +269,21 @@ describe('ModelService slow-warn', () => {
    });
 });
 
+describe('ModelService createSession', () => {
+   it('registers the id before it calls the factory, so a duplicate id builds no session', () => {
+      const bundle = makeTestServices<FakeRoot>();
+      bundle.modelService.createSession('test', 'client-1');
+      const create = vi.spyOn(bundle.services.model.ClientSessionFactory, 'create');
+      expect(() => bundle.modelService.createSession('test', 'client-1')).toThrow(DuplicateClientIdError);
+      expect(create).not.toHaveBeenCalled();
+   });
+});
+
 describe('ModelService update profiling', () => {
-   afterEach(() => Logger.setLevel('info'));
+   afterEach(() => {
+      Logger.setLevel('info');
+      vi.restoreAllMocks();
+   });
 
    it('emits a per-stage profile breakdown of the update chain at debug level', async () => {
       const { session, lines } = buildService(undefined);
@@ -242,8 +298,8 @@ describe('ModelService update profiling', () => {
    });
 
    it('opens no profile session at the default info level', async () => {
-      const { service, session, lines } = buildService(undefined);
-      const profileSpy = vi.spyOn(service.boundTracer, 'profile');
+      const { session, lines } = buildService(undefined);
+      const profileSpy = vi.spyOn(DefaultTracer.prototype, 'profile');
 
       await session.update(updateArgs);
 
@@ -634,13 +690,13 @@ describe('ModelService update supersession', () => {
       const { logger, lines } = makeCapturingLogger();
       const bundle = makeTestServices<FakeRoot>({
          logger,
-         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 1 } }]
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 1 } }],
+         modelService: services => new DefaultModelService<FakeRoot>(services)
       });
-      const service = new DefaultModelService<FakeRoot>(bundle.services);
       // Current text-doc version = 1, matching `args.basedOn` at v1 so the
       // conflict gate stays inert; `AstDocumentManager.update` then bumps
       // to v2, making `appliedVersion = 2`.
-      const session = openSession(service, bundle.textDocuments, 'editor-1', 'v1');
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1', 'v1');
       return { session, lines, bundle };
    }
 
@@ -1014,8 +1070,8 @@ describe('ModelService per-state convenience methods', () => {
 });
 
 /**
- * Pins the slow-warn-gated stopwatch allocation in `update`
- * (`this.slowUpdateWarn !== undefined ? Clock.stopwatch() : undefined`).
+ * Pins the slow-warn-gated stopwatch allocation in a session's `update`: a
+ * stopwatch only when the factory's `slowUpdateWarnMs` is set.
  * When no threshold is configured the slow-warn path is dead, so the
  * stopwatch must NOT be allocated; when one is configured it must be.
  * Wraps the bound `Clock.stopwatch` to count allocations, so an
@@ -1035,10 +1091,11 @@ describe('ModelService update stopwatch allocation', () => {
       };
       const bundle = makeTestServices<FakeRoot>({
          clock,
-         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
+         modelService: services => new DelayedModelService<FakeRoot>(services),
+         clientSessionFactoryOptions: { slowUpdateWarnMs }
       });
-      const service = new DelayedModelService<FakeRoot>(bundle.services, { slowUpdateWarnMs });
-      return { session: openSession(service, bundle.textDocuments, 'test-client'), stopwatchCalls: () => calls };
+      return { session: openSession(bundle.modelService, bundle.textDocuments, 'test-client'), stopwatchCalls: () => calls };
    }
 
    it('does not allocate a stopwatch when slowUpdateWarnMs is undefined', async () => {

@@ -23,12 +23,18 @@ import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.
 import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 import type { Harness } from '@hydranium/protocol/testing';
 import { type AstNode, type AstNodeDescription, type WorkspaceLock } from '@hydranium/langium';
+import {
+   type ClientSessionFactory,
+   type ClientSessionFactoryOptions,
+   DefaultClientSessionFactory
+} from '../langium/model-service/client-session.js';
 import type { ModelService, ModelServiceOptions } from '../langium/model-service/model-service.js';
 import type { ServerSharedServices } from '../langium/module.js';
 import type { AstDiagnostic } from '../langium/validation/document-validator.js';
 import { DefaultTransferEncoder, type TransferEncoder } from '../langium/transfer/transfer-encoder.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
+import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import type { FakeDocumentOptions } from './fake-document.js';
 import { makeStubDocumentBuilder, type StubDocumentBuilder } from './stub-document-builder.js';
 import { makeStubIndexManager, type StubIndexManager } from './stub-index-manager.js';
@@ -85,6 +91,8 @@ export interface TestSharedServices<
       SelfSaveRegistry: StubSelfSaveRegistry;
       ProjectManager: StubProjectManager<TProject>;
       DocumentUriPolicy: DocumentUriPolicy;
+      /** The REAL queue: a stub that runs each task at once hides the save interleaving the queue exists to prevent. */
+      FileSystemTaskQueue: FileSystemTaskQueue;
       /**
        * Present only when {@link MakeTestServicesOptions.seedIndex} was passed.
        * Omitted otherwise for the same reason as `ServiceRegistry` — see that
@@ -105,6 +113,7 @@ export interface TestSharedServices<
    readonly model: {
       TransferEncoder: TransferEncoder<TTransferDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
+      ClientSessionFactory: ClientSessionFactory;
    };
    /**
     * The REAL services, not stubs — the framework renderer's no-catalogue
@@ -151,7 +160,7 @@ export interface MakeTestServicesOptions<
     *
     * **Default: no `ServiceRegistry` slot at all.** Binding an empty registry
     * by default would silently change behaviour for the tests that rely on the
-    * slot being absent — `ModelService.updateRewriteService` optional-chains it
+    * slot being absent — `ModelService.rewriteModel` optional-chains it
     * precisely for those bundles — so a registry appears only when a test asks
     * for one.
     */
@@ -209,11 +218,18 @@ export interface MakeTestServicesOptions<
    modelService?: (services: ServerSharedServices<TProject>) => ModelService<TAst, TDiagnostic, TTransfer>;
    /**
     * Framework {@link ModelServiceOptions} for the DEFAULT stub service, so a
-    * test can reach an option-gated path (`serializeBuilds`, the slow-warn
-    * threshold) without supplying a whole {@link modelService} factory. Ignored
-    * when `modelService` is given — that factory owns its own construction.
+    * test can reach an option-gated path (`serializeBuilds`) without supplying
+    * a whole {@link modelService} factory. Ignored when `modelService` is
+    * given — that factory owns its own construction.
     */
    modelServiceOptions?: ModelServiceOptions;
+   /**
+    * Options of the {@link DefaultClientSessionFactory} bound on
+    * `model.ClientSessionFactory`, so a test can reach the slow-update warn.
+    * Its sessions serialise and rebuild through the `model.ModelService` slot,
+    * so a test of a model service subclass passes it as {@link modelService}.
+    */
+   clientSessionFactoryOptions?: ClientSessionFactoryOptions;
    /**
     * Override the {@link TransferEncoder} factory. Default: framework
     * {@link TransferEncoder} with no overrides.
@@ -326,7 +342,7 @@ export function makeTestServices<
    // is dependency-free (as `HydraniumWorkspaceLock` is) — a no-op stub of a
    // synchronisation primitive hides the very interleaving it exists to prevent.
    //
-   // `model.TransferEncoder` / `model.ModelService` are populated below
+   // The `model` slots are populated below
    // (after the factories run); the literal uses unsafe casts to
    // partially-built objects to satisfy TestSharedServices, then patches
    // them in.
@@ -350,7 +366,8 @@ export function makeTestServices<
          // Spread for the same reason as `ServiceRegistry` above — the slot must
          // be genuinely ABSENT, not present-and-undefined, when no index was seeded.
          ...(indexManager ? { IndexManager: indexManager } : {}),
-         WorkspaceLock: new HydraniumWorkspaceLock()
+         WorkspaceLock: new HydraniumWorkspaceLock(),
+         FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: documentUriPolicy } })
       },
       model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic>['model'],
       ServerLocale: {} as ServerLocale,
@@ -380,9 +397,11 @@ export function makeTestServices<
    const mutableModel = services.model as {
       TransferEncoder: TransferEncoder<TTransferDiagnostic>;
       ModelService: ModelService<TAst, TDiagnostic, TTransfer>;
+      ClientSessionFactory: ClientSessionFactory;
    };
    mutableModel.TransferEncoder = transferEncoder;
    mutableModel.ModelService = modelService;
+   mutableModel.ClientSessionFactory = new DefaultClientSessionFactory(sharedServices, options.clientSessionFactoryOptions);
 
    return {
       services: sharedServices,

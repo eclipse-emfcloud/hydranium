@@ -35,11 +35,11 @@
  *
  * # Why a scratch workspace
  *
- * An in-memory `ModelService.update` is not the only write a test provokes: a
- * rebuild runs the integrity rules, whose default silent mode persists repairs
- * to every file no client holds with `writeFile` — and the cross-grammar test
- * below deliberately makes a `.process` effect dangle, which is exactly the
- * state a repair rule acts on.
+ * A client session's in-memory `update` is not the only write a test provokes:
+ * a rebuild runs the integrity rules, whose default silent mode persists
+ * repairs to every file no client holds with `writeFile` — and the
+ * cross-grammar test below deliberately makes a `.process` effect dangle, which
+ * is exactly the state a repair rule acts on.
  * Pointing this at `examples/order-flow/workspace` would let a test rewrite the
  * committed sample.
  */
@@ -428,7 +428,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       await data.proxy.watchModelDocument({ uri: processUri, clientId: 'coherence-sub' });
 
       // Edit THROUGH the GLSP head: a real operation, recording command,
-      // `ModelService.update`, rebuild on the shared builder.
+      // the diagram session's `updateAll`, rebuild on the shared builder.
       glsp.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE));
       await glsp.nextAction(RequestBoundsAction.KIND);
       await waitFor(() => data.events.length >= 1);

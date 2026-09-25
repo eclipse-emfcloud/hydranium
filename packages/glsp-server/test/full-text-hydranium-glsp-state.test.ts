@@ -123,8 +123,8 @@ function createState(harness: Harness): TestFullTextState {
    container.bind(ModelState).to(TestFullTextState).inSingletonScope();
    container.bind(TestFullTextState).toService(ModelState);
    const state = container.get(TestFullTextState);
-   // The diagram's session forwards to the service under its own id, as the
-   // framework's does, so the recorded calls carry that id.
+   // The diagram's session is stubbed to record through the service double,
+   // stamping its own id, so the recorded calls carry that id.
    state.modelSession = {
       clientId: 'test-client',
       update: (args: object) => sharedServices.model.ModelService.update({ ...args, clientId: 'test-client' } as UpdateCall)

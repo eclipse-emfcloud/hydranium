@@ -22,8 +22,8 @@
  * command ran, only that the document afterwards says what it should. The
  * write path is genuine — a recording command derives a patch from the transfer
  * projection, `ReconcilingMultiDocumentGlspState.updateSourceModel` persists it
- * through `ModelService.update`, and the document is re-parsed. So a mutation
- * the serializer cannot express fails here rather than at runtime.
+ * through its client session's `updateAll`, and the document is re-parsed. So a
+ * mutation the serializer cannot express fails here rather than at runtime.
  *
  * The workspace is a scratch copy: builds run the integrity rules, whose
  * default silent mode writes repairs to every file no client holds.

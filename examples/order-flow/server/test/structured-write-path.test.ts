@@ -8,9 +8,9 @@
  ********************************************************************************/
 
 /**
- * The **structured** write path: `ModelService.update` handed a transfer model
- * rather than pre-serialised text, which is what `DataServer.updateModelDocument`
- * does for every form-editor save.
+ * The **structured** write path: a client session's `update` handed a transfer
+ * model rather than pre-serialised text, which is what
+ * `DataServer.updateModelDocument` does for every form-editor save.
  *
  * This lives in the example, not in `core`, because `core` cannot reach it.
  * `makeTestServices` takes a `serialize` function and gives it to
@@ -74,7 +74,7 @@ async function writeAsForm(harness: OrderFlowHarness, uri: string, model: Transf
    await session.update({ uri, model, basedOn: 'anything' });
 }
 
-describe('order-flow structured write path — ModelService.update with a transfer model', () => {
+describe('order-flow structured write path — ClientSession.update with a transfer model', () => {
    it('writes back a .process transfer model with every cross-reference intact', async () => {
       const harness = await makeWorkspaceHarness();
       const uri = await loadCopy(harness, 'orders/fulfillment.process');

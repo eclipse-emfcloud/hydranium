@@ -15,6 +15,7 @@ import { URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
+import { type FileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -44,6 +45,7 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
    builder: ReturnType<typeof makeTestServices<FakeRoot>>['documentBuilder'];
    documents: ReturnType<typeof makeTestServices<FakeRoot>>['documents'];
    fileSystem: ReturnType<typeof makeTestServices<FakeRoot>>['fileSystem'];
+   queue: FileSystemTaskQueue;
 } {
    const bundle = makeTestServices<FakeRoot>({
       seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
@@ -56,7 +58,14 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
    } as ServerSharedServices;
    const manager = new DefaultAstDocumentManager<FakeRoot>(services, opts.managerOptions);
-   return { manager, textDocuments, builder: bundle.documentBuilder, documents: bundle.documents, fileSystem: bundle.fileSystem };
+   return {
+      manager,
+      textDocuments,
+      builder: bundle.documentBuilder,
+      documents: bundle.documents,
+      fileSystem: bundle.fileSystem,
+      queue: services.workspace.FileSystemTaskQueue
+   };
 }
 
 /** Open `uri` at `version` so the real text store records `clientId` as the version author. */
@@ -717,14 +726,14 @@ describe('AstDocumentManager disk queue', () => {
    });
 
    it('runs a queued disk task after the saves queued before it', async () => {
-      const { manager, fileSystem } = makeManagerHarness();
+      const { manager, fileSystem, queue } = makeManagerHarness();
       await openForSave(manager, URI_A, 'saved\n');
       const reads = parkReads(fileSystem);
       const order: string[] = [];
 
       const save = manager.save(URI_A, 'c1');
       await waitFor(() => reads.parked() === 1);
-      const task = manager.queueDiskTask(URI_A, async () => {
+      const task = queue.enqueue(URI_A, async () => {
          order.push(`task after ${fileSystem.writes.length} write`);
          return 'result';
       });

@@ -273,7 +273,7 @@ export class CanaryDataServer {
    }
 
    /** A second connection to this server: shares its state, and closing it ends nothing. */
-   connectSibling(): CanaryDataServer {
+   attach(): CanaryDataServer {
       return Object.assign(Object.create(this) as CanaryDataServer, { dispose: () => undefined });
    }
 

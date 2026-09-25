@@ -58,7 +58,7 @@ function batteryOver(defects: CanaryDefects = {}): ConformanceCheck[] {
    const connect = (): DataConformanceDriver<CanaryRoot, TransferDiagnostic> => server;
    return buildDataChecks<CanaryRoot, TransferDiagnostic>({
       connect,
-      connectSibling: () => server.connectSibling(),
+      attach: () => server.attach(),
       languages: [CANARY_FIXTURE],
       expectsProjects: true
    });

@@ -531,9 +531,9 @@ describe('rendering across a racing rebuild', () => {
  *
  * Asserted over the real wire rather than on the declaration, because the push
  * is what carries it: the framework coalesces per URI and drives the sync from a
- * build-phase settle, so a `ModelService.update` resolves long before the push
- * is sent — which is why the capture length is recorded before the write and
- * the wait armed after it.
+ * build-phase settle, so a client session's `update` resolves long before the
+ * push is sent — which is why the capture length is recorded before the write
+ * and the wait armed after it.
  */
 describe('the applyEdit undo label', () => {
    afterEach(() => {

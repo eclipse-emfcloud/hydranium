@@ -163,7 +163,7 @@ describe('data head sessions', () => {
       await head.proxy.openModelDocument({ uri, clientId: SESSION, options: { mode: 'compact' } });
       await head.proxy.openModelDocument({ uri: otherUri, clientId: SESSION });
       await head.proxy.watchModelDocument({ uri, clientId: SESSION });
-      expect(textDocuments.openOptions(uri, SESSION)).toEqual({ mode: 'compact' });
+      expect(services.shared.model.ModelService.getSession(SESSION)?.openOptions(uri)).toEqual({ mode: 'compact' });
 
       await head.proxy.closeSession({ clientId: SESSION });
 

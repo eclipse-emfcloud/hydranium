@@ -8,22 +8,13 @@
  ********************************************************************************/
 
 import {
-   type BasedOn,
    type CanonicalUri,
-   type CloseModelArgs,
-   ConflictError,
-   isSnapshotVersion,
    defineMessage,
-   Logger,
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
    type TransferElement,
-   type OpenModelArgs,
-   type Tracer,
-   type TransferSaveArgs,
-   type TransferUpdateAllArgs,
-   type TransferUpdateArgs
+   type Tracer
 } from '@hydranium/protocol';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
@@ -36,10 +27,9 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import { labelPhaseListener } from '../document-builder/labeled-phase-listener.js';
 import { LANGUAGE_CLIENT_ID } from '../../documents/client-ids.js';
-import { DocumentNotOpenError } from '../../documents/client-session-errors.js';
 import { type OpenOptions } from '../../documents/client-session-registry.js';
 import { type ServerSharedServices } from '../module.js';
-import { type ClientSession, type ClientSessionWriter, DefaultClientSession } from './client-session.js';
+import { type ClientSession } from './client-session.js';
 
 /**
  * The undo-stack entry for a server-authored write pushed to the editor.
@@ -76,29 +66,6 @@ class SaveSettleTimeoutError extends Error {}
  */
 export interface ModelServiceOptions extends LogNameOptions {
    /**
-    * When set, {@link DefaultModelService.update} logs a `warn` line if its
-    * end-to-end wait (serialise + content-change apply + rebuild +
-    * settled-phase wait) exceeds this many milliseconds. Default
-    * `undefined` (no warn line ever emitted; the underlying
-    * `Logger.time` debug timing log is unchanged either way).
-    *
-    * Pure observability — does NOT abort the update, does NOT change
-    * resolution semantics. Adopters wanting a hard timeout that throws
-    * instead override {@link DefaultModelService.update} on their subclass and
-    * race the parent call against their own deadline.
-    *
-    * Recommended starting threshold: 2-5 seconds for interactive paths
-    * (form save, diagram edit). Workspaces with very large documents
-    * or slow validation may legitimately exceed 5s on the cold path —
-    * tune per workspace.
-    *
-    * Accepts a {@link MaybeObservableValue} so the threshold can be a
-    * fixed constant or bound to a user setting via `Settings.number`
-    * and retuned live. Leaving it unset disables the warn line entirely
-    * (and skips the per-update stopwatch).
-    */
-   readonly slowUpdateWarnMs?: MaybeObservableValue<number>;
-   /**
     * Serialise the facade's own build under the workspace WRITE lock, the way
     * Langium's `DefaultDocumentUpdateHandler` dispatches its build. Default
     * `true`.
@@ -120,9 +87,9 @@ export interface ModelServiceOptions extends LogNameOptions {
     * option removes is the wasted pass, not just its visible symptom.
     *
     * **What `false` buys.** `WorkspaceLock` is not reentrant. A caller that
-    * reaches `update` / `save` / `rebuild` while already holding the write lock —
-    * an integrity rule or build-phase pass that writes through this facade —
-    * deadlocks: acquiring the lock cancels the running holder, and the new
+    * reaches a session's `update` / `save` or `rebuild` while already holding
+    * the write lock — an integrity rule or build-phase pass that writes
+    * back — deadlocks: acquiring the lock cancels the running holder, and the new
     * acquisition then waits for that holder to release while the holder waits
     * for this call. On `true` that shape is DETECTED and rejected with
     * {@link ReentrantWriteLockError} rather than hanging, wherever a host
@@ -174,15 +141,16 @@ export interface ModelServiceOptions extends LogNameOptions {
  *
  * **Read-latest supersession**
  *
- * The default `update` and `save` flows use Langium's per-URI
+ * A session's default `update` and `save` use Langium's per-URI
  * `DocumentBuilder.waitUntil` to wait for the integrity-settled landmark
  * ({@link IntegrityService.SettledState}), then read the post-build state. Concurrent
  * in-process callers on the same URI all see the latest post-build
  * snapshot — none deadlock waiting for a specific version's settled
  * event. Adopters wanting strict version-matched semantics (resolve
  * with vN's snapshot specifically, log "vN superseded by vM at vN+1")
- * override {@link update} to attach a phase-listener with explicit
- * version checks; the framework default doesn't need it for safety.
+ * override `DefaultClientSession.updateDocument` to attach a phase-listener
+ * with explicit version checks; the framework default doesn't need it for
+ * safety.
  *
  * **Returns AST snapshots, not wire envelopes**
  *
@@ -234,7 +202,7 @@ export interface ModelServiceOptions extends LogNameOptions {
  *   **Not the `TransferEncoder`'s parameter of the same name**, which is
  *   that encoder's OUTPUT and so names the wire shape. This one names its
  *   input, and an adopter binds the two to different types.
- * - `TTransfer` — transfer-model root accepted by `update` / `save`
+ * - `TTransfer` — transfer-model root a session's `update` / `save` accept
  *   args. Constrained to {@link TransferElement}. Defaults to the
  *   structural base.
  */
@@ -270,6 +238,11 @@ export interface ModelService<
 
    isOpen(uri: string): boolean;
    snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined;
+   /**
+    * The text a session's write of `model` to `uri` applies: a textual model
+    * as given, a structured one rewritten and serialised.
+    */
+   modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string>;
    getDocument(uri: string): LangiumDocument | undefined;
 
    onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
@@ -278,12 +251,16 @@ export interface ModelService<
 
    /**
     * Start a client session, the only way to open and write documents through
-    * this service. The id defaults to `label#` plus a random UUID; a fixed
+    * this service. Pass a `label` naming the participant; without one it is
+    * `session`. The id defaults to `label#` plus a random UUID; a fixed
     * `clientId` is taken as given. Throws `DuplicateClientIdError` when the id
     * is reserved by the framework, held by another live session, or has
     * documents open under it as a client that is not a session.
     *
-    * `TOpenOptions` types the options the session's `open` takes.
+    * `TOpenOptions` types the options the session's `open` takes and its
+    * `openOptions` returns. The narrowing is an unchecked cast, and it holds
+    * only for the caller that started the session: a holder reached through
+    * {@link getSession} sees plain `OpenOptions`.
     */
    createSession<TOpenOptions extends OpenOptions = OpenOptions>(
       label?: string,
@@ -297,7 +274,7 @@ export class DefaultModelService<
    TAst extends AstNode,
    TDiagnostic extends AstDiagnostic = AstDiagnostic,
    /**
-    * Structured payload accepted by `update` / `save`. Constrained to
+    * Structured payload a session's `update` / `save` accept. Constrained to
     * {@link TransferElement} — the minimal `{ readonly $type: string }`
     * shape. Both transfer-model overlay roots (which extend
     * `TransferElement` explicitly) and AST root types (which have
@@ -317,12 +294,6 @@ export class DefaultModelService<
     * (see {@link DocumentUriPolicy}).
     */
    protected readonly uriPolicy: DocumentUriPolicy;
-   /**
-    * Live slow-update-warn threshold cell, or `undefined` when the option
-    * was not supplied (warn line + stopwatch disabled). Reads `.value` per
-    * update so a setting-bound threshold retunes without reconstruction.
-    */
-   protected readonly slowUpdateWarn?: ObservableValue<number>;
    /** See {@link ModelServiceOptions.serializeBuilds}. Defaults to `true`. */
    protected readonly serializeBuilds: ObservableValue<boolean>;
 
@@ -385,7 +356,6 @@ export class DefaultModelService<
    ) {
       this.tracer = services.Tracer.for(options.logName ?? 'ModelService').trace('instantiated');
       this.uriPolicy = services.workspace.DocumentUriPolicy;
-      this.slowUpdateWarn = options.slowUpdateWarnMs !== undefined ? ObservableValue.from(options.slowUpdateWarnMs) : undefined;
       this.serializeBuilds = ObservableValue.from(options.serializeBuilds ?? true);
       // Optional-chain so a harness that binds no WorkspaceManager awaits
       // `undefined` and resolves immediately; production hosts always have it
@@ -526,6 +496,12 @@ export class DefaultModelService<
     * diagnostic. Opt out via
     * {@link ModelServiceOptions.serializeBuilds} — see there for the
     * non-reentrancy hazard that is the reason the opt-out exists.
+    *
+    * An override calls the base before it awaits. Under an LSP connection the
+    * store's change event has already asked the update handler to build a
+    * session's write; an override whose await outlasts that build makes the
+    * base's request start a build of its own, so the write is built and
+    * delivered twice.
     *
     * Returns an empty `{ root, diagnostics }` envelope when the document
     * cannot be loaded; adopters that want to throw override this method
@@ -691,192 +667,6 @@ export class DefaultModelService<
    }
 
    /**
-    * Apply a session's update for `uri`. The structured-or-textual `model`
-    * payload is serialised (via {@link serialize} after {@link rewriteModel}
-    * when structured), pushed into the multi-client text-document store with a
-    * fresh version, drives a build to the target phase, and returns the
-    * post-build AST snapshot. Reached through a session's `update`, as
-    * `args.clientId`; override it to change how every session writes.
-    *
-    * **Read-latest supersession**: concurrent callers on the same URI
-    * all see the same post-build state once `waitUntil` resolves; none
-    * deadlock waiting for a specific version's settled event. The
-    * framework emits a post-resolution `debug` log line distinguishing
-    * "vN ready" from "vN ready at vM (superseded)" so callers can
-    * observe when their write was overtaken by a newer one before
-    * settling — purely observability, doesn't change resolution
-    * semantics. Adopters wanting version-matched resolution (resolve
-    * with vN's specific settled snapshot, intermediate-phase
-    * observability, slow-warn / hard-timeout behaviour) override this
-    * method.
-    *
-    * **Opens nothing.** It fails with `DocumentNotOpenError` unless
-    * `args.clientId` has the URI open at the moment the text is applied.
-    */
-   protected async update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
-      const stopwatch = this.slowUpdateWarn !== undefined ? this.services.Clock.stopwatch() : undefined;
-      // Canonicalize the write URI once at the door and thread the resulting
-      // CanonicalUri through the chain. The text store keys documents by their
-      // canonical identity, so any spelling of a file — a canonical
-      // (server-identity) URI from a GLSP cross-document save derived from
-      // `findDocument(node).uri`, or the symlink path an editor opened — collapses
-      // to the one registration; there is no second registration to fork. The
-      // build step reuses the canonical wait core (`rebuildCanonical`) so the
-      // identity is not re-resolved downstream.
-      const uri = this.uriPolicy.canonicalUri(args.uri);
-      // Per-stage self-time breakdown of the update chain (serialise → apply →
-      // rebuild), opt-in at debug — the default path skips the session and
-      // `run` calls the stage directly. `update` is a per-operation method (one
-      // user save / diagram edit), not a per-node hot loop, so the stage
-      // closures `run` allocates on the non-debug path are negligible.
-      const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
-      const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (session ? session.scope(stage, fn) : fn());
-      // Checked at the door as well as at apply, so a write that cannot land is
-      // refused before any adopter serialiser runs; the apply-time checks are
-      // the ones that decide.
-      const textDocuments = this.services.workspace.TextDocuments;
-      this.checkOpen(uri, args.clientId);
-      this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
-      const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
-      const appliedVersion = await run('apply', () => {
-         // The open check sits in the same synchronous step as the apply: made
-         // before the serialize await instead, it passes for a write whose
-         // client closes the document during that await, and the write then
-         // lands on a document the client no longer has open.
-         this.checkOpen(uri, args.clientId);
-         // The gate again, in the same step as the apply: two writes based on
-         // one version both pass the check at the door while they serialise,
-         // and without this both apply.
-         this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
-         return this.services.workspace.AstDocumentManager.update(uri, text, args.clientId);
-      });
-      // Dispatch through the public `rebuild` (which re-canonicalizes the already-
-      // canonical `uri` once, idempotently) rather than `rebuildCanonical`, so an
-      // adopter `rebuild` override stays in the update path. The redundant call is
-      // a single kernel-cached `realpath`; correctness of the override contract
-      // wins over shaving it.
-      const doc = await run('rebuild', () => this.rebuild(uri, undefined, cancelToken));
-      const finalVersion = this.services.workspace.TextDocuments.version(uri);
-      if (finalVersion > appliedVersion) {
-         this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (superseded)`);
-      } else {
-         this.tracer.debug(`Update to v${appliedVersion} ready`);
-      }
-      if (this.slowUpdateWarn !== undefined && stopwatch) {
-         const elapsed = Math.round(stopwatch.elapsedMs);
-         const threshold = this.slowUpdateWarn.value;
-         if (elapsed >= threshold) {
-            this.tracer.withUri(uri).warn(`Slow update: ${elapsed}ms ≥ ${threshold}ms (v${appliedVersion}, client=${args.clientId})`);
-         }
-      }
-      // One line per stage (serialise / apply / rebuild) + unaccounted — only when profiling.
-      session?.report('debug');
-      return doc;
-   }
-
-   /** Throw `DocumentNotOpenError` unless `clientId` has `uri` open. */
-   protected checkOpen(uri: string, clientId: string): void {
-      if (!this.services.workspace.TextDocuments.isOpenInClient(uri, clientId)) {
-         throw new DocumentNotOpenError(uri, clientId);
-      }
-   }
-
-   /**
-    * Throw {@link ConflictError} when `basedOn` names a version other than
-    * `currentVersion`. {@link update} calls it at the door and again in the
-    * synchronous step that applies the text, and has to call it synchronously
-    * there: a check separated from the apply by an await lets two writes based
-    * on one version both apply.
-    */
-   protected checkBasedOn(uri: string, basedOn: BasedOn, currentVersion: number): void {
-      if (isSnapshotVersion(basedOn) && currentVersion !== basedOn) {
-         // Distinct from the post-build "superseded" debug line in `update`: this
-         // is a based-on-stale rejection (the write never applies), not two
-         // writes racing.
-         this.tracer.debug(`Conflict on ${uri}: based-on v${basedOn} stale, server at v${currentVersion}`);
-         throw new ConflictError(uri, basedOn, currentVersion);
-      }
-   }
-
-   /**
-    * Write several documents as `args.clientId`, all or none: every document is
-    * serialised first, then every open check and `basedOn` gate runs and every
-    * text is applied in one synchronous step, so a `ConflictError` or a
-    * `DocumentNotOpenError` leaves every document as it was. Reached through a
-    * session's `updateAll`. Resolves to the rebuilt documents, in the order
-    * given.
-    *
-    * Checked at the door as well as at apply, so a stale set is refused before
-    * any adopter serialiser runs.
-    *
-    * The apply step relies on `AstDocumentManager.update` applying its text
-    * before its first await, as the default does: an override that awaits first
-    * lets another write land between two documents of the set.
-    */
-   protected async updateAll(
-      args: TransferUpdateAllArgs<TTransfer>,
-      cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>[]> {
-      const { clientId, updates } = args;
-      const textDocuments = this.services.workspace.TextDocuments;
-      const uris = updates.map(update => this.uriPolicy.canonicalUri(update.uri));
-      if (new Set(uris).size !== uris.length) {
-         throw new Error(`updateAll names a document more than once: ${uris.join(', ')}`);
-      }
-      updates.forEach((update, i) => {
-         this.checkOpen(uris[i], clientId);
-         this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
-      });
-      const texts: string[] = [];
-      for (const [i, update] of updates.entries()) {
-         texts.push(await this.modelToText(uris[i], update.model, cancelToken));
-      }
-      // One synchronous step from the first check to the last apply: an await
-      // anywhere in it lets a close or another write land after its document
-      // was checked, and a set half-applied before a later check fails is what
-      // this method exists to rule out.
-      updates.forEach((update, i) => {
-         this.checkOpen(uris[i], clientId);
-         this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
-      });
-      const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], clientId));
-      await Promise.all(applied);
-      // Through the public `rebuild`, as in `update`, so an adopter override
-      // stays in the path.
-      return Promise.all(uris.map(uri => this.rebuild(uri, undefined, cancelToken)));
-   }
-
-   /**
-    * Persist `uri` to disk. Same content-change + settled-phase flow as
-    * {@link update}, then writes via the
-    * `WritableFileSystemProvider` and notifies the multi-client
-    * text-document store of the save (so any open LSP-side editor sees
-    * the `onDidSave` event regardless of who originated the persist).
-    * Reached through a session's `save`.
-    *
-    * Returns the post-save AST snapshot.
-    *
-    * Also fails with `DocumentNotOpenError` when `args.clientId` closes the URI
-    * while the text is being built, and writes nothing. Once the manager has
-    * taken the text, the write completes whatever the client does next.
-    */
-   protected async save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
-      // Dispatch through `update` (not its internals) so an adopter `update`
-      // override — version-matched resolution, etc. — applies to saves too.
-      const doc = await this.update(args, cancelToken);
-      // Persist under the same canonical identity `update` operated on. Writing
-      // the canonical (real) path follows any symlink to the same file, and the
-      // `onDidSave` keys the one canonical registration.
-      const uri = this.uriPolicy.canonicalUri(args.uri);
-      // In the same synchronous step as the manager taking the text: checked
-      // any earlier, a client that closes the URI during the rebuild still has
-      // the shared text, other clients' edits included, written in its name.
-      this.checkOpen(uri, args.clientId);
-      await this.services.workspace.AstDocumentManager.save(uri, args.clientId);
-      return doc;
-   }
-
-   /**
     * Wait for the document at `uri` to reach the integrity-settled landmark and
     * drain any in-flight write-path applyEdit sync chain (see {@link syncChains})
     * so every language client reflects the latest content before a save returns.
@@ -909,35 +699,6 @@ export class DefaultModelService<
             this.tracer.withUri(key).warn(`Save settle failed before the timeout — returning anyway. ${detail}`);
          }
       }
-   }
-
-   /**
-    * Open the document at `args.uri` on behalf of `args.clientId`, for a
-    * session's `open` and `create`. Multi-client: each (uri, clientId) pair is
-    * tracked as one registration; the underlying document stays open until
-    * the last client closes it. If `args.text` is omitted the document
-    * content is read from the `FileSystemProvider`.
-    *
-    * Delegates to the framework-bound
-    * `services.workspace.AstDocumentManager`. Adopter subclasses with
-    * extra open-time behaviour (logging, sync-chain bootstrapping)
-    * override on their `ModelService` subclass and call `super.open`.
-    *
-    * The open path does not thread cancellation: `AstDocumentManager.open`
-    * and the filesystem read behind it take no token, so a cancelled caller
-    * still completes the open.
-    */
-   protected async open(args: OpenModelArgs): Promise<void> {
-      await this.services.workspace.AstDocumentManager.open(args);
-   }
-
-   /**
-    * Close the document at `args.uri` for `args.clientId`, for a session's
-    * `close`. Counterpart to {@link open}; the underlying document stays open
-    * until every registered client has closed.
-    */
-   protected async close(args: CloseModelArgs): Promise<void> {
-      return this.services.workspace.AstDocumentManager.close(args);
    }
 
    /**
@@ -1014,7 +775,15 @@ export class DefaultModelService<
       });
       let session: ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
       try {
-         session = this.newSession<TOpenOptions>(id, sessionLabel);
+         // Unchecked: the session keeps whatever options its `open` is handed,
+         // and the factory types it for every grammar, so the narrowed type
+         // holds only for the caller that started it.
+         session = this.services.model.ClientSessionFactory.create(id, sessionLabel) as ClientSession<
+            TAst,
+            TDiagnostic,
+            TTransfer,
+            TOpenOptions
+         >;
       } catch (err: unknown) {
          textDocuments.closeSession(id);
          throw err;
@@ -1028,41 +797,35 @@ export class DefaultModelService<
    }
 
    /**
-    * Build the handle for a session {@link createSession} has already
-    * registered. The override point for a custom session class; narrow the
-    * return type to it.
+    * Convert a structured-or-textual `model` payload to its textual form.
     *
-    * Registration and the uniqueness check have already happened when this
-    * runs, so an override cannot skip them.
+    * Textual payloads (LSP / pre-serialised callers) pass through untouched.
+    * Structured payloads run the per-language `UpdateRewriteService` chain
+    * (transfer-model transforms; diff-aware rewrites see the previous AST root),
+    * then serialise. The chain is the single transfer-model-transform seam — a
+    * unary normalisation is just a rewrite that ignores `previous`, as
+    * `NormalizeEmptyStringsContribution` does. The chain is empty by
+    * default, so this is a no-op for adopters that register none.
     */
-   protected newSession<TOpenOptions extends OpenOptions = OpenOptions>(
-      clientId: string,
-      label: string
-   ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
-      return new DefaultClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>(
-         this,
-         this.sessionWriter(),
-         this.services,
-         clientId,
-         label
-      );
-   }
-
-   /**
-    * The writes a session makes, bound to this service's {@link open},
-    * {@link close}, {@link update}, {@link updateAll} and {@link save}. They
-    * are protected so that nothing writes except through a session, and bound
-    * here so that an override of any of them applies to every session's
-    * writes. A custom session built in {@link newSession} is handed this.
-    */
-   protected sessionWriter(): ClientSessionWriter<TAst, TDiagnostic, TTransfer> {
-      return {
-         open: args => this.open(args),
-         close: args => this.close(args),
-         update: (args, cancelToken) => this.update(args, cancelToken),
-         updateAll: (args, cancelToken) => this.updateAll(args, cancelToken),
-         save: (args, cancelToken) => this.save(args, cancelToken)
-      };
+   async modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string> {
+      if (typeof model === 'string') {
+         return model;
+      }
+      const rewritten = await this.rewriteModel(uri, model, cancelToken);
+      const target = UriUtils.toUri(uri);
+      const trivia = this.services.ServiceRegistry?.getServices(target)?.trivia?.TriviaService;
+      // Extracted BEFORE serializing, so it reads the document the write is
+      // about to replace rather than whatever a concurrent build left behind.
+      let document = this.services.workspace.LangiumDocuments.getDocument(target);
+      if (trivia !== undefined && document === undefined) {
+         const source = await this.textToTakeTriviaFrom(uri, target);
+         if (source !== undefined) {
+            document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
+         }
+      }
+      const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
+      const serialized = await this.serialize(uri, rewritten);
+      return extracted === undefined ? serialized : trivia!.apply(serialized, extracted, target);
    }
 
    // ============================================================
@@ -1265,13 +1028,13 @@ export class DefaultModelService<
     * Adopters whose serializer call shape differs (custom service
     * names, generator-driven YAML pretty printers, etc.) override this
     * method. Routes through `Serializer.serializeTransfer` because
-    * `ModelService.update` / `ModelService.save` always receive a
+    * a session's `update` / `save` always receive a
     * transfer-model shape (cross-references as plain strings) from
     * adopter callers — the AST-shape entry point is `serializeAst`.
     *
     * Returns {@link MaybePromise} so adopter `Serializer` overrides can be
     * async (remote schema lookup, external canonical-value resolution); the
-    * single caller ({@link modelToText} → {@link update}) is already `async`,
+    * single caller ({@link modelToText}) is already `async`,
     * so a naive `await` covers both branches without extra ceremony.
     */
    protected serialize(uri: string, root: TTransfer): MaybePromise<string> {
@@ -1282,38 +1045,6 @@ export class DefaultModelService<
    // ============================================================
    // Protected plumbing (override sparingly)
    // ============================================================
-
-   /**
-    * Convert a structured-or-textual `model` payload to its textual form.
-    *
-    * Textual payloads (LSP / pre-serialised callers) pass through untouched.
-    * Structured payloads run the per-language `UpdateRewriteService` chain
-    * (transfer-model transforms; diff-aware rewrites see the previous AST root),
-    * then serialise. The chain is the single transfer-model-transform seam — a
-    * unary normalisation is just a rewrite that ignores `previous`, as
-    * `NormalizeEmptyStringsContribution` does. The chain is empty by
-    * default, so this is a no-op for adopters that register none.
-    */
-   protected async modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string> {
-      if (typeof model === 'string') {
-         return model;
-      }
-      const rewritten = await this.rewriteModel(uri, model, cancelToken);
-      const target = UriUtils.toUri(uri);
-      const trivia = this.services.ServiceRegistry?.getServices(target)?.trivia?.TriviaService;
-      // Extracted BEFORE serializing, so it reads the document the write is
-      // about to replace rather than whatever a concurrent build left behind.
-      let document = this.services.workspace.LangiumDocuments.getDocument(target);
-      if (trivia !== undefined && document === undefined) {
-         const source = await this.textToTakeTriviaFrom(uri, target);
-         if (source !== undefined) {
-            document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
-         }
-      }
-      const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
-      const serialized = await this.serialize(uri, rewritten);
-      return extracted === undefined ? serialized : trivia!.apply(serialized, extracted, target);
-   }
 
    /**
     * The text a write into a document not yet built should take its trivia

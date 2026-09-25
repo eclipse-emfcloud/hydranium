@@ -511,9 +511,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       if (this.syncMode === 'silent') {
          const repaired = document.getText();
          // Async write so the integrity pass does not block the event loop on a slow filesystem.
-         // In the URI's disk queue, behind any save already queued: written
+         // In the file's task queue, behind any save already queued: written
          // beside one, the older repair can land last and stay on disk.
-         await this.services.shared.workspace.AstDocumentManager.queueDiskTask(document.uri, () =>
+         await this.services.shared.workspace.FileSystemTaskQueue.enqueue(document.uri, () =>
             this.fileSystemProvider.writeFile(UriUtils.toUri(document.uri), repaired)
          );
          return;
@@ -528,7 +528,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * the text the repair was computed from — so the write carries the repair
     * and nothing a holder could still discard.
     *
-    * The read, the compare and the write run as one task in the URI's disk
+    * The read, the compare and the write run as one task in the file's task
     * queue, so no save of the file lands between them. The store is compared
     * again once the read returns, and the write is skipped if it no longer
     * holds the repair: an edit does not wait for the queue, and writing the
@@ -540,7 +540,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    protected async persistIfDiskMatches(document: TextDocument, parsedFrom: string): Promise<void> {
       const uri = UriUtils.toUri(document.uri);
       const repaired = document.getText();
-      await this.services.shared.workspace.AstDocumentManager.queueDiskTask(document.uri, async () => {
+      await this.services.shared.workspace.FileSystemTaskQueue.enqueue(document.uri, async () => {
          let onDisk: string;
          try {
             onDisk = await this.fileSystemProvider.readFile(uri);

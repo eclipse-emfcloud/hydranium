@@ -16,7 +16,7 @@
  * four outcomes by making a fake `ModelService.update` throw, which settles what
  * each branch DOES. What a stub cannot show is that the gate ever ARMS in a real
  * head: the based-on version travels from `setSourceRoot` through the recording
- * command's capture into `ModelService.update`, and one stale link anywhere
+ * command's capture into the session's `updateAll`, and one stale link anywhere
  * along that chain turns every conflict into an ordinary write that silently
  * clobbers the other writer, with no error to show for it.
  *

@@ -85,7 +85,7 @@ function makeComposition(): Composition {
          SelfSaveRegistry: { isRegistered: () => false },
          FileSystemProvider: { exists: async () => true },
          DocumentUriPolicy: new DefaultDocumentUriPolicy(),
-         AstDocumentManager: { queueDiskTask: (_uri: string, task: () => Promise<unknown>) => task() },
+         FileSystemTaskQueue: { enqueue: (_uri: string, task: () => Promise<unknown>) => task() },
          BuildPhasePassService: {
             register: (pass: CapturedPass) => {
                capturedPass = pass;

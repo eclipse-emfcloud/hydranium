@@ -46,13 +46,20 @@ import {
    type WillSaveTextDocumentParams
 } from 'vscode-languageserver';
 import { type DocumentUri, TextDocument, type TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
-import { type CanonicalUri, type LanguageClientUri, asLanguageClientUri, DisposableCollection, type Tracer } from '@hydranium/protocol';
+import {
+   type CanonicalUri,
+   type LanguageClientUri,
+   asLanguageClientUri,
+   DisposableCollection,
+   type Stopwatch,
+   type Tracer
+} from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { HYDRANIUM_BUILD_REASONS } from '../langium/document-builder/document-builder.js';
 import { isConnectionGoneError } from '../util/connection-liveness.js';
 import { LANGUAGE_CLIENT_ID } from './client-ids.js';
 import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
-import { type ClientSessionClosedEvent, ClientSessionRegistry, type OpenOptions, type SessionEndCause } from './client-session-registry.js';
+import { type ClientSessionClosedEvent, ClientSessionRegistry, type SessionEndCause } from './client-session-registry.js';
 import { isFullReplace, LanguageClientTextShadow } from './language-client-text-shadow.js';
 
 /**
@@ -81,18 +88,28 @@ export interface HydraniumTextDocumentsOptions<T extends TextDocument = TextDocu
    readonly configuration?: TextDocumentsConfiguration<T>;
    /**
     * How long a document whose last open closed because its client's
-    * connection was lost keeps its text before it reverts to disk. An open of
-    * the document within that time cancels the revert, so a client that
-    * registers again after a dropped connection finds its unsaved edits.
-    * Meanwhile the document counts as open for the integrity service, which
-    * therefore writes none of its unsaved text to disk. A close the client
-    * makes itself, or ending its session, reverts at once whatever this is.
+    * connection was lost keeps its text before it reverts to disk. An open by
+    * a client lost from the document, within this time of its own loss,
+    * cancels the revert, so a client that registers again under its id after
+    * a dropped connection finds its unsaved edits. Any other open releases the
+    * document first and then opens it as a first open does, from the text the
+    * opener supplies (an editor's own) or else from the file. Meanwhile the
+    * document counts as open for the integrity service, which therefore writes
+    * none of its unsaved text to disk. A close the client makes itself, or
+    * ending its session, reverts at once whatever this is.
     *
-    * Defaults to `0`: such a document reverts at once as well, released in
-    * the close itself rather than on a timer.
+    * Defaults to 10 s. `0` reverts such a document at once as well, released
+    * in the close itself rather than on a timer.
     */
    readonly revertGraceMs?: number;
 }
+
+/**
+ * The default of {@link HydraniumTextDocumentsOptions.revertGraceMs}: long
+ * enough for a client whose connection dropped to register again and reopen
+ * its documents, which a data client does as soon as it has a connection.
+ */
+const DEFAULT_REVERT_GRACE_MS = 10_000;
 
 /** Delivered by {@link HydraniumTextDocuments.onDidSaveInLanguageClient}. */
 export interface LanguageClientSavedEvent {
@@ -146,6 +163,22 @@ export interface DocumentTrackingRecord {
     * record on last close.
     */
    languageClientUris?: Set<LanguageClientUri>;
+   /**
+    * The clients whose close of this document was caused by a lost connection
+    * and that have not opened it again, each with a stopwatch started at its
+    * loss on the store's `Clock`. While the document waits out the revert grace, only an
+    * open by one of them within its own
+    * {@link HydraniumTextDocumentsOptions.revertGraceMs} of that loss cancels
+    * the revert. Every such client counts, not only the last to close: one
+    * connection's sessions all end lost together, and any of them may reopen
+    * first. Without the time limit, a client that returns late inherits the
+    * unsaved text of a holder lost after it. A stopwatch rather than a `now()`
+    * reading, because a wall-clock step would otherwise expire a claim early or
+    * revive one past its grace, against a grace timer that the step leaves
+    * alone. An entry past its grace counts as any other client's and is pruned
+    * at the next open of the document.
+    */
+   lostClients?: Map<string, Stopwatch>;
 }
 
 /**
@@ -409,7 +442,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          (uri, reason) => this.tracer.with(uri).warn(`Diff apply-verify fallback (${reason}) — using full-document replace`),
          this
       );
-      this.revertGraceMs = options.revertGraceMs ?? 0;
+      this.revertGraceMs = options.revertGraceMs ?? DEFAULT_REVERT_GRACE_MS;
       this.onDidCloseLastOpen(event => void this.revertToDisk(event.uri));
    }
 
@@ -673,7 +706,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (!this.__sessions.removeOpen(uri, clientId)) {
          return;
       }
-      this.__documents.get(uri)?.clientVersions.delete(clientId);
+      const record = this.__documents.get(uri);
+      record?.clientVersions.delete(clientId);
+      if (record && cause === 'lost') {
+         (record.lostClients ??= new Map()).set(clientId, this.services.Clock.stopwatch());
+      }
       const syncedDocument = this.__syncedDocuments.get(uri);
       if (syncedDocument !== undefined) {
          this.log(syncedDocument.uri, `Closed synced document: ${syncedDocument.version} by ${this.formatClientId(clientId)}`);
@@ -700,8 +737,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
 
    /**
     * Keep the document, text and all, for the revert grace, then release it.
-    * The document stays in the store meanwhile, so an open within the grace
-    * attaches to it and finds the unsaved text rather than reading disk.
+    * The document stays in the store meanwhile, so a lost client that opens it
+    * again within its own grace attaches to it and finds its unsaved text
+    * rather than reading disk; see {@link resolvePendingRevert} for any other
+    * open.
     */
    protected deferRelease(uri: CanonicalUri): void {
       this.log(uri, `No client left; revert deferred for ${this.revertGraceMs} ms (connection lost)`);
@@ -712,6 +751,38 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          }
       }, this.revertGraceMs);
       this.__sessions.deferRevert(uri, timer);
+   }
+
+   /**
+    * Resolve the pending revert of `uri` for an open by `clientId`. An open by a
+    * client lost from the document within its grace cancels the revert, and
+    * the client finds its unsaved text. Any other open releases the document
+    * first, so it opens as a first open does: cancelling for every open hands
+    * a lost client's unsaved text to whoever opens next, a reloaded page or an
+    * editor, with nothing marking it unsaved.
+    */
+   protected resolvePendingRevert(uri: CanonicalUri, clientId: string): void {
+      const record = this.__documents.get(uri);
+      if (record) {
+         this.pruneLostClients(record);
+      }
+      const returning = record?.lostClients?.delete(clientId) ?? false;
+      if (!this.__sessions.isRevertPending(uri)) {
+         return;
+      }
+      this.__sessions.cancelRevert(uri);
+      if (!returning) {
+         this.releaseDocument(uri);
+      }
+   }
+
+   /** Drop the entries of {@link DocumentTrackingRecord.lostClients} whose grace has run out. */
+   protected pruneLostClients(record: DocumentTrackingRecord): void {
+      for (const [clientId, sinceLoss] of record.lostClients ?? []) {
+         if (sinceLoss.elapsedMs >= this.revertGraceMs) {
+            record.lostClients?.delete(clientId);
+         }
+      }
    }
 
    /**
@@ -770,7 +841,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       try {
          // Read before the lock: every build and read waits while the lock is
          // held, and this read waits on the file's save I/O.
-         const onDisk = await workspace.AstDocumentManager.queueDiskTask(uri, () => workspace.FileSystemProvider.exists(target));
+         const onDisk = await workspace.FileSystemTaskQueue.enqueue(uri, () => workspace.FileSystemProvider.exists(target));
          await workspace.WorkspaceManager?.ready;
          await workspace.WorkspaceLock.write(async token => {
             if (reopened()) {
@@ -851,7 +922,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // clients keep their unsaved state until the next save of the document.
       let onDisk: string | undefined;
       try {
-         onDisk = await this.services.workspace.AstDocumentManager.queueDiskTask(uri, () =>
+         onDisk = await this.services.workspace.FileSystemTaskQueue.enqueue(uri, () =>
             this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(uri))
          );
       } catch (err: unknown) {
@@ -886,7 +957,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    public notifyDidOpenTextDocument(event: DidOpenTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const td = event.textDocument;
       const uri = this.documentKey(td.uri);
-      this.__sessions.cancelRevert(uri);
+      this.resolvePendingRevert(uri, clientId);
       if (this.isOpenInClient(uri, clientId)) {
          // Already open for this client under this canonical identity. If this is a
          // NEW client-facing URI for the same file (a second tab reached via a
@@ -988,16 +1059,21 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * Unifying the two routes therefore rebaselines a textual client's guard to a
     * version it never declared.
     *
-    * Returns whether a hold was added — `false` when `uri` is not open, or
-    * `clientId` already holds it.
+    * Returns whether a hold was added — `false` when `uri` is not open,
+    * `clientId` already holds it, or the document was waiting out the revert
+    * grace for other clients and was released instead (see
+    * {@link resolvePendingRevert}); the caller then opens it anew.
     */
    attachClient(uri: DocumentUri, clientId: string): boolean {
       const key = this.documentKey(uri);
-      const document = this.__syncedDocuments.get(key);
-      if (!document || this.isOpenInClient(key, clientId)) {
+      if (!this.__syncedDocuments.has(key) || this.isOpenInClient(key, clientId)) {
          return false;
       }
-      this.__sessions.cancelRevert(key);
+      this.resolvePendingRevert(key, clientId);
+      const document = this.__syncedDocuments.get(key);
+      if (!document) {
+         return false;
+      }
       const existingClients = this.__sessions.clientsOf(key);
       this.__sessions.addOpen(key, clientId);
       const record = this.trackingFor(key);
@@ -1254,8 +1330,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
 
    /**
     * Fires once a document no client has open is released: at its last close,
-    * or when the revert grace of a lost client's last close runs out with no
-    * new open. The document then reverts to disk.
+    * or, for a lost client's last close, when its revert grace runs out,
+    * another client opens it, or it is deleted. The document then reverts to
+    * disk.
     */
    get onDidCloseLastOpen(): Event<LastOpenClosedEvent> {
       return this.lastOpenClosedEmitter.event;
@@ -1309,16 +1386,6 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.tracer.info(`Session closed: ${this.formatClientId(clientId)}`);
          this.tracer.trace(`Session closed: ${clientId}`);
       }
-   }
-
-   /** The options `clientId` opened `uri` with, or `undefined` when it gave none or does not have it open. */
-   openOptions(uri: DocumentUri, clientId: string): OpenOptions | undefined {
-      return this.__sessions.openOptions(this.documentKey(uri), clientId);
-   }
-
-   /** Replace the options of an existing open. Does nothing when `clientId` does not have `uri` open. */
-   setOpenOptions(uri: DocumentUri, clientId: string, options: OpenOptions | undefined): void {
-      this.__sessions.setOpenOptions(this.documentKey(uri), clientId, options);
    }
 
    /**

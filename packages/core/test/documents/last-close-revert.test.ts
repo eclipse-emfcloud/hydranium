@@ -20,6 +20,8 @@ import { describe, expect, it } from 'vitest';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
+import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
@@ -27,8 +29,15 @@ const FILE = URI.file('/hydranium-test/revert.a').toString();
 const DISK = 'on disk\n';
 const EDITED = 'edited\n';
 
+/** Shows the ids the store holds as lost, which no behaviour tells apart from pruned ones. */
+class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
+   lostClientIds(uri: string): string[] {
+      return [...(this.__documents.get(this.documentKey(uri))?.lostClients?.keys() ?? [])];
+   }
+}
+
 interface RevertRig {
-   readonly docs: HydraniumTextDocuments<TextDocument>;
+   readonly docs: InspectableTextDocuments;
    readonly clock: FakeClock;
    /** Every `DocumentBuilder.update` dispatched under the write lock, with the reason staged for it. */
    readonly builds: Array<{ changed: string[]; deleted?: string[]; reason: string | undefined }>;
@@ -43,6 +52,8 @@ interface RevertRig {
    holdLock(): { release: () => void };
    /** Fail the next `DocumentBuilder.update` with `error`. */
    failNextBuild(error: Error): void;
+   /** Step the wall clock (`now()`) by `ms`, as a time sync does, leaving timers and stopwatches alone. */
+   jumpWallClock(ms: number): void;
 }
 
 function makeRig(revertGraceMs?: number): RevertRig {
@@ -50,11 +61,13 @@ function makeRig(revertGraceMs?: number): RevertRig {
    const builds: Array<{ changed: string[]; deleted?: string[]; reason: string | undefined }> = [];
    const errors: string[] = [];
    let staged: string | undefined;
-   let queueTail: Promise<unknown> = Promise.resolve();
+   const uriPolicy = new DefaultDocumentUriPolicy();
+   const fileSystemTaskQueue = new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } });
    let lockTail: Promise<unknown> = Promise.resolve();
    let nextBuildFailure: Error | undefined;
    const onDisk = new Set<string>([FILE]);
    let existenceChecks = 0;
+   let wallOffsetMs = 0;
    const noop = makeNoopTracer();
    const recordError = (message: string): void => {
       errors.push(message);
@@ -68,10 +81,10 @@ function makeRig(revertGraceMs?: number): RevertRig {
       trace: () => tracer
    });
    const services = {
-      Clock: clock,
+      Clock: { ...clock, now: () => clock.now() + wallOffsetMs },
       Tracer: { for: () => tracer },
       workspace: {
-         DocumentUriPolicy: new DefaultDocumentUriPolicy(),
+         DocumentUriPolicy: uriPolicy,
          WorkspaceManager: { ready: Promise.resolve() },
          WorkspaceLock: { write: (action: (token: unknown) => unknown) => lockTail.then(() => action(undefined)) },
          DocumentBuilder: {
@@ -98,16 +111,10 @@ function makeRig(revertGraceMs?: number): RevertRig {
                return onDisk.has(uri.toString());
             }
          },
-         AstDocumentManager: {
-            queueDiskTask: <T>(_uri: string, task: () => Promise<T>): Promise<T> => {
-               const result = queueTail.then(task);
-               queueTail = result.catch(() => undefined);
-               return result;
-            }
-         }
+         FileSystemTaskQueue: fileSystemTaskQueue
       }
    } as unknown as ServerSharedServices;
-   const docs = new HydraniumTextDocuments<TextDocument>(services, { revertGraceMs });
+   const docs = new InspectableTextDocuments(services, { revertGraceMs });
    return {
       docs,
       clock,
@@ -118,7 +125,7 @@ function makeRig(revertGraceMs?: number): RevertRig {
       holdQueue: () => {
          let release!: () => void;
          const held = new Promise<void>(resolve => (release = resolve));
-         queueTail = queueTail.then(() => held);
+         void fileSystemTaskQueue.enqueue(FILE, () => held);
          return { release };
       },
       holdLock: () => {
@@ -129,6 +136,9 @@ function makeRig(revertGraceMs?: number): RevertRig {
       },
       failNextBuild: error => {
          nextBuildFailure = error;
+      },
+      jumpWallClock: ms => {
+         wallOffsetMs += ms;
       }
    };
 }
@@ -289,8 +299,8 @@ describe('HydraniumTextDocuments — revert on last close', () => {
 
    it('logs a revert whose queue wait fails', async () => {
       const { docs, errors } = makeRig();
-      const services = docs['services'] as unknown as { workspace: { AstDocumentManager: { queueDiskTask: () => Promise<never> } } };
-      services.workspace.AstDocumentManager.queueDiskTask = () => Promise.reject(new Error('queue broke'));
+      const services = docs['services'] as unknown as { workspace: { FileSystemTaskQueue: { enqueue: () => Promise<never> } } };
+      services.workspace.FileSystemTaskQueue.enqueue = () => Promise.reject(new Error('queue broke'));
       open(docs, 'form');
 
       close(docs, 'form');
@@ -300,7 +310,7 @@ describe('HydraniumTextDocuments — revert on last close', () => {
    });
 
    it('releases the document at once when the grace is 0, even for a lost client', () => {
-      const { docs } = makeRig();
+      const { docs } = makeRig(0);
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
 
@@ -312,6 +322,50 @@ describe('HydraniumTextDocuments — revert on last close', () => {
 });
 
 describe('HydraniumTextDocuments — revert grace', () => {
+   it('keeps a lost client’s document for 10 s when no grace is configured', async () => {
+      const { docs, builds, clock } = makeRig();
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+
+      close(docs, 'form', 'lost');
+      clock.advance(9_999);
+      await settle();
+      expect(docs.get(FILE)?.getText()).toBe(EDITED);
+      expect(builds).toEqual([]);
+
+      clock.advance(1);
+      await settle();
+      expect(docs.get(FILE)).toBeUndefined();
+      expect(builds).toEqual([{ changed: [FILE], reason: 'didClose' }]);
+   });
+
+   it('removes, and logs no error for, a document whose file is gone when its grace runs out', async () => {
+      // A grace outlives what it was granted for: a workspace torn down
+      // meanwhile has no file left to revert to.
+      const { docs, builds, errors, onDisk, clock } = makeRig(1000);
+      open(docs, 'form');
+      close(docs, 'form', 'lost');
+
+      onDisk.clear();
+      clock.advance(1000);
+      await settle();
+
+      expect(builds).toEqual([{ changed: [], deleted: [FILE], reason: 'didClose' }]);
+      expect(errors).toEqual([]);
+   });
+
+   it('logs no error for a revert whose grace runs out after the connection went away', async () => {
+      const { docs, errors, failNextBuild, clock } = makeRig(1000);
+      open(docs, 'form');
+      close(docs, 'form', 'lost');
+
+      failNextBuild(new Error('Connection is disposed.'));
+      clock.advance(1000);
+      await settle();
+
+      expect(errors).toEqual([]);
+   });
+
    it('keeps the text of a document whose last client was lost until the grace runs out', async () => {
       const { docs, builds, clock } = makeRig(1000);
       open(docs, 'form');
@@ -333,13 +387,13 @@ describe('HydraniumTextDocuments — revert grace', () => {
       expect(builds).toEqual([{ changed: [FILE], reason: 'didClose' }]);
    });
 
-   it('hands the unsaved text to a client that opens the document within the grace, and never reverts', async () => {
+   it('hands the unsaved text back to the lost client when it opens the document within the grace, and never reverts', async () => {
       const { docs, builds, clock } = makeRig(1000);
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
       close(docs, 'form', 'lost');
 
-      open(docs, 'form-again');
+      open(docs, 'form');
       expect(docs.isRevertPending(FILE)).toBe(false);
       clock.advance(5000);
       await settle();
@@ -349,19 +403,162 @@ describe('HydraniumTextDocuments — revert grace', () => {
       expect(builds.filter(build => build.reason === 'didClose')).toEqual([]);
    });
 
-   it('cancels the revert for a client that attaches within the grace', async () => {
+   it('keeps the unsaved text for any client lost from the document, not only the last to close', () => {
+      const { docs } = makeRig(1000);
+      open(docs, 'form');
+      open(docs, 'tree');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+      close(docs, 'tree', 'lost');
+
+      open(docs, 'form');
+
+      expect(docs.get(FILE)?.getText()).toBe(EDITED);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('reverts for a lost client that opens the document after its own grace, though a later loss keeps the document waiting', () => {
+      const { docs, clock } = makeRig(1000);
+      const released: string[] = [];
+      docs.onDidCloseLastOpen(event => released.push(event.uri));
+      open(docs, 'x');
+      open(docs, 'e');
+      close(docs, 'x', 'lost');
+      docs.applyContentChange(FILE, EDITED, 'e');
+      clock.advance(500);
+      close(docs, 'e', 'lost');
+      clock.advance(700);
+
+      open(docs, 'x');
+
+      expect(released).toEqual([FILE]);
+      expect(docs.get(FILE)?.getText()).toBe(DISK);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it.each([
+      ['x', 'e'],
+      ['e', 'x']
+   ])('keeps all the text for two clients lost within the grace with an edit between the losses, %s reopening first', (first, second) => {
+      const { docs, clock } = makeRig(1000);
+      open(docs, 'x');
+      open(docs, 'e');
+      close(docs, 'x', 'lost');
+      clock.advance(300);
+      docs.applyContentChange(FILE, EDITED, 'e');
+      close(docs, 'e', 'lost');
+      clock.advance(300);
+
+      open(docs, first);
+      open(docs, second);
+
+      expect(docs.get(FILE)?.getText()).toBe(EDITED);
+      expect(docs.isOpenInClient(FILE, 'x')).toBe(true);
+      expect(docs.isOpenInClient(FILE, 'e')).toBe(true);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('forgets lost clients whose grace has run out while another client keeps the document open', () => {
+      const { docs, clock } = makeRig(1000);
+      open(docs, LANGUAGE_CLIENT_ID);
+      for (let i = 0; i < 5; i++) {
+         open(docs, `page#${i}`);
+         close(docs, `page#${i}`, 'lost');
+      }
+      clock.advance(1000);
+
+      open(docs, 'page#5');
+      close(docs, 'page#5', 'lost');
+
+      expect(docs.lostClientIds(FILE)).toEqual(['page#5']);
+   });
+
+   it('hands the unsaved text back to a lost client within its grace though the wall clock jumps forward', () => {
+      const { docs, clock, jumpWallClock } = makeRig(1000);
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+      clock.advance(100);
+      jumpWallClock(5000);
+
+      open(docs, 'form');
+
+      expect(docs.get(FILE)?.getText()).toBe(EDITED);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('reverts for a lost client past its grace though the wall clock jumps back', () => {
+      const { docs, clock, jumpWallClock } = makeRig(1000);
+      open(docs, 'x');
+      open(docs, 'e');
+      close(docs, 'x', 'lost');
+      jumpWallClock(-60_000);
+      clock.advance(5000);
+      docs.applyContentChange(FILE, EDITED, 'e');
+      close(docs, 'e', 'lost');
+
+      open(docs, 'x');
+
+      expect(docs.get(FILE)?.getText()).toBe(DISK);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('reverts first for another client that opens the document within the grace, which gets the disk text', () => {
+      const { docs } = makeRig(1000);
+      const released: string[] = [];
+      docs.onDidCloseLastOpen(event => released.push(event.uri));
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+
+      open(docs, 'other');
+
+      expect(released).toEqual([FILE]);
+      expect(docs.get(FILE)?.getText()).toBe(DISK);
+      expect(docs.isOpenInClient(FILE, 'other')).toBe(true);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('releases the unsaved text first for an editor that opens the document within the grace, which keeps its own text', () => {
+      const { docs } = makeRig(1000);
+      const released: string[] = [];
+      docs.onDidCloseLastOpen(event => released.push(event.uri));
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+
+      const editorText = 'in the editor\n';
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: FILE, languageId: 'plaintext', version: 0, text: editorText } });
+
+      expect(released).toEqual([FILE]);
+      expect(docs.get(FILE)?.getText()).toBe(editorText);
+      expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('cancels the revert for the lost client when it attaches within the grace', async () => {
       const { docs, builds, clock } = makeRig(1000);
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
       close(docs, 'form', 'lost');
 
-      expect(docs.attachClient(FILE, 'diagram')).toBe(true);
+      expect(docs.attachClient(FILE, 'form')).toBe(true);
       expect(docs.isRevertPending(FILE)).toBe(false);
       clock.advance(5000);
       await settle();
 
       expect(docs.get(FILE)?.getText()).toBe(EDITED);
       expect(builds).toEqual([]);
+   });
+
+   it('releases the document instead of attaching another client within the grace', () => {
+      const { docs } = makeRig(1000);
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+
+      expect(docs.attachClient(FILE, 'diagram')).toBe(false);
+      expect(docs.get(FILE)).toBeUndefined();
+      expect(docs.isRevertPending(FILE)).toBe(false);
    });
 
    it('reverts at once on an explicit close, whatever the grace', async () => {

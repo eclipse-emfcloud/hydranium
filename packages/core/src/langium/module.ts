@@ -15,6 +15,7 @@ import { HydraniumLangiumProfiler } from './diagnostics/hydranium-langium-profil
 import { type AstNode, type Module } from '@hydranium/langium';
 import { type DefaultSharedModuleContext, type LangiumSharedServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
+import { type ClientSessionFactory, DefaultClientSessionFactory } from './model-service/client-session.js';
 import { DefaultModelService, type ModelService } from './model-service/model-service.js';
 import { type ProjectManager } from './project/project-manager.js';
 import { SingleProjectManager } from './project/single-project-manager.js';
@@ -35,6 +36,7 @@ import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/do
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { DefaultAstDocumentManager, type AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from '../documents/self-save-registry.js';
+import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import { DefaultEmptyFileSystemProvider } from './workspace/file-system-provider.js';
 import { type ServerLanguageServices } from './language-module.js';
 import { ExtendedServiceRegistry } from './service-registry.js';
@@ -218,6 +220,12 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
        */
       AstDocumentManager: AstDocumentManager<AstNode>;
       /**
+       * Orders the server's disk accesses of each file. One slot for every
+       * reader and writer: a service given a queue of its own does not order
+       * against the others.
+       */
+      FileSystemTaskQueue: FileSystemTaskQueue;
+      /**
        * Wires the framework's build-time features (integrity, AST
        * enrichment) into Langium's build pipeline: owns the build-phase
        * listeners and routes each document to the relevant feature
@@ -273,6 +281,8 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
    model: {
       TransferEncoder: TransferEncoder;
       ModelService: ModelService<AstNode>;
+      /** Builds the handle of every session `ModelService.createSession` starts. */
+      ClientSessionFactory: ClientSessionFactory;
    };
    /**
     * Shared contribution group for batch-level build-phase passes (see
@@ -507,6 +517,7 @@ export function createServerSharedModule(
             return new DefaultEmptyFileSystemProvider(services);
          },
          AstDocumentManager: services => new DefaultAstDocumentManager(services),
+         FileSystemTaskQueue: services => new DefaultFileSystemTaskQueue(services),
          // Eagerly constructed, so its build-phase listeners attach before the
          // first build.
          BuildPipelineIntegration: services => new DefaultBuildPipelineIntegration(services),
@@ -519,7 +530,8 @@ export function createServerSharedModule(
          // Generic walker — adopters with a typed `$type → wire shape` overlay
          // rebind this slot with a subclass.
          TransferEncoder: services => new DefaultTransferEncoder(services),
-         ModelService: services => new DefaultModelService(services)
+         ModelService: services => new DefaultModelService(services),
+         ClientSessionFactory: services => new DefaultClientSessionFactory(services)
       },
       // Empty default so `services.buildPhasePasses` always resolves (Langium
       // throws on access to an unbound slot). The framework's own integrity /

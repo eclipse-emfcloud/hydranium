@@ -22,9 +22,9 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
 
 /**
  * Minimal stub of {@link AstDocumentManager} for use in test
- * harnesses. Implements just the methods the framework's
- * `ModelService` calls (`open` / `close` / `update` / `save` /
- * `isOpen` / `getDocument`) and a disk queue that runs each task at once;
+ * harnesses. Implements just the methods the model service and client
+ * sessions call (`open` / `close` / `update` / `save` / `isOpen` /
+ * `getDocument`);
  * `onSave` / `onClientClosed` forward to the underlying stub text store,
  * `onUpdate` is driven explicitly
  * through {@link StubAstDocumentManager.emitUpdate} because the stub tree runs
@@ -48,17 +48,7 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  */
 export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> extends Pick<
    AstDocumentManager<TAst, TDiagnostic>,
-   | 'open'
-   | 'close'
-   | 'isOpen'
-   | 'update'
-   | 'save'
-   | 'queueDiskTask'
-   | 'onUpdate'
-   | 'onSave'
-   | 'onClientClosed'
-   | 'getAuthor'
-   | 'getDocument'
+   'open' | 'close' | 'isOpen' | 'update' | 'save' | 'onUpdate' | 'onSave' | 'onClientClosed' | 'getAuthor' | 'getDocument'
 > {
    readonly openClients: Map<string, Set<string>>;
 
@@ -154,9 +144,6 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
          const text = textDocuments.get(uri)?.getText() ?? '';
          await fileSystem.writeFile(UriUtils.toUri(uri), text);
          textDocuments.notifyDidSaveTextDocument({ textDocument: { uri }, text }, clientId);
-      },
-      queueDiskTask<T>(_uri: string, task: () => Promise<T>): Promise<T> {
-         return task();
       },
       // Registers the listener but never calls it by itself — the real manager
       // emits from a `DocumentBuilder.onDocumentPhase(Validated)` hook and the

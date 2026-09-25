@@ -22,10 +22,10 @@ declare const shared: ServerSharedServices;
 const session = shared.model.ModelService.createSession('form');
 ```
 
-`ModelService.createSession(label?, clientId?)` is synchronous. The id defaults
-to the label, a `#` and a random UUID, such as `form#3f2b…`; without a label the
-label is `session`. A fixed id is taken as given:
-`createSession('form', 'form-1')`.
+`ModelService.createSession(label?, clientId?)` is synchronous. Pass a label
+naming the participant. The id defaults to the label, a `#` and a random UUID,
+such as `form#3f2b…`; without a label the label is `session`. A fixed id is
+taken as given: `createSession('form', 'form-1')`.
 
 An id is unique in the process while its session is live. `createSession` throws
 `DuplicateClientIdError` for an id that is live anywhere in the process: one
@@ -37,21 +37,35 @@ its own participants. Once a session has ended its id is free again.
 `undefined` once it has ended, so a request handler or a server subclass can act
 as the caller whose id arrived with the request.
 
-To use a session class of your own, override `DefaultModelService.newSession`
-and narrow its return type, handing the session `this.sessionWriter()`.
-`createSession` registers the id and checks it before `newSession` runs, so an
-override cannot skip either.
+To use a session class of your own, bind a `ClientSessionFactory` on
+`model.ClientSessionFactory` whose `create(clientId, label)` returns it.
+`createSession` registers the id and checks it before it calls the factory, so a
+factory cannot skip either. The framework's `DefaultClientSessionFactory` takes
+the `slowUpdateWarnMs` option: when it is set, a session's `update` that takes
+at least that many milliseconds logs a warn line. A factory that builds its
+sessions without that threshold loses the warn line, so a session class of your
+own keeps it by subclassing `DefaultClientSessionFactory` and building the
+session as `new MySession(this.services, { ...this.options, clientId, label })`,
+the `ClientSessionOptions` the default passes. A session logs under the
+factory's `logName`, `ClientSession` when none is set, with its client id in a
+bracket of its own.
 
-`DefaultModelService` keeps `open`, `close`, `update`, `updateAll` and `save`
-as protected methods, and `sessionWriter()` binds every session's opens and
-writes to them. Override one of them to change how every session opens or
-writes.
+`DefaultClientSession` opens and writes itself: each member hands its work to a
+protected method (`registerOpen`, `createDocument`, `updateDocument`,
+`updateDocuments`, `saveDocument`, `closeDocument`), and a session class of
+your own overrides one of them to change how its sessions open or write. `save`
+writes through `updateDocument`, so an override of it applies to saves too. The
+open check and the `basedOn` gate are the session's own `assertOpen` and
+`assertBasedOn`. Turning a model into text (`modelToText`) and `rebuild` live on
+the `ModelService` bound on `model.ModelService`, which the session writes
+through.
 
 ## The handle
 
 | Member | Meaning |
 | --- | --- |
 | `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
+| `openOptions(uri)` | The options this session opened `uri` with |
 | `create(uri, text)` | Create a document with `text` and open it; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
@@ -76,7 +90,7 @@ nothing.
 until it closes. It is stored per session and URI, so two sessions opening one
 document keep their own; a repeat open keeps the options of the first, and so
 does a second open issued while the first is still under way, which joins it.
-Read them back with `TextDocuments.openOptions(uri, clientId)`. To type them,
+Read them back with the session's `openOptions(uri)`. To type them,
 pass the type when starting the session:
 `createSession<{ mode: string }>('form')`.
 
@@ -229,9 +243,9 @@ had open. It does not send its unsaved edits again:
 A document that cannot be re-opened is reported with the message
 `DATA_SESSION_RESTORE_FAILED`, and forgotten. A session that was a document's
 only client keeps its unsaved edits across a reconnect only when it re-opens
-the document within the server's revert grace; with the default grace of `0`
-the document reverts when the connection is lost, and the session loses its
-unsaved edits and is told so.
+the document within the server's revert grace, ten seconds by default; after
+that the document has reverted, and the session loses its unsaved edits and is
+told so.
 
 To hand out a subclass of `DataSession`, pass `sessionFactory` in the
 connection's options.
@@ -317,10 +331,11 @@ do not wait for the queue. A build waits only for its own repair write, which
 queues behind earlier saves of that file.
 
 Code of your own that writes a file the framework also saves runs its write
-through `AstDocumentManager.queueDiskTask` to stay in that order. The task must
-not await a build, a save, another queued task or an open of a document no
-client has open, for the same file: what it waits for queues behind it, and the
-file's queue stops for good.
+through `FileSystemTaskQueue.enqueue`, the shared service at
+`workspace.FileSystemTaskQueue`, to stay in that order. The task must not await
+a build, a save, another queued task or an open of a document no client has
+open, for the same file: what it waits for queues behind it, and the file's
+queue stops for good.
 
 With `coalesceSaves` set in `AstDocumentManagerOptions`, a save still waiting
 behind another is skipped when a newer save of the same file queues behind it.
@@ -389,7 +404,7 @@ import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/co
 ```ts
 const sharedModule = {
    workspace: {
-      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs: 5_000 })
+      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs: 0 })
    }
 };
 ```
@@ -397,15 +412,23 @@ const sharedModule = {
 `revertGraceMs` in `HydraniumTextDocumentsOptions` defers the revert of a
 document whose last close came from a lost connection: a data connection that
 closed, or a session a reconnecting client took over with its resume token.
-The store keeps the document, and its unsaved text, for that long. Any
-client's open within the grace, an editor attaching over the LSP head
-included, cancels the revert and inherits the unsaved text; a `create` of the
-URI is refused meanwhile. Meanwhile the document is open for no client, and
+The store keeps the document, and its unsaved text, for that long. A client
+lost from the document may reclaim that text only within the grace of its own
+loss: an open under its id in that time, such as a session a reconnecting
+client registers again or takes over with its resume token, cancels the revert.
+An open under any other id, a reloaded page's new session or an editor
+attaching over the LSP head included, releases the document first and then
+opens it as a first open does: a session reads the file, and an editor keeps
+the text it opened with. So does an open under a lost id whose own grace has
+run out, though a later loss keeps the document waiting: that client would
+otherwise inherit unsaved text written after it was lost. A `create` of the URI
+is refused while the document waits. It is open for no client meanwhile, and
 `TextDocuments.isRevertPending(uri)` answers `true`; the integrity service
 treats it as open, so none of its unsaved text reaches disk. A close the
 client makes itself, `closeSession`, and a session's `dispose()` revert at
-once, whatever the grace. The default is `0`: the revert follows at once, and
-the document is released in the close itself rather than on a timer.
+once, whatever the grace. The default is ten seconds; with `0` the revert
+follows at once, and the document is released in the close itself rather than
+on a timer.
 
 ## `withOpen`
 
@@ -497,9 +520,9 @@ connection.
   Code reports as a newer file on disk and Theia as out of sync. The gate only
   makes that order certain: the conflict follows whenever the server's write
   lands first.
-- With the default grace of `0`, a client that reconnects after a lost
-  connection finds its sole-client documents reverted: other sessions see the
-  revert, and the reconnecting session reports its unsaved edits lost.
+- A client that reconnects after the revert grace has run out finds its
+  sole-client documents reverted: other sessions see the revert, and the
+  reconnecting session reports its unsaved edits lost.
 
 ## Logs
 
