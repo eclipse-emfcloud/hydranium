@@ -15,7 +15,8 @@ import {
    type DataClientProtocol,
    type DataServerProtocol,
    type DiagnosticOf,
-   type ProjectOf
+   type ProjectOf,
+   type TransferDocumentDirtyChangedEvent
 } from '../data';
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
@@ -98,6 +99,13 @@ export class DataConnection<
     * the listener subscribed is in {@link liveSessions}.
     */
    readonly onDidCreateSession: Event<DataSession<TTransfer, TServer>> = this.createSessionEmitter.event;
+   /**
+    * Per URI, the `dirty` the client was last told since a session of this
+    * connection last opened the URI. A restore tells the client its answer
+    * only where it differs, so the client hears changes and nothing else; see
+    * {@link DataSessionHost.restoreDirty}.
+    */
+   protected readonly dirtyStates = new Map<string, boolean>();
 
    constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient, TServer>) {
       const [options = {}] = rest as [
@@ -151,7 +159,13 @@ export class DataConnection<
          id,
          {
             connected: () => this.connected(),
-            reportError: (error, reported) => this.reportError(error, reported)
+            reportError: (error, reported) => this.reportError(error, reported),
+            restoreDirty: event => {
+               if (this.dirtyStates.get(event.uri) !== event.dirty) {
+                  this.deliverDirty(event);
+               }
+            },
+            forgetDirty: uri => this.dirtyStates.delete(uri)
          },
          label
       );
@@ -164,6 +178,35 @@ export class DataConnection<
       session.connected().catch(() => undefined);
       this.createSessionEmitter.fire(session);
       return session;
+   }
+
+   /**
+    * The client, with its `onDocumentDirtyChanged` passing through
+    * {@link deliverDirty} first, so {@link dirtyStates} holds what the server
+    * told it. Every other bound method forwards to the client unchanged, and
+    * one the client lacks stays absent, so the binding still refuses it.
+    */
+   protected override localTarget(): TClient {
+      const client = this.client as unknown as Record<string, unknown>;
+      if (typeof client.onDocumentDirtyChanged !== 'function') {
+         return this.client;
+      }
+      const target: Record<string, unknown> = {};
+      for (const name of this.clientMethods) {
+         const method: unknown = client[name];
+         if (typeof method === 'function') {
+            target[name] = (params: unknown): unknown => (method as (params: unknown) => unknown).call(client, params);
+         }
+      }
+      target.onDocumentDirtyChanged = (event: TransferDocumentDirtyChangedEvent): void => this.deliverDirty(event);
+      return target as unknown as TClient;
+   }
+
+   /** Record `event` in {@link dirtyStates} and hand it to the client. */
+   protected deliverDirty(event: TransferDocumentDirtyChangedEvent): void {
+      this.dirtyStates.set(event.uri, event.dirty);
+      const client = this.client as unknown as Partial<Pick<DataClientProtocol<TTransfer>, 'onDocumentDirtyChanged'>>;
+      client.onDocumentDirtyChanged?.(event);
    }
 
    /**

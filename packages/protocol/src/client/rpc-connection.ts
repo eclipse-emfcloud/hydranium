@@ -189,11 +189,20 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
       );
       const server = createRpcProxy<TServer, TClient>(connection, {
          methodNamespace: this.methodNamespace,
-         localTarget: this.client,
+         localTarget: this.localTarget(),
          localMethods: this.clientMethods
       });
       this.generation = { connection, server };
       return this.generation;
+   }
+
+   /**
+    * The object whose {@link clientMethods} answer the server on each new
+    * generation: {@link client} itself. A subclass that must see a call before
+    * the client does returns an object that forwards each of them to it.
+    */
+   protected localTarget(): TClient {
+      return this.client;
    }
 
    /** Await the connection and the server's startup gate for one generation. */

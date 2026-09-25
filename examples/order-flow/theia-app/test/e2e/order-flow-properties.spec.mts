@@ -27,7 +27,7 @@
  */
 
 import { expect } from '@playwright/test';
-import type { TheiaApp } from '@theia/playwright';
+import { type TheiaApp, TheiaTextEditor } from '@theia/playwright';
 import { loadOrderFlowApp, openPropertiesPanel, PROPERTIES_PANEL as PANEL, selectFile, test } from './order-flow-app.mjs';
 
 /**
@@ -157,5 +157,27 @@ test.describe.serial('Order-flow properties panel in Theia', () => {
       // re-check rather than a wait for a push that may never come.
       await selectFile(app, 'orders/fulfillment.layout');
       await expect(app.page.locator(`${PANEL} .diagnostics li`)).toHaveCount(0);
+   });
+
+   test("marks the document unsaved while an editor holds an edit, and clears it on the editor's save", async () => {
+      // The panel has no save of its own, so the note follows the server's
+      // view of the document: an edit from any client, cleared by any save.
+      // The layout is used because it opens in a text editor, and no earlier
+      // test in this serial suite edits it.
+      await selectFile(app, 'orders/fulfillment.layout');
+      await expect(app.page.locator(`${PANEL} input#field-process`)).toHaveValue('Fulfillment');
+      const unsaved = app.page.locator(`${PANEL} .unsaved`);
+      await expect(unsaved).toBeHidden();
+
+      const editor = await app.openEditor('orders/fulfillment.layout', TheiaTextEditor);
+      await editor.placeCursorInLineWithLineNumber(1);
+      await app.page.keyboard.press('End');
+      await app.page.keyboard.type(' ');
+      await expect(unsaved).toBeVisible();
+      await expect(unsaved).toHaveText('Unsaved changes');
+
+      await editor.activate();
+      await app.page.keyboard.press('Control+s');
+      await expect(unsaved).toBeHidden();
    });
 });

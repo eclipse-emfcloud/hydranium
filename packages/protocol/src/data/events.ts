@@ -96,6 +96,22 @@ export type TransferDocumentSavedListener<
 > = (event: TransferDocumentSavedEvent<TTransfer, TDiagnostic>) => void;
 
 /**
+ * Delivered on the data-server when a watched document's text starts or stops
+ * differing from its file, as the server last knew the file. The current
+ * answer rides on every transfer document the server sends as `dirty`; this
+ * carries only its changes, so a client that follows it needs no rebuild to
+ * learn of a save.
+ */
+export interface TransferDocumentDirtyChangedEvent {
+   /** Canonical URI, keyed as the subscription is. */
+   readonly uri: string;
+   readonly dirty: boolean;
+}
+
+/** Callback shape for `DataClientProtocol.onDocumentDirtyChanged`. */
+export type TransferDocumentDirtyChangedListener = (event: TransferDocumentDirtyChangedEvent) => void;
+
+/**
  * Delivered on the data-server when a document's backing file was removed.
  * Carries no document, and cannot: the state a
  * {@link TransferDocumentUpdatedEvent} would have to carry no longer exists by

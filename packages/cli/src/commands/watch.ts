@@ -137,6 +137,9 @@ export async function runWatch(options: WatchCommandOptions): Promise<void> {
       onDocumentSaved(): void {
          // Persistence is out of band for the per-URI update view.
       },
+      onDocumentDirtyChanged(): void {
+         // Out of band for the per-URI update view, as persistence is.
+      },
       onDocumentDeleted(event: TransferDocumentDeletedEvent): void {
          // In band, unlike the two neighbours: this is the end of the stream
          // the view exists to show, and a consumer that never hears it waits

@@ -90,10 +90,12 @@ export const test = base.extend<OrderFlowFixtures>({
  *
  * Call from a spec's `beforeAll`. The returned app is the spec's own; the
  * workspace path it publishes is what the server-log fixture attaches on
- * failure.
+ * failure. Each of `overlays` is copied over the fixture workspace in turn, so
+ * a spec can add workspace settings or replace a file without the others
+ * seeing it.
  */
-export async function loadOrderFlowApp(args: PlaywrightWorkerArgs & { browser: Browser }): Promise<TheiaApp> {
-   const workspace = new TheiaWorkspace([WORKSPACE_SOURCE]);
+export async function loadOrderFlowApp(args: PlaywrightWorkerArgs & { browser: Browser }, overlays: string[] = []): Promise<TheiaApp> {
+   const workspace = new TheiaWorkspace([WORKSPACE_SOURCE, ...overlays]);
    const app = await TheiaAppLoader.load(args, workspace);
    activeWorkspacePath = app.workspace.path;
    forwardBrowserConsole(app.page, activeWorkspacePath);

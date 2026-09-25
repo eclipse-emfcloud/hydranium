@@ -148,6 +148,18 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       expect(updates).toBe(0);
    });
 
+   it('fans a dirty flip out on its own channel, and releases it on dispose', () => {
+      const events = new DataEvents<WidgetRoot>();
+      const flips: string[] = [];
+      events.onDidChangeDocumentDirty(event => flips.push(`${event.uri} ${event.dirty}`));
+
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: true });
+      events.dispose();
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: false });
+
+      expect(flips).toEqual(['file:///widgets/gauge.widget true']);
+   });
+
    it('releases its emitters on dispose', () => {
       const events = new DataEvents<WidgetRoot>();
       let updates = 0;

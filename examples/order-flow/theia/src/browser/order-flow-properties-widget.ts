@@ -105,6 +105,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
       );
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));
+      this.toDispose.push(this.model.onDidChangeDirty(() => this.form.setDirty(this.model.dirty)));
       this.toDispose.push(this.model);
       // The session only; the connection is shared and outlives this widget.
       this.toDispose.push(session);

@@ -27,6 +27,7 @@ import {
    type RequestModelAction,
    SOURCE_URI_ARG,
    type SaveModelAction,
+   SetDirtyStateAction,
    SetEditModeAction,
    type SourceModelStorage,
    TEMPORARY_CLIENT_ID
@@ -47,6 +48,7 @@ import {
    type AstDocumentSavedEvent,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
+   type DocumentDirtyChangedEvent,
    type ServerSharedServices
 } from '@hydranium/core';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
@@ -262,6 +264,8 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
 
    /** Set by {@link dispose}; a disposed storage registers no session again. */
    protected disposed = false;
+   /** Saves of the diagram's own that GLSP's save handler awaits; see {@link handleDirtyChanged}. */
+   protected ownSavesPending = 0;
 
    /**
     * Whether an external resubmit has ever been dispatched. Gates the
@@ -424,8 +428,11 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // React to external rebuilds: settle-gated capture + debounced/deduped resubmit.
       this.toDispose.push(modelService.onModelUpdated(rootUri, event => this.handleModelUpdated(rootUri, event)));
 
-      // Coordinate the command stack's dirty state when another client saves.
+      // GLSP's own command stack counts commands; tell it of another client's save.
       this.toDispose.push(modelService.onModelSaved(rootUri, event => this.handleModelSaved(event)));
+
+      // Tell the client of each dirty flip, one the diagram did not cause included.
+      this.toDispose.push(this.sharedServices.workspace.TextDocuments.onDidChangeDirty(event => this.handleDirtyChanged(event)));
 
       // Capture the initial settled root.
       const document = await modelService.settled(rootUri);
@@ -647,14 +654,44 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Coordinate the command stack when another client persists the document:
-    * mark our stack clean so the editor doesn't prompt to re-save identical
-    * content. Our own saves already settle the stack through the save flow.
+    * For a diagram module on GLSP's own command stack, which counts commands:
+    * mark it clean when another client persists the document.
+    * `HydraniumGlspCommandStack` reads the text store instead, and this does
+    * not move it.
     */
    protected handleModelSaved(event: AstDocumentSavedEvent<AstNode>): void {
       if (this.state.clientId !== event.sourceClientId) {
          this.commandStack.saveIsDone();
       }
+   }
+
+   /**
+    * Send the diagram's dirty state when a document it has open turns dirty or
+    * clean, the answer being the command stack's. GLSP sends it only with a
+    * model submission or a save of the diagram's own, so a save by another
+    * client, an editor included, or an edit that changes nothing the diagram
+    * shows would otherwise leave the client's marker wrong until the next
+    * gesture. A flip the diagram's own operation causes is sent twice, once
+    * here and once with the submission, and the client keeps the one state.
+    *
+    * Nothing is sent while a save of the diagram's own is awaited: GLSP's save
+    * handler sends the state once the save settles, reason `save`, and GLSP's
+    * client keeps a state only when it changes, so the save's own flip sent
+    * here first would leave that answer changing nothing. GLSP's saveable
+    * waits for exactly that answer, and times out without it.
+    */
+   protected handleDirtyChanged(event: DocumentDirtyChangedEvent): void {
+      if (this.ownSavesPending > 0 || !this.sharedServices.workspace.TextDocuments.isOpenInClient(event.uri, this.state.clientId)) {
+         return;
+      }
+      this.sendDirtyState();
+   }
+
+   /** Send the command stack's dirty state, reason `external`. */
+   protected sendDirtyState(): void {
+      this.actionDispatcher
+         .dispatch(SetDirtyStateAction.create(this.commandStack.isDirty, { reason: 'external' }))
+         .catch((error: unknown) => this.logger.warn(`Could not send the dirty state of ${this.state.sourceUri}: ${String(error)}`));
    }
 
    /**
@@ -828,17 +865,29 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // the call site rather than inside `getFileUri` so that method's contract —
       // return what the action said — is unchanged for adopters overriding it.
       const uri = this.toSourceModelUri(this.getFileUri(action));
-      const policy = this.saveDeliveryPolicy;
-      const persisted = this.flushWriteSet(uri);
-
-      if (policy.kind === 'fire-and-forget') {
+      if (this.saveDeliveryPolicy.kind === 'fire-and-forget') {
          // Log rather than leave an unhandled rejection: the promise is not
          // returned, so nothing else will observe a failure.
-         persisted.catch(error => this.logger.error(`Save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`));
+         this.flushWriteSet(uri).catch(error =>
+            this.logger.error(`Save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`)
+         );
          return undefined;
       }
-      // Awaited: any failure propagates to GLSP's save-action handler.
-      return persisted;
+      // Awaited: any failure propagates to GLSP's save-action handler, which
+      // then sends no dirty state, so the one the save held back goes here.
+      // An override that throws before it returns a promise throws inside the
+      // async function too, so the hold always ends.
+      this.ownSavesPending++;
+      return (async () => {
+         try {
+            await this.flushWriteSet(uri);
+         } catch (error: unknown) {
+            this.sendDirtyState();
+            throw error;
+         } finally {
+            this.ownSavesPending--;
+         }
+      })();
    }
 
    /**

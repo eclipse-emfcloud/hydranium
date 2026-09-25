@@ -70,6 +70,8 @@ export const PROPERTIES_LOADING = defineMessage('order-flow/properties/loading',
 
 export const PROPERTIES_APPLY_HINT = defineMessage('order-flow/properties/apply-hint', 'Press Enter to apply');
 
+export const PROPERTIES_UNSAVED = defineMessage('order-flow/properties/unsaved', 'Unsaved changes');
+
 export const PROPERTIES_DISCONNECTED = defineMessage(
    'order-flow/properties/disconnected',
    'The data server connection closed. Reopen the panel to reconnect.'

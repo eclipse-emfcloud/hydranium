@@ -8,3 +8,4 @@
  ********************************************************************************/
 
 export * from './hydranium-glsp-recording-command.js';
+export * from './hydranium-glsp-command-stack.js';

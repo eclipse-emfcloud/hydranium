@@ -7,12 +7,19 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type ActionHandlerConstructor, DiagramModule, type InstanceMultiBinding } from '@eclipse-glsp/server';
+import {
+   type ActionHandlerConstructor,
+   type BindingTarget,
+   type CommandStack,
+   DiagramModule,
+   type InstanceMultiBinding
+} from '@eclipse-glsp/server';
 import { injectable, type interfaces } from 'inversify';
 import type { LanguageMetaData } from '@hydranium/langium';
 import { type ServerLanguageServices, type ServerSharedServices, typedMetadata } from '@hydranium/core';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
+import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
 
 /**
  * Bind {@link HydraniumTypes}.DiagramLanguage on a GLSP **session** container
@@ -21,8 +28,9 @@ import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium
  * Exported separately from {@link AbstractHydraniumGlspDiagramModule} for adopters
  * whose diagram module already extends an intermediate base of their own and
  * cannot take the framework base class; call it from `configure` after
- * `super.configure(...)`, and add {@link HydraniumGlspRequestSaveModelActionHandler}
- * in `configureActionHandlers`, which the base also does. The base class is the
+ * `super.configure(...)`, add {@link HydraniumGlspRequestSaveModelActionHandler}
+ * in `configureActionHandlers`, and return {@link HydraniumGlspCommandStack} from
+ * `bindCommandStack`, all of which the base also does. The base class is the
  * preferred entry point because it makes the declaration non-optional.
  *
  * **Why the session tier.** GLSP builds its app container once per process,
@@ -115,6 +123,11 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
    ): void {
       super.configure(bind, unbind, isBound, rebind);
       bindDiagramLanguage(bind, this.declareLanguage());
+   }
+
+   /** {@link HydraniumGlspCommandStack}, so the diagram is dirty exactly while a document it has open is. */
+   protected override bindCommandStack(): BindingTarget<CommandStack> {
+      return HydraniumGlspCommandStack;
    }
 
    /**

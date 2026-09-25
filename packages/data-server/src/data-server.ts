@@ -107,9 +107,11 @@ import type {
    ClientSession,
    ClientSessionWriteArgs,
    ClientTextDocumentChangeEvent,
+   DocumentDirtyChangedEvent,
    HydraniumLanguageServices,
    LogNameOptions,
    AstDiagnostic,
+   AstDocument,
    ModelService,
    ProjectChangeEvent,
    ServerSharedServices,
@@ -570,6 +572,7 @@ export class DataServer<
       );
       this.subscribeToDocumentBuilder();
       this.subscribeToTextDocumentSaves();
+      this.subscribeToDirtyChanges();
       this.subscribeToTextDocumentCloses();
       this.subscribeToProjectManager();
       // Self-register teardown so an adopter that keeps no reference to the
@@ -714,10 +717,7 @@ export class DataServer<
       const astDocuments = await this.requireSession(args.clientId).updateAll({
          updates: args.updates.map(update => this.toSessionWrite(update))
       });
-      return astDocuments.map(
-         astDocument =>
-            this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>
-      );
+      return astDocuments.map(astDocument => this.encodeDocument(astDocument));
    }
 
    /**
@@ -799,17 +799,17 @@ export class DataServer<
       // `includeDiagnostics: true` to settle at `Validated` instead.
       const state = args.includeDiagnostics ? DocumentState.Validated : undefined;
       const astDocument = await this.modelService.ensureDocumentState(args.uri, state);
-      return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
+      return this.encodeDocument(astDocument);
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
       const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
-      return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
+      return this.encodeDocument(astDocument);
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
       const astDocument = await this.requireSession(args.clientId).save(this.toSessionWrite(args));
-      return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
+      return this.encodeDocument(astDocument);
    }
 
    /**
@@ -1187,7 +1187,28 @@ export class DataServer<
          // override `envelope`.
          return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
-      return this.encoder.toTransferDocument(document) as unknown as TransferDocument<TTransfer, TDiagnostic>;
+      return this.withDirtyState(this.encoder.toTransferDocument(document) as unknown as TransferDocument<TTransfer, TDiagnostic>);
+   }
+
+   /**
+    * The transfer document a request answers with for `astDocument`, the
+    * store's current `dirty` stamped on it by {@link withDirtyState}. Every
+    * document a request answers with goes through here, so none goes out
+    * without the stamp.
+    */
+   protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
+      return this.withDirtyState(
+         this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>
+      );
+   }
+
+   /**
+    * `document` with the store's current {@link TransferDocument.dirty}. Read
+    * when the document is sent rather than kept with the build: a save changes
+    * the answer without a rebuild.
+    */
+   protected withDirtyState(document: TransferDocument<TTransfer, TDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
+      return { ...document, dirty: this.services.workspace.TextDocuments.isDirty(document.uri) };
    }
 
    /**
@@ -1271,6 +1292,23 @@ export class DataServer<
     */
    protected subscribeToTextDocumentSaves(): void {
       this.disposables.push(this.services.workspace.TextDocuments.onDidSave(event => this.dispatchSaveEvent(event)));
+   }
+
+   /** Relay each change of a document's dirty state; see {@link dispatchDirtyEvent}. */
+   protected subscribeToDirtyChanges(): void {
+      this.disposables.push(this.services.workspace.TextDocuments.onDidChangeDirty(event => this.dispatchDirtyEvent(event)));
+   }
+
+   /**
+    * Send a dirty flip to the connection, gated by the subscription map as
+    * {@link dispatchSaveEvent} is: the answer at any one moment travels on
+    * every document sent, so a client that watches nothing reads it there.
+    */
+   protected dispatchDirtyEvent(event: DocumentDirtyChangedEvent): void {
+      const uri = this.canonicalKey(event.uri);
+      if (this.subscriptions.has(uri)) {
+         this.clientProxy.onDocumentDirtyChanged({ uri, dirty: event.dirty });
+      }
    }
 
    /**

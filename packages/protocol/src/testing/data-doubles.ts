@@ -37,6 +37,7 @@ import type { DataClientProtocol } from '../data/data-server-protocol';
 import type {
    ProjectsChangedEvent,
    TransferDocumentDeletedEvent,
+   TransferDocumentDirtyChangedEvent,
    TransferDocumentSavedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent
@@ -132,6 +133,8 @@ export interface CapturingDataClient<
    readonly updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[];
    /** Every `onDocumentSaved` event, in arrival order. */
    readonly saves: TransferDocumentSavedEvent<TTransfer, TDiagnostic>[];
+   /** Every `onDocumentDirtyChanged` event, in arrival order. */
+   readonly dirtyChanges: TransferDocumentDirtyChangedEvent[];
    /** Every `onDocumentDeleted` event, in arrival order. */
    readonly deletions: TransferDocumentDeletedEvent[];
    /** Every `onDocumentsBuilt` event, in arrival order. */
@@ -160,6 +163,7 @@ export function makeCapturingDataClient<
 >(overrides: Partial<DataClientProtocol<TTransfer, TDiagnostic, TProject>> = {}): CapturingDataClient<TTransfer, TDiagnostic, TProject> {
    const updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[] = [];
    const saves: TransferDocumentSavedEvent<TTransfer, TDiagnostic>[] = [];
+   const dirtyChanges: TransferDocumentDirtyChangedEvent[] = [];
    const deletions: TransferDocumentDeletedEvent[] = [];
    const builds: TransferDocumentsBuiltEvent[] = [];
    const projectsChanges: ProjectsChangedEvent<TProject>[] = [];
@@ -173,6 +177,11 @@ export function makeCapturingDataClient<
          overrides.onDocumentSaved ??
          (event => {
             saves.push(event);
+         }),
+      onDocumentDirtyChanged:
+         overrides.onDocumentDirtyChanged ??
+         (event => {
+            dirtyChanges.push(event);
          }),
       onDocumentDeleted:
          overrides.onDocumentDeleted ??
@@ -190,5 +199,5 @@ export function makeCapturingDataClient<
             projectsChanges.push(event);
          })
    };
-   return { client, updates, saves, deletions, builds, projectsChanges };
+   return { client, updates, saves, dirtyChanges, deletions, builds, projectsChanges };
 }

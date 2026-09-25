@@ -125,6 +125,7 @@ function main(): void {
       form.setDiagnostics(model.diagnostics);
    };
    model.onDidChange(render);
+   model.onDidChangeDirty(() => form.setDirty(model.dirty));
 
    messenger.onNotification(ORDER_FLOW_PANEL_SET_DOCUMENT, document_ => {
       form.setTitle(document_.label);

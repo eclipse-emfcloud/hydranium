@@ -46,6 +46,7 @@
   "order-flow/properties/no-fields": "Dieses Dokument hat keine bearbeitbaren Texteigenschaften.",
   "order-flow/properties/loading": "Wird geladen…",
   "order-flow/properties/apply-hint": "Zum Übernehmen die Eingabetaste drücken",
+  "order-flow/properties/unsaved": "Ungespeicherte Änderungen",
   "order-flow/properties/disconnected": "Die Verbindung zum Datenserver wurde geschlossen. Öffnen Sie den Bereich erneut, um sich wieder zu verbinden.",
   "order-flow/properties/write-merged": "Gespeichert. Jemand anderes hatte ein anderes Feld bearbeitet; beide Änderungen wurden übernommen.",
   "order-flow/properties/write-conflict": "Nicht gespeichert — jemand anderes hat dieses Feld zuerst geändert. Angezeigt wird dessen Wert.",

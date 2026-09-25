@@ -121,6 +121,13 @@ export interface LastOpenClosedEvent {
    readonly uri: CanonicalUri;
 }
 
+/** Delivered by {@link HydraniumTextDocuments.onDidChangeDirty}. */
+export interface DocumentDirtyChangedEvent {
+   readonly uri: CanonicalUri;
+   /** The new answer of {@link HydraniumTextDocuments.isDirty}. */
+   readonly dirty: boolean;
+}
+
 /**
  * All per-URI client-facing tracking the manager keys by normalized URI,
  * collapsed into one record so a URI's full state lives in one place and the
@@ -179,6 +186,13 @@ export interface DocumentTrackingRecord {
     * at the next open of the document.
     */
    lostClients?: Map<string, Stopwatch>;
+   /**
+    * The text the server last knew the file to hold, `undefined` for no file.
+    * Set by the first open and moved by {@link HydraniumTextDocuments.updateDiskBaseline}.
+    */
+   diskBaseline?: string;
+   /** The last answer {@link HydraniumTextDocuments.onDidChangeDirty} announced. */
+   dirty?: boolean;
 }
 
 /**
@@ -335,6 +349,8 @@ function contentHash(text: string): string {
  *   - The revert to disk once no client has a document open, for every head
  *     ({@link revertToDisk}), deferred by
  *     {@link HydraniumTextDocumentsOptions.revertGraceMs} after a lost connection.
+ *   - A disk baseline per open document, and whether its text differs from it
+ *     ({@link isDirty}).
  *   - Pending-content staging used by the integrity service to thread corrections
  *     through `workspace/applyEdit` cycles for currently-closed documents.
  *   - `didOpen` notifications arriving over the LSP connection wait on the
@@ -429,6 +445,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    protected readonly revertGraceMs: number;
    protected readonly lastOpenClosedEmitter = new Emitter<LastOpenClosedEvent>();
    protected readonly languageClientSavedEmitter = new Emitter<LanguageClientSavedEvent>();
+   protected readonly dirtyChangedEmitter = new Emitter<DocumentDirtyChangedEvent>();
 
    constructor(
       protected services: ServerSharedServices,
@@ -631,6 +648,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.__syncedDocuments.set(uri, document);
          if (changed) {
             this.setAuthor(uri, document.version, clientId);
+            this.refreshDirty(uri);
          }
          if (clientId === LANGUAGE_CLIENT_ID) {
             // Monaco just told us about its new content; record it so the next outbound
@@ -683,6 +701,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          document = this.configuration.update(document, [{ text }], document.version + 1);
          this.__syncedDocuments.set(key, document);
          this.setAuthor(key, document.version, clientId);
+         this.refreshDirty(key);
       }
       this.log(
          document.uri,
@@ -803,10 +822,14 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          version: syncedDocument.version,
          contentHash: contentHash(syncedDocument.getText())
       });
+      const wasDirty = this.__documents.get(uri)?.dirty === true;
       this.__syncedDocuments.delete(uri);
       // One delete clears every per-URI axis (version history + any staged
       // pending content) so a future open with the same URI starts fresh.
       this.__documents.delete(uri);
+      if (wasDirty) {
+         this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty: false }));
+      }
       this.lastOpenClosedEmitter.fire(Object.freeze({ uri }));
    }
 
@@ -906,20 +929,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       }
       const uri = syncedDocument.uri;
       this.languageClientSavedEmitter.fire(Object.freeze({ uri }));
-      // `onDidSave` tells its listeners that the shared document is on disk: a
-      // diagram marks its save done, the data head broadcasts a save and its
-      // clients drop their dirty state. The editor wrote its own buffer,
-      // which lags the store while another client's edit is still on its way
-      // to it, so only the file says whether that holds. Read it rather than
-      // trust the editor: `didSave` carries text only for a client that
-      // honours `includeText`, and asking for it means rewriting Langium's
-      // initialize answer, which advertises `save` as a Boolean. The read goes
-      // through the disk queue and waits on nothing but the provider, so it
-      // follows a server save queued meanwhile. A file changed again between
-      // the editor's write and this read compares unequal and takes the safe
-      // side. A save not announced leaves every other client dirty, which is
-      // true of the store's text: a diagram keeps its save pending, and data
-      // clients keep their unsaved state until the next save of the document.
+      // `onDidSave` tells its listeners that the shared document is on disk.
+      // The editor wrote its own buffer, which lags the store while another
+      // client's edit is still on its way to it, so only the file says
+      // whether that holds. Read it rather than trust the editor: `didSave`
+      // carries text only for a client that honours `includeText`, and asking
+      // for it means rewriting Langium's initialize answer, which advertises
+      // `save` as a Boolean. The read goes through the disk queue and waits on
+      // nothing but the provider, so it follows a server save queued
+      // meanwhile. A file changed again between the editor's write and this
+      // read compares unequal, and the save goes unannounced.
       let onDisk: string | undefined;
       try {
          onDisk = await this.services.workspace.FileSystemTaskQueue.enqueue(uri, () =>
@@ -931,6 +950,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             .debug(`Editor save not announced: reading the file back failed. ${err instanceof Error ? err.message : String(err)}`);
          return;
       }
+      // What the file holds, not what the editor meant to write: an editor
+      // that saved older text leaves the document dirty.
+      this.updateDiskBaseline(uri, onDisk);
       // An editor that saves and then closes releases the document while the
       // read is under way; its save is still a save of the text it held.
       const document = this.__syncedDocuments.get(this.documentKey(uri)) ?? syncedDocument;
@@ -941,9 +963,18 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       this.announceSave(document, LANGUAGE_CLIENT_ID);
    }
 
+   /**
+    * Announce a save the server made. `event.text`, when given, is what the
+    * file now holds, written or found there, and becomes the disk baseline
+    * before the save is announced. It lags the store when an edit landed
+    * after the save took its text, and the document then stays dirty.
+    */
    public notifyDidSaveTextDocument(event: DidSaveTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const syncedDocument = this.__syncedDocuments.get(this.documentKey(event.textDocument.uri));
       if (syncedDocument !== undefined) {
+         if (event.text !== undefined) {
+            this.updateDiskBaseline(syncedDocument.uri, event.text);
+         }
          this.announceSave(syncedDocument, clientId);
       }
    }
@@ -1009,6 +1040,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          document = this.configuration.create(uri, td.languageId, version, text);
          this.__syncedDocuments.set(uri, document);
          this.setAuthor(uri, version, clientId);
+         // The opener's text, not the staged content: a session's open read
+         // it from the file, and an editor opened its buffer from there. An
+         // editor that opens a buffer it never saved is taken as clean.
+         record.diskBaseline = td.text;
+         this.refreshDirty(uri);
          if (clientId === LANGUAGE_CLIENT_ID) {
             // Baseline the shadow to what Monaco just opened so the next outbound
             // applyEditToLanguageClient diffs against the right starting point. Keyed by the
@@ -1260,6 +1296,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const updated = this.configuration.update(document, [{ text: repaired }], document.version + 1);
       this.__syncedDocuments.set(key, updated);
       this.setAuthor(key, updated.version, INTEGRITY_CLIENT_ID);
+      this.refreshDirty(key);
       this.log(updated.uri, `Update to version ${updated.version} by ${this.formatClientId(INTEGRITY_CLIENT_ID)} (repair)`);
       return { status: 'committed', document: updated };
    }
@@ -1355,6 +1392,76 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    isRevertPending(uri: DocumentUri): boolean {
       return this.__sessions.isRevertPending(this.documentKey(uri));
+   }
+
+   /**
+    * Whether the store holds `uri` with text that differs from its disk
+    * baseline: what the server last knew the file to hold. `false` for a URI
+    * the store does not hold; a document waiting out the revert grace is still
+    * held.
+    *
+    * The baseline is the text a first open brought, or what the server wrote,
+    * or read back after an editor's save or a watched-file change, so it can
+    * trail a change to the file that none of these has seen yet. A check that
+    * must know the file reads it instead.
+    */
+   isDirty(uri: DocumentUri): boolean {
+      return this.__documents.get(this.documentKey(uri))?.dirty ?? false;
+   }
+
+   /** Fires each time the answer of {@link isDirty} changes, the release of a dirty document included. */
+   get onDidChangeDirty(): Event<DocumentDirtyChangedEvent> {
+      return this.dirtyChangedEmitter.event;
+   }
+
+   /**
+    * Record that the file behind `uri` holds `text`, or no file at all for
+    * `undefined`. A no-op for a URI the store does not hold: the next first
+    * open sets the baseline from its own text.
+    */
+   updateDiskBaseline(uri: DocumentUri, text: string | undefined): void {
+      const key = this.documentKey(uri);
+      const record = this.__documents.get(key);
+      if (!record || !this.__syncedDocuments.has(key)) {
+         return;
+      }
+      record.diskBaseline = text;
+      this.refreshDirty(key);
+   }
+
+   /**
+    * Read the file behind `uri` through its disk queue and take it as the
+    * baseline. A file that cannot be read counts as none, the side that
+    * leaves the document dirty.
+    */
+   async reloadDiskBaseline(uri: DocumentUri): Promise<void> {
+      const key = this.documentKey(uri);
+      if (!this.__syncedDocuments.has(key)) {
+         return;
+      }
+      let onDisk: string | undefined;
+      try {
+         onDisk = await this.services.workspace.FileSystemTaskQueue.enqueue(key, () =>
+            this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(key))
+         );
+      } catch (err: unknown) {
+         this.tracer.with(key).debug(`Disk baseline: the file cannot be read. ${err instanceof Error ? err.message : String(err)}`);
+      }
+      this.updateDiskBaseline(key, onDisk);
+   }
+
+   /** Compare the held text of `uri` with its baseline, and announce a changed answer. */
+   protected refreshDirty(uri: CanonicalUri): void {
+      const record = this.__documents.get(uri);
+      const document = this.__syncedDocuments.get(uri);
+      if (!record || !document) {
+         return;
+      }
+      const dirty = document.getText() !== record.diskBaseline;
+      if (dirty !== (record.dirty ?? false)) {
+         record.dirty = dirty;
+         this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty }));
+      }
    }
 
    /**

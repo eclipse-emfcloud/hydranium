@@ -18,6 +18,7 @@ interface FakeRoot extends TransferElement {
 
 const updateEvent = { document: { uri: 'a' }, sourceClientId: 'c', reason: 'changed' } as unknown as TransferDocumentUpdatedEvent<FakeRoot>;
 const saveEvent = { document: { uri: 'a' }, sourceClientId: 'c' } as unknown as TransferDocumentSavedEvent<FakeRoot>;
+const dirtyEvent = { uri: 'a', dirty: true };
 const deleteEvent = { uri: 'a' };
 const builtEvent = { uris: ['a', 'b'] };
 const projectEvent = { project: { id: 'p' }, reason: 'added' } as unknown as ProjectsChangedEvent;
@@ -27,23 +28,27 @@ describe('EmitterDataClient', () => {
       const client = new EmitterDataClient<FakeRoot>();
       const updates: unknown[] = [];
       const saves: unknown[] = [];
+      const dirtyChanges: unknown[] = [];
       const deletions: unknown[] = [];
       const builds: unknown[] = [];
       const projects: unknown[] = [];
       client.onDidUpdateDocument(event => updates.push(event));
       client.onDidSaveDocument(event => saves.push(event));
+      client.onDidChangeDocumentDirty(event => dirtyChanges.push(event));
       client.onDidDeleteDocument(event => deletions.push(event));
       client.onDidBuildDocuments(event => builds.push(event));
       client.onDidChangeProjects(event => projects.push(event));
 
       client.onDocumentUpdated(updateEvent);
       client.onDocumentSaved(saveEvent);
+      client.onDocumentDirtyChanged(dirtyEvent);
       client.onDocumentDeleted(deleteEvent);
       client.onDocumentsBuilt(builtEvent);
       client.onProjectsChanged(projectEvent);
 
       expect(updates).toEqual([updateEvent]);
       expect(saves).toEqual([saveEvent]);
+      expect(dirtyChanges).toEqual([dirtyEvent]);
       expect(deletions).toEqual([deleteEvent]);
       expect(builds).toEqual([builtEvent]);
       expect(projects).toEqual([projectEvent]);

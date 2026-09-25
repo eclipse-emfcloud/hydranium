@@ -212,6 +212,15 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             if (filtered.changes.length === 0) {
                return;
             }
+            // Only an open document keeps the file's text as its disk
+            // baseline; the store ignores the rest. The self-save filter has
+            // dropped the server's own writes, which set the baseline when
+            // they wrote.
+            for (const change of filtered.changes) {
+               this.textDocuments
+                  .reloadDiskBaseline(change.uri)
+                  .catch((err: unknown) => this.logger.error(`Disk baseline not reloaded for ${change.uri}. ${String(err)}`));
+            }
             // External file-system changes are authoritative — overwrite any
             // pending reason (typically empty here; could be `didChangeContent`
             // if a watcher event raced an in-flight Monaco edit, in which case

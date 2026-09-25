@@ -127,6 +127,8 @@ interface ServicesStubOptions {
     * assertion would pass even if the handler bypassed this seam entirely.
     */
    mtimeMs?: (uri: URI) => Promise<number | undefined>;
+   /** Records each `TextDocuments.reloadDiskBaseline` call. */
+   reloadedBaselines?: string[];
 }
 
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
@@ -166,7 +168,10 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          TextDocuments: {
             getAuthor,
             onDidCloseLastOpen: (opts.lastOpenClosed ?? new Emitter<{ uri: string }>()).event,
-            onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event
+            onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event,
+            reloadDiskBaseline: async (uri: string) => {
+               opts.reloadedBaselines?.push(uri);
+            }
          },
          SelfSaveRegistry: { isRegistered: selfSaveRegistered },
          FileSystemTaskQueue: fileSystemTaskQueue,
@@ -524,6 +529,34 @@ describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', ()
       // immediateFlush fired the dispatch without any clock.advance(50).
       expect(handler.dispatchCalls).toHaveLength(1);
       expect(handler.dispatchCalls[0].changed.map(u => u.toString())).toEqual([WATCHED_URI]);
+   });
+});
+
+describe('HydraniumDocumentUpdateHandler — disk baseline of watched files', () => {
+   it('reloads the baseline of each change the self-save filter keeps, deletions included', async () => {
+      const reloadedBaselines: string[] = [];
+      const deleted = URI.file('/hydranium-test/deleted.a').toString();
+      const handler = new CapturingHandler(makeServicesStub({ reloadedBaselines }));
+
+      handler.didChangeWatchedFiles({
+         changes: [
+            { uri: WATCHED_URI, type: FileChangeType.Changed },
+            { uri: deleted, type: FileChangeType.Deleted }
+         ]
+      });
+      await flushMicrotasks();
+
+      expect(reloadedBaselines).toEqual([WATCHED_URI, deleted]);
+   });
+
+   it('reloads nothing for the echo of a server write', async () => {
+      const reloadedBaselines: string[] = [];
+      const handler = new CapturingHandler(makeServicesStub({ reloadedBaselines, selfSaveRegistered: () => true }));
+
+      handler.didChangeWatchedFiles({ changes: [{ uri: WATCHED_URI, type: FileChangeType.Changed }] });
+      await flushMicrotasks();
+
+      expect(reloadedBaselines).toEqual([]);
    });
 });
 

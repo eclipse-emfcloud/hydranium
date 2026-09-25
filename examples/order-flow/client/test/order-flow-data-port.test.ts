@@ -43,14 +43,12 @@ import {
    DATA_SERVER_NOT_READY,
    DataConnection,
    type DataSession,
-   type DataClientProtocol,
    type DataPort,
    isSessionClosedError,
    type ResolvedMessage,
-   type TransferDocumentSavedEvent,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/lib/testing';
+import { makeCapturingDataClient, waitFor } from '@hydranium/protocol/lib/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/lib/testing/node';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import type {
@@ -119,32 +117,6 @@ class FakeDataPort implements DataPort {
    }
 }
 
-/** A `DataClientProtocol` that captures, which is what a widget's would do first. */
-function makeCapturingClient(): {
-   client: DataClientProtocol<OrderFlowTransferRoot>;
-   updates: TransferDocumentUpdatedEvent<OrderFlowTransferRoot>[];
-} {
-   const updates: TransferDocumentUpdatedEvent<OrderFlowTransferRoot>[] = [];
-   const client: DataClientProtocol<OrderFlowTransferRoot> = {
-      onDocumentUpdated(event: TransferDocumentUpdatedEvent<OrderFlowTransferRoot>): void {
-         updates.push(event);
-      },
-      onDocumentSaved(_event: TransferDocumentSavedEvent<OrderFlowTransferRoot>): void {
-         // Not this suite's subject; the save path is covered server-side.
-      },
-      onDocumentDeleted(): void {
-         // Likewise, and covered server-side against a real builder.
-      },
-      onDocumentsBuilt(): void {
-         // Likewise; this suite watches the document it reads.
-      },
-      onProjectsChanged(): void {
-         // Likewise.
-      }
-   };
-   return { client, updates };
-}
-
 let workspace: ScratchWorkspace | undefined;
 let port: FakeDataPort | undefined;
 let connection: DataConnection<OrderFlowTransferRoot> | undefined;
@@ -181,7 +153,7 @@ describe('order-flow data port', () => {
          // constructor; nothing else needs the instance.
          void new DataServer<OrderFlowTransferRoot>(channel, shared);
       });
-      const capturing = makeCapturingClient();
+      const capturing = makeCapturingDataClient<OrderFlowTransferRoot>();
       updates = capturing.updates;
       connection = new DataConnection<OrderFlowTransferRoot>(port, capturing.client);
       session = connection.createSession('order-flow-port-test');
@@ -324,7 +296,7 @@ describe('order-flow data port', () => {
       const deadPort = new FakeDataPort(() => {
          // Attach no server, so nothing answers under any namespace.
       });
-      const capturing = makeCapturingClient();
+      const capturing = makeCapturingDataClient<OrderFlowTransferRoot>();
       const failing = new DataConnection<OrderFlowTransferRoot>(deadPort, capturing.client, {
          methodNamespace: 'wrong-namespace/'
       });

@@ -32,6 +32,21 @@ hydranium server; a non-Theia host does not need it.
   (Backend) — register only when the optional `HostMemoryDiagnosticsService` is
   bound. You bind `MemoryDiagnosticsService` to your own connected data-server
   frontend; the framework cannot, because that class is yours.
+- **`EditorDiskSync`** — keeps a dirty editor's save from applying edits its
+  file already holds, as the file does once the server saves a document the
+  editor shows unsaved. Before each save of the editor it drops the edits the
+  file holds, so the save writes only the rest, a save participant's included;
+  on each watched change of the file to the editor's text it marks the editor
+  clean. Theia otherwise keeps the editor dirty, and its next save applies the
+  editor's edits to a file that already holds them. You bind it as a
+  `FrontendApplicationContribution`.
+- **`HydraniumFileService`** — Theia's `FileService`, refusing an editor's
+  incremental save once the file's mtime has moved past the one the editor
+  read, so the editor writes its whole text instead. Theia's own check passes a
+  file of unchanged size, and the save then applies the editor's edits to a
+  file that may already hold them; `write` keeps Theia's check. The safety net
+  behind `EditorDiskSync`, for a save the sync cannot catch. You bind it with
+  `rebind(FileService).to(HydraniumFileService).inSingletonScope()`.
 - **`captureBrowserRuntime` / `formatBrowserRuntime`** — the renderer's own memory
   reading as a `BrowserRuntimeReport`, preferring the standardized
   `performance.measureUserAgentSpecificMemory()` and falling back to Chromium's
@@ -64,6 +79,8 @@ declared peer dependencies are:
 | --------------------- | ------------- |
 | `@hydranium/protocol` | `^1.0.0-next` |
 | `@theia/core`         | `^1.70.0`     |
+| `@theia/editor`       | `^1.70.0`     |
+| `@theia/filesystem`   | `^1.70.0`     |
 | `@theia/output`       | `^1.70.0`     |
 | `inversify`           | `^6.0.0`      |
 | `vscode-jsonrpc`      | `9.0.1`       |
@@ -91,12 +108,12 @@ from here:
 
 ## Entry points
 
-| Subpath     | Holds                                                                                                                                                                                                            | Environment                      |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `.`         | Nothing. Deliberately empty, so an environment-specific import cannot reach the wrong bundle through a barrel.                                                                                                    | browser-neutral (gated)          |
-| `./browser` | `ChannelLogger`, `ChannelTracer`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, the `bind*` helpers, `captureBrowserRuntime`                                                                 | browser / Theia frontend (gated) |
-| `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                                                                        | Node / Theia backend             |
-| `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                                        | browser-neutral (gated)          |
+| Subpath     | Holds                                                                                                                                                                                       | Environment                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `.`         | Nothing. Deliberately empty, so an environment-specific import cannot reach the wrong bundle through a barrel.                                                                              | browser-neutral (gated)          |
+| `./browser` | `ChannelLogger`, `ChannelTracer`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, `EditorDiskSync`, `HydraniumFileService`, the `bind*` helpers, `captureBrowserRuntime` | browser / Theia frontend (gated) |
+| `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                  | Node / Theia backend             |
+| `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                  | browser-neutral (gated)          |
 
 Every subpath also has a `./lib/<name>` twin, so a consumer on
 `moduleResolution: "Node"` can reach it. "Gated" means the entry is enforced
