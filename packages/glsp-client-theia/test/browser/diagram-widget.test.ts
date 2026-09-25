@@ -21,6 +21,20 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
    GLSPDiagramWidget: class GLSPDiagramWidget {
       onAfterAttachCalls = 0;
       disposeCalls = 0;
+      saveable?: { dispose(): void };
+      readonly toDispose = {
+         pushed: [] as unknown[],
+         push(item: unknown): void {
+            this.pushed.push(item);
+         }
+      };
+      readonly actionDispatcher = { kind: 'dispatcher' };
+      readonly diContainer = { get: (): unknown => ({ kind: 'editor context' }) };
+      /** Builds GLSP's own saveable inline, as the real `configure` does. */
+      configure(): void {
+         this.saveable = { dispose: vi.fn() };
+         this.toDispose.push(this.saveable);
+      }
       protected onAfterAttach(): void {
          this.onAfterAttachCalls++;
       }
@@ -29,11 +43,23 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
       }
    }
 }));
+// The real saveable's module requires GLSP's CommonJS build; its behaviour has
+// its own suite. What is under test here is that the widget installs it.
+vi.mock('../../src/browser/glsp-saveable', () => ({
+   HydraniumGlspSaveable: class HydraniumGlspSaveable {
+      constructor(
+         readonly actionDispatcher: unknown,
+         readonly editorContextService: unknown
+      ) {}
+      dispose(): void {}
+   }
+}));
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Message } from '@theia/core/lib/browser';
 import { DIAGRAM_LOADING_CLASS, DIAGRAM_LOADING_FAILED_CLASS, HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
+import { HydraniumGlspSaveable } from '../../src/browser/glsp-saveable';
 
 /** Records `appendChild` / `remove` without a DOM. */
 interface OverlayHost {
@@ -130,6 +156,18 @@ describe('HydraniumGlspDiagramWidget', () => {
       widget = new TestableWidget();
       loader = new ControllableLoader();
       widget.loader = loader;
+   });
+
+   it('replaces GLSP’s saveable with one that stays dirty while a save is pending', () => {
+      const base = widget as unknown as { saveable?: { dispose(): void }; toDispose: { pushed: unknown[] } };
+      widget.configure({} as never, {} as never);
+
+      const [glspSaveable, installed] = base.toDispose.pushed as [{ dispose: ReturnType<typeof vi.fn> }, unknown];
+      expect(widget.saveable).toBeInstanceOf(HydraniumGlspSaveable);
+      expect(installed).toBe(widget.saveable);
+      // GLSP's own one listens to the dirty state until disposed.
+      expect(glspSaveable.dispose).toHaveBeenCalled();
+      expect(widget.saveable).toMatchObject({ actionDispatcher: { kind: 'dispatcher' }, editorContextService: { kind: 'editor context' } });
    });
 
    it('covers the canvas on attach while the load is in flight', () => {

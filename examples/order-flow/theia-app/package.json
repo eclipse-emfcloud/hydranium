@@ -19,7 +19,7 @@
     "lint": "eslint test --max-warnings 0",
     "rebuild": "theia rebuild:browser --cacheRoot ../../..",
     "start": "theia start --plugins=local-dir:./plugins --hostname=0.0.0.0 --port=3001 ../workspace",
-    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --project chromium && cross-env HYDRANIUM_PLAYWRIGHT_TIER=reload playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --project chromium-reload",
     "test:e2e:headed": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --headed",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:reconnect": "playwright test --config playwright.reconnect.config.mts --tsconfig tsconfig.e2e.json",

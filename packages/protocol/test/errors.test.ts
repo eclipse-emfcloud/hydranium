@@ -16,6 +16,7 @@ import {
    DUPLICATE_CLIENT_ID_ERROR_CODE,
    DocumentNotOpenError,
    DuplicateClientIdError,
+   SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
    STALE_BASED_UPDATE,
    SessionClosedError,
@@ -121,7 +122,9 @@ describe('client session errors', () => {
          expect(error).toBeInstanceOf(ResponseError);
          expect(error.code).toBe(entry.code);
          expect(error.name).toBe(entry.name);
-         expect(error.data).toEqual(entry.data);
+         // `toMatchObject`: `SessionClosedError` also carries a message identity,
+         // asserted on its own below.
+         expect(error.data).toMatchObject(entry.data);
          for (const [field, value] of Object.entries(entry.data)) {
             expect((error as unknown as Record<string, unknown>)[field]).toBe(value);
          }
@@ -136,6 +139,22 @@ describe('client session errors', () => {
          expect(entry.guard(undefined)).toBe(false);
       });
    }
+});
+
+describe('SessionClosedError', () => {
+   it('carries the message identity beside the client id, and keeps the id out of the sentence', () => {
+      const error = new SessionClosedError('form#1');
+      expect(resolvedFromResponseError(error)?.code).toBe(SESSION_CLOSED.code);
+      expect(error.message).toBe(SESSION_CLOSED.text);
+      expect(error.message).not.toContain('form#1');
+      expect(error.clientId).toBe('form#1');
+   });
+
+   it('keeps the identity under a caller-supplied sentence', () => {
+      const error = new SessionClosedError('form#1', 'The diagram has closed');
+      expect(error.message).toBe('The diagram has closed');
+      expect(resolvedFromResponseError(error)?.code).toBe(SESSION_CLOSED.code);
+   });
 });
 
 describe('isConflictError', () => {

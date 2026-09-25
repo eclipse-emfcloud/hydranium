@@ -45,6 +45,7 @@ import {
    type DataSession,
    type DataClientProtocol,
    type DataPort,
+   isSessionClosedError,
    type ResolvedMessage,
    type TransferDocumentSavedEvent,
    type TransferDocumentUpdatedEvent
@@ -350,6 +351,6 @@ describe('order-flow data port', () => {
 
    it('refuses use after dispose', async () => {
       session!.dispose();
-      await expect(session!.connected()).rejects.toThrow(/disposed/);
+      await expect(session!.connected()).rejects.toSatisfy(isSessionClosedError);
    });
 });

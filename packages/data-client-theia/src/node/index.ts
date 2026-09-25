@@ -10,4 +10,3 @@
 export * from './connection-container-module';
 export * from './data-server-connection-handler';
 export * from './host-diagnostics-server';
-export * from './socket-channel-forwarder';

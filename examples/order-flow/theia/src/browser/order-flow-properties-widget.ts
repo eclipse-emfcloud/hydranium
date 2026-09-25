@@ -8,13 +8,13 @@
  ********************************************************************************/
 
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
+import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import {
    PROPERTIES_CLOSE_FAILED,
    PROPERTIES_LOADING,
    PROPERTIES_OPEN_FAILED
 } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { describeError, renderFrameworkMessage, resolve, type TransferElement } from '@hydranium/protocol';
+import { renderFrameworkMessage, resolve, type ResolvedMessage, type TransferElement } from '@hydranium/protocol';
 import { nls } from '@theia/core/lib/common/nls';
 import { BaseWidget } from '@theia/core/lib/browser/widgets/widget';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
@@ -72,6 +72,12 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
    protected model!: OrderFlowPropertiesModel<OrderFlowTransferRoot>;
    /** The document currently open, so a repeated selection is not reloaded. */
    protected openUri?: string;
+   /**
+    * Renders every sentence this panel shows, the form's and a failure's own,
+    * through the same catalogue the data port renders a failure through, so a
+    * sentence the panel draws and one it raises come from one authority.
+    */
+   protected readonly renderMessage = (message: ResolvedMessage): string => renderFrameworkMessage(message, nls.localization?.translations);
 
    @postConstruct()
    protected init(): void {
@@ -95,9 +101,7 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
             setField: (name, value) => this.model.setField(name, value),
             reportError: (error, reported) => this.dataConnection.reportError(error, reported)
          },
-         // The same catalogue the data port renders a failure through, so a
-         // sentence the panel draws and one it raises come from one authority.
-         { renderMessage: message => renderFrameworkMessage(message, nls.localization?.translations) }
+         { renderMessage: this.renderMessage }
       );
 
       this.toDispose.push(this.model.onDidChange(() => this.render()));
@@ -139,7 +143,10 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
          void this.model
             .close()
             .catch((error: unknown) =>
-               this.dataConnection.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeError(error) }))
+               this.dataConnection.reportError(
+                  error,
+                  resolve(PROPERTIES_CLOSE_FAILED, { detail: describeFailure(error, this.renderMessage) })
+               )
             );
          return;
       }
@@ -160,8 +167,9 @@ export class OrderFlowPropertiesWidget extends BaseWidget {
          })
          .catch((error: unknown) => {
             this.form.setLoading(false);
-            this.dataConnection.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
-            this.form.report(describeError(error), 'error');
+            const detail = describeFailure(error, this.renderMessage);
+            this.dataConnection.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail }));
+            this.form.report(detail, 'error');
          });
    }
 

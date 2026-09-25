@@ -17,9 +17,10 @@
  * the only enforcement there is.
  */
 
-import { isMessageDeclaration, renderFrameworkMessage, resolve } from '@hydranium/protocol';
+import { isMessageDeclaration, renderFrameworkMessage, resolve, SESSION_CLOSED, SessionClosedError } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
 import * as propertiesMessages from '../src/properties/properties-messages';
+import { describeFailure } from '../src/properties/properties-form';
 import { PROPERTIES_OPEN_FAILED, PROPERTIES_WRITE_FAILED } from '../src/properties/properties-messages';
 
 const codes = Object.values(propertiesMessages)
@@ -73,5 +74,22 @@ describe("the properties panel's message texts", () => {
 
       expect(reported.params).toEqual({ field: 'name', detail: 'stale based-on version' });
       expect(renderFrameworkMessage(reported, catalogue)).toBe("stale based-on version — 'name' wurde nicht gespeichert.");
+   });
+});
+
+describe('describeFailure', () => {
+   it("renders an error's own sentence through the host's catalogue when the error carries an identity", () => {
+      // The session's own refusal, raised client-side once the panel's session
+      // has ended: its sentence belongs in the reader's language, not in English
+      // inside a translated one.
+      const catalogue = { [SESSION_CLOSED.code]: 'Die Bearbeitungssitzung ist beendet.' };
+
+      expect(describeFailure(new SessionClosedError('panel'), message => renderFrameworkMessage(message, catalogue))).toBe(
+         'Die Bearbeitungssitzung ist beendet.'
+      );
+   });
+
+   it('keeps the technical text of an error without one', () => {
+      expect(describeFailure(new Error('connection refused'), () => 'rendered')).toBe('connection refused');
    });
 });

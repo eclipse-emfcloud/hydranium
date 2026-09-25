@@ -7,7 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import type { DataServerProtocol, DiagnosticOf } from '../data';
+import { SessionClosedError } from '../errors';
 import type { SnapshotVersion } from '../model-service/based-on';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import type { OpenModelArgs } from '../model-server';
@@ -104,7 +106,6 @@ export type DataSessionDocument<
 export interface DataSessionHost<TTransfer extends TransferElement, TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>>> {
    /** The connected, READY proxy of the current connection; a new object after each reconnect. */
    connected(): Promise<RpcProxy<TServer>>;
-   releaseSession(session: DataSession<TTransfer, TServer>): void;
    /** Surface a failure no caller is waiting on, such as restoring a document after a reconnect. */
    reportError?(error: unknown, reported: ResolvedMessage): void;
 }
@@ -156,7 +157,7 @@ export type DataSessionFactory<TTransfer extends TransferElement, TServer extend
 export class DataSession<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> {
+> implements Disposable {
    /**
     * How long {@link closeDocument} and {@link dispose} wait for this session's
     * calls in flight before closing anyway. Long, because the wait only runs
@@ -179,6 +180,21 @@ export class DataSession<
    protected readonly unsavedWrites = new Map<string, SnapshotVersion>();
    /** Per URI, this session's calls still in flight on it, which a close waits for. */
    protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
+   /** This session's saves still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
+   protected readonly savesInFlight = new Set<Promise<unknown>>();
+   protected readonly disposeEmitter = new Emitter<void>();
+   /**
+    * Fires once when the session ends, by {@link dispose} or {@link detach}, as
+    * soon as it rejects further calls and before any close is sent. For a
+    * session its connection created, the connection's listener runs first, so
+    * the id is free again on that connection by the time any other listener
+    * runs; the server still holds it until the close arrives, and refuses a new
+    * session under it until then.
+    *
+    * A listener subscribed once the session has ended is never called, so a
+    * late subscriber checks {@link isDisposed} first.
+    */
+   readonly onDidDispose: Event<void> = this.disposeEmitter.event;
    /**
     * Sent with every registration, so the server lets this session register
     * its id again while the dropped connection's session is still live there:
@@ -350,12 +366,39 @@ export class DataSession<
 
    /** Persist `args.model` to disk as this session. The session must have `args.uri` open. */
    saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      return this.track([args.uri], async () => {
+      const saving = this.track([args.uri], async () => {
          const server = await this.connected();
          const document = await server.saveModelDocument({ ...args, clientId: this.clientId });
          this.unsavedWrites.delete(args.uri);
          return document;
       });
+      this.savesInFlight.add(saving);
+      const done = (): boolean => this.savesInFlight.delete(saving);
+      saving.then(done, done);
+      return saving;
+   }
+
+   /** Whether the session has ended, by {@link dispose} or {@link detach}. */
+   get isDisposed(): boolean {
+      return this.disposed;
+   }
+
+   /**
+    * Whether a save of this session has not answered yet. Synchronous, for a
+    * host whose exit veto must decide within the tick, such as Theia's
+    * `onWillStop`.
+    */
+   get hasSavesInFlight(): boolean {
+      return this.savesInFlight.size > 0;
+   }
+
+   /**
+    * Resolves once the saves in flight now have answered, or
+    * {@link settleBeforeCloseMs} has passed. Never rejects: a failed save has
+    * answered too.
+    */
+   whenSavesSettled(): Promise<void> {
+      return this.settle(this.savesInFlight);
    }
 
    /**
@@ -375,16 +418,17 @@ export class DataSession<
     * end it on the server, which closes everything it has open. Idempotent,
     * and leaves the connection usable by its other sessions.
     *
-    * Every later call rejects. The server close is not awaited, because a
-    * `Disposable` cannot be; a close that fails leaves the session to the
-    * server's connection-close cleanup.
+    * Every later call rejects, and so does a call made earlier in the same
+    * tick, which has not reached the wire yet and is never sent. The server
+    * close is not awaited, because a `Disposable` cannot be; a close that fails
+    * leaves the session to the server's connection-close cleanup.
     */
    dispose(): void {
       if (this.disposed) {
          return;
       }
       this.disposed = true;
-      this.host.releaseSession(this);
+      this.fireDispose();
       const pending = [...this.inFlight.values()].flatMap(calls => [...calls]);
       void (async () => {
          await this.settle(pending);
@@ -403,12 +447,26 @@ export class DataSession<
     * Sends nothing, unlike {@link dispose}: the server ends every session on a
     * connection it sees close, and the close would travel over the very
     * connection being disposed.
+    *
+    * Public because the connection calls it; anyone else ends a session with
+    * {@link dispose}. It fires {@link onDidDispose} only if the session has not
+    * already ended, and after {@link dispose} it still cancels the close that
+    * dispose has not sent yet.
     */
    detach(): void {
-      this.disposed = true;
       this.detached = true;
       this.openUris.clear();
       this.unsavedWrites.clear();
+      if (!this.disposed) {
+         this.disposed = true;
+         this.fireDispose();
+      }
+   }
+
+   /** Fire {@link onDidDispose} and dispose its emitter, so a second call fires nothing. */
+   protected fireDispose(): void {
+      this.disposeEmitter.fire(undefined);
+      this.disposeEmitter.dispose();
    }
 
    /**
@@ -522,7 +580,7 @@ export class DataSession<
 
    protected assertLive(): void {
       if (this.disposed) {
-         throw new Error('DataSession is disposed');
+         throw new SessionClosedError(this.clientId);
       }
    }
 }

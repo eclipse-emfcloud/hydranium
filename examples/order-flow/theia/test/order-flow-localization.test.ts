@@ -13,7 +13,7 @@ import { collectMessages, renderFrameworkMessage, resolve } from '@hydranium/pro
 // the same reason the message barrels below are spelled `/lib/messages`.
 import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/lib/testing';
 import * as protocolMessages from '@hydranium/protocol/lib/messages';
-import { DATA_SERVER_CONNECT_FAILED } from '@hydranium/protocol/lib/messages';
+import { DATA_SERVER_CONNECT_FAILED, SESSION_CLOSED } from '@hydranium/protocol/lib/messages';
 import * as coreMessages from '@hydranium/core/lib/messages';
 import * as dataServerMessages from '@hydranium/data-server/lib/messages';
 import * as glspServerMessages from '@hydranium/glsp-server/lib/messages';
@@ -143,11 +143,14 @@ describe('the German catalogue', () => {
       expect(renderFrameworkMessage(reported)).toBe('Could not connect to the data server: ECONNREFUSED');
    });
 
-   it('shares no key with the catalogue the SERVER renders from', () => {
+   it('shares no key with the catalogue the SERVER renders from but the one both sides raise', () => {
       // The invariant, made checkable: a message rendered on both sides has two
       // authorities over one sentence, and the two would drift on the first
       // reword. Which side renders a message decides which file it belongs in,
-      // so an overlap is the defect — not a duplicate translation.
+      // so an overlap is the defect — not a duplicate translation. The one
+      // exception is a message both sides RAISE: the server ends its sessions,
+      // and the client tier refuses a call on a session it has ended, so each
+      // renders its own, and the two entries must hold one sentence.
       const serverKeys = Object.keys(serverTranslations);
       // Both non-empty first, which `findSharedCodes` documents as the caller's
       // job: an empty set on either side satisfies a disjointness assertion
@@ -155,7 +158,8 @@ describe('the German catalogue', () => {
       expect(serverKeys.length).toBeGreaterThan(0);
       expect(Object.keys(translations).length).toBeGreaterThan(0);
 
-      expect(findSharedCodes(serverKeys, Object.keys(translations))).toEqual([]);
+      expect(findSharedCodes(serverKeys, Object.keys(translations))).toEqual([SESSION_CLOSED.code]);
+      expect(translations[SESSION_CLOSED.code]).toBe(serverTranslations[SESSION_CLOSED.code]);
    });
 
    it('leaves every server-rendered code to the server, including the ones it used to hold', () => {

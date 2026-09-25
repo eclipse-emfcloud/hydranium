@@ -43,6 +43,10 @@ hydranium server; a non-Theia host does not need it.
   forwarder bridges the two; port discovery, connect orchestration, and the
   buffer-and-replay fix for frontend writes that arrive before the forwarder is
   wired all live here.
+- **`SocketChannelForwarder`** (Node side) — the byte forwarder both heads plug
+  into that hook. When the frontend channel closes, it finishes the writes it
+  still has queued before it ends the socket, so a message sent just before a
+  page goes away still reaches the server.
 - **`./testing`** — `makeStubOutputChannelManager` and `makeStubInversifyContext`,
   the doubles that let the pieces above be unit-tested without a Theia
   application.
@@ -62,6 +66,7 @@ declared peer dependencies are:
 | `@theia/core`         | `^1.70.0`     |
 | `@theia/output`       | `^1.70.0`     |
 | `inversify`           | `^6.0.0`      |
+| `vscode-jsonrpc`      | `9.0.1`       |
 
 `@theia/output` is easy to miss: the memory-diagnostics commands and the channel
 logger both write to an Output channel, so a host that does not already depend on
@@ -90,7 +95,7 @@ from here:
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `.`         | Nothing. Deliberately empty, so an environment-specific import cannot reach the wrong bundle through a barrel.                                                                                                    | browser-neutral (gated)          |
 | `./browser` | `ChannelLogger`, `ChannelTracer`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, the `bind*` helpers, `captureBrowserRuntime`                                                                 | browser / Theia frontend (gated) |
-| `./node`    | `AbstractSocketForwardingConnectionHandler` and its options — imports `node:net`                                                                                                                                          | Node / Theia backend             |
+| `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                                                                        | Node / Theia backend             |
 | `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                                        | browser-neutral (gated)          |
 
 Every subpath also has a `./lib/<name>` twin, so a consumer on

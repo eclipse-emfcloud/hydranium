@@ -7,13 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DiagramLoader } from '@eclipse-glsp/client';
-import { GLSPDiagramWidget } from '@eclipse-glsp/theia-integration';
+import { DiagramLoader, EditorContextService } from '@eclipse-glsp/client';
+import { GLSPDiagramWidget, type GLSPDiagramWidgetOptions } from '@eclipse-glsp/theia-integration';
 // Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
 import { type Message } from '@theia/core/lib/browser';
-import { injectable } from '@theia/core/shared/inversify';
+import { type Container, injectable } from '@theia/core/shared/inversify';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
+import { HydraniumGlspSaveable } from './glsp-saveable';
 // Shipped by this package rather than left to adopters: an overlay whose
 // stylesheet was forgotten is an unstyled div in normal flow, which is a silent
 // failure. Adopters override individual rules from their own stylesheet.
@@ -56,10 +57,30 @@ export const DIAGRAM_LOADING_FAILED_CLASS = `${DIAGRAM_LOADING_CLASS}-failed`;
  * Bound unconditionally by `AbstractHydraniumGlspTheiaFrontendModule`. To opt out,
  * override {@link showLoadingOverlay} to a no-op; to change what is rendered,
  * override {@link createLoadingOverlay} or {@link loadingLabel}.
+ *
+ * Its saveable is a {@link HydraniumGlspSaveable}, which keeps a pending save
+ * dirty, so Theia's exit check still counts it; see {@link createSaveable}.
  */
 @injectable()
 export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
    protected loadingOverlay?: HTMLElement;
+
+   /**
+    * Replaces the saveable GLSP's `configure` builds inline, with no factory
+    * seam. The widget factory calls `configure` before the widget reaches the
+    * shell, so Theia only ever tracks this one.
+    */
+   override configure(options: GLSPDiagramWidgetOptions, diContainer: Container): void {
+      super.configure(options, diContainer);
+      this.saveable.dispose();
+      this.saveable = this.createSaveable();
+      this.toDispose.push(this.saveable);
+   }
+
+   /** The widget's saveable. Override to change how saves and dirty state behave. */
+   protected createSaveable(): GLSPDiagramWidget['saveable'] {
+      return new HydraniumGlspSaveable(this.actionDispatcher, this.diContainer.get(EditorContextService));
+   }
 
    protected override onAfterAttach(msg: Message): void {
       // Before `super`, which is what starts the load on first attach — so the

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
+import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import {
    PROPERTIES_CLOSE_FAILED,
    PROPERTIES_LOADING,
@@ -17,7 +17,6 @@ import {
 import {
    type DataEvents,
    type DataSession,
-   describeError,
    renderFrameworkMessage,
    resolve,
    type ResolvedMessage,
@@ -80,7 +79,7 @@ export class PropertiesPanel {
             // The form's heading is the document's, and here it sits inside a
             // panel the page has already headed `Properties` with an `h2`.
             headingLevel: 'h3',
-            renderMessage: message => renderFrameworkMessage(message, pageTranslations())
+            renderMessage: this.renderMessage
          }
       );
       this.model.onDidChange(() => this.render());
@@ -107,7 +106,7 @@ export class PropertiesPanel {
       if (!uri) {
          this.form.setTitle(undefined);
          void this.model.close().catch((error: unknown) => {
-            this.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeError(error) }));
+            this.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeFailure(error, this.renderMessage) }));
          });
          return;
       }
@@ -128,10 +127,14 @@ export class PropertiesPanel {
          })
          .catch((error: unknown) => {
             this.form.setLoading(false);
-            this.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
-            this.form.report(describeError(error), 'error');
+            const detail = describeFailure(error, this.renderMessage);
+            this.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail }));
+            this.form.report(detail, 'error');
          });
    }
+
+   /** Renders the form's sentences and a failure's own through the page's catalogue. */
+   protected readonly renderMessage = (message: ResolvedMessage): string => renderFrameworkMessage(message, pageTranslations());
 
    protected render(): void {
       this.form.setFields(this.model.fields);

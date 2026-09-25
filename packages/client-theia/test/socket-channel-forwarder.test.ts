@@ -81,6 +81,11 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
    }
 }
 
+/** A forwarder whose flush bound a test can outlast. */
+class BoundedForwarder extends SocketChannelForwarder {
+   protected override readonly flushTimeoutMs = 50;
+}
+
 const REQUEST: Message = { jsonrpc: '2.0', id: 1, method: 'ns/one', params: { value: 'a' } } as Message;
 
 describe('SocketChannelForwarder', () => {
@@ -161,6 +166,44 @@ describe('SocketChannelForwarder', () => {
       channel.close();
 
       await until(() => near.destroyed, 'the socket to be destroyed after the channel closed');
+   });
+
+   it('delivers what the channel sent just before it closed', async () => {
+      // A page going away sends its last messages and closes its channel in
+      // the same tick, and the writer takes several turns per message. A
+      // forwarder that destroys the socket on the close cuts off the queue.
+      const { channel, far } = await forwarder();
+      const received: Message[] = [];
+      new SocketMessageReader(far).listen(message => received.push(message));
+      const messages = [1, 2, 3].map(id => ({ ...REQUEST, id }) as Message);
+
+      messages.forEach(message => channel.deliver(message));
+      channel.close();
+
+      await until(() => received.length === messages.length, 'every message sent before the close');
+      expect(received).toEqual(messages);
+   });
+
+   it('ends the socket after the bound when the server stops reading', async () => {
+      // A write the peer never reads never settles, so without a bound the
+      // socket, and the server's end of the connection, stay open for good.
+      const { near, far, server } = await socketPair();
+      cleanup.push(() => {
+         far.destroy();
+         near.destroy();
+         server.close();
+      });
+      // A write whose callback never runs, as for a peer that stopped reading.
+      // Filling the socket buffers instead does not hold on Windows, which
+      // takes a large write whole.
+      near.write = (() => true) as typeof near.write;
+      const channel = new RecordingChannel();
+      new BoundedForwarder(channel, near);
+      channel.deliver(REQUEST);
+
+      channel.close();
+
+      await until(() => near.destroyed, 'the socket to be destroyed after the bound');
    });
 
    it('closes the channel when the socket end goes away', async () => {

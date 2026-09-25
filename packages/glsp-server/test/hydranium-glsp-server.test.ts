@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
 import 'reflect-metadata';
 import { createHash } from 'node:crypto';
 import {
+   type ActionMessage,
    type BindingTarget,
+   type ClientSession,
    type DiagramConfiguration,
    DiagramModule,
    DefaultGLSPServer,
@@ -20,6 +22,7 @@ import {
    type GModelFactory,
    ModelState,
    type ModelSubmissionHandler,
+   NullLogger,
    RejectAction,
    RequestModelAction,
    ServerLayoutKind,
@@ -30,7 +33,7 @@ import {
 import { ContainerModule, inject, injectable } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { ReconcilingConflictResolver } from '@hydranium/protocol';
+import { ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
@@ -239,5 +242,47 @@ describe('a failed GLSP request', () => {
 
    it('leaves a plain Error unchanged', async () => {
       await expect(rejectDetailFor(new Error('plain failure'))).resolves.toBe('Error: plain failure');
+   });
+});
+
+// ---------------------------------------------------------------------------
+// A client connection closed before a failed request is answered. Upstream's
+// `process` does not await `handleClientRequest`, so a throw from it is an
+// unhandled rejection, which ends a Node server started with the default
+// `--unhandled-rejections=throw`.
+// ---------------------------------------------------------------------------
+
+/** A server whose client connection has closed: every send to the client throws. */
+class ClosedConnectionServer extends HydraniumGlspServer {
+   constructor() {
+      super();
+      this.logger = new NullLogger();
+      this.glspClientProxy = {
+         process: (_message: ActionMessage): void => {
+            throw new Error('Connection is closed.');
+         }
+      };
+   }
+
+   protected override sendResponseToClient(): void {
+      throw new Error('Connection is closed.');
+   }
+
+   /** Sends a request of `kind` whose handler rejects. */
+   failRequest(kind: string): Promise<void> {
+      const clientSession = {
+         actionDispatcher: { request: () => Promise.reject(new Error('The diagram has closed')) }
+      } as unknown as ClientSession;
+      return this.handleClientRequest(clientSession, { kind, requestId: 'request_1' }, 'client_1');
+   }
+}
+
+describe('a failed request on a closed client connection', () => {
+   it('settles without throwing for any request', async () => {
+      await expect(new ClosedConnectionServer().failRequest('someRequest')).resolves.toBeUndefined();
+   });
+
+   it('settles without throwing for a save request, whose error notification also fails to send', async () => {
+      await expect(new ClosedConnectionServer().failRequest(RequestSaveModelAction.KIND)).resolves.toBeUndefined();
    });
 });

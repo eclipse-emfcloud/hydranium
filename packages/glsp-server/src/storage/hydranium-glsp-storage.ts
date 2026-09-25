@@ -329,10 +329,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     */
    protected requireModelSession(): ModelClientSession<AstNode> {
       if (this.disposed) {
-         throw new SessionClosedError(
-            this.state.clientId,
-            `The diagram of ${this.state.clientId} has closed; its client session has ended`
-         );
+         throw new SessionClosedError(this.state.clientId, 'The diagram has closed; its client session has ended.');
       }
       if (!this.state.modelSession) {
          this.state.modelSession = this.registerModelSession();

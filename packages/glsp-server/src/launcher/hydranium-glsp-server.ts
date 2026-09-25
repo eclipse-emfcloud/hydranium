@@ -15,6 +15,7 @@ import {
    type RequestAction,
    type ResponseAction
 } from '@eclipse-glsp/server';
+import { RequestSaveModelAction } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 
 /**
@@ -64,9 +65,12 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    /**
     * Lifted verbatim from `@eclipse-glsp/server` 2.7.0's
     * {@link DefaultGLSPServer.handleClientRequest}, with the detail computation
-    * delegated to {@link requestFailureDetail}. Nothing else here — the
-    * timeout branch, the response dispatch, the nested send-failure handling —
-    * relates to that fallback.
+    * delegated to {@link requestFailureDetail}, and one addition: a failed
+    * {@link RequestSaveModelAction} also raises the error notification a failed
+    * `SaveModelAction` raises. A rejection reaches only the client's log, and a
+    * Theia host only logs a rejected save, so without it a save that failed
+    * would tell the user nothing. Nothing else here — the timeout branch, the
+    * response dispatch, the nested send-failure handling — relates to either.
     *
     * **This body does not track upstream.** A release that changes request
     * handling would silently not apply, on the path every request takes. There
@@ -97,6 +101,11 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
                detail
             });
             this.sendResponseToClient(clientId, reject);
+            // Inside the guard: `process` does not await this method, so a
+            // closed connection throwing here would be an unhandled rejection.
+            if (action.kind === RequestSaveModelAction.KIND) {
+               this.handleProcessError({ clientId, action }, error);
+            }
          } catch (sendError: unknown) {
             this.logger.error(`Failed to send rejection for request '${action.requestId}':`, sendError);
          }

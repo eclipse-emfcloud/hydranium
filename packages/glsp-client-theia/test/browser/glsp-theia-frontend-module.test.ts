@@ -44,6 +44,10 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
    },
    registerDiagramManager: registerDiagramManagerMock
 }));
+// The widget's saveable imports a deep module of `@eclipse-glsp/theia-integration`,
+// which the stand-in above does not cover, and its CommonJS build requires
+// stylesheets Node cannot load.
+vi.mock('../../src/browser/glsp-saveable', () => ({ HydraniumGlspSaveable: class HydraniumGlspSaveable {} }));
 
 import {
    type DiagramConfiguration,

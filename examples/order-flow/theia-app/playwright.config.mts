@@ -56,17 +56,20 @@ const serverLog = captureServerLog({ dir: serverLogDir });
  * Which invocation of this config is running, and therefore which subdirectory
  * of `test-results/` it owns.
  *
- * THIS CONFIG RUNS TWICE — `test:e2e` excludes `@restart`, `test:e2e:restart`
- * selects it — and Playwright CLEARS `outputDir` when a run starts. Sharing one
- * directory meant the second invocation deleted the first's JUnit report, so
- * eleven passing cases went missing from the artefact with nothing red to show
- * for it. Naming only the FILE apart does not help, because the directory is
- * what gets cleared.
+ * THIS CONFIG RUNS MORE THAN ONCE — `test:e2e` runs the `chromium` project and
+ * then, as `reload`, the `chromium-reload` one, both excluding `@restart`, and
+ * `test:e2e:restart` selects it — and Playwright CLEARS `outputDir` when a run
+ * starts. Sharing one directory meant the second invocation deleted the first's
+ * JUnit report, so eleven passing cases went missing from the artefact with
+ * nothing red to show for it. Naming only the FILE apart does not help, because
+ * the directory is what gets cleared.
  *
  * One variable drives both the directory and the report path below, so they
  * cannot drift apart — which is the mistake this replaces.
  */
 const tier = process.env.HYDRANIUM_PLAYWRIGHT_TIER ?? 'e2e';
+
+const RELOAD_SPEC = /order-flow-reload\.spec\.mts$/;
 
 export default defineConfig({
    testDir: './test/e2e',
@@ -108,7 +111,17 @@ export default defineConfig({
    projects: [
       {
          name: 'chromium',
-         use: { ...devices['Desktop Chrome'] }
+         use: { ...devices['Desktop Chrome'] },
+         testIgnore: RELOAD_SPEC
+      },
+      {
+         // One worker, and a run of its own in `test:e2e`, so nothing overlaps
+         // it: the page's last frames are best effort under load, and the spec
+         // asserts what they carried.
+         name: 'chromium-reload',
+         use: { ...devices['Desktop Chrome'] },
+         testMatch: RELOAD_SPEC,
+         workers: 1
       }
    ],
    webServer: {

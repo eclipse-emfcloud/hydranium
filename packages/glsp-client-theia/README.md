@@ -51,8 +51,20 @@ if you are mounting a hydranium GLSP diagram in a Theia application.
 - **`HydraniumGlspClientContribution`** — for a server that starts late: it tails
   the Output channel for a server-printed ready marker and defers `start` until a
   workspace is open.
+- **`HydraniumGlspSaveable`** — the diagram widget's saveable. Each save is a
+  `RequestSaveModelAction` the server answers: the save resolves on its own
+  response, and rejects on its own rejection or after 10 s rather than GLSP's
+  2 s. It stays dirty while a save is pending, so Theia's exit check still
+  counts it. The server answers through
+  `HydraniumGlspRequestSaveModelActionHandler`, which
+  `AbstractHydraniumGlspDiagramModule` registers; against a server that does
+  not advertise the request, the saveable behaves as GLSP's does. The dirty
+  flag follows the server, so an edit whose dirty state has not arrived when
+  Save All runs is not saved. Under the `fire-and-forget` `SaveDeliveryPolicy`
+  the server answers before the disk write finishes, and answers a failed
+  write as saved.
 - **Backend (`./node`)** — `GlspServerConnectionHandler` (the socket bridge,
-  plugging in `@eclipse-glsp/theia-integration`'s `SocketConnectionForwarder`) and
+  over `@hydranium/client-theia`'s `SocketChannelForwarder`) and
   `createGlspConnectionContainerModule(handler)` for the frontend-scoped module
   boilerplate.
 
@@ -107,12 +119,12 @@ stylesheet loaded afterwards.
 
 ## Entry points
 
-| Subpath     | Holds                                                                                                                                                                                                                       | Environment                      |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `.`         | Re-exports `./browser` — the larger of the two tiers and safe to load anywhere.                                                                                                                                              | browser-neutral (gated)          |
-| `./browser` | The frontend module bases, `createGlspClientTheiaModule`, the dispatcher, loader, widget, bounds updater, message service, diagram manager and configuration bases, `NoOpExternalMarkerManager`                               | browser / Theia frontend (gated) |
-| `./node`    | `GlspServerConnectionHandler`, `createGlspConnectionContainerModule`                                                                                                                                                         | Node / Theia backend             |
-| `./testing` | `makeBindRecorder`, the GLSP-module-specific Inversify double (the cross-head doubles live in `@hydranium/client-theia/testing`)                                                                                              | browser-neutral (gated)          |
+| Subpath     | Holds                                                                                                                                                                                                            | Environment                      |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `.`         | Re-exports `./browser` — the larger of the two tiers and safe to load anywhere.                                                                                                                                  | browser-neutral (gated)          |
+| `./browser` | The frontend module bases, `createGlspClientTheiaModule`, the dispatcher, loader, widget and its saveable, bounds updater, message service, diagram manager and configuration bases, `NoOpExternalMarkerManager` | browser / Theia frontend (gated) |
+| `./node`    | `GlspServerConnectionHandler`, `createGlspConnectionContainerModule`                                                                                                                                             | Node / Theia backend             |
+| `./testing` | `makeBindRecorder`, the GLSP-module-specific Inversify double (the cross-head doubles live in `@hydranium/client-theia/testing`)                                                                                 | browser-neutral (gated)          |
 
 Every subpath also has a `./lib/<name>` twin for consumers on
 `moduleResolution: "Node"`. "Gated" means the repository's neutral-bundle check

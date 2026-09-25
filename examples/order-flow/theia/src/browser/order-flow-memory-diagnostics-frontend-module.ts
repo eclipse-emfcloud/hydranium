@@ -10,9 +10,8 @@
 import { bindMemoryDiagnostics, MemoryDiagnosticsService } from '@hydranium/client-theia/lib/browser';
 import { bindHostDiagnostics } from '@hydranium/data-client-theia/lib/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
-import { OrderFlowDataConnection } from './order-flow-data-connection';
+import { bindOrderFlowDataConnection } from './order-flow-data-connection';
 import { OrderFlowMemoryDiagnostics } from './order-flow-memory-diagnostics';
-import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 
 /**
  * Wires the framework's parameterised `MemoryDiagnosticsContribution` into the
@@ -28,16 +27,11 @@ import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
  * A separate `theiaExtensions` entry from the panel and the diagram, because it
  * is separately loadable: diagnostics need only the data head, so a deployment
  * can take these commands without a properties view or a diagram. The shared
- * connection is therefore bound here too, guarded, rather than owned by the
- * panel's entry.
+ * connection is therefore bound here too, rather than owned by the panel's
+ * entry.
  */
 export default new ContainerModule((bind, _unbind, isBound) => {
-   // Guarded because the properties entry binds the same two, and either
-   // module may be loaded alone or beside the other.
-   if (!isBound(OrderFlowTheiaDataPort)) {
-      bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
-      bind(OrderFlowDataConnection).toSelf().inSingletonScope();
-   }
+   bindOrderFlowDataConnection(bind, isBound);
    bind(OrderFlowMemoryDiagnostics).toSelf().inSingletonScope();
    bind(MemoryDiagnosticsService).toService(OrderFlowMemoryDiagnostics);
    bindMemoryDiagnostics(bind, {

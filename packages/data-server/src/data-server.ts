@@ -738,7 +738,7 @@ export class DataServer<
    protected requireSession(clientId: string): ClientSession<AstNode, AstDiagnostic, TTransfer> {
       const session = this.clientSessions.get(clientId);
       if (!session) {
-         throw new SessionClosedError(clientId, `Client session ${clientId} was never registered on this connection`);
+         throw new SessionClosedError(clientId, 'The client session was never registered on this connection.');
       }
       return session;
    }
