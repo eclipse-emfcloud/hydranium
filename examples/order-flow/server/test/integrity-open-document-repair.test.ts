@@ -366,14 +366,15 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const modelService = harness.shared.model.ModelService;
          const onDisk = (): string => readFileSync(workspace.resolve(FILE), 'utf8');
 
-         await modelService.open({ uri: uriString, clientId: 'data-client' });
+         const session = modelService.createSession('data', 'data-client');
+         await session.open(uriString);
          await builder.waitUntil(DocumentState.Validated, uri);
 
          // An unsaved update that needs a repair. `update` resolves at the
          // settled phase, past both integrity passes, and `Validated` follows
          // every settled-phase listener — so each place a repair could be
          // persisted or staged has already run.
-         await modelService.update({ uri: uriString, clientId: 'data-client', model: DUPLICATES, basedOn: 'anything' });
+         await session.update({ uri: uriString, model: DUPLICATES, basedOn: 'anything' });
          await builder.waitUntil(DocumentState.Validated, uri);
 
          expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
@@ -387,7 +388,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          // read the same either way.
          const held = textDocuments.get(uriString)!.getText();
          const heldVersion = textDocuments.version(uriString);
-         await modelService.save({ uri: uriString, clientId: 'data-client', model: held, basedOn: asSnapshotVersion(heldVersion) });
+         await session.save({ uri: uriString, model: held, basedOn: asSnapshotVersion(heldVersion) });
 
          expect(textDocuments.version(uriString)).toBe(heldVersion);
          expect(onDisk()).toBe(held);
@@ -403,13 +404,13 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const sources: string[] = [];
          harness.shared.workspace.AstDocumentManager.onUpdate(uriString, event => sources.push(event.sourceClientId));
 
-         await modelService.open({ uri: uriString, clientId: 'data-client' });
+         const session = modelService.createSession('data', 'data-client');
+         await session.open(uriString);
          await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
          const opened = textDocuments.version(uriString);
 
-         const repaired = await modelService.update({
+         const repaired = await session.update({
             uri: uriString,
-            clientId: 'data-client',
             model: DUPLICATES,
             basedOn: asSnapshotVersion(opened)
          });
@@ -424,9 +425,8 @@ for (const syncMode of ['editor', 'silent'] as const) {
          // the writing client's own.
          expect(sources.at(-1)).toBe(INTEGRITY_CLIENT_ID);
 
-         const stale = modelService.update({
+         const stale = session.update({
             uri: uriString,
-            clientId: 'data-client',
             model: DUPLICATES,
             basedOn: asSnapshotVersion(opened + 1)
          });
@@ -453,9 +453,9 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const onDisk = (): string => readFileSync(workspace.resolve(FILE), 'utf8');
          writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
 
-         // `open` builds the document, and `Validated` follows both integrity
+         // The open builds the document, and `Validated` follows both integrity
          // passes and every settled-phase listener.
-         await harness.shared.model.ModelService.open({ uri: uriString, clientId: 'data-client' });
+         await harness.shared.model.ModelService.createSession('data', 'data-client').open(uriString);
          await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
 
          const repaired = textDocuments.get(uriString)?.getText();
@@ -502,7 +502,7 @@ describe('a silent repair of a held URI whose source is what disk holds', () => 
       };
       // `Validated` for the document follows the integrity passes of the build
       // `open` drives; the builder-wide wait then covers the one the edit drives.
-      await harness.shared.model.ModelService.open({ uri: uriString, clientId: 'data-client' });
+      await harness.shared.model.ModelService.createSession('data', 'data-client').open(uriString);
       await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
       await harness.shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
       await saved;

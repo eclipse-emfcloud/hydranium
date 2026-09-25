@@ -61,6 +61,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { thirdPartyWrite } from './testing/third-party-write.js';
 
 /** The three transfer roots this server serves, as a host would name them. */
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
@@ -267,12 +268,7 @@ describe('order-flow data port', () => {
       await session!.openDocument({ uri });
 
       const server = await session!.connected();
-      await server.updateModelDocument({
-         uri,
-         clientId: THIRD_PARTY,
-         model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Pay ', 'task Pay2 '),
-         basedOn: 'anything'
-      });
+      await thirdPartyWrite(server, THIRD_PARTY, uri, `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Pay ', 'task Pay2 '));
 
       await waitFor(() => updates.length >= 1, { message: `no onDocumentUpdated for ${uri}` });
       const event = updates[updates.length - 1];

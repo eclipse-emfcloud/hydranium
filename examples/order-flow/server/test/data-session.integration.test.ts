@@ -113,13 +113,15 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe('data head sessions', () => {
-   it('keeps the per-client upsert for an id that is not a registered session', async () => {
+   it('refuses a write under an id that is not a registered session, and opens nothing', async () => {
       const { services, uri, connect } = await boot();
       const { proxy } = connect();
 
-      await proxy.updateModelDocument({ uri, clientId: 'plain-client', model: EDITED, basedOn: 'anything' });
+      const failure = await rejectionOf(proxy.updateModelDocument({ uri, clientId: 'plain-client', model: EDITED, basedOn: 'anything' }));
 
-      expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, 'plain-client')).toBe(true);
+      expect(isSessionClosedError(failure)).toBe(true);
+      expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, 'plain-client')).toBe(false);
+      expect(services.shared.workspace.TextDocuments.isOpen(uri)).toBe(false);
    });
 
    it('refuses an id live on another connection, or in the server process', async () => {
@@ -362,7 +364,7 @@ describe('DataSession restore against the real stack', () => {
    it('reports nothing when another client kept the document, and the edits with it', async () => {
       const { services, uri, connect } = await boot();
       const textDocuments = services.shared.workspace.TextDocuments;
-      await services.shared.model.ModelService.open({ uri, clientId: 'bystander' });
+      await services.shared.model.ModelService.createSession('bystander').open(uri);
       let head = connect();
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);

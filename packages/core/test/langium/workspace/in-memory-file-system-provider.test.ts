@@ -97,6 +97,22 @@ describe('InMemoryFileSystemProvider reads', () => {
       expect(() => seeded().readFileSync(URI.parse(`${ROOT}/missing.a`))).toThrow(`No such file: ${ROOT}/missing.a`);
    });
 
+   it.each(['readFileSync', 'statSync'] as const)(
+      '%s reports an absent file as not found, with its path, as a Node file system does',
+      method => {
+         // Callers tell a missing file from any other failure by the code and
+         // the path, whichever provider is bound.
+         const missing = URI.parse(`${ROOT}/missing.a`);
+         let failure: unknown;
+         try {
+            seeded()[method](missing);
+         } catch (error: unknown) {
+            failure = error;
+         }
+         expect(failure).toMatchObject({ code: 'ENOENT', path: missing.fsPath });
+      }
+   );
+
    it('serves a registered virtual document instead of consulting the map', () => {
       // The framework re-reads a changed URI through this seam, and nothing in
       // the map backs a virtual URI — so without this the stdlib disappears on

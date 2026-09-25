@@ -20,7 +20,7 @@
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
-import { type URI, UriUtils } from '@hydranium/langium';
+import { URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
    type ApplyWorkspaceEditResult,
@@ -31,7 +31,7 @@ import {
    type DidOpenTextDocumentParams,
    type DidSaveTextDocumentParams,
    type Disposable,
-   type Emitter,
+   Emitter,
    type Event,
    type HandlerResult,
    OptionalVersionedTextDocumentIdentifier,
@@ -48,9 +48,11 @@ import {
 import { type DocumentUri, TextDocument, type TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
 import { type CanonicalUri, type LanguageClientUri, asLanguageClientUri, DisposableCollection, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
+import { HYDRANIUM_BUILD_REASONS } from '../langium/document-builder/document-builder.js';
+import { isConnectionGoneError } from '../util/connection-liveness.js';
 import { LANGUAGE_CLIENT_ID } from './client-ids.js';
 import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
-import { type ClientSessionClosedEvent, ClientSessionRegistry, type OpenOptions } from './client-session-registry.js';
+import { type ClientSessionClosedEvent, ClientSessionRegistry, type OpenOptions, type SessionEndCause } from './client-session-registry.js';
 import { isFullReplace, LanguageClientTextShadow } from './language-client-text-shadow.js';
 
 /**
@@ -77,6 +79,24 @@ export interface HydraniumTextDocumentsOptions<T extends TextDocument = TextDocu
     * Adopters with a custom text-document type (rare) pass their factory.
     */
    readonly configuration?: TextDocumentsConfiguration<T>;
+   /**
+    * How long a document whose last open closed because its client's
+    * connection was lost keeps its text before it reverts to disk. An open of
+    * the document within that time cancels the revert, so a client that
+    * registers again after a dropped connection finds its unsaved edits.
+    * Meanwhile the document counts as open for the integrity service, which
+    * therefore writes none of its unsaved text to disk. A close the client
+    * makes itself, or ending its session, reverts at once whatever this is.
+    *
+    * Defaults to `0`: such a document reverts at once as well, released in
+    * the close itself rather than on a timer.
+    */
+   readonly revertGraceMs?: number;
+}
+
+/** Delivered by {@link HydraniumTextDocuments.onDidCloseLastOpen}. */
+export interface LastOpenClosedEvent {
+   readonly uri: CanonicalUri;
 }
 
 /**
@@ -226,6 +246,18 @@ export type LanguageClientChangeOrigin =
    | { readonly kind: 'unreconstructable' };
 
 /**
+ * Whether `err` reports that the file of `target` does not exist, as a Node
+ * file system and the framework's providers do: code `ENOENT`, with `target`'s
+ * path. A missing file of another document is a different failure.
+ */
+function isFileNotFound(err: unknown, target: URI): boolean {
+   if (typeof err !== 'object' || err === null || !('code' in err) || err.code !== 'ENOENT') {
+      return false;
+   }
+   return !('path' in err) || err.path === target.fsPath;
+}
+
+/**
  * Cheap, stable, non-cryptographic content hash (cyrb53) for the version
  * sequence's "did the content change across close/reopen?" question. Only
  * needs to be collision-resistant enough that an accidental match across two
@@ -262,6 +294,9 @@ function contentHash(text: string): string {
  *     document's content-revision number), and splicing them lets versions drift
  *     silently past based-on gate holders.
  *   - Version-author history so each edit is attributable to its originating client.
+ *   - The revert to disk once no client has a document open, for every head
+ *     ({@link revertToDisk}), deferred by
+ *     {@link HydraniumTextDocumentsOptions.revertGraceMs} after a lost connection.
  *   - Pending-content staging used by the integrity service to thread corrections
  *     through `workspace/applyEdit` cycles for currently-closed documents.
  *   - `didOpen` notifications arriving over the LSP connection wait on the
@@ -352,6 +387,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
 
    protected readonly tracer: Tracer;
    protected readonly configuration: TextDocumentsConfiguration<T>;
+   /** See {@link HydraniumTextDocumentsOptions.revertGraceMs}. */
+   protected readonly revertGraceMs: number;
+   protected readonly lastOpenClosedEmitter = new Emitter<LastOpenClosedEvent>();
 
    constructor(
       protected services: ServerSharedServices,
@@ -365,6 +403,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          (uri, reason) => this.tracer.with(uri).warn(`Diff apply-verify fallback (${reason}) — using full-document replace`),
          this
       );
+      this.revertGraceMs = options.revertGraceMs ?? 0;
+      this.onDidCloseLastOpen(event => void this.revertToDisk(event.uri));
    }
 
    // Re-exposed configuration factories — for framework-internal callers
@@ -613,7 +653,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       return document.version;
    }
 
-   public notifyDidCloseTextDocument(event: DidCloseTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
+   /**
+    * Close `clientId`'s open of the document. When it was the last open, the
+    * document is released and reverts to disk, at once or, for a `'lost'`
+    * close, after {@link HydraniumTextDocumentsOptions.revertGraceMs}.
+    */
+   public notifyDidCloseTextDocument(
+      event: DidCloseTextDocumentParams,
+      clientId = LANGUAGE_CLIENT_ID,
+      cause: SessionEndCause = 'closed'
+   ): void {
       const uri = this.documentKey(event.textDocument.uri);
       if (!this.__sessions.removeOpen(uri, clientId)) {
          return;
@@ -627,32 +676,125 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          if (clientId === LANGUAGE_CLIENT_ID) {
             // Monaco closed the document; drop the URI it held and the shadow
             // baselined under it. (If this was the last URI/client the whole record
-            // is deleted below, clearing the set anyway.)
+            // is deleted on release, clearing the set anyway.)
             const droppedUri = this.toLanguageClientUri(event.textDocument.uri);
             this.__documents.get(uri)?.languageClientUris?.delete(droppedUri);
             this.__shadow.invalidate(droppedUri);
             this.__pendingPushes.delete(droppedUri);
          }
          if (!this.__sessions.isOpen(uri)) {
-            // Last client closed the document; delete sync state. The downstream
-            // "rebuild from disk for file URIs / drop from index for ephemeral
-            // URIs" decision lives in `HydraniumDocumentUpdateHandler.didCloseDocument`,
-            // which subscribes to `onDidClose` and consults `isOpenInAnyClient`
-            // to detect the last-close transition.
-            this.log(syncedDocument.uri, `Remove synced document: ${syncedDocument.version} (no client left)`);
-            // Persist where the shared version sequence left off (version +
-            // content hash) so the next open CONTINUES the sequence instead of
-            // restarting at the reopening client's declared id. Hashed once
-            // here at close, not on every change.
-            this.__versionSequences.set(uri, {
-               version: syncedDocument.version,
-               contentHash: contentHash(syncedDocument.getText())
-            });
-            this.__syncedDocuments.delete(uri);
-            // One delete clears every per-URI axis (version history + any staged
-            // pending content) so a future open with the same URI starts fresh.
-            this.__documents.delete(uri);
+            if (cause === 'lost' && this.revertGraceMs > 0) {
+               this.deferRelease(uri);
+            } else {
+               this.releaseDocument(uri);
+            }
          }
+      }
+   }
+
+   /**
+    * Keep the document, text and all, for the revert grace, then release it.
+    * The document stays in the store meanwhile, so an open within the grace
+    * attaches to it and finds the unsaved text rather than reading disk.
+    */
+   protected deferRelease(uri: CanonicalUri): void {
+      this.log(uri, `No client left; revert deferred for ${this.revertGraceMs} ms (connection lost)`);
+      const timer = this.services.Clock.setTimer(() => {
+         this.__sessions.cancelRevert(uri);
+         if (!this.__sessions.isOpen(uri)) {
+            this.releaseDocument(uri);
+         }
+      }, this.revertGraceMs);
+      this.__sessions.deferRevert(uri, timer);
+   }
+
+   /**
+    * Drop the document no client has open any more, then announce it on
+    * {@link onDidCloseLastOpen}, which is what reverts it to disk.
+    */
+   protected releaseDocument(uri: CanonicalUri): void {
+      const syncedDocument = this.__syncedDocuments.get(uri);
+      if (syncedDocument === undefined) {
+         return;
+      }
+      this.log(syncedDocument.uri, `Remove synced document: ${syncedDocument.version} (no client left)`);
+      // Persist where the shared version sequence left off (version +
+      // content hash) so the next open CONTINUES the sequence instead of
+      // restarting at the reopening client's declared id. Hashed once
+      // here at release, not on every change.
+      this.__versionSequences.set(uri, {
+         version: syncedDocument.version,
+         contentHash: contentHash(syncedDocument.getText())
+      });
+      this.__syncedDocuments.delete(uri);
+      // One delete clears every per-URI axis (version history + any staged
+      // pending content) so a future open with the same URI starts fresh.
+      this.__documents.delete(uri);
+      this.lastOpenClosedEmitter.fire(Object.freeze({ uri }));
+   }
+
+   /**
+    * Rebuild a released document from disk, so the build stops carrying the
+    * unsaved text of its last client.
+    *
+    * Only a `file:` document reverts. A document of another scheme may have
+    * been loaded by the adopter into the workspace index, and a rebuild would
+    * drop it and break every reference to it.
+    *
+    * The file's existence is read in its disk queue, so the rebuild follows
+    * any save still queued rather than reverting past it. A document with no
+    * file behind it — created and never saved, or deleted meanwhile — is
+    * removed from the workspace instead: there is no disk text to revert to,
+    * and one whose file goes after that read is removed when its rebuild
+    * finds none.
+    *
+    * Whether to revert at all is decided inside the write lock, as its holder:
+    * decided before waiting for the lock, a client that opens or re-creates the
+    * document meanwhile has its text rebuilt over from disk, or removed. A
+    * document some client has open again, or that waits out a new grace, is
+    * left to that client.
+    */
+   protected async revertToDisk(uri: CanonicalUri): Promise<void> {
+      if (URI.parse(uri).scheme !== 'file') {
+         return;
+      }
+      const workspace = this.services.workspace;
+      const target = UriUtils.toUri(uri);
+      const reopened = (): boolean => this.isOpenInAnyClient(uri) || this.__syncedDocuments.has(uri);
+      try {
+         // Read before the lock: every build and read waits while the lock is
+         // held, and this read waits on the file's save I/O.
+         const onDisk = await workspace.AstDocumentManager.queueDiskTask(uri, () => workspace.FileSystemProvider.exists(target));
+         await workspace.WorkspaceManager?.ready;
+         await workspace.WorkspaceLock.write(async token => {
+            if (reopened()) {
+               return;
+            }
+            workspace.DocumentBuilder.markNextReason(HYDRANIUM_BUILD_REASONS.didClose);
+            try {
+               await (onDisk
+                  ? workspace.DocumentBuilder.update([target], [], token)
+                  : workspace.DocumentBuilder.update([], [target], token));
+            } catch (err: unknown) {
+               if (!onDisk || !isFileNotFound(err, target)) {
+                  throw err;
+               }
+               // The file went after its existence was read.
+               this.tracer.with(uri).debug('Revert found no file; removing the document instead');
+               workspace.DocumentBuilder.markNextReason(HYDRANIUM_BUILD_REASONS.didClose);
+               await workspace.DocumentBuilder.update([], [target], token);
+            }
+         });
+      } catch (err: unknown) {
+         // A revert that finishes after the LSP peer went away fails its
+         // diagnostics publish, and one that runs after its workspace was torn
+         // down finds no file: teardown races, not failed reverts.
+         if (isConnectionGoneError(err) || isFileNotFound(err, target)) {
+            this.tracer.with(uri).debug(`Revert on last close skipped: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+         }
+         const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+         this.tracer.with(uri).error(`Revert on last close dropped. ${detail}`);
       }
    }
 
@@ -686,6 +828,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    public notifyDidOpenTextDocument(event: DidOpenTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const td = event.textDocument;
       const uri = this.documentKey(td.uri);
+      this.__sessions.cancelRevert(uri);
       if (this.isOpenInClient(uri, clientId)) {
          // Already open for this client under this canonical identity. If this is a
          // NEW client-facing URI for the same file (a second tab reached via a
@@ -796,6 +939,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (!document || this.isOpenInClient(key, clientId)) {
          return false;
       }
+      this.__sessions.cancelRevert(key);
       const existingClients = this.__sessions.clientsOf(key);
       this.__sessions.addOpen(key, clientId);
       const record = this.trackingFor(key);
@@ -1051,6 +1195,25 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
+    * Fires once a document no client has open is released: at its last close,
+    * or when the revert grace of a lost client's last close runs out with no
+    * new open. The document then reverts to disk.
+    */
+   get onDidCloseLastOpen(): Event<LastOpenClosedEvent> {
+      return this.lastOpenClosedEmitter.event;
+   }
+
+   /**
+    * Whether `uri` is waiting out the revert grace: its last open closed with a
+    * lost connection, and it still holds its unsaved text. Such a document is
+    * open for no client, yet not closed either, so a caller that would persist
+    * a closed document's text to disk treats it as open.
+    */
+   isRevertPending(uri: DocumentUri): boolean {
+      return this.__sessions.isRevertPending(this.documentKey(uri));
+   }
+
+   /**
     * Start a client session under `clientId`. Throws `DuplicateClientIdError`
     * where {@link ClientSessionRegistry.register} refuses the id.
     */
@@ -1063,15 +1226,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    /**
     * End the client session `clientId`: close every document it has open, then
     * free the id. Immediate — each close runs the ordinary close path before
-    * this returns. A no-op for an id that is not a registered session.
+    * this returns, with `cause` as its cause. A no-op for an id that is not a
+    * registered session.
     */
-   closeSession(clientId: string): void {
+   closeSession(clientId: string, cause: SessionEndCause = 'closed'): void {
       if (!this.__sessions.isRegistered(clientId)) {
          return;
       }
       try {
          for (const uri of this.__sessions.beginClose(clientId)) {
-            this.notifyDidCloseTextDocument({ textDocument: { uri } }, clientId);
+            this.notifyDidCloseTextDocument({ textDocument: { uri } }, clientId, cause);
          }
       } finally {
          this.__sessions.unregister(clientId);
@@ -1121,6 +1285,12 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const key = this.documentKey((typeof uri === 'object' && 'uri' in uri ? uri.uri : uri).toString());
       for (const clientId of this.__sessions.clientsOf(key)) {
          this.notifyDidCloseTextDocument({ textDocument: { uri: key } }, clientId);
+      }
+      // A document waiting out the grace has no client left to close, and is
+      // released now as its last close would have released it.
+      if (this.__sessions.isRevertPending(key)) {
+         this.__sessions.cancelRevert(key);
+         this.releaseDocument(key);
       }
       super.delete(key);
    }

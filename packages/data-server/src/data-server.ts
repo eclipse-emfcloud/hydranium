@@ -112,6 +112,7 @@ import type {
    ModelService,
    ProjectChangeEvent,
    ServerSharedServices,
+   SessionEndCause,
    TransferEncoder
 } from '@hydranium/core';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -428,24 +429,13 @@ export class DataServer<
    /** Subscription bookkeeping: URI → set of clientIds that subscribed for that URI. */
    protected readonly subscriptions = new Map<string, Set<string>>();
    /**
-    * Open-document bookkeeping for client ids that are NOT sessions: URI → set
-    * of clientIds that opened it over THIS connection.
-    *
-    * Kept because the document store releases such a client's open only from an
-    * explicit close, and a client that dies without closing would otherwise keep
-    * the document open forever — resident, and with its last-close revert
-    * suppressed. A session needs none of this: {@link sessions} ends it, and
-    * ending it closes everything it has open.
-    */
-   protected readonly openedDocuments = new Map<string, Set<string>>();
-   /**
-    * The client sessions this connection registered, by client id. A request
-    * carrying one of these ids acts as that session.
+    * The client sessions this connection registered, by client id. A document
+    * request carrying one of these ids acts as that session; one carrying any
+    * other id fails.
     *
     * Entries stay after {@link dispose} has ended their sessions, so a request
     * still running from before the connection closed reaches the ended handle
-    * and fails, rather than taking the per-client path and opening a document
-    * nothing would close.
+    * and fails with the session's own error.
     */
    protected readonly clientSessions = new Map<string, ClientSession<AstNode, AstDiagnostic, TTransfer>>();
    /** Typed client proxy — sends `data-server/on*` notifications back over the same wire. */
@@ -499,12 +489,12 @@ export class DataServer<
     */
    protected readonly lastEmittedFingerprint = new Map<string, string>();
    /**
-    * URIs whose LAST client just closed. The update handler rebuilds such a
-    * document from its disk content (discarding unsaved in-session edits),
-    * but {@link dispatchPhaseEvent} gates on the subscription map — and the
-    * last close typically also removed the last watcher, so consumers that
-    * only ever fetch via `getModelDocument` would keep showing the
-    * discarded state forever. Marked on the last-close transition (see
+    * URIs the text store just released after their last close. The store
+    * rebuilds such a document from its disk content (discarding unsaved
+    * in-session edits), but {@link dispatchPhaseEvent} gates on the
+    * subscription map — and the last close typically also removed the last
+    * watcher, so consumers that only ever fetch via `getModelDocument` would
+    * keep showing the discarded state forever. Marked on the release (see
     * {@link subscribeToTextDocumentCloses}) and consumed by
     * {@link dispatchPhaseEvent}, which broadcasts the following rebuild's
     * phase event even without a subscription — de-duplicated against
@@ -583,8 +573,10 @@ export class DataServer<
       this.subscribeToProjectManager();
       // Self-register teardown so an adopter that keeps no reference to the
       // server still releases per-connection state, with no lifecycle hook of
-      // its own. See `dispose`.
-      this.disposables.push(connection.onClose(() => this.dispose()));
+      // its own. The client did not close anything itself, so its sessions end
+      // as lost and each document it was the last to have open waits out the
+      // store's revert grace. See `dispose`.
+      this.disposables.push(connection.onClose(() => this.dispose('lost')));
    }
 
    /**
@@ -592,17 +584,19 @@ export class DataServer<
     * handlers and every listener — and clear the subscription map and the
     * per-URI emission-fingerprint cache, so a long-lived shared services
     * bundle does not retain per-connection memory after the connection
-    * closes. Also ends every session this connection registered and closes
-    * every document still open over it (see {@link closeOpenDocuments}), which
-    * is the SHARED store's state rather than this server's and so outlives the
-    * connection unless released here.
+    * closes. Also ends every session this connection registered, which closes
+    * every document it has open: the SHARED store's state rather than this
+    * server's, which outlives the connection unless released here.
     *
-    * Idempotent: subsequent calls are no-ops. Self-fires on
-    * `connection.onClose` so adopters who don't hold a reference still
-    * get per-connection cleanup; adopters that DO hold a reference may
-    * call `dispose()` directly for early teardown.
+    * Idempotent: subsequent calls are no-ops. Runs by itself when the
+    * connection closes, so adopters who don't hold a reference still get
+    * per-connection cleanup; adopters that DO hold a reference may call
+    * `dispose()` directly for early teardown. The sessions end with `cause`:
+    * `'closed'` reverts every document whose last open they close at once,
+    * and `'lost'`, the connection's own close, lets each wait out the revert
+    * grace.
     */
-   dispose(): void {
+   dispose(cause: SessionEndCause = 'closed'): void {
       this.disposed = true;
       // Release an in-flight interactive capture so the process-wide inspector
       // singleton is not left active after the connection closes.
@@ -611,13 +605,13 @@ export class DataServer<
          this.activeProfile = undefined;
          void capture.stop({}).catch(() => undefined);
       }
-      // AFTER `disposables.dispose()`, deliberately: closing a document fires
-      // `onDidClose`, and this server's own close listener would otherwise mark a
-      // revert broadcast for a connection that is already gone.
+      // AFTER `disposables.dispose()`, deliberately: ending a session releases
+      // each document it was the last to hold, and this server's own
+      // `onDidCloseLastOpen` listener would otherwise mark a revert broadcast
+      // for a connection that is already gone.
       this.disposables.dispose();
-      this.closeOpenDocuments();
       for (const [clientId, session] of this.clientSessions) {
-         this.endSession(clientId, session);
+         this.endSession(clientId, session, cause);
       }
       this.subscriptions.clear();
       this.lastEmittedFingerprint.clear();
@@ -649,15 +643,18 @@ export class DataServer<
       const session = this.modelService.createSession(args.label, args.clientId);
       this.clientSessions.set(args.clientId, session);
       if (args.resumeToken !== undefined) {
-         resumable.set(args.clientId, { token: args.resumeToken, end: () => this.endSession(args.clientId, session) });
+         // Taken over by a client registering again after its connection
+         // dropped, so the old session ends as lost: the documents it was the
+         // last to have open wait out the grace, and the new session's opens
+         // find their unsaved text.
+         resumable.set(args.clientId, { token: args.resumeToken, end: () => this.endSession(args.clientId, session, 'lost') });
       }
    }
 
    /**
     * End a session this connection registered. The ended handle stays in
     * {@link clientSessions}, as it does after {@link dispose}, so a request for
-    * the id still arriving fails rather than taking the per-client path and
-    * opening a document nothing would close.
+    * the id still arriving fails with the ended session's own error.
     */
    async closeSession(args: CloseSessionArgs): Promise<void> {
       const session = this.clientSessions.get(args.clientId);
@@ -666,15 +663,19 @@ export class DataServer<
       }
    }
 
-   /** End `session`, registered here under `clientId`, and drop its watches on this connection. */
-   protected endSession(clientId: string, session: ClientSession<AstNode, AstDiagnostic, TTransfer>): void {
+   /** End `session`, registered here under `clientId`, with `cause`, and drop its watches on this connection. */
+   protected endSession(
+      clientId: string,
+      session: ClientSession<AstNode, AstDiagnostic, TTransfer>,
+      cause: SessionEndCause = 'closed'
+   ): void {
       for (const [uri, watchers] of this.subscriptions) {
          if (watchers.delete(clientId) && watchers.size === 0) {
             this.subscriptions.delete(uri);
             this.lastEmittedFingerprint.delete(uri);
          }
       }
-      session.dispose();
+      session.dispose(cause);
    }
 
    /**
@@ -717,9 +718,10 @@ export class DataServer<
    }
 
    /**
-    * The session this connection registered under `clientId`, for the methods
-    * that exist only for sessions. An id that is not one has no per-client path
-    * to fall back to, so it fails with the closed-session code.
+    * The session this connection registered under `clientId`, which every
+    * document request acts as. An id that is not one fails with the
+    * closed-session code: opening or writing under it would leave an open that
+    * no session end ever closes.
     */
    protected requireSession(clientId: string): ClientSession<AstNode, AstDiagnostic, TTransfer> {
       const session = this.clientSessions.get(clientId);
@@ -729,73 +731,25 @@ export class DataServer<
       return session;
    }
 
-   async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const session = this.clientSessions.get(args.clientId);
-      if (session) {
-         const wasOpen = this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId);
-         await session.open(args.uri, args.options);
-         // A repeat open keeps the earlier one, which is still in use.
-         return this.openedSnapshot(args.uri, wasOpen ? undefined : () => session.close(args.uri));
-      }
-      // Register the editor session (idempotent — an already-open document is
-      // attached without rebuilding), then return a fresh snapshot at the
-      // configured target phase. Subsequent build-phase events arrive via
-      // `watchModelDocument`.
-      await this.modelService.open(args);
-      // Record the hold so `dispose` can release it for a client that never
-      // closes. Keyed by the URI as given, because that is what `close` takes.
-      let holders = this.openedDocuments.get(args.uri);
-      if (!holders) {
-         holders = new Set<string>();
-         this.openedDocuments.set(args.uri, holders);
-      }
-      const heldBefore = holders.has(args.clientId);
-      holders.add(args.clientId);
-      let document: TransferDocument<TTransfer, TDiagnostic>;
-      try {
-         document = await this.getModelDocument({ uri: args.uri });
-      } catch (error: unknown) {
-         // The snapshot is the last step, and failing it fails the RPC — so the
-         // caller sees no open and has no reason to close. Release what this
-         // call took rather than leaving a hold nothing on either side is
-         // tracking. A repeat open by a client that already held the URI keeps
-         // it: the hold is one per `(uri, clientId)`, so releasing here would
-         // revoke an earlier open that is still legitimately in use.
-         if (!heldBefore) {
-            try {
-               // Untracked only once the close has actually LANDED. Dropping the
-               // record first gives a failed close the same effect as a
-               // successful one: the hold survives on the document store while
-               // the connection-close drain — the only thing left that would
-               // release it — has no record of it.
-               await this.modelService.close({ uri: args.uri, clientId: args.clientId });
-               this.forgetOpenDocument(args.uri, args.clientId);
-            } catch {
-               // Swallowed so the caller receives the reason the OPEN failed
-               // rather than a secondary one about the cleanup. The record stays
-               // behind deliberately, so teardown retries the release.
-            }
-         }
-         throw error;
-      }
-      // Project the authoritative client-facing version onto the open snapshot.
-      // `getModelDocument` encodes the freshly-built AST snapshot, whose version
-      // is the `LangiumDocument`'s own `textDocument.version`. That lags the
-      // multi-client synced version whenever the open seeded the synced document
-      // with a caller-supplied version id — and the synced version is what
-      // `ModelService.update`'s optimistic-concurrency gate compares
-      // `basedOn` against, so reporting the snapshot's would make the
-      // caller's first tagged write self-conflict. A genuine concurrent edit
-      // still trips the gate and is reconciled by the caller's replay rather
-      // than predicted here.
-      return { ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(args.uri)) };
+   async openModelDocument(args: Pick<OpenModelArgs, 'uri' | 'clientId' | 'options'>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      const session = this.requireSession(args.clientId);
+      const wasOpen = this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId);
+      await session.open(args.uri, args.options);
+      // A repeat open keeps the earlier one, which is still in use.
+      return this.openedSnapshot(args.uri, wasOpen ? undefined : () => session.close(args.uri));
    }
 
    /**
-    * The snapshot a session's open or create answers with, versioned as
-    * {@link openModelDocument}'s is. When the read fails, `rollback` undoes the
-    * open this call made before the failure is rethrown: the caller sees no
-    * open, so nothing on its side would ever close it.
+    * The snapshot a session's open or create answers with. When the read
+    * fails, `rollback` undoes the open this call made before the failure is
+    * rethrown: the caller sees no open, so nothing on its side would ever close
+    * it.
+    *
+    * Versioned with the store's shared version rather than the snapshot's own:
+    * the built document's `textDocument.version` lags the store's whenever the
+    * store assigned the version, and the store's is what a write's `basedOn` is
+    * compared against, so reporting the snapshot's would make the caller's
+    * first based-on write conflict with itself.
     */
    protected async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
       let document: TransferDocument<TTransfer, TDiagnostic>;
@@ -810,59 +764,14 @@ export class DataServer<
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
-      // Closing a session also releases its watch for (uri, clientId) — a
-      // forgotten unwatch would otherwise leak phase-event dispatch until the
-      // connection closes. Idempotent: a close without a prior watch is a no-op.
-      await this.unwatchModelDocument({ uri: args.uri, clientId: args.clientId });
       // Through the handle, so a close under an ended session fails as that
       // session's calls do, and a session class's own close is honoured.
-      const session = this.clientSessions.get(args.clientId);
-      if (session) {
-         await session.close(args.uri);
-         return;
-      }
-      this.forgetOpenDocument(args.uri, args.clientId);
-      await this.modelService.close(args);
-   }
-
-   /**
-    * Drop the recorded hold for `(uri, clientId)` so {@link dispose} does not
-    * close it a second time. Idempotent.
-    */
-   protected forgetOpenDocument(uri: string, clientId: string): void {
-      const holders = this.openedDocuments.get(uri);
-      if (!holders) {
-         return;
-      }
-      holders.delete(clientId);
-      if (holders.size === 0) {
-         this.openedDocuments.delete(uri);
-      }
-   }
-
-   /**
-    * Close every document still open over this connection, for the clients that
-    * opened it here.
-    *
-    * The document store releases a per-URI hold only from an explicit close, so
-    * without this a client that dies mid-session keeps its documents open for the
-    * lifetime of the process: `isOpenInAnyClient` stays true, the document stays
-    * resident, and the last-close revert never runs. A long-lived multi-client
-    * head is the configuration where a dead client is normal rather than
-    * exceptional, so the leak accumulates there.
-    *
-    * Runs from {@link dispose}, which is synchronous, so each close is fired and
-    * its failure swallowed — a teardown must not reject, and a URI whose close
-    * fails is no worse off than it was before this drain existed.
-    */
-   protected closeOpenDocuments(): void {
-      const held = [...this.openedDocuments];
-      this.openedDocuments.clear();
-      for (const [uri, clientIds] of held) {
-         for (const clientId of clientIds) {
-            void Promise.resolve(this.modelService.close({ uri, clientId })).catch(() => undefined);
-         }
-      }
+      const session = this.requireSession(args.clientId);
+      // Closing also releases the watch for (uri, clientId) — a forgotten
+      // unwatch would otherwise leak phase-event dispatch until the connection
+      // closes. Idempotent: a close without a prior watch is a no-op.
+      await this.unwatchModelDocument({ uri: args.uri, clientId: args.clientId });
+      await session.close(args.uri);
    }
 
    async getModelDocument(args: GetModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
@@ -882,14 +791,12 @@ export class DataServer<
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const session = this.clientSessions.get(args.clientId);
-      const astDocument = await (session ? session.update(args) : this.modelService.update(args));
+      const astDocument = await this.requireSession(args.clientId).update(args);
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const session = this.clientSessions.get(args.clientId);
-      const astDocument = await (session ? session.save(args) : this.modelService.save(args));
+      const astDocument = await this.requireSession(args.clientId).save(args);
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 
@@ -1355,18 +1262,16 @@ export class DataServer<
    }
 
    /**
-    * Mark the last-close transition per URI (see
-    * {@link pendingRevertBroadcasts}). The listener consults
-    * `isOpenInAnyClient` AFTER the store decremented the closing client's
-    * hold, so a `false` answer means this close was the last one.
+    * Mark each document the store releases after its last close (see
+    * {@link pendingRevertBroadcasts}). A release, not the close itself: a
+    * document whose last client lost its connection is released only once
+    * the revert grace runs out, and not at all when a client opens it again
+    * within the grace.
     */
    protected subscribeToTextDocumentCloses(): void {
-      const textDocuments = this.services.workspace.TextDocuments;
       this.disposables.push(
-         textDocuments.onDidClose(event => {
-            if (!textDocuments.isOpenInAnyClient(event.document.uri)) {
-               this.pendingRevertBroadcasts.add(this.canonicalKey(event.document.uri));
-            }
+         this.services.workspace.TextDocuments.onDidCloseLastOpen(event => {
+            this.pendingRevertBroadcasts.add(this.canonicalKey(event.uri));
          })
       );
    }

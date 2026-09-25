@@ -50,6 +50,7 @@ import * as path from 'node:path';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OrderFlowPropertiesModel } from '../src/data/order-flow-properties-model';
+import { thirdPartyWrite as writeAsThirdParty } from './testing/third-party-write.js';
 
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
 
@@ -156,7 +157,7 @@ function pinnedModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
 /** Write `root` as a third party, ungated, so it always lands. */
 async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promise<void> {
    const server = await session!.connected();
-   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root, basedOn: 'anything' });
+   await writeAsThirdParty(server, THIRD_PARTY, uri, root);
 }
 
 describe('order-flow properties model', () => {

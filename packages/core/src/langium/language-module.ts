@@ -158,7 +158,7 @@ export interface ServerAddedServices {
        * multi-grammar workspaces route to the right serializer per file. The
        * framework default throws a clear "no Serializer registered" error;
        * adopters bind their own per-language subclass to enable
-       * `ModelService.update` / `ModelService.save`.
+       * a client session's `update` / `save`.
        */
       Serializer: Serializer;
    };
@@ -211,7 +211,7 @@ export interface ServerAddedServices {
    updateRewrite: {
       /**
        * Per-language runner for transfer-model rewrites applied on the
-       * structured write path of `ModelService.update` / `save`, before
+       * structured write path of a client session's `update` / `save`, before
        * serialisation. The RPC-update-stage sibling of the
        * {@link IntegrityService} / {@link AstExtensionService} registries.
        * Framework default is a no-op (zero rewrites registered) — adopters
@@ -263,12 +263,12 @@ export interface ServerAddedServices {
 class UnboundSerializer implements Serializer {
    serializeAst(_model: AstNode): string {
       throw new Error(
-         'No Serializer registered at services.serializer.Serializer — bind a Serializer<TAst, TTransfer> in your per-language module before calling ModelService.update / ModelService.save.'
+         "No Serializer registered at services.serializer.Serializer — bind a Serializer<TAst, TTransfer> in your per-language module before writing through a client session's update or save."
       );
    }
    serializeTransfer(_model: TransferElement): string {
       throw new Error(
-         'No Serializer registered at services.serializer.Serializer — bind a Serializer<TAst, TTransfer> in your per-language module before calling ModelService.update / ModelService.save.'
+         "No Serializer registered at services.serializer.Serializer — bind a Serializer<TAst, TTransfer> in your per-language module before writing through a client session's update or save."
       );
    }
 }

@@ -45,6 +45,20 @@ export const DEFAULT_LOGGED_PHASES: DocumentState[] = [
 ];
 
 /**
+ * The build reasons the framework stages through
+ * {@link HydraniumDocumentBuilder.markNextReason}: the LSP events the update
+ * handler dispatches on, and `didClose` for the revert the text store runs
+ * after a last close. Exposed so a subclass layering reasons of its own keeps
+ * the names the framework emits.
+ */
+export const HYDRANIUM_BUILD_REASONS = Object.freeze({
+   didOpen: 'didOpen',
+   didChangeContent: 'didChangeContent',
+   didChangeWatchedFiles: 'didChangeWatchedFiles',
+   didClose: 'didClose'
+} as const);
+
+/**
  * Consecutive re-queued builds that leave a waited-on document at the same state
  * before {@link HydraniumDocumentBuilder.awaitDocumentState} stops re-queuing it.
  * A backstop against spinning builds for a document the builder will never carry
@@ -211,8 +225,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
 
    /**
     * Stage an LSP event name for the next `update()` call. Adopters call before
-    * the update fires; `HydraniumDocumentUpdateHandler` does it for the
-    * four LSP events.
+    * the update fires; `HydraniumDocumentUpdateHandler` does it for the LSP
+    * events, and the text store for the revert that follows a last close.
     *
     * The framework stages the value and never reads it back. The consumer is a
     * subclass overriding the build logging, which takes

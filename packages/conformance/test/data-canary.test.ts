@@ -44,6 +44,7 @@ const CREATE = 'createModelDocument creates a document open for the session';
 const SET = 'updateModelDocuments writes a set all or none';
 const SESSION_SAVE = 'a session saves only a document it has open';
 const CONNECTION_END = 'ending a connection ends its sessions';
+const UNREGISTERED = 'a document request under an id no session was registered for fails';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -105,12 +106,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
    });
 
-   it('plans exactly the eighteen checks the must-fail cases below name', () => {
+   it('plans exactly the nineteen checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(18);
+      expect(titles).toHaveLength(19);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -129,9 +130,10 @@ describe('the /data battery discriminates', () => {
          CREATE,
          SET,
          SESSION_SAVE,
-         CONNECTION_END
+         CONNECTION_END,
+         UNREGISTERED
       ];
-      expect(matching(titles, covered)).toHaveLength(18);
+      expect(matching(titles, covered)).toHaveLength(19);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -178,6 +180,11 @@ describe('the /data battery discriminates', () => {
          label: 'a picker answering nothing for a source whose URI names no file',
          defects: { noCandidatesAtFolder: true },
          expected: [FOLDER_CANDIDATES]
+      },
+      {
+         label: 'an id no session was registered for opening and writing documents',
+         defects: { plainClientWrites: true },
+         expected: [UNREGISTERED]
       },
       { label: 'a live session id accepted a second time', defects: { sessionIdsReused: true }, expected: [SESSION_IDS] },
       {

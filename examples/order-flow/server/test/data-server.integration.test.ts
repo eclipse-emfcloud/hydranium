@@ -34,7 +34,7 @@ import { DataServer, type DataServerOptions } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { isProcessModel, isTask } from '../src/language-server/generated-hydranium/transfer-model.js';
@@ -57,13 +57,15 @@ interface DrivenHead {
    readonly services: OrderFlowHarness;
 }
 
-/** Boot both languages over a scratch workspace and put a real DataServer on a duplex pair. */
+/** Boot both languages over a scratch workspace, put a real DataServer on a duplex pair, and register the client's session on it. */
 async function driveDataHead(options?: DataServerOptions): Promise<DrivenHead> {
    const { harness: services, workspace: scratch } = await makeScratchWorkspaceHarness();
    workspace = scratch;
    harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
       server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared, options)
    });
+   // Every document request acts as a session registered on the connection.
+   await harness.proxy.createSession({ clientId: CLIENT_ID });
    return {
       harness,
       uri: relativePath => scratch.uri(relativePath),
@@ -245,6 +247,10 @@ describe('order-flow data head', () => {
       const afterUpdate = head.harness.events.length;
       expect(afterUpdate).toBeGreaterThan(0);
 
+      // Gone from disk as well, as a real deletion is: the deletion closes the
+      // session's open, and the revert that follows the last close rebuilds
+      // whatever the file then holds.
+      rmSync(URI.parse(uri).fsPath);
       await head.services.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
       // The builder call is in-process, so it orders against no wire traffic. A
       // round trip on the same connection is the flush: a notification emitted

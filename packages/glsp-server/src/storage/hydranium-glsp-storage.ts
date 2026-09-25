@@ -790,7 +790,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * diagram's session has open.
     *
     * **A save persists, it does not author.** Every diagram gesture already
-    * reached the store through `ModelService.update`, so the store holds the
+    * reached the store through the diagram's session, so the store holds the
     * settled text and disk is the only thing behind. Re-serializing from the AST
     * here cannot improve on that text and can only damage it: a serializer
     * normalises formatting, and the comments the write path carries over keep

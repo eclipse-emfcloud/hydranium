@@ -13,7 +13,7 @@ import { type RegistryItem } from '../../util/registry.js';
 
 /**
  * A single transform applied to the incoming transfer model on the structured
- * (object) write path of `ModelService.update` / `ModelService.save`, before
+ * (object) write path of a client session's `update` / `save`, before
  * serialisation. The RPC-update-stage sibling of `IntegrityRule` /
  * `AstExtension` / `ValidationCheck` — same id-keyed,
  * priority-ordered registry shape, but it runs on the transfer model rather

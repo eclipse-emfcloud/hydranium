@@ -39,7 +39,7 @@ import { LANGUAGE_CLIENT_ID } from '../../documents/client-ids.js';
 import { DocumentNotOpenError } from '../../documents/client-session-errors.js';
 import { type OpenOptions } from '../../documents/client-session-registry.js';
 import { type ServerSharedServices } from '../module.js';
-import { type ClientSession, DefaultClientSession } from './client-session.js';
+import { type ClientSession, type ClientSessionWriter, DefaultClientSession } from './client-session.js';
 
 /**
  * The undo-stack entry for a server-authored write pushed to the editor.
@@ -76,7 +76,7 @@ class SaveSettleTimeoutError extends Error {}
  */
 export interface ModelServiceOptions extends LogNameOptions {
    /**
-    * When set, {@link ModelService.update} logs a `warn` line if its
+    * When set, {@link DefaultModelService.update} logs a `warn` line if its
     * end-to-end wait (serialise + content-change apply + rebuild +
     * settled-phase wait) exceeds this many milliseconds. Default
     * `undefined` (no warn line ever emitted; the underlying
@@ -84,7 +84,7 @@ export interface ModelServiceOptions extends LogNameOptions {
     *
     * Pure observability — does NOT abort the update, does NOT change
     * resolution semantics. Adopters wanting a hard timeout that throws
-    * instead override {@link ModelService.update} on their subclass and
+    * instead override {@link DefaultModelService.update} on their subclass and
     * race the parent call against their own deadline.
     *
     * Recommended starting threshold: 2-5 seconds for interactive paths
@@ -145,10 +145,11 @@ export interface ModelServiceOptions extends LogNameOptions {
  *
  * In-process facade over the framework's document plumbing
  * (`HydraniumTextDocuments`, `LangiumDocuments`,
- * `DocumentBuilder`, `WritableFileSystemProvider`). Owns the
- * `open / request / update / save / ready` lifecycle that protocol heads
- * (LSP, data-server, GLSP) delegate to so coordinating those primitives
- * doesn't have to be re-implemented per-head.
+ * `DocumentBuilder`, `WritableFileSystemProvider`). Owns the document
+ * lifecycle the data-server and GLSP heads delegate to — client sessions that
+ * open, update, save and close documents, the phase reads, and `ready` — so
+ * coordinating those primitives doesn't have to be re-implemented per head.
+ * Every open and write goes through a session from {@link createSession}.
  *
  * "Model" here means the parsed AST — distinct from the wire-shape
  * `TransferDocument` in `@hydranium/protocol`.
@@ -158,9 +159,9 @@ export interface ModelServiceOptions extends LogNameOptions {
  * Multiple in-process consumers want the same workspace-level
  * operations:
  * - The data-server head turns these into typed RPC methods.
- * - The GLSP head uses the same lifecycle for diagram-driven edits;
- *   GModel operation handlers route through `update` for AST mutation,
- *   `waitForDocumentState` for indexed-phase waits before reads, etc.
+ * - The GLSP head uses the same lifecycle for diagram-driven edits: GModel
+ *   operation handlers write through the diagram's session and wait on phases
+ *   before reading.
  * - Server-internal callers (integrity service, ad-hoc bridges, tests)
  *   want the same operations without the wire serialisation step.
  *
@@ -267,20 +268,6 @@ export interface ModelService<
    indexed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
    validated(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
 
-   update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
-   /**
-    * Write several documents as `args.clientId`, all or none: every document is
-    * serialised first, then every open check and `basedOn` gate runs and every
-    * text is applied in one synchronous step, so a `ConflictError` or a
-    * `DocumentNotOpenError` leaves every document as it was. Opens nothing:
-    * the client must have each URI open, whether or not it is a session.
-    * Resolves to the rebuilt documents, in the order given.
-    */
-   updateAll(args: TransferUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
-   save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
-
-   open(args: OpenModelArgs): Promise<Disposable>;
-   close(args: CloseModelArgs): Promise<void>;
    isOpen(uri: string): boolean;
    snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined;
    getDocument(uri: string): LangiumDocument | undefined;
@@ -290,9 +277,10 @@ export interface ModelService<
    onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
 
    /**
-    * Start a client session. The id defaults to `label#` plus a random UUID;
-    * a fixed `clientId` is taken as given. Throws `DuplicateClientIdError` when
-    * the id is reserved by the framework, held by another live session, or has
+    * Start a client session, the only way to open and write documents through
+    * this service. The id defaults to `label#` plus a random UUID; a fixed
+    * `clientId` is taken as given. Throws `DuplicateClientIdError` when the id
+    * is reserved by the framework, held by another live session, or has
     * documents open under it as a client that is not a session.
     *
     * `TOpenOptions` types the options the session's `open` takes.
@@ -347,11 +335,7 @@ export class DefaultModelService<
    protected readonly syncChains = new Map<string, Promise<void>>();
    protected readonly pendingSync = new Map<string, string>();
 
-   /**
-    * The live sessions this service started, by client id. {@link update}
-    * reads it to tell a session's write, which must find its document open,
-    * from a write under a plain client id, which opens it.
-    */
+   /** The live sessions this service started, by client id, for {@link getSession}. */
    protected readonly sessions = new Map<string, ClientSession<TAst, TDiagnostic, TTransfer>>();
    /**
     * Drops an ended session from {@link sessions}. Subscribed by the first
@@ -707,11 +691,12 @@ export class DefaultModelService<
    }
 
    /**
-    * Apply an update for `uri`. The structured-or-textual `model` payload
-    * is serialised (via {@link serialize} after {@link rewriteModel} when
-    * structured), pushed into the multi-client text-document store with
-    * a fresh version, drives a build to the target phase, and returns
-    * the post-build AST snapshot.
+    * Apply a session's update for `uri`. The structured-or-textual `model`
+    * payload is serialised (via {@link serialize} after {@link rewriteModel}
+    * when structured), pushed into the multi-client text-document store with a
+    * fresh version, drives a build to the target phase, and returns the
+    * post-build AST snapshot. Reached through a session's `update`, as
+    * `args.clientId`; override it to change how every session writes.
     *
     * **Read-latest supersession**: concurrent callers on the same URI
     * all see the same post-build state once `waitUntil` resolves; none
@@ -725,24 +710,11 @@ export class DefaultModelService<
     * observability, slow-warn / hard-timeout behaviour) override this
     * method.
     *
-    * **Upsert, except for a session.** Under a plain client id the write opens
-    * the document for that client first, creating it from the payload when no
-    * file exists. Under the id of a live session from {@link createSession} it
-    * opens nothing, and fails with `DocumentNotOpenError` unless the session
-    * has the URI open at the moment the text is applied.
+    * **Opens nothing.** It fails with `DocumentNotOpenError` unless
+    * `args.clientId` has the URI open at the moment the text is applied.
     */
-   async update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
-      // Read before the first await, while the call is still the caller's: a
-      // session that ends during the serialise would otherwise read as a plain
-      // client id here, and the write would open the document for an id no
-      // session owns any more and land there.
-      const bySession = this.sessions.has(args.clientId);
+   protected async update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       const stopwatch = this.slowUpdateWarn !== undefined ? this.services.Clock.stopwatch() : undefined;
-      // Per-stage self-time breakdown of the update/reconcile chain (serialise →
-      // open → apply → rebuild), opt-in at debug — the default path skips the
-      // session and `run` calls the stage directly. `update` is a per-operation
-      // method (one user save / diagram edit), not a per-node hot loop, so the
-      // stage closures `run` allocates on the non-debug path are negligible.
       // Canonicalize the write URI once at the door and thread the resulting
       // CanonicalUri through the chain. The text store keys documents by their
       // canonical identity, so any spelling of a file — a canonical
@@ -752,65 +724,30 @@ export class DefaultModelService<
       // build step reuses the canonical wait core (`rebuildCanonical`) so the
       // identity is not re-resolved downstream.
       const uri = this.uriPolicy.canonicalUri(args.uri);
+      // Per-stage self-time breakdown of the update chain (serialise → apply →
+      // rebuild), opt-in at debug — the default path skips the session and
+      // `run` calls the stage directly. `update` is a per-operation method (one
+      // user save / diagram edit), not a per-node hot loop, so the stage
+      // closures `run` allocates on the non-debug path are negligible.
       const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (session ? session.scope(stage, fn) : fn());
-      // Open WITH the new text so a cold URI (no open editor, no file on disk) is
-      // created from the payload rather than read from the filesystem — `update`
-      // is an upsert. For an already-open document `open` only attaches the
-      // client (the text is ignored on that branch), and the actual update is
-      // `AstDocumentManager.update`'s. `version` is intentionally NOT
-      // forwarded to `open`, so a cold create stays at its initial version
-      // rather than adopting a number the caller chose.
-      //
-      // The gate reads the version and decides BEFORE the open, and both halves
-      // of that matter.
-      //
-      // Reading first, because for a document no client holds open the open
-      // assigns the shared version from the INCOMING text, so a version read
-      // afterwards has already absorbed the caller's own write. Gating on it
-      // rejects every modifying write to a closed document, comparing the
-      // caller's `basedOn` against a number the caller itself produced — and a
-      // serialised round-trip that is not byte-identical to the stored text is
-      // enough to trigger that. Reading first keeps both cases the gate exists
-      // for: an unknown URI answers 0, so a based-on-version update of a
-      // not-yet-existing document still trips it, and a genuine conflict still
-      // trips it, another writer having advanced the sequence past the version
-      // the caller read.
-      //
-      // Deciding first, because the open is a mutation and `update` is an
-      // upsert: for a cold URI it installs the payload in the shared text store
-      // and records a hold for the writing client. Throwing after it hands the
-      // caller its rejection while the server keeps the refused text — and the
-      // hold outlives the call, because a client whose write failed has no
-      // reason to close a document it never asked to open. Serialisation is
-      // held back too; it is the adopter's code and need not be side-effect
-      // free.
+      // Checked at the door as well as at apply, so a write that cannot land is
+      // refused before any adopter serialiser runs; the apply-time checks are
+      // the ones that decide.
       const textDocuments = this.services.workspace.TextDocuments;
+      this.checkOpen(uri, args.clientId);
       this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
-      // Whether this call's own open is the one that creates the document, read
-      // in the same step as the check above so no other open can land between.
-      const opensCold = !bySession && textDocuments.get(uri) === undefined;
       const text = await run('serialize', () => this.modelToText(uri, args.model, cancelToken));
-      if (!bySession) {
-         await run('open', () => this.open({ uri, clientId: args.clientId, text }));
-      }
       const appliedVersion = await run('apply', () => {
-         // A session's write never opens its document. The check sits in the
-         // same synchronous step as the apply: made before the serialize await
-         // instead, it passes for a write whose session closes the document
-         // during that await, and the write then lands on a document the
-         // session no longer has open.
-         if (bySession && !textDocuments.isOpenInClient(uri, args.clientId)) {
-            throw new DocumentNotOpenError(uri, args.clientId);
-         }
+         // The open check sits in the same synchronous step as the apply: made
+         // before the serialize await instead, it passes for a write whose
+         // client closes the document during that await, and the write then
+         // lands on a document the client no longer has open.
+         this.checkOpen(uri, args.clientId);
          // The gate again, in the same step as the apply: two writes based on
          // one version both pass the check at the door while they serialise,
-         // and without this both apply. The version a cold open assigned from
-         // this write's own text is not a conflict; the store holding exactly
-         // that text is how it shows.
-         if (!(opensCold && textDocuments.get(uri)?.getText() === text)) {
-            this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
-         }
+         // and without this both apply.
+         this.checkBasedOn(uri, args.basedOn, textDocuments.version(uri));
          return this.services.workspace.AstDocumentManager.update(uri, text, args.clientId);
       });
       // Dispatch through the public `rebuild` (which re-canonicalizes the already-
@@ -832,9 +769,16 @@ export class DefaultModelService<
             this.tracer.withUri(uri).warn(`Slow update: ${elapsed}ms ≥ ${threshold}ms (v${appliedVersion}, client=${args.clientId})`);
          }
       }
-      // One line per stage (serialise / open / apply / rebuild) + unaccounted — only when profiling.
+      // One line per stage (serialise / apply / rebuild) + unaccounted — only when profiling.
       session?.report('debug');
       return doc;
+   }
+
+   /** Throw `DocumentNotOpenError` unless `clientId` has `uri` open. */
+   protected checkOpen(uri: string, clientId: string): void {
+      if (!this.services.workspace.TextDocuments.isOpenInClient(uri, clientId)) {
+         throw new DocumentNotOpenError(uri, clientId);
+      }
    }
 
    /**
@@ -855,6 +799,13 @@ export class DefaultModelService<
    }
 
    /**
+    * Write several documents as `args.clientId`, all or none: every document is
+    * serialised first, then every open check and `basedOn` gate runs and every
+    * text is applied in one synchronous step, so a `ConflictError` or a
+    * `DocumentNotOpenError` leaves every document as it was. Reached through a
+    * session's `updateAll`. Resolves to the rebuilt documents, in the order
+    * given.
+    *
     * Checked at the door as well as at apply, so a stale set is refused before
     * any adopter serialiser runs.
     *
@@ -862,14 +813,20 @@ export class DefaultModelService<
     * before its first await, as the default does: an override that awaits first
     * lets another write land between two documents of the set.
     */
-   async updateAll(args: TransferUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]> {
+   protected async updateAll(
+      args: TransferUpdateAllArgs<TTransfer>,
+      cancelToken?: CancellationToken
+   ): Promise<AstDocument<TAst, TDiagnostic>[]> {
       const { clientId, updates } = args;
       const textDocuments = this.services.workspace.TextDocuments;
       const uris = updates.map(update => this.uriPolicy.canonicalUri(update.uri));
       if (new Set(uris).size !== uris.length) {
          throw new Error(`updateAll names a document more than once: ${uris.join(', ')}`);
       }
-      updates.forEach((update, i) => this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i])));
+      updates.forEach((update, i) => {
+         this.checkOpen(uris[i], clientId);
+         this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
+      });
       const texts: string[] = [];
       for (const [i, update] of updates.entries()) {
          texts.push(await this.modelToText(uris[i], update.model, cancelToken));
@@ -879,9 +836,7 @@ export class DefaultModelService<
       // was checked, and a set half-applied before a later check fails is what
       // this method exists to rule out.
       updates.forEach((update, i) => {
-         if (!textDocuments.isOpenInClient(uris[i], clientId)) {
-            throw new DocumentNotOpenError(uris[i], clientId);
-         }
+         this.checkOpen(uris[i], clientId);
          this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
       });
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], clientId));
@@ -897,18 +852,15 @@ export class DefaultModelService<
     * `WritableFileSystemProvider` and notifies the multi-client
     * text-document store of the save (so any open LSP-side editor sees
     * the `onDidSave` event regardless of who originated the persist).
+    * Reached through a session's `save`.
     *
     * Returns the post-save AST snapshot.
     *
-    * Under the id of a live session the save also fails with
-    * `DocumentNotOpenError` when the session closes the URI while the text is
-    * being built, and writes nothing. Once the manager has taken the text, the
-    * write completes whatever the session does next.
+    * Also fails with `DocumentNotOpenError` when `args.clientId` closes the URI
+    * while the text is being built, and writes nothing. Once the manager has
+    * taken the text, the write completes whatever the client does next.
     */
-   async save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
-      // Read before the first await, as in `update`: a session that ends during
-      // the rebuild would otherwise read as a plain client id below.
-      const bySession = this.sessions.has(args.clientId);
+   protected async save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       // Dispatch through `update` (not its internals) so an adopter `update`
       // override — version-matched resolution, etc. — applies to saves too.
       const doc = await this.update(args, cancelToken);
@@ -917,11 +869,9 @@ export class DefaultModelService<
       // `onDidSave` keys the one canonical registration.
       const uri = this.uriPolicy.canonicalUri(args.uri);
       // In the same synchronous step as the manager taking the text: checked
-      // any earlier, a session that closes the URI during the rebuild still has
+      // any earlier, a client that closes the URI during the rebuild still has
       // the shared text, other clients' edits included, written in its name.
-      if (bySession && !this.services.workspace.TextDocuments.isOpenInClient(uri, args.clientId)) {
-         throw new DocumentNotOpenError(uri, args.clientId);
-      }
+      this.checkOpen(uri, args.clientId);
       await this.services.workspace.AstDocumentManager.save(uri, args.clientId);
       return doc;
    }
@@ -962,14 +912,11 @@ export class DefaultModelService<
    }
 
    /**
-    * Open the document at `args.uri` on behalf of `args.clientId`.
-    * Multi-client: each (uri, clientId) pair is tracked as one
-    * registration; the underlying document stays open until the last
-    * client closes it. If `args.text` is omitted the document content
-    * is read from the `FileSystemProvider`.
-    *
-    * Returns a {@link Disposable} that closes the registration when
-    * disposed — useful for `using` blocks and shutdown cleanup.
+    * Open the document at `args.uri` on behalf of `args.clientId`, for a
+    * session's `open` and `create`. Multi-client: each (uri, clientId) pair is
+    * tracked as one registration; the underlying document stays open until
+    * the last client closes it. If `args.text` is omitted the document
+    * content is read from the `FileSystemProvider`.
     *
     * Delegates to the framework-bound
     * `services.workspace.AstDocumentManager`. Adopter subclasses with
@@ -980,16 +927,16 @@ export class DefaultModelService<
     * and the filesystem read behind it take no token, so a cancelled caller
     * still completes the open.
     */
-   async open(args: OpenModelArgs): Promise<Disposable> {
-      return this.services.workspace.AstDocumentManager.open(args);
+   protected async open(args: OpenModelArgs): Promise<void> {
+      await this.services.workspace.AstDocumentManager.open(args);
    }
 
    /**
-    * Close the document at `args.uri` for `args.clientId`. Counterpart
-    * to {@link open}; the underlying document stays open until every
-    * registered client has closed.
+    * Close the document at `args.uri` for `args.clientId`, for a session's
+    * `close`. Counterpart to {@link open}; the underlying document stays open
+    * until every registered client has closed.
     */
-   async close(args: CloseModelArgs): Promise<void> {
+   protected async close(args: CloseModelArgs): Promise<void> {
       return this.services.workspace.AstDocumentManager.close(args);
    }
 
@@ -1092,7 +1039,30 @@ export class DefaultModelService<
       clientId: string,
       label: string
    ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
-      return new DefaultClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>(this, this.services, clientId, label);
+      return new DefaultClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>(
+         this,
+         this.sessionWriter(),
+         this.services,
+         clientId,
+         label
+      );
+   }
+
+   /**
+    * The writes a session makes, bound to this service's {@link open},
+    * {@link close}, {@link update}, {@link updateAll} and {@link save}. They
+    * are protected so that nothing writes except through a session, and bound
+    * here so that an override of any of them applies to every session's
+    * writes. A custom session built in {@link newSession} is handed this.
+    */
+   protected sessionWriter(): ClientSessionWriter<TAst, TDiagnostic, TTransfer> {
+      return {
+         open: args => this.open(args),
+         close: args => this.close(args),
+         update: (args, cancelToken) => this.update(args, cancelToken),
+         updateAll: (args, cancelToken) => this.updateAll(args, cancelToken),
+         save: (args, cancelToken) => this.save(args, cancelToken)
+      };
    }
 
    // ============================================================
@@ -1103,23 +1073,14 @@ export class DefaultModelService<
     * Mirror a server-side change of `document` back to the LSP textual language
     * client, run per document as it reaches the post-integrity settled phase.
     * The single framework caller of
-    * `HydraniumTextDocuments.applyEditToLanguageClient` and
-    * `HydraniumTextDocuments.stagePendingContent`.
+    * `HydraniumTextDocuments.applyEditToLanguageClient`.
     *
-    * Routes by client registration, because an open and a closed document
-    * answer different questions:
-    *
-    * - **Open in the language client** → {@link syncOpenDocument}: mirror the
-    *   settled text via a coalesced `applyEditToLanguageClient`, routed purely by
-    *   **content**.
-    * - **Open only in another client** (the data or GLSP head) → nothing. A
-    *   language client opening it joins the existing entry and is refreshed from
-    *   the store, and only a FIRST open reads a stage, so staging here would
-    *   leave text nothing reads.
-    * - **Closed in every client** → {@link stageClosedDocument}, gated by
-    *   **provenance** ({@link isNonLanguageClientEdit}). With the default text
-    *   store this never stages; see {@link stageClosedDocument} for why, and
-    *   for the store it serves.
+    * Only a document open in the language client is mirrored, through
+    * {@link syncOpenDocument}, routed purely by **content**. A document open
+    * only in another client needs nothing: a language client opening it joins
+    * the existing entry and is refreshed from the store. A session writes only
+    * what it has open, so no session edit of a closed document waits here for
+    * the language client's next open.
     *
     * The decision is **re-derived from the current settled state every time** (it
     * is not a one-shot enrolment), which is what makes it self-healing: a doc
@@ -1139,11 +1100,8 @@ export class DefaultModelService<
       // the canonical key to the recorded language-client URI(s); driving the chain
       // in client space here would key it under a URI `settleSave` never computes, so
       // the drain would miss for a divergent open path.
-      const textDocuments = this.services.workspace.TextDocuments;
-      if (textDocuments.isOpenInLanguageClient(document.textDocument.uri)) {
+      if (this.services.workspace.TextDocuments.isOpenInLanguageClient(document.textDocument.uri)) {
          this.syncOpenDocument(document.textDocument.uri, document.textDocument.getText());
-      } else if (!textDocuments.isOpenInAnyClient(document.textDocument.uri)) {
-         this.stageClosedDocument(document);
       }
    }
 
@@ -1160,53 +1118,6 @@ export class DefaultModelService<
     */
    protected syncOpenDocument(uri: string, text: string): void {
       this.queueSync(uri, text);
-   }
-
-   /**
-    * Stage the settled text of a document no client holds so the eventual
-    * first `didOpen` sees this in-memory text instead of stale disk —
-    * but only for a {@link isNonLanguageClientEdit genuine non-language-client edit}.
-    * A document rebuilt by an internal build is skipped, leaving disk authoritative
-    * on the next open.
-    *
-    * The default `HydraniumTextDocuments` never gets this far. Its own paths
-    * record a version's author only while a client holds the document, and the
-    * last close drops that history with the tracking record, so a document no
-    * client holds reports no author and the provenance gate refuses. The stage
-    * is reachable for a text store that keeps authorship past the last close,
-    * or a subclass overriding {@link isNonLanguageClientEdit}.
-    */
-   protected stageClosedDocument(document: LangiumDocument): void {
-      if (this.isNonLanguageClientEdit(document)) {
-         this.services.workspace.TextDocuments.stagePendingContent(document.textDocument.uri, document.textDocument.getText());
-      }
-   }
-
-   /**
-    * Whether `document`'s settled state is a genuine edit by a client *other than
-    * the language client* — a write a form / GLSP / integrity client actually made.
-    * Excludes two non-edits: the **language client** itself (the LSP/Monaco text
-    * client — it already holds its own edits, and the staging here exists to feed
-    * it) and an **internal build** (workspace startup, a cascade relink, a
-    * `didClose`-reload). This is the gate for {@link stageClosedDocument}: staging
-    * an internal build would
-    * (a) pre-stage every file on boot and (b) re-stage discarded content after
-    * close (e.g. a disposing GLSP session's debounced submit firing after close),
-    * which then shadows clean disk on the next open.
-    *
-    * The signal is "a known client other than the language client authored this
-    * version **and** the URI was in the last build's changed set
-    * (`isTriggeringEdit`)". A framework-internal rebuild reports no author
-    * (`getAuthor` → `undefined`), so it fails `hasKnownAuthor` without comparing
-    * against a sentinel. This is NOT redundant with content/registration — it
-    * distinguishes "client edited" from "framework rebuilt", which neither the
-    * shadow nor `isTriggeringEdit` alone can.
-    */
-   protected isNonLanguageClientEdit(document: LangiumDocument): boolean {
-      const documents = this.services.workspace.AstDocumentManager;
-      const author = documents.getAuthor(document);
-      const hasKnownAuthor = !!author && author !== LANGUAGE_CLIENT_ID;
-      return hasKnownAuthor && documents.isTriggeringEdit(document.textDocument.uri);
    }
 
    /**
@@ -1405,30 +1316,12 @@ export class DefaultModelService<
    }
 
    /**
-    * The text a write into an unloaded document should take its trivia from —
-    * the open editor's if one holds it, the file's otherwise, and `undefined`
-    * when neither can supply it.
-    *
-    * **A read that fails answers `undefined` rather than throwing.** `getDocument`
-    * is a store read, so an ordinary create answers nothing here and must still
-    * write; letting a permission error or a path that turned into a directory
-    * escape would fail the user's write instead, having found nothing to preserve
-    * in a file the write is about to replace anyway. Losing the comments is
-    * recoverable, and traced; losing the write is neither.
+    * The text a write into a document not yet built should take its trivia
+    * from: the store's, which a write always has, since it writes only a
+    * document its client has open.
     */
-   protected async textToTakeTriviaFrom(uri: string, target: URI): Promise<string | undefined> {
-      const open = this.services.workspace.TextDocuments.get(uri)?.getText();
-      if (open !== undefined) {
-         return open;
-      }
-      const fileSystem = this.services.workspace.FileSystemProvider;
-      try {
-         return (await fileSystem.exists(target)) ? await fileSystem.readFile(target) : undefined;
-      } catch (err: unknown) {
-         const detail = err instanceof Error ? err.message : String(err);
-         this.tracer.withUri(uri).debug(`Could not read the file to take trivia from; writing as emitted. ${detail}`);
-         return undefined;
-      }
+   protected async textToTakeTriviaFrom(uri: string, _target: URI): Promise<string | undefined> {
+      return this.services.workspace.TextDocuments.get(uri)?.getText();
    }
 
    /**

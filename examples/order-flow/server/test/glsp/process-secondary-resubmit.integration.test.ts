@@ -146,18 +146,12 @@ async function openDiagram({ preValidate = true }: { preValidate?: boolean } = {
          return document.textDocument.getText();
       },
       foreignLayoutWrite: async text => {
-         // Open as that client FIRST, which is also what a real text editor does
-         // before it edits. `update` is an upsert: writing a document no client
-         // holds open seeds a fresh registration WITH the new text, so the update
-         // that follows reports "content unchanged", never rebuilds, and emits no
-         // event — a fixture that cannot exercise the subscription at all.
-         await services.shared.model.ModelService.open({ uri: harness.state.layoutUri, clientId: 'text-editor' });
-         await services.shared.model.ModelService.update({
-            uri: harness.state.layoutUri,
-            model: text,
-            clientId: 'text-editor',
-            basedOn: 'anything'
-         });
+         // Open as that client first, as a real text editor does before it
+         // edits; a repeat open changes nothing.
+         const models = services.shared.model.ModelService;
+         const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
+         await editor.open(harness.state.layoutUri);
+         await editor.update({ uri: harness.state.layoutUri, model: text, basedOn: 'anything' });
       },
       apply: async action => {
          const before = harness.actions.length;

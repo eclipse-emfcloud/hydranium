@@ -16,8 +16,8 @@
  * session is the document's one holder. The disk assertion pins the routing
  * for that holder, since an unsaved diagram write that needs a repair must stay
  * in the store under the default `'silent'` sync mode. The disk assertion
- * cannot witness the hold on its own: `ModelService.update` opens the document
- * for its writer, so the test's own write holds it whatever the storage does.
+ * cannot witness the hold on its own: the test writes through the diagram's
+ * session, which has to have the document open to write it at all.
  *
  * The workspace is a scratch copy: the workspace build persists repairs to
  * every file no client holds.
@@ -75,7 +75,11 @@ describe('order-flow .process integrity repair under an open diagram', () => {
       // settled-phase listener, so the silent write, had it happened, has.
       const lastBrace = onDisk.lastIndexOf('}');
       const duplicated = `${onDisk.slice(0, lastBrace)}   task Pay writes Order.status = PAID\n${onDisk.slice(lastBrace)}`;
-      await services.shared.model.ModelService.update({ uri: uriString, clientId: sessionClient, model: duplicated, basedOn: 'anything' });
+      const session = services.shared.model.ModelService.getSession(sessionClient);
+      if (!session) {
+         throw new Error(`no client session for the diagram ${sessionClient}`);
+      }
+      await session.update({ uri: uriString, model: duplicated, basedOn: 'anything' });
       await services.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
 
       expect(textDocuments.get(uriString)?.getText()).toContain('Pay__1');

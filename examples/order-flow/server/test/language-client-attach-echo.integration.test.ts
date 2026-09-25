@@ -100,9 +100,9 @@ describe('order-flow language-client attach over the real transport', () => {
    it('keeps the authored text when the attaching client echoes a minimised push', async () => {
       const { composed, shared } = await composeServer();
 
-      // A non-LSP client writes a document the editor has not opened. `update` is
-      // an upsert, so no file has to exist for the store to hold this.
-      await shared.model.ModelService.update({ uri: URI, model: AUTHORED, clientId: 'diagram', basedOn: 'anything' });
+      // A non-LSP client creates a document the editor has not opened, so no file
+      // has to exist for the store to hold this.
+      await shared.model.ModelService.createSession('diagram', 'diagram').create(URI, AUTHORED);
 
       // The editor opens the same URI from disk, which is now the older text. The
       // server notices the two disagree and pushes, which is what the client is

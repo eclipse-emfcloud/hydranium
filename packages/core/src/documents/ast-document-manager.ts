@@ -244,18 +244,6 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
 
    /** Client id that authored the document's current version, or `undefined` for a framework-internal build. */
    getAuthor(document: LangiumDocument): string | undefined;
-
-   /**
-    * Whether `uri` is one of the URIs the most recent build request named, as
-    * opposed to a document that build swept in as a dependent. Deletions are
-    * excluded: they never reach this layer, since a deleted document is
-    * removed before the build set is computed.
-    *
-    * The answer refers to the latest request, which may still be building, and
-    * it is retained between builds — so outside a build it describes whichever
-    * one ran last.
-    */
-   isTriggeringEdit(uri: string): boolean;
 }
 
 /**
@@ -442,8 +430,8 @@ export class DefaultAstDocumentManager<
     * The client that authored `document`'s current version, or `undefined` when
     * no client wrote it — a framework-internal rebuild (workspace startup, a
     * cascade relink, a `didClose`-reload) or a genuine author gap. Honest about
-    * absence so routing consumers (`ModelService.isNonLanguageClientEdit`)
-    * test `undefined` directly rather than against a sentinel; the presentation
+    * absence so a routing consumer tests `undefined` directly rather than
+    * against a sentinel; the presentation
     * default ({@link UNKNOWN_CLIENT_ID}) is applied at the boundary that needs a
     * concrete value (the `onUpdate` event's `sourceClientId`, the data-server's
     * `resolveSourceClientId`).
@@ -454,9 +442,9 @@ export class DefaultAstDocumentManager<
 
    async open(args: OpenModelArgs): Promise<Disposable> {
       // `open()` is the RPC-level "ensure this document is loaded" call. It is issued
-      // by a view attaching, but also internally by `update()` / `save()` and by every
-      // additional client attaching to the same URI, including the several sub-editors
-      // a composite view opens. When the document is already loaded there is nothing to
+      // by a session opening the document, including by every additional client
+      // attaching to the same URI and the several sub-editors a composite view
+      // opens. When the document is already loaded there is nothing to
       // do here but hand back the close-disposable — callers that want the current
       // state read it from this method's surrounding RPC response, not from a re-build.
       //
@@ -471,10 +459,11 @@ export class DefaultAstDocumentManager<
       // wires `onDidOpen -> this.open`, it would fire a second, identical rebuild on
       // every first open.
       //
-      // So an already-open `open()` records the attaching client's hold and nothing
-      // else. The hold is per `(uri, clientId)` and the last-close revert counts down
-      // to it, so skipping it lets the first holder's close tear down a document
-      // another client is still reading.
+      // So an already-open `open()` records the attaching client's open and nothing
+      // else. The open is per `(uri, clientId)` and the last-close revert counts down
+      // to it, so skipping it lets the first client's close tear down a document
+      // another client is still reading. A document waiting out the revert grace
+      // is still loaded, so opening it attaches too, and keeps its text.
       if (!this.isOpen(args.uri)) {
          const textDocument = await this.createDocumentFromTextOrFileSystem(args.uri, args.languageId, args.version, args.text);
          this.textDocuments.notifyDidOpenTextDocument({ textDocument }, args.clientId);
@@ -604,11 +593,6 @@ export class DefaultAstDocumentManager<
 
    isOpen(uri: string): boolean {
       return !!this.textDocuments.get(uri);
-   }
-
-   isTriggeringEdit(uri: string): boolean {
-      const canonical = this.uriPolicy.canonicalUri(uri);
-      return this.lastUpdate?.changed.some(changed => this.uriPolicy.canonicalUri(changed) === canonical) ?? false;
    }
 
    /**

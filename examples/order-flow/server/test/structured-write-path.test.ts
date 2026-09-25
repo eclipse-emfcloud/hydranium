@@ -31,6 +31,7 @@
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { URI } from '@hydranium/langium';
+import type { TransferElement } from '@hydranium/protocol';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -66,6 +67,13 @@ async function loadCopy(harness: OrderFlowHarness, relativePath: string): Promis
    return uri.toString();
 }
 
+/** Write `model` to `uri` as a form's session does: open first, then update. */
+async function writeAsForm(harness: OrderFlowHarness, uri: string, model: TransferElement): Promise<void> {
+   const session = harness.shared.model.ModelService.createSession('form', 'form-editor');
+   await session.open(uri);
+   await session.update({ uri, model, basedOn: 'anything' });
+}
+
 describe('order-flow structured write path — ModelService.update with a transfer model', () => {
    it('writes back a .process transfer model with every cross-reference intact', async () => {
       const harness = await makeWorkspaceHarness();
@@ -76,7 +84,7 @@ describe('order-flow structured write path — ModelService.update with a transf
 
       // Round-trip the projection unchanged: any difference in the resulting text
       // is the write path corrupting it, not the edit.
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await writeAsForm(harness, uri, transfer);
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       // The header, the blank line under it and the final newline all survive:
@@ -124,7 +132,7 @@ describe('order-flow structured write path — ModelService.update with a transf
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
 
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await writeAsForm(harness, uri, transfer);
 
       // The layout survives the TRANSFER round-trip, where `LayoutModel.process`
       // and `DiagramNode.flowNode` are plain strings rather than Langium
@@ -179,7 +187,7 @@ describe('order-flow structured write path — ModelService.update with a transf
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
 
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await writeAsForm(harness, uri, transfer);
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       expect(after).toContain('public valuetype Money {');
@@ -199,7 +207,7 @@ describe('order-flow structured write path — ModelService.update with a transf
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await writeAsForm(harness, uri, transfer);
 
       expect(readFileSync(URI.parse(uri).fsPath, 'utf8')).toBe(onDisk);
    });

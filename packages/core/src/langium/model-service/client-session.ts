@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import {
+   type CloseModelArgs,
    type MaybePromise,
+   type OpenModelArgs,
    type TransferElement,
    type TransferSaveArgs,
    type TransferUpdateAllArgs,
@@ -18,7 +20,7 @@ import { type AstNode, UriUtils } from '@hydranium/langium';
 import { type CancellationToken } from 'vscode-languageserver';
 import { type AstDocument } from '../../documents/ast-document-manager.js';
 import { SessionClosedError } from '../../documents/client-session-errors.js';
-import { type OpenOptions } from '../../documents/client-session-registry.js';
+import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type ServerSharedServices } from '../module.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type ModelService } from './model-service.js';
@@ -53,14 +55,16 @@ export interface ClientSession<
 
    /**
     * Open `uri` for this session, reading it from disk unless some client has
-    * it open already. `options` are kept for this open until it closes; a
-    * repeat open, concurrent or not, keeps the options of the first.
+    * it open already or it holds this client's unsaved text within its revert
+    * grace. `options` are kept for this open until it closes; a repeat open,
+    * concurrent or not, keeps the options of the first.
     */
    open(uri: string, options?: TOpenOptions): Promise<void>;
    /**
     * Create a document with `text` and open it for this session. It reaches
-    * disk on the first `save`. Fails when the file exists or any client has the
-    * URI open, and of two creates of one URI at most one succeeds.
+    * disk on the first `save`. Fails when the file exists, any client has the
+    * URI open, or the URI waits out the revert grace, and of two creates of one
+    * URI at most one succeeds.
     */
    create(uri: string, text: string): Promise<void>;
    update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
@@ -86,20 +90,45 @@ export interface ClientSession<
    withOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T>;
    /** Whether an event's `sourceClientId` names this session, i.e. the event echoes its own write. */
    isOwnEcho(sourceClientId: string): boolean;
-   /** End the session: close everything it has open and free its id. Idempotent. */
-   dispose(): void;
+   /**
+    * End the session: close everything it has open and free its id.
+    * Idempotent. `cause` is `'lost'` when the session ends because its
+    * client's connection went away, which lets each document it was the last
+    * to have open wait out the store's revert grace; ending it for any other
+    * reason reverts such a document at once.
+    */
+   dispose(cause?: SessionEndCause): void;
+}
+
+/**
+ * The writes a {@link DefaultClientSession} makes, each under the session's
+ * own client id. The model service's own open, close and write methods are
+ * protected, so this is the only way to reach them.
+ */
+export interface ClientSessionWriter<
+   TAst extends AstNode,
+   TDiagnostic extends AstDiagnostic = AstDiagnostic,
+   TTransfer extends TransferElement = TransferElement
+> {
+   open(args: OpenModelArgs): Promise<void>;
+   close(args: CloseModelArgs): Promise<void>;
+   update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   updateAll(args: TransferUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
+   save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
 }
 
 /**
  * The framework's {@link ClientSession}, built by
  * `DefaultModelService.newSession`.
  *
- * Writes go through the owning `ModelService`, so its overrides apply to a
- * session's writes as they do to anyone's. The open rule is enforced there, not
- * here, because only the service reaches the point where the text is applied.
+ * Opens and writes go through `writer`, which `DefaultModelService` binds to
+ * its own protected methods, so its overrides apply to every session's writes.
+ * The open rule is enforced there, not here, because only the service reaches
+ * the point where the text is applied.
  *
- * An override of {@link dispose} calls `super.dispose()`: that is what closes
- * the session's opens and frees its id.
+ * An override of {@link dispose} calls `super.dispose(cause)`: that is what
+ * closes the session's opens and frees its id, and dropping `cause` reverts
+ * a lost client's documents without their grace.
  */
 export class DefaultClientSession<
    TAst extends AstNode,
@@ -117,6 +146,7 @@ export class DefaultClientSession<
 
    constructor(
       protected readonly modelService: ModelService<TAst, TDiagnostic, TTransfer>,
+      protected readonly writer: ClientSessionWriter<TAst, TDiagnostic, TTransfer>,
       protected readonly services: ServerSharedServices,
       readonly clientId: string,
       readonly label: string
@@ -134,7 +164,7 @@ export class DefaultClientSession<
 
    update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       this.assertLive();
-      return this.modelService.update({ ...args, clientId: this.clientId }, cancelToken);
+      return this.writer.update({ ...args, clientId: this.clientId }, cancelToken);
    }
 
    updateAll(
@@ -142,17 +172,17 @@ export class DefaultClientSession<
       cancelToken?: CancellationToken
    ): Promise<AstDocument<TAst, TDiagnostic>[]> {
       this.assertLive();
-      return this.modelService.updateAll({ ...args, clientId: this.clientId }, cancelToken);
+      return this.writer.updateAll({ ...args, clientId: this.clientId }, cancelToken);
    }
 
    save(args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       this.assertLive();
-      return this.modelService.save({ ...args, clientId: this.clientId }, cancelToken);
+      return this.writer.save({ ...args, clientId: this.clientId }, cancelToken);
    }
 
    close(uri: string): Promise<void> {
       this.assertLive();
-      return this.modelService.close({ uri, clientId: this.clientId });
+      return this.writer.close({ uri, clientId: this.clientId });
    }
 
    withOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T> {
@@ -165,12 +195,12 @@ export class DefaultClientSession<
       return sourceClientId === this.clientId;
    }
 
-   dispose(): void {
+   dispose(cause?: SessionEndCause): void {
       if (this.disposed) {
          return;
       }
       this.disposed = true;
-      this.services.workspace.TextDocuments.closeSession(this.clientId);
+      this.services.workspace.TextDocuments.closeSession(this.clientId, cause);
    }
 
    protected assertLive(): void {
@@ -198,7 +228,7 @@ export class DefaultClientSession<
    protected async registerOpen(uri: string, options: TOpenOptions | undefined): Promise<void> {
       const textDocuments = this.services.workspace.TextDocuments;
       const wasOpen = textDocuments.isOpenInClient(uri, this.clientId);
-      await this.modelService.open({ uri, clientId: this.clientId });
+      await this.writer.open({ uri, clientId: this.clientId });
       await this.rejectIfEnded(uri, wasOpen);
       if (!wasOpen && options !== undefined) {
          textDocuments.setOpenOptions(uri, this.clientId, options);
@@ -214,6 +244,9 @@ export class DefaultClientSession<
          throw new Error(`Cannot create ${uri}: the file exists`);
       }
       this.assertLive();
+      if (this.services.workspace.TextDocuments.isRevertPending(uri)) {
+         throw new Error(`Cannot create ${uri}: it holds the unsaved text of a lost client, waiting out the revert grace`);
+      }
       if (this.modelService.isOpen(uri)) {
          throw new Error(`Cannot create ${uri}: it is open in a client`);
       }
@@ -231,13 +264,13 @@ export class DefaultClientSession<
          }
       });
       try {
-         await this.modelService.open({ uri, clientId: this.clientId, text });
+         await this.writer.open({ uri, clientId: this.clientId, text });
       } finally {
          listener.dispose();
       }
       await this.rejectIfEnded(uri, false);
       if (!created) {
-         await this.modelService.close({ uri, clientId: this.clientId });
+         await this.writer.close({ uri, clientId: this.clientId });
          throw new Error(`Cannot create ${uri}: it is open in a client`);
       }
    }
@@ -252,7 +285,7 @@ export class DefaultClientSession<
          return await fn();
       } finally {
          if (!alreadyOpen && !this.disposed) {
-            await this.modelService.close({ uri, clientId: this.clientId });
+            await this.writer.close({ uri, clientId: this.clientId });
          }
       }
    }
@@ -273,7 +306,7 @@ export class DefaultClientSession<
          return;
       }
       if (!wasOpen && this.modelService.getSession(this.clientId) === undefined) {
-         await this.modelService.close({ uri, clientId: this.clientId });
+         await this.writer.close({ uri, clientId: this.clientId });
       }
       throw new SessionClosedError(this.clientId);
    }

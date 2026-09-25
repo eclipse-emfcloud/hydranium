@@ -13,15 +13,12 @@
  * this file wires the REAL pieces the production chain runs through:
  *
  *  1. `HydraniumTextDocuments` — real per-URI multi-client ref-counting
- *     (`notifyDidOpen/CloseTextDocument`), firing per-client `onDidClose`.
- *  2. `HydraniumDocumentUpdateHandler.didCloseDocument` — subscribed to
- *     `onDidClose` exactly as Langium's `addDocumentUpdateHandler` wires it in
- *     `startLanguageServer`; gates on `isOpenInAnyClient` (last-client close)
- *     and dispatches the rebuild for `file:` URIs.
- *  3. `CstResidencyService` — its `Validated` build-phase pass arms the idle
+ *     (`notifyDidOpen/CloseTextDocument`), and the revert it dispatches for a
+ *     `file:` document once its last client closed it.
+ *  2. `CstResidencyService` — its `Validated` build-phase pass arms the idle
  *     timer for the closed document included in that rebuild.
  *
- * The only simulated seam is the DocumentBuilder itself: when the handler
+ * The only simulated seam is the DocumentBuilder itself: when the store
  * dispatches, the test runs the captured build-phase pass with the document —
  * the documented contract of a build reaching `Validated` with the closed
  * document in the batch. Everything upstream of that seam (ref counting,
@@ -43,7 +40,6 @@ import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-do
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { DefaultCstResidencyService } from '../../../src/langium/residency/cst-residency-service.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { HydraniumDocumentUpdateHandler } from '../../../src/lsp/hydranium-document-update-handler.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
 const DOC_URI = 'file:///a.x';
@@ -56,7 +52,7 @@ interface CapturedPass {
 
 interface Composition {
    docs: HydraniumTextDocuments<TextDocument>;
-   /** URIs of each rebuild the update handler dispatched (close-triggered). */
+   /** URIs of each rebuild the store dispatched (close-triggered). */
    dispatches: string[][];
    pass: CapturedPass;
    clock: ReturnType<typeof makeFakeClock>;
@@ -74,14 +70,20 @@ function makeComposition(): Composition {
    const noop = (): void => undefined;
    const services = makeNoopSharedServices<ServerSharedServices>({
       Clock: clock,
-      lsp: { LanguageServer: { onInitialize: noop, onInitialized: noop } },
       workspace: {
          LangiumDocuments: { getDocument: (uri: URI) => langiumDocs.get(uri.toString()) },
-         DocumentBuilder: { update: () => Promise.resolve(), resetToState: noop, markNextReason: noop },
+         DocumentBuilder: {
+            update: (changed: URI[]) => {
+               dispatches.push(changed.map(uri => uri.toString()));
+               return Promise.resolve();
+            },
+            resetToState: noop,
+            markNextReason: noop
+         },
          WorkspaceLock: { write: (callback: (token: unknown) => unknown) => callback(undefined) },
          WorkspaceManager: { ready: Promise.resolve(), workspaceInitialized: Promise.resolve() },
          SelfSaveRegistry: { isRegistered: () => false },
-         FileSystemProvider: { mtimeMs: async () => undefined },
+         FileSystemProvider: { exists: async () => true },
          DocumentUriPolicy: new DefaultDocumentUriPolicy(),
          AstDocumentManager: { queueDiskTask: (_uri: string, task: () => Promise<unknown>) => task() },
          BuildPhasePassService: {
@@ -95,18 +97,8 @@ function makeComposition(): Composition {
 
    const docs = new HydraniumTextDocuments<TextDocument>(services);
    // The store is itself a workspace service — close the self-reference so the
-   // handler and the residency service read the SAME real instance.
+   // residency service reads the SAME real instance.
    Object.assign(services.workspace, { TextDocuments: docs });
-
-   class DispatchCapturingHandler extends HydraniumDocumentUpdateHandler {
-      protected override dispatch(changed: URI[], _deleted: URI[]): void {
-         dispatches.push(changed.map(uri => uri.toString()));
-      }
-   }
-   const handler = new DispatchCapturingHandler(services);
-   // Mirror Langium's `addDocumentUpdateHandler` (startLanguageServer): every
-   // per-client close event reaches the handler, which gates on last-client.
-   docs.onDidClose(event => handler.didCloseDocument(event));
 
    new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: IDLE_MS } });
    if (!capturedPass) {
@@ -158,15 +150,15 @@ describe('CST shed on close — real ref-counting through the real close trigger
       clock.advance(IDLE_MS * 100);
       expect(cstNodeCount(document)).toBe(2);
 
-      // Partial close: the other client still holds the URI — the handler
-      // suppresses the rebuild entirely, so nothing can arm the timer.
+      // Partial close: the other client still holds the URI — the store
+      // dispatches no rebuild, so nothing can arm the timer.
       close('form-editor');
       await tick();
       expect(dispatches).toEqual([]);
       clock.advance(IDLE_MS * 100);
       expect(cstNodeCount(document)).toBe(2);
 
-      // Last close: the handler dispatches the rebuild for exactly this URI.
+      // Last close: the store dispatches the rebuild for exactly this URI.
       close(LANGUAGE_CLIENT_ID);
       await waitFor(() => dispatches.length > 0);
       expect(dispatches).toEqual([[DOC_URI]]);

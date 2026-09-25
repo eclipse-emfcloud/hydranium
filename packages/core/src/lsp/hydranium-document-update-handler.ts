@@ -10,7 +10,7 @@
 import { Debouncer, type Logger, ObservableValue, type MaybeObservableValue } from '@hydranium/protocol';
 import { URI, UriUtils } from '@hydranium/langium';
 import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
-import { type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
+import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
 import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
@@ -20,18 +20,7 @@ import { isConnectionGoneError } from '../util/connection-liveness.js';
 import { type DidChangeWatchedFilesParams, type FileEvent, FileChangeType, type TextDocumentChangeEvent } from 'vscode-languageserver';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 
-/**
- * Default LSP-event reasons stamped by {@link HydraniumDocumentUpdateHandler}
- * onto the next `documentBuilder.update` call via `markNextReason`. Exposed
- * so adopters subclassing the handler can layer additional reasons or rename
- * existing ones without losing the canonical names the framework emits.
- */
-export const HYDRANIUM_BUILD_REASONS = Object.freeze({
-   didOpen: 'didOpen',
-   didChangeContent: 'didChangeContent',
-   didChangeWatchedFiles: 'didChangeWatchedFiles',
-   didClose: 'didClose'
-} as const);
+export { HYDRANIUM_BUILD_REASONS };
 
 /**
  * Construction options for {@link HydraniumDocumentUpdateHandler}.
@@ -72,19 +61,19 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *     changes and watched-file changes bypass the debounce (their
  *     producers are already coalesced).
  *  3. **Build-reason stamping** — the LSP event overrides
- *     (`didOpenDocument`, `didChangeContent`, `didChangeWatchedFiles`,
- *     `didCloseDocument`) populate {@link nextReason} with a canonical
- *     reason string. {@link fireDocumentUpdate} captures the reason;
- *     {@link dispatch} stages it on the builder via
- *     {@link HydraniumDocumentBuilder.markNextReason}, so a subclass that
- *     formats build logs can tag its line with the event that caused the
- *     build without per-adopter wiring to capture it.
- *  4. **Last-client-close rebuild trigger** ({@link didCloseDocument}) —
- *     when the final client closes a document, dispatch a build so the
- *     LangiumDocument's `textDocument` is refreshed (from disk for `file:`
- *     URIs, or removed from the index for ephemeral URIs). Langium's
- *     default handler does not implement `didCloseDocument`, so the
- *     in-memory text of the last writer would otherwise persist.
+ *     (`didOpenDocument`, `didChangeContent`, `didChangeWatchedFiles`)
+ *     populate {@link nextReason} with a canonical reason string.
+ *     {@link fireDocumentUpdate} captures the reason; {@link dispatch} stages
+ *     it on the builder via {@link HydraniumDocumentBuilder.markNextReason},
+ *     so a subclass that formats build logs can tag its line with the event
+ *     that caused the build without per-adopter wiring to capture it.
+ *
+ * The revert to disk after a document's last close is not dispatched here:
+ * the text store runs it for every head, the LSP head included, so a
+ * `didCloseDocument` added in a subclass would build the document twice. A
+ * change still debounced for the document is dropped when the store releases
+ * it: a `file:` document's revert rebuilds it, and a document of another
+ * scheme, which does not revert, keeps its last build.
  *
  * Adopters with their own handler subclass should extend this class
  * (not Langium's `DefaultDocumentUpdateHandler`) so all of them are
@@ -145,6 +134,17 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       this.debounce = ObservableValue.from(options.debounceMs ?? 0);
       this.flushDebouncer = new Debouncer(services.Clock, () => this.flushPending(), { delayMs: this.debounce });
       this.bypassNonLanguageClientChanges = options.bypassNonLanguageClientChanges ?? true;
+      // A change still debounced for a document the store has released would
+      // build it once more after the store's own revert: from disk again, or,
+      // for a file that never existed, by reading a file that is not there. A
+      // document of another scheme does not revert, so dropping its change
+      // leaves it at its last build.
+      this.textDocuments.onDidCloseLastOpen(event => {
+         this.pendingChanged.delete(URI.parse(event.uri).toString());
+         if (this.pendingChanged.size === 0 && this.pendingDeleted.size === 0) {
+            this.pendingReason = undefined;
+         }
+      });
    }
 
    didOpenDocument(_change: TextDocumentChangeEvent<TextDocument>): void {
@@ -167,70 +167,6 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
          this.immediateFlush = true;
       }
       super.didChangeContent(change);
-   }
-
-   /**
-    * Last-client close is the missing rebuild trigger in Langium's
-    * `DefaultDocumentUpdateHandler`: `documents.onDidClose` fires on every
-    * per-client close, but the default handler ignores the event entirely.
-    * For multi-client servers this leaves the LangiumDocument carrying the
-    * unsaved in-memory `textDocument` of the last writer until something
-    * else triggers a rebuild — integrity rules walking `langiumDocuments.all`
-    * then see stale text long after the user discarded their edits.
-    *
-    * We funnel the last-client transition through the same dispatch path
-    * the other LSP events use, so the rebuild gets debouncing, workspace
-    * locking, build-reason stamping, and `markNextReason` for free. The
-    * scheme split governs the `DocumentBuilder.update` shape:
-    *
-    *  - **`file:` URI** → `update([uri], [])`. Routes through
-    *    `LangiumDocuments.invalidateDocument` (doc stays in the trie) and
-    *    `LangiumDocumentFactory.update`, which consults the LSP-tracked
-    *    open-documents map first. That map is cleared LATER in the same
-    *    synchronous `notifyDidCloseTextDocument` call that fires this event,
-    *    and {@link dispatch} defers the build behind `workspaceManager.ready`
-    *    — so by the time the factory looks, the URI is gone: it falls back to
-    *    `FileSystemProvider.readFile` and the doc rebuilds from disk,
-    *    Langium's canonical close-without-save semantic. A dispatch made
-    *    synchronously here would still see the open document and re-read the
-    *    in-memory text instead.
-    *  - **non-`file:` URI** (`builtin:`, `untitled:`) → no dispatch.
-    *    Adopter-loaded schemes — documents pulled in via
-    *    `loadAdditionalDocuments` — need to stay in the workspace index;
-    *    dropping them on close would break every cross-reference that
-    *    targets them. The framework cannot enumerate adopter schemes, so the
-    *    safe default is "leave alone unless it's a file." Adopters that need
-    *    ephemeral-URI cleanup handle it explicitly.
-    *
-    * Per-client closes (where other clients still hold the URI) are
-    * suppressed via {@link HydraniumTextDocuments.isOpenInAnyClient}.
-    *
-    * The dispatch waits for the URI's disk queue to drain, because the rebuild
-    * re-reads the file: dispatched while a save is still queued, it reads the
-    * text from before that save, and the document reverts past it. A client
-    * that opens the URI meanwhile holds the text, so no revert follows.
-    */
-   didCloseDocument(change: TextDocumentChangeEvent<TextDocument>): void {
-      if (this.textDocuments.isOpenInAnyClient(change.document.uri)) {
-         return;
-      }
-      const uri = URI.parse(change.document.uri);
-      if (uri.scheme !== 'file') {
-         return;
-      }
-      this.services.workspace.AstDocumentManager.queueDiskTask(change.document.uri, async () => undefined)
-         .then(() => {
-            if (this.textDocuments.isOpenInAnyClient(change.document.uri)) {
-               return;
-            }
-            this.nextReason = HYDRANIUM_BUILD_REASONS.didClose;
-            this.immediateFlush = true;
-            this.fireDocumentUpdate([uri], []);
-         })
-         .catch((err: unknown) => {
-            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-            this.logger.error(`Revert on last close dropped for ${change.document.uri}. ${detail}`);
-         });
    }
 
    override didChangeWatchedFiles(params: DidChangeWatchedFilesParams): void {

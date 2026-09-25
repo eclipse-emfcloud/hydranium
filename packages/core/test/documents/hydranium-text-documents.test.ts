@@ -402,10 +402,7 @@ describe('HydraniumTextDocuments.isOpenInAnyClient', () => {
    /**
     * `isOpenInAnyClient` reads the per-URI tracking record's `clients` set
     * (updated synchronously BEFORE the close event fires), so subscribers to {@link onDidClose}
-    * can use it to detect the last-close transition. The downstream
-    * "rebuild from disk for `file:` URIs / drop from index for ephemeral
-    * URIs" decision lives in `HydraniumDocumentUpdateHandler.didCloseDocument`,
-    * not in this manager.
+    * can use it to detect the last-close transition.
     */
    it('returns false before any open', () => {
       const { docs } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });

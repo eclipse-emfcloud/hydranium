@@ -481,7 +481,7 @@ describe('AstDocumentManager update', () => {
 
 describe('AstDocumentManager external content reconciliation', () => {
    it('re-stamps a rebuilt closed document with the stepped sequence version', () => {
-      // Close-revert: edits are discarded, the update handler rebuilds from
+      // Close-revert: edits are discarded, the text store rebuilds from
       // disk, and the factory creates a fresh text document at its own version.
       // The Parsed-phase reconcile must step the persisted sequence (content
       // changed while closed) and re-stamp the rebuilt document so the revert
@@ -595,7 +595,7 @@ describe('AstDocumentManager save', () => {
    });
 });
 
-describe('AstDocumentManager isOpen / isTriggeringEdit', () => {
+describe('AstDocumentManager isOpen', () => {
    it('isOpen reflects open state for a URI', async () => {
       // Kills the `return false` / `return true` ConditionalExpression mutants
       // on isOpen.
@@ -603,37 +603,6 @@ describe('AstDocumentManager isOpen / isTriggeringEdit', () => {
       expect(manager.isOpen(URI_B)).toBe(false);
       await manager.open({ uri: URI_B, clientId: 'c1', languageId: 'plaintext' });
       expect(manager.isOpen(URI_B)).toBe(true);
-   });
-
-   it('isTriggeringEdit is true only for URIs in the latest changed set', () => {
-      // Kills the isTriggeringEdit mutants: OptionalChaining (`lastUpdate?.`),
-      // `?? false`→`&& false`, `.some`→`.every`, the predicate equality, and
-      // the per-element booleans.
-      const { manager, builder } = makeManagerHarness();
-      // No build yet → no lastUpdate → false (exercises the `?? false` default).
-      expect(manager.isTriggeringEdit(URI_A)).toBe(false);
-
-      // Two changed URIs where only ONE equals the target. `.some` → true,
-      // but a `.every` mutant → false (URI_B fails the predicate). A
-      // single-element changed set cannot kill `.every`, because a one-element
-      // array that matches satisfies BOTH `.some` and `.every`.
-      builder.fireOnUpdate([URI.parse(URI_A), URI.parse(URI_B)], []);
-      expect(manager.isTriggeringEdit(URI_A)).toBe(true);
-
-      // A URI not in the changed set → false (kills `=> true` per-element booleans
-      // and confirms the predicate equality is real).
-      builder.fireOnUpdate([URI.parse(URI_A)], []);
-      expect(manager.isTriggeringEdit('file:///C.fake')).toBe(false);
-   });
-
-   it('isTriggeringEdit canonicalizes the URI so a non-canonical query still matches', () => {
-      const { manager, builder } = makeManagerHarness();
-      // The builder reports canonical (percent-encoded) URIs; a caller querying with
-      // the non-canonical spelling must still match (same normalization the
-      // HydraniumTextDocuments applies to its document store).
-      builder.fireOnUpdate([URI.parse('file:///My Folder/x.fake')], []);
-      expect(manager.isTriggeringEdit('file:///My Folder/x.fake')).toBe(true);
-      expect(manager.isTriggeringEdit('file:///My%20Folder/x.fake')).toBe(true);
    });
 });
 

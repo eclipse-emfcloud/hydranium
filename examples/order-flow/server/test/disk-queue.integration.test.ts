@@ -8,14 +8,14 @@
  ********************************************************************************/
 
 /**
- * The per-file disk queue against the real manager and the real LSP update
- * handler: a client saves and then closes as the last client, and the revert
+ * The per-file disk queue against the real manager and the real text store's
+ * revert: a client saves and then closes as the last client, and the revert
  * that close triggers reads the file only after the save has written it.
  *
- * The LSP head is attached because the revert lives in its update handler,
- * which `startLanguageServer` subscribes to the text store's close event. Writes
- * are held by a provider gate, so the revert has a window in which reading the
- * file would return the text from before the save.
+ * The LSP head is attached so the revert, which the text store runs for every
+ * head, is exercised beside the editor's own event flow. Writes are held by a
+ * provider gate, so the revert has a window in which reading the file would
+ * return the text from before the save.
  */
 
 import { serverSharedFactory } from '@hydranium/core';
@@ -95,8 +95,9 @@ describe('a save followed by the last close', () => {
       const models = shared.model.ModelService;
       const uri = workspace.uri(FILE);
 
-      await models.open({ uri, clientId: 'form' });
-      await models.update({ uri, clientId: 'form', model: EDITED, basedOn: 'anything' });
+      const session = models.createSession('form', 'form');
+      await session.open(uri);
+      await session.update({ uri, model: EDITED, basedOn: 'anything' });
       let rebuilds = 0;
       shared.workspace.DocumentBuilder.onUpdate(changed => {
          rebuilds += changed.filter(changedUri => changedUri.toString() === uri).length;
@@ -104,7 +105,7 @@ describe('a save followed by the last close', () => {
 
       const release = holdWrites();
       const saved = shared.workspace.AstDocumentManager.save(uri, 'form');
-      await models.close({ uri, clientId: 'form' });
+      await session.close(uri);
       // Long enough for a revert that does not wait for the save to rebuild.
       await tick(50);
       release();

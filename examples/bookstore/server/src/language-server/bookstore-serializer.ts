@@ -13,9 +13,9 @@
 //
 // Without it every structured write fails: the framework's default binding at
 // `services.serializer.Serializer` THROWS, because a concrete syntax is
-// language knowledge no framework can derive. `ModelService.update` / `save`,
-// the data head's `saveModelDocument` and a GLSP `SaveModelAction` all reach
-// it.
+// language knowledge no framework can derive. A client session's `update` /
+// `save`, the data head's `saveModelDocument` and a GLSP `SaveModelAction`
+// all reach it.
 //
 // `AbstractSerializer`'s generic property walk lays out FORMAT-structured
 // output — its YAML and JSON subclasses are what it exists for — and cannot

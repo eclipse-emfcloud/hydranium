@@ -172,7 +172,7 @@ describe('order-flow .process change-bounds', () => {
          ])
       );
 
-      // `ModelService.update` is an upsert, so the write created the document.
+      // The state's `openForWrite` creates the missing layout, which the write fills.
       const layout = diagram.layoutText();
       expect(layout).toBeDefined();
       expect(layout).toContain('layout ReturnsLayout for Returns');

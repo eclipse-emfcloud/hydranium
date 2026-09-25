@@ -44,6 +44,15 @@ export const UNSUPPORTED_WRITE = defineMessage(
 );
 
 /**
+ * A missing-file error shaped as a Node file system raises it, with code
+ * `ENOENT` and the path: callers tell a missing file from any other failure by
+ * those two fields, whichever provider is bound.
+ */
+function notFound(message: string, uri: URI): Error {
+   return Object.assign(new Error(message), { code: 'ENOENT', path: uri.fsPath });
+}
+
+/**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
  *
  * Keys are absolute URI strings unless {@link InMemoryFileSystemOptions.rootUri}
@@ -162,7 +171,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       }
       const content = this.files.get(normalize(uri));
       if (content === undefined) {
-         throw new Error(NO_SUCH_FILE.format({ uri: uri.toString() }));
+         throw notFound(NO_SUCH_FILE.format({ uri: uri.toString() }), uri);
       }
       return content;
    }
@@ -192,7 +201,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       if (this.hasChildren(path)) {
          return { isFile: false, isDirectory: true, uri };
       }
-      throw new Error(NO_SUCH_PATH.format({ uri: uri.toString() }));
+      throw notFound(NO_SUCH_PATH.format({ uri: uri.toString() }), uri);
    }
 
    exists(uri: URI): Promise<boolean> {

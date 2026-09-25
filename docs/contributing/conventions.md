@@ -798,7 +798,7 @@ capability is non-breaking and an absent field reads as "not supported".
   value reflects the single source of truth and cannot drift from actual
   behaviour.
 - **Assert** only a true implementation invariant with no config knob (e.g.
-  version-checking is inherent to `ModelService.update`); the owner sets it,
+  version-checking is inherent to a session's `update`); the owner sets it,
   a subclass that drops the behaviour overrides it.
 - For behaviour currently HARDCODED with no governing slot (e.g. recording
   granularity — `HydraniumGlspRecordingCommand` records a whole-source-model

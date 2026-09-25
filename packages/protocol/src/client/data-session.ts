@@ -51,8 +51,8 @@ export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Par
 /**
  * Open a document through a session; the session supplies `clientId`. Only the
  * URI and the open's options: a session's open reads the file, and the server
- * ignores the seeds a per-client open can carry, so accepting them here would
- * let a caller believe they took effect.
+ * ignores the `languageId`, `version` and `text` seeds of `OpenModelArgs`, so
+ * accepting them here would let a caller believe they took effect.
  */
 export type DataSessionOpenArgs<
    TTransfer extends TransferElement,

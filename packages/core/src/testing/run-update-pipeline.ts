@@ -9,7 +9,7 @@
 
 /**
  * Driver for the structured-write transform chain — the rewrite registry plus
- * the serializer — run the way `ModelService.update` runs it.
+ * the serializer — run the way a session's `update` runs it.
  *
  * # Why a driver and not a documented recipe
  *
@@ -38,7 +38,7 @@
  * This runs rewrite → serialize and stops. It does NOT open the document, push
  * text into the multi-client store, drive a build or return an
  * {@link AstDocument}: those need a live workspace, and a test that wants them
- * should call `ModelService.update` itself rather than a driver standing in for
+ * should call a session's `update` itself rather than a driver standing in for
  * it. What is left is the part with no observable of its own — the text and the
  * rewritten model — which is why it needed lifting.
  *
@@ -61,7 +61,7 @@ export interface UpdatePipelineArgs<TTransfer extends TransferElement = Transfer
     * rather than merely labelling it.
     */
    readonly uri: string;
-   /** Transfer-model payload, as an adopter caller would hand it to `ModelService.update`. */
+   /** Transfer-model payload, as an adopter caller would hand it to a session's `update`. */
    readonly model: TTransfer;
    /**
     * Previous AST root threaded into every rewrite, so a diff-based rewrite can
@@ -90,7 +90,7 @@ export interface UpdatePipelineResult<TTransfer extends TransferElement = Transf
     * surface but it makes the precise assertion unavailable.
     */
    readonly rewritten: TTransfer;
-   /** The serialized text, which is what `ModelService.update` applies to the store. */
+   /** The serialized text, which is what a session's `update` applies to the store. */
    readonly text: string;
 }
 

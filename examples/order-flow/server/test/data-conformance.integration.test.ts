@@ -30,7 +30,7 @@
  * `.process` cannot have a self-contained fixture: `subject=[Entity:ID]` is
  * **mandatory** in the grammar, so a valid `.process` model is only valid
  * relative to a `.domain` file declaring the entity. The kit seeds documents
- * through the proxy (`updateModelDocument` upserts a cold URI), but it seeds
+ * through the proxy (a session creates a URI with no file behind it), but it seeds
  * only the fixture under test — so the entity has to come from a booted
  * workspace, and the fixture URIs have to sit inside it for project-tier
  * visibility to reach it.

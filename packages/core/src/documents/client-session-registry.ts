@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type CanonicalUri, FRAMEWORK_CLIENT_IDS } from '@hydranium/protocol';
-import { Emitter, type Event } from 'vscode-languageserver';
+import { type Disposable, Emitter, type Event } from 'vscode-languageserver';
 import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
 import { DuplicateClientIdError, SessionClosedError } from './client-session-errors.js';
 
@@ -36,6 +36,15 @@ export interface ClientSessionClosedEvent {
 }
 
 /**
+ * Why a close happened. `'lost'` is a close caused by the client's connection
+ * going away rather than by the client, and only such a last close waits out
+ * the store's revert grace: a client that closed or ended on purpose has
+ * discarded its unsaved edits, while one that lost its connection may be about
+ * to register again and open the document once more.
+ */
+export type SessionEndCause = 'closed' | 'lost';
+
+/**
  * The ids no client session may be started under: the wire's well-known ids and
  * the integrity author. Each names a framework participant rather than a
  * client, and a session holding one would have its writes read as that
@@ -48,11 +57,11 @@ export const RESERVED_CLIENT_IDS: readonly string[] = [...FRAMEWORK_CLIENT_IDS, 
  * sessions — the open facts every head shares, composed by
  * `HydraniumTextDocuments`.
  *
- * Opens are recorded for every client id, registered or not. An id that was
- * never registered is a client that predates sessions and writes through the
- * flat `clientId` calls; its opens are tracked exactly as a session's are, and
- * only the session table ignores it. Requiring registration before an open
- * would refuse every such client.
+ * Opens are recorded for every client id, registered or not. The language
+ * client opens under its reserved id without a session, over the LSP
+ * connection, and its opens are tracked exactly as a session's are; only the
+ * session table ignores it. Requiring registration before an open would refuse
+ * the editor.
  *
  * One open per `(client, uri)`, with no reference count: a repeat open changes
  * nothing, and one close ends it.
@@ -68,6 +77,13 @@ export class ClientSessionRegistry {
    protected readonly opensByClient = new Map<string, Map<CanonicalUri, OpenOptions | undefined>>();
    protected readonly reservedIds: ReadonlySet<string> = new Set(RESERVED_CLIENT_IDS);
    protected readonly sessionClosedEmitter = new Emitter<ClientSessionClosedEvent>();
+   /**
+    * The documents whose last open closed with a lost connection and whose
+    * revert is deferred, each with the timer that runs it. An open of such a
+    * document cancels its timer, which is what keeps the unsaved text for a
+    * client that comes back.
+    */
+   protected readonly pendingReverts = new Map<CanonicalUri, Disposable>();
 
    /** Fires once a session has been removed from the table, after all its opens closed. */
    get onDidCloseSession(): Event<ClientSessionClosedEvent> {
@@ -198,14 +214,34 @@ export class ClientSessionRegistry {
       }
    }
 
+   /** Record `timer` as the deferred revert of `uri`. */
+   deferRevert(uri: CanonicalUri, timer: Disposable): void {
+      this.pendingReverts.set(uri, timer);
+   }
+
+   /** Whether the revert of `uri` is deferred. */
+   isRevertPending(uri: CanonicalUri): boolean {
+      return this.pendingReverts.has(uri);
+   }
+
+   /** Cancel the deferred revert of `uri`, if one is pending. */
+   cancelRevert(uri: CanonicalUri): void {
+      this.pendingReverts.get(uri)?.dispose();
+      this.pendingReverts.delete(uri);
+   }
+
    /**
-    * Forget every session and open without announcing anything. Subscriptions
-    * stay, so a listener registered before the clear hears the sessions that
-    * end after it.
+    * Forget every session, open and deferred revert without announcing
+    * anything. Subscriptions stay, so a listener registered before the clear
+    * hears the sessions that end after it.
     */
    clear(): void {
       this.sessions.clear();
       this.clientsByUri.clear();
       this.opensByClient.clear();
+      for (const timer of this.pendingReverts.values()) {
+         timer.dispose();
+      }
+      this.pendingReverts.clear();
    }
 }

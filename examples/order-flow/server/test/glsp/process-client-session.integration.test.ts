@@ -94,16 +94,18 @@ async function startDiagram(relativePath: string, options: { open: boolean } = {
       text: uri => shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))?.textDocument.getText(),
       isOpenForDiagram: uri => shared.workspace.TextDocuments.isOpenInClient(uri, CLIENT_ID),
       foreignWrite: async (uri, text) => {
-         await shared.model.ModelService.update({ uri, model: text, clientId: 'text-editor', basedOn: 'anything' });
+         // A repeat open changes nothing, so every write can open first.
+         const models = shared.model.ModelService;
+         const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
+         await editor.open(uri);
+         await editor.update({ uri, model: text, basedOn: 'anything' });
       }
    };
    if (options.open) {
       await started.start();
       await started.openDocument(sourcePath);
       // The layout opens for the diagram as it joins the write set, which the
-      // load does not wait for. A foreign write before that open creates the
-      // document from its own text at the version the diagram read, which no
-      // gate can tell from the file.
+      // load does not wait for; a test asserting on the diagram's opens has to.
       if (diagram.text(layoutUri) !== undefined) {
          await waitFor(() => diagram.isOpenForDiagram(layoutUri), { message: 'the layout was never opened for the diagram' });
       }

@@ -81,6 +81,7 @@ import {
    startSocketDataServer
 } from './testing/socket-data-server';
 import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import { thirdPartyWrite as writeAsThirdParty } from './testing/third-party-write.js';
 
 const WORKSPACE_ROOT = path.resolve(__dirname, '../../workspace');
 const FULFILLMENT_PROCESS = 'orders/fulfillment.process';
@@ -191,7 +192,7 @@ function mountHop(webview: Participant = 'webview'): void {
 /** Write `root` as a third party, ungated, so it always lands. */
 async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promise<void> {
    const server = await session!.connected();
-   await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: root, basedOn: 'anything' });
+   await writeAsThirdParty(server, THIRD_PARTY, uri, root);
 }
 
 describe('order-flow properties panel data path (socket → relay → messenger hop)', () => {

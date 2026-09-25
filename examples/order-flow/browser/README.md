@@ -457,7 +457,7 @@ the write. The page reads the file back through the data head instead — a
 different head than the one that wrote, over the same Langium store.
 
 An edit does not touch `examples/order-flow/workspace`. A diagram operation goes
-through `ModelService.update`, which rewrites the in-memory text document and
+through the diagram's client session, which rewrites the in-memory text document and
 rebuilds; only an explicit save reaches the (seeded, in-memory) filesystem. So
 `git status` after a browser run should be clean, and a change there would be a
 real finding.

@@ -1307,7 +1307,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
 
       // A diagram drag, so what is persisted has been through the whole write
-      // path — GLSP operation, `ModelService.update`, `applyEdit` into the
+      // path — GLSP operation, session `update`, `applyEdit` into the
       // editor — rather than typed straight into a buffer.
       await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
       const entry = await expectLayoutEntry(page, 'Cancel');

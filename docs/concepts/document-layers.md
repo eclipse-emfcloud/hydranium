@@ -72,7 +72,7 @@ The build-side descriptions below apply after a successful
 | --- | --- | --- | --- |
 | Closed file, no staged repair | Disk; a closed `'silent'` repair writes it. | A build reads disk and reconciles after a textual repair. There is no open store entry. | None. |
 | Open in the language client | Shared store; `didChange`, server-authored updates, and current-source integrity repairs write it. Disk is not written under the open editor. | A textual repair commits by URI and reconciles text/CST with the store; the AST also has its derived state. | Based on the editor's declared buffer. The settled listener queues a shadow-based `workspace/applyEdit`. |
-| Open only through data or GLSP | Shared store; `ModelService.update` and current-source repairs write it. `save` persists it, and so does a `'silent'` repair whose source text is what disk holds. | A textual repair commits by URI and reconciles against store text. In `'silent'` mode it writes disk only when disk holds the text it was computed from, so unsaved updates never ride along. In `'editor'` mode it never writes disk, and a repair of text the holder never changed then differs from disk with nothing marking it unsaved, since the data and GLSP heads mark only their own edits; that is a known limitation. It never stages, since an editor attaching joins the existing entry instead of taking the first-open path that reads a stage. A last close without a save discards a repair left in the store along with the unsaved updates; the disk-backed rebuild that follows sees a closed file, so a defect still on disk takes the closed-file route. | None until an editor attaches; an editor joining this existing store refreshes from its current content. |
+| Open only through data or GLSP | Shared store; session updates and current-source repairs write it. `save` persists it, and so does a `'silent'` repair whose source text is what disk holds. | A textual repair commits by URI and reconciles against store text. In `'silent'` mode it writes disk only when disk holds the text it was computed from, so unsaved updates never ride along. In `'editor'` mode it never writes disk, and a repair of text the holder never changed then differs from disk with nothing marking it unsaved, since the data and GLSP heads mark only their own edits; that is a known limitation. It never stages, since an editor attaching joins the existing entry instead of taking the first-open path that reads a stage. A last close without a save discards a repair left in the store along with the unsaved updates; the disk-backed rebuild the store runs next, for every head, sees a closed file, so a defect still on disk takes the closed-file route. A document whose last close came from a lost connection and that waits out the revert grace is treated as open here, so its unsaved text reaches no disk. | None until an editor attaches; an editor joining this existing store refreshes from its current content. |
 | Separately constructed Langium document for an already-open URI | Existing shared store; the separate document is not a text authority. | Its AST can enter a build, but repair commits only if its CST source still matches the store. A stale mutation is abandoned and the registered document is reconciled from current text. | Follows the actual open holder, never the separate document's text object. |
 | Closed file with an `'editor'`-mode staged repair | Disk remains persisted; pending content takes priority on the next first open. | The settled AST carries the repair, while `textDocument` and CST may still describe disk. | None while closed. First `didOpen` starts a shadow from the editor's declared buffer so the pending correction can be delivered. |
 
@@ -101,9 +101,9 @@ The transitions that change the owner are explicit:
   store text and writes it through the file's disk queue, in the order saves
   were called. The last close removes the shared entry and editor shadow and
   retains the content-version sequence. A file URI then gets a disk-backed
-  rebuild once its disk queue has drained, and a reopen reads the file in that
-  queue, after any save still writing; the default close handler leaves
-  non-file documents in the index for the adopter to manage.
+  rebuild from the text store, for every head, once its disk queue has
+  drained, and a reopen reads the file in that queue, after any save still
+  writing; non-file documents stay in the index for the adopter to manage.
 
 The open-document repair tests in the order-flow example exercise the normal
 and separately constructed paths in both sync modes, for a URI an editor
@@ -243,10 +243,10 @@ Writing the correct thing is therefore writing less:
 // Right: the version is the one the read returned, next to the read.
 const snapshot = await modelService.validated(uri);
 mutate(document.parseResult.value);
-await modelService.save({ uri, model: document.parseResult.value, clientId, basedOn: snapshot.version });
+await session.save({ uri, model: document.parseResult.value, basedOn: snapshot.version });
 
 // Explicitly ungated, for a write with no reader behind it.
-await modelService.save({ uri, model, clientId, basedOn: 'anything' });
+await session.save({ uri, model, basedOn: 'anything' });
 ```
 
 `document.textDocument.version` does not compile in that field. It is a plain

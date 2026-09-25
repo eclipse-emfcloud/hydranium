@@ -318,6 +318,8 @@ class RecordingTextDocuments {
    openInLanguageClient = false;
    /** Held by a client other than the language client — the data or GLSP head. */
    openInOtherClient = false;
+   /** Open for no client, but waiting out the revert grace after its last client's connection was lost. */
+   revertPending = false;
    /** What `get` answers, by URI: the store's own document for a held URI. */
    readonly held = new Map<string, TextDocument>();
 
@@ -331,6 +333,10 @@ class RecordingTextDocuments {
 
    isOpenInAnyClient(): boolean {
       return this.openInLanguageClient || this.openInOtherClient;
+   }
+
+   isRevertPending(): boolean {
+      return this.revertPending;
    }
 
    setAuthor(uri: string, version: number, author: string): void {
@@ -893,6 +899,19 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
    });
 
    for (const syncMode of ['silent', 'editor'] as const) {
+      it(`treats a file waiting out the revert grace as held: its unsaved source reaches no disk and no stage (${syncMode} mode)`, async () => {
+         const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe(syncMode);
+         textDocuments.revertPending = true;
+         fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+         const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+
+         // Parsed from the lost client's unsaved edit, which the grace keeps.
+         await probe.syncCorrectionsNow(td, 'unsaved');
+
+         expect(fileSystemProvider.writes).toEqual([]);
+         expect(textDocuments.stagedContent).toEqual([]);
+      });
+
       it(`neither writes disk nor stages for a held file whose source is not what disk holds (${syncMode} mode)`, async () => {
          const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe(syncMode);
          textDocuments.openInOtherClient = true;

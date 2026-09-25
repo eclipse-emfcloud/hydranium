@@ -30,9 +30,8 @@ import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-hand
  *
  * - {@link HydraniumDocumentUpdateHandler} wraps `didChangeWatchedFiles` to
  *   suppress echo events for the server's own writes via the shared
- *   `SelfSaveRegistry` slot, debounces `didChangeContent`, stamps build
- *   reasons through `markNextReason`, and dispatches a rebuild when the last
- *   client closes a document.
+ *   `SelfSaveRegistry` slot, debounces `didChangeContent`, and stamps build
+ *   reasons through `markNextReason`.
  *   Adopters with their own update-handler subclass should extend
  *   `HydraniumDocumentUpdateHandler` (not Langium's
  *   `DefaultDocumentUpdateHandler`) to preserve those behaviours.

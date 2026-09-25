@@ -49,7 +49,7 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  * `modelState.updateSourceModel(newModel)` with the model only. The
  * framework lift overrides `postChange` so it also threads the snapshot
  * version taken at command start — letting the downstream
- * `ModelService.update` opt into the `ConflictError` gate. Undo / redo
+ * session `update` opt into the `ConflictError` gate. Undo / redo
  * postChange calls pass `'anything'`: the user authored against the recorded
  * patch, not against a specific server version, so re-applying it should
  * succeed regardless of intervening edits. The recorded patch itself encodes

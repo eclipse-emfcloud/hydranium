@@ -29,7 +29,7 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  * `onUpdate` is driven explicitly
  * through {@link StubAstDocumentManager.emitUpdate} because the stub tree runs
  * no build phases to emit from, and the remaining read helpers
- * (`isTriggeringEdit`, `getAuthor`) throw if invoked — tests that need them
+ * (`getAuthor`) throw if invoked — tests that need them
  * should wire a richer stub or use the real {@link AstDocumentManager}.
  *
  * Open state is tracked per URI as the set of holding client ids, so a
@@ -59,7 +59,6 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extend
    | 'onClientClosed'
    | 'getAuthor'
    | 'getDocument'
-   | 'isTriggeringEdit'
 > {
    readonly openClients: Map<string, Set<string>>;
 
@@ -132,10 +131,13 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
          clients.add(args.clientId);
          openClients.set(args.uri, clients);
          // The real `open` materialises the synced document (from the payload
-         // text or the filesystem); mirror that so a subsequent `update` finds
-         // an open document to apply its content change to.
+         // text or the filesystem), or attaches the client to the one that is
+         // there; mirror both so a subsequent `update` finds the document open
+         // for this client.
          if (!textDocuments.get(args.uri)) {
             textDocuments.seedOpen(args.uri, args.text ?? '', args.clientId);
+         } else {
+            textDocuments.attachClient(args.uri, args.clientId);
          }
          return Disposable.create(() => close({ uri: args.uri, clientId: args.clientId }));
       },
@@ -217,9 +219,6 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
       // that need real symlink canonicalization wire the real AstDocumentManager).
       getDocument(uri: string): LangiumDocument | undefined {
          return documents?.getDocument(UriUtils.toUri(uri));
-      },
-      isTriggeringEdit(): boolean {
-         return notSupported('isTriggeringEdit');
       }
    };
 }
