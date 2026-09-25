@@ -16,8 +16,8 @@
  * The kit's create-operation check drives a **field-level** write path end to
  * end: the operation mutates the AST, the recording command diffs the transfer
  * projection, and `ReconcilingMultiDocumentGlspState.updateSourceModel` persists
- * the patch through `ModelService.update`. A mutation the `.process` serializer
- * cannot express fails here rather than at runtime.
+ * the patch through its client session's `updateAll`. A mutation the `.process`
+ * serializer cannot express fails here rather than at runtime.
  *
  * The two fixtures are a **matched pair over the layout overlay**, not two
  * copies of one run:

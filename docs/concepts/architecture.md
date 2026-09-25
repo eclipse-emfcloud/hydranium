@@ -144,9 +144,9 @@ lifecycle to a multi-client scenario:
   are released, while the server's content-version sequence is retained. The
   text store then rebuilds file URIs from disk for every head, the LSP head and
   a headless server alike; non-file URIs remain indexed for adopter-controlled
-  lifecycle handling. After a lost connection the release can wait out a
-  configured grace, within which a reconnecting client finds its unsaved text
-  (see [Last close](client-sessions.md#last-close)).
+  lifecycle handling. After a lost connection the release waits out a grace,
+  ten seconds by default, within which a reconnecting client finds its unsaved
+  text (see [Last close](client-sessions.md#last-close)).
 
 A data-server client's `DataSession` is a client session registered over its
 connection (see [Client sessions](client-sessions.md)). It pairs an
@@ -160,7 +160,7 @@ registration fails, the session closes the document it just opened. A close
 that fails leaves the document open until the session ends.
 
 Saving is a separate boundary: a session's `save`
-([`ModelService`](../../packages/core/src/langium/model-service/model-service.ts))
+([`ClientSession`](../../packages/core/src/langium/model-service/client-session.ts))
 builds through the update path, then
 [`AstDocumentManager.save`](../../packages/core/src/documents/ast-document-manager.ts)
 writes the current store text to disk only when it differs. A successful model

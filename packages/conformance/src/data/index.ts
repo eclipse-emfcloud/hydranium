@@ -101,7 +101,7 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
     * check disposes `driver` and needs its `dispose` to close the connection as
     * the server sees it. Absent, the check reports skipped.
     */
-   readonly connectSibling?: (
+   readonly attach?: (
       driver: DataConformanceDriver<TTransfer, TDiagnostic>
    ) => DataConformanceDriver<TTransfer, TDiagnostic> | Promise<DataConformanceDriver<TTransfer, TDiagnostic>>;
    /** Suite title override. Default `'conformance: data-server'`. */
@@ -219,7 +219,7 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic = TransferDiagnostic>(
    options: DataConformanceOptions<TTransfer, TDiagnostic>
 ): ConformanceCheck[] {
-   const { connect, connectSibling, expectsProjects } = options;
+   const { connect, attach, expectsProjects } = options;
    const checks: ConformanceCheck[] = [];
 
    // Split from `waitForReady` so a failure names which of the two broke.
@@ -481,10 +481,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
 
       checks.push({
          title: `ending a connection ends its sessions ${tag}`,
-         skipReason: connectSibling
-            ? undefined
-            : 'options supply no `connectSibling` (a second connection to the same server outlives the ended one)',
-         body: connectSibling
+         skipReason: attach ? undefined : 'options supply no `attach` (a second connection to the same server outlives the ended one)',
+         body: attach
             ? async () => {
                  const driver = await connect();
                  let driverOpen = true;
@@ -493,7 +491,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     await seed(driver, model);
                     const clientId = await startSession(driver, 'conformance-session');
                     await driver.proxy.openModelDocument({ uri: model.uri, clientId });
-                    const sibling = await connectSibling(driver);
+                    const sibling = await attach(driver);
                     try {
                        driverOpen = false;
                        driver.dispose();

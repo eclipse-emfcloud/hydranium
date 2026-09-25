@@ -16,9 +16,10 @@
  */
 
 import {
+   type AstDocument,
    type ClientSession,
+   type ClientSessionFactory,
    DefaultClientSession,
-   DefaultModelService,
    DocumentNotOpenError,
    DuplicateClientIdError,
    LANGUAGE_CLIENT_ID,
@@ -26,7 +27,8 @@ import {
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
+import { asSnapshotVersion, isConflictError, type TransferElement, type TransferUpdateArgs } from '@hydranium/protocol';
+import { type CancellationToken } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -139,7 +141,7 @@ describe('ModelService.createSession', () => {
       const primitive = (): Promise<void> => untyped.open(uri, 'compact');
 
       expect(typeof primitive).toBe('function');
-      expect(harness.shared.workspace.TextDocuments.openOptions(uri, session.clientId)).toEqual({ mode: 'compact' });
+      expect(session.openOptions(uri)).toEqual({ mode: 'compact' });
    });
 });
 
@@ -401,7 +403,7 @@ describe('ClientSession open and close', () => {
       await session.open(uri, { mode: 'first' });
       await session.open(uri, { mode: 'second' });
 
-      expect(harness.shared.workspace.TextDocuments.openOptions(uri, session.clientId)).toEqual({ mode: 'first' });
+      expect(session.openOptions(uri)).toEqual({ mode: 'first' });
    });
 
    // Both finishing orders, because each alone is satisfied by a rule other
@@ -417,7 +419,38 @@ describe('ClientSession open and close', () => {
 
       await Promise.all([session.open(uri, { mode: 'first' }), session.open(uri, { mode: 'second' })]);
 
-      expect(harness.shared.workspace.TextDocuments.openOptions(uri, session.clientId)).toEqual({ mode: 'first' });
+      expect(session.openOptions(uri)).toEqual({ mode: 'first' });
+   });
+
+   it('drops the options with the open, so a later open without any has none', async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.open(uri, { mode: 'first' });
+      await session.close(uri);
+      expect(session.openOptions(uri)).toBeUndefined();
+      await session.open(uri);
+
+      expect(session.openOptions(uri)).toBeUndefined();
+   });
+
+   it("shows a listener of the store's open the options of that open, not of an earlier one", async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri, { mode: 'first' });
+      await session.close(uri);
+      const heard: unknown[] = [];
+      harness.shared.workspace.TextDocuments.onDidOpen(event => {
+         if (event.clientId === session.clientId) {
+            heard.push(session.openOptions(uri));
+         }
+      });
+
+      await session.open(uri, { mode: 'second' });
+      await session.close(uri);
+      await session.open(uri);
+
+      expect(heard).toEqual([{ mode: 'second' }, undefined]);
    });
 
    it('withOpen leaves open a document a plain open of the session is still opening', async () => {
@@ -651,35 +684,83 @@ describe('ClientSession.create races', () => {
 });
 
 describe('deletion closes a session open', () => {
-   it('closes the open of a deleted file, so a later write fails as not open', async () => {
+   it('closes the open of a deleted file, so a later write fails as not open and its options are gone', async () => {
       const { harness, uri, path } = await boot();
       const session = harness.shared.model.ModelService.createSession('form');
-      await session.open(uri);
+      await session.open(uri, { mode: 'compact' });
 
       rmSync(path(FILE));
       await harness.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
 
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+      expect(session.openOptions(uri)).toBeUndefined();
       await expect(session.update({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
    });
 });
 
-describe('DefaultModelService.newSession', () => {
+describe('a session keeps no options of an open that ended', () => {
+   class InspectingSession extends DefaultClientSession<AstNode> {
+      heldOptions(): string[] {
+         return [...this.openOptionsByUri.keys()];
+      }
+   }
+
+   async function bootInspecting(): Promise<{ session: InspectingSession; uri: string; harness: OrderFlowHarness; filePath: string }> {
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new InspectingSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const harness = scratch.harness;
+      const uri = scratch.workspace.uri(FILE);
+      const session = harness.shared.model.ModelService.createSession('form') as InspectingSession;
+      await session.open(uri, { mode: 'compact' });
+      return { session, uri, harness, filePath: scratch.workspace.resolve(FILE) };
+   }
+
+   it('drops the options when the session closes the document', async () => {
+      const { session, uri } = await bootInspecting();
+
+      await session.close(uri);
+
+      expect(session.heldOptions()).toEqual([]);
+   });
+
+   it('drops the options when the store ends the open for a deleted file', async () => {
+      const { session, uri, harness, filePath } = await bootInspecting();
+
+      rmSync(filePath);
+      await harness.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+      expect(session.heldOptions()).toEqual([]);
+   });
+});
+
+describe('ClientSessionFactory', () => {
    class LabelledSession extends DefaultClientSession<AstNode> {
       describe(): string {
          return `${this.label} (${this.clientId})`;
       }
    }
 
-   class LabellingModelService extends DefaultModelService<AstNode> {
-      protected override newSession(clientId: string, label: string): LabelledSession {
-         return new LabelledSession(this, this.sessionWriter(), this.services, clientId, label);
-      }
-   }
-
-   it('builds the handle while registration stays in createSession', async () => {
+   it('builds the handle of createSession while registration stays in createSession', async () => {
       scratch = await makeScratchWorkspaceHarness(undefined, {
-         extraSharedModules: [{ model: { ModelService: (services: ServerSharedServices) => new LabellingModelService(services) } }]
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new LabelledSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
       });
       const models = scratch.harness.shared.model.ModelService;
 
@@ -690,14 +771,46 @@ describe('DefaultModelService.newSession', () => {
       expect(() => models.createSession('form', 'form-1')).toThrow(DuplicateClientIdError);
    });
 
-   it('frees the id again when building the handle throws', async () => {
-      class FailingModelService extends DefaultModelService<AstNode> {
-         protected override newSession(): LabelledSession {
-            throw new Error('no handle');
+   it('writes a save through the session subclass’s own update', async () => {
+      class CountingSession extends DefaultClientSession<AstNode> {
+         updates = 0;
+         protected override updateDocument(
+            args: Omit<TransferUpdateArgs<TransferElement>, 'clientId'>,
+            cancelToken?: CancellationToken
+         ): Promise<AstDocument<AstNode>> {
+            this.updates++;
+            return super.updateDocument(args, cancelToken);
          }
       }
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new CountingSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const uri = scratch.workspace.uri(FILE);
+      const session = scratch.harness.shared.model.ModelService.createSession('form') as CountingSession;
+      await session.open(uri);
+
+      await session.save({ uri, model: EDITED, basedOn: 'anything' });
+
+      expect(session.updates).toBe(1);
+      expect(readFileSync(scratch.workspace.resolve(FILE), 'utf8')).toBe(EDITED);
+   });
+
+   it('frees the id again when building the handle throws', async () => {
+      const failing: ClientSessionFactory = {
+         create: () => {
+            throw new Error('no handle');
+         }
+      };
       scratch = await makeScratchWorkspaceHarness(undefined, {
-         extraSharedModules: [{ model: { ModelService: (services: ServerSharedServices) => new FailingModelService(services) } }]
+         extraSharedModules: [{ model: { ClientSessionFactory: () => failing } }]
       });
       const models = scratch.harness.shared.model.ModelService;
 

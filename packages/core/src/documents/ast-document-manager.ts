@@ -214,27 +214,11 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
    /** Apply `text` as `clientId`'s edit. Resolves to the resulting text-document version. */
    update(uri: string, text: string, clientId: string): Promise<number>;
    /**
-    * Write the document's current text to disk through the URI's disk queue.
-    * The text is taken when this is called, so saves of one URI land in the
+    * Write the document's current text to disk through `FileSystemTaskQueue`.
+    * The text is taken when this is called, so saves of one file land in the
     * order they were called.
     */
    save(uri: string, clientId: string): Promise<void>;
-
-   /**
-    * Run `task` once every disk task already queued for `uri` has settled, and
-    * before any queued after it. Every server-side disk access of a file that
-    * must not interleave with its saves goes through here: two writes of one
-    * file that bypass it can land in either order, and the older text then
-    * stays on disk. Tasks of different URIs run in parallel. A task that has
-    * nothing to do still resolves once the tasks before it have settled.
-    *
-    * A task must not await a build, nor a save, another disk task or an open
-    * of a document no client has open, all of the same URI: a build's
-    * integrity repair queues its own write here and the build waits for it,
-    * and such an open reads the file here, so a task waiting on either queued
-    * behind it never resolves, which wedges the URI's queue for good.
-    */
-   queueDiskTask<T>(uri: string, task: () => Promise<T>): Promise<T>;
 
    onUpdate(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
    onSave(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void | Promise<void>): Disposable;
@@ -272,13 +256,6 @@ export class DefaultAstDocumentManager<
 > implements AstDocumentManager<TAst, TDiagnostic> {
    protected lastUpdate?: UpdateInfo;
 
-   /**
-    * Per canonical URI, the settling of the last disk task queued for it; the
-    * next task chains behind it. An entry leaves once its URI's queue is idle.
-    * Kept outside the workspace lock, whose `write` cancels the write before
-    * it: a save cancelled that way reports success for text it never wrote.
-    */
-   protected readonly diskQueues = new Map<CanonicalUri, Promise<void>>();
    /** Per canonical URI, the newest save queued for it, which {@link coalesceSaves} lets older queued saves defer to. */
    protected readonly newestSaves = new Map<CanonicalUri, Promise<void>>();
    protected readonly coalesceSaves: boolean;
@@ -463,12 +440,15 @@ export class DefaultAstDocumentManager<
       // else. The open is per `(uri, clientId)` and the last-close revert counts down
       // to it, so skipping it lets the first client's close tear down a document
       // another client is still reading. A document waiting out the revert grace
-      // is still loaded, so opening it attaches too, and keeps its text.
+      // is still loaded: a client lost from it within its own grace attaches and
+      // keeps its text, and for any other client the attach releases it, so the
+      // open reads the file.
+      if (this.isOpen(args.uri)) {
+         this.textDocuments.attachClient(args.uri, args.clientId);
+      }
       if (!this.isOpen(args.uri)) {
          const textDocument = await this.createDocumentFromTextOrFileSystem(args.uri, args.languageId, args.version, args.text);
          this.textDocuments.notifyDidOpenTextDocument({ textDocument }, args.clientId);
-      } else {
-         this.textDocuments.attachClient(args.uri, args.clientId);
       }
       return Disposable.create(() => this.close(args));
    }
@@ -503,7 +483,7 @@ export class DefaultAstDocumentManager<
     * callers don't need to pass it — the manager owns content and version
     * sequencing.
     *
-    * The text is taken synchronously, before the save waits in the URI's disk
+    * The text is taken synchronously, before the save waits in the file's task
     * queue; the compare and the write run in the queue. Taken later, a save
     * that waits behind another writes whatever the store holds when its turn
     * comes, edits made after the call included, and announces that text under
@@ -528,7 +508,7 @@ export class DefaultAstDocumentManager<
       }
       const text = document.getText();
       let supersededBy: Promise<void> | undefined;
-      const saved: Promise<void> = this.queueDiskTask(canonical, async () => {
+      const saved: Promise<void> = this.services.workspace.FileSystemTaskQueue.enqueue(canonical, async () => {
          const newest = this.newestSaves.get(canonical);
          if (this.coalesceSaves && newest !== saved) {
             supersededBy = newest;
@@ -546,7 +526,7 @@ export class DefaultAstDocumentManager<
       return saved;
    }
 
-   /** Write `text` to `uri` unless the file already holds it, then announce the save. Runs inside the URI's disk queue. */
+   /** Write `text` to `uri` unless the file already holds it, then announce the save. Runs inside the file's task queue. */
    protected async writeSave(uri: CanonicalUri, text: string, clientId: string): Promise<void> {
       if (!(await this.matchesDisk(uri, text))) {
          await this.tracer.with(uri).time(
@@ -557,22 +537,6 @@ export class DefaultAstDocumentManager<
          );
       }
       this.textDocuments.notifyDidSaveTextDocument({ textDocument: TextDocumentIdentifier.create(uri), text }, clientId);
-   }
-
-   queueDiskTask<T>(uri: string, task: () => Promise<T>): Promise<T> {
-      const key = this.uriPolicy.canonicalUri(uri);
-      const result = (this.diskQueues.get(key) ?? Promise.resolve()).then(task);
-      const settled = result.then(
-         () => undefined,
-         () => undefined
-      );
-      this.diskQueues.set(key, settled);
-      void settled.then(() => {
-         if (this.diskQueues.get(key) === settled) {
-            this.diskQueues.delete(key);
-         }
-      });
-      return result;
    }
 
    /**
@@ -612,13 +576,15 @@ export class DefaultAstDocumentManager<
       version = 0,
       text?: string
    ): Promise<TextDocumentItem> {
-      // Read in the disk queue: a read beside a queued save of the file returns
-      // the text from before it, and the document then opens on that.
+      // Read in the file's task queue: a read beside a queued save of the file
+      // returns the text from before it, and the document then opens on that.
       return {
          uri,
          languageId,
          version,
-         text: text ?? (await this.queueDiskTask(uri, () => this.fileSystemProvider.readFile(UriUtils.toUri(uri))))
+         text:
+            text ??
+            (await this.services.workspace.FileSystemTaskQueue.enqueue(uri, () => this.fileSystemProvider.readFile(UriUtils.toUri(uri))))
       };
    }
 

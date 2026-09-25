@@ -67,16 +67,10 @@ function serializerOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>):
    return hook.serialize.bind(hook);
 }
 
-/** Read the two option-derived fields off a model service. */
-function optionsOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>): {
-   serializeBuilds: boolean;
-   slowUpdateWarnMs: number | undefined;
-} {
-   const fields = service as unknown as {
-      serializeBuilds: { value: boolean };
-      slowUpdateWarn?: { value: number };
-   };
-   return { serializeBuilds: fields.serializeBuilds.value, slowUpdateWarnMs: fields.slowUpdateWarn?.value };
+/** Read the option-derived field off a model service. */
+function optionsOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>): { serializeBuilds: boolean } {
+   const fields = service as unknown as { serializeBuilds: { value: boolean } };
+   return { serializeBuilds: fields.serializeBuilds.value };
 }
 
 function bundleWith(languages?: readonly StubLanguageDescriptor[]): ServerSharedServices {
@@ -130,13 +124,7 @@ describe('makeStubModelService — the serialize seam, against the real ModelSer
 describe('makeStubModelService — option forwarding, against the real ModelService', () => {
    it('derives the same option-gated state as a real ModelService given the same options', () => {
       const services = bundleWith();
-      const cases: readonly (ModelServiceOptions | undefined)[] = [
-         undefined,
-         {},
-         { serializeBuilds: false },
-         { serializeBuilds: true, slowUpdateWarnMs: 42 },
-         { slowUpdateWarnMs: 0 }
-      ];
+      const cases: readonly (ModelServiceOptions | undefined)[] = [undefined, {}, { serializeBuilds: false }, { serializeBuilds: true }];
 
       for (const options of cases) {
          const real = new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, options);
@@ -146,17 +134,10 @@ describe('makeStubModelService — option forwarding, against the real ModelServ
 
       // Two services that both derived nothing would agree above, so pin the
       // documented defaults and one non-default on the real side.
-      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services))).toEqual({
-         serializeBuilds: true,
-         slowUpdateWarnMs: undefined
-      });
+      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services))).toEqual({ serializeBuilds: true });
       expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, { serializeBuilds: false }))).toEqual({
-         serializeBuilds: false,
-         slowUpdateWarnMs: undefined
+         serializeBuilds: false
       });
-      expect(
-         optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, { slowUpdateWarnMs: 0 })).slowUpdateWarnMs
-      ).toBe(0);
    });
 
    it('resolves ready on a tree that binds no WorkspaceManager, like the real service', async () => {

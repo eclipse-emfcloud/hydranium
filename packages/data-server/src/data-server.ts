@@ -1265,8 +1265,9 @@ export class DataServer<
     * Mark each document the store releases after its last close (see
     * {@link pendingRevertBroadcasts}). A release, not the close itself: a
     * document whose last client lost its connection is released only once
-    * the revert grace runs out, and not at all when a client opens it again
-    * within the grace.
+    * the revert grace runs out, or when another client opens it meanwhile, and
+    * not at all when a client lost from it opens it again within its own
+    * grace.
     */
    protected subscribeToTextDocumentCloses(): void {
       this.disposables.push(

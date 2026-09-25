@@ -165,7 +165,7 @@ function recordSaves(services: ReturnType<typeof createOrderFlowServices>, uri: 
 async function readBackDone(services: ReturnType<typeof createOrderFlowServices>, uri: string, reported: () => boolean): Promise<void> {
    await waitFor(reported, { timeoutMs: 500 });
    await tick(0);
-   await services.shared.workspace.AstDocumentManager.queueDiskTask(uri, async () => undefined);
+   await services.shared.workspace.FileSystemTaskQueue.enqueue(uri, async () => undefined);
    await tick(20);
 }
 

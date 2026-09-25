@@ -270,7 +270,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             resolve([]);
          }, this.willSaveGateMs);
          try {
-            void this.services.workspace.AstDocumentManager.queueDiskTask(uri, async () => {
+            void this.services.workspace.FileSystemTaskQueue.enqueue(uri, async () => {
                cap.dispose();
                resolve([]);
                const bound = clock.setTimer(() => {

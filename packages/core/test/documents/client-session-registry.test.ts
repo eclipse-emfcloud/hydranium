@@ -109,21 +109,4 @@ describe('ClientSessionRegistry — opens', () => {
       expect(() => registry.addOpen(A, 's')).toThrow(SessionClosedError);
       expect(registry.isOpen(A)).toBe(false);
    });
-
-   it('keeps open options per (client, uri) and drops them with the open', () => {
-      const registry = new ClientSessionRegistry();
-      registry.addOpen(A, 'one');
-      registry.addOpen(A, 'two');
-
-      registry.setOpenOptions(A, 'one', { mode: 'compact' });
-      registry.setOpenOptions(B, 'one', { mode: 'ignored' });
-
-      expect(registry.openOptions(A, 'one')).toEqual({ mode: 'compact' });
-      expect(registry.openOptions(A, 'two')).toBeUndefined();
-      expect(registry.openOptions(B, 'one')).toBeUndefined();
-
-      registry.removeOpen(A, 'one');
-      registry.addOpen(A, 'one');
-      expect(registry.openOptions(A, 'one')).toBeUndefined();
-   });
 });

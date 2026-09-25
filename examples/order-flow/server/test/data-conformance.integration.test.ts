@@ -268,7 +268,7 @@ runDataConformance<OrderFlowTransfer>({
    },
    // A second connection to the same services tree, which is what "the same
    // server" is in process.
-   connectSibling: driver => driveConnection(servicesOf.get(driver)!),
+   attach: driver => driveConnection(servicesOf.get(driver)!),
    languages: [domainFixture, processFixture, layoutFixture],
    // `OrderFlowProjectManager` turns every `.domain` project header in the
    // workspace into a `Project`, so this head genuinely has a project tier and

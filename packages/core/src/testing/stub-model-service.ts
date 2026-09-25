@@ -53,8 +53,8 @@ export type StubModelService<
  * `makeTestServices` wires this stub automatically.
  *
  * `options` are the framework {@link ModelServiceOptions}, forwarded verbatim, so
- * a test can exercise an option-gated code path (`serializeBuilds`, the slow-warn
- * threshold) without hand-rolling a subclass just to reach the constructor.
+ * a test can exercise an option-gated code path (`serializeBuilds`) without
+ * hand-rolling a subclass just to reach the constructor.
  *
  * Adopters that need richer override behaviour — the framework's own extension
  * surface is {@link ModelService.rewriteModel} alongside `serialize` — should

@@ -13,8 +13,8 @@
  * The observable is the built document's text, which is what every read and
  * every integrity pass sees.
  *
- * The grace cases rebind the text store with `revertGraceMs`, the one way a
- * server turns it on.
+ * Most grace cases rebind the text store with a short `revertGraceMs`, the
+ * one way a server sets it, so that a test can outlast it.
  */
 
 import { HydraniumTextDocuments, INTEGRITY_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, type ServerSharedServices } from '@hydranium/core';
@@ -114,7 +114,7 @@ describe('revert grace', () => {
       expect(services.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(CLEAN);
    });
 
-   it('keeps a lost session’s unsaved text for a session that opens the document within the grace', async () => {
+   it('keeps a lost session’s unsaved text for a session under its id that opens the document within the grace', async () => {
       const { services, uri, built } = await boot(GRACE_MS);
       const models = services.shared.model.ModelService;
       const textDocuments = services.shared.workspace.TextDocuments;
@@ -123,13 +123,31 @@ describe('revert grace', () => {
       const written = await lost.update({ uri, model: EDITED, basedOn: 'anything' });
 
       lost.dispose('lost');
-      const back = models.createSession('form');
+      const back = models.createSession('form', lost.clientId);
       await back.open(uri);
       await outlastRevert();
 
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
       expect(textDocuments.version(uri)).toBe(written.version);
       expect(built()).toBe(EDITED);
+   });
+
+   it('opens a lost session’s document from disk for another session within the grace', async () => {
+      const { services, uri, built } = await boot(GRACE_MS);
+      const models = services.shared.model.ModelService;
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const lost = models.createSession('form');
+      await lost.open(uri);
+      const written = await lost.update({ uri, model: EDITED, basedOn: 'anything' });
+
+      lost.dispose('lost');
+      const other = models.createSession('form');
+      await other.open(uri);
+
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.version(uri)).toBeGreaterThan(written.version);
+      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      await waitFor(() => built() === CLEAN, { timeoutMs: 2000 });
    });
 
    it('writes no unsaved text of a document waiting out the grace to disk when integrity repairs it', async () => {
@@ -211,6 +229,26 @@ describe('revert grace over the data head', () => {
       expect(built()).toBe(EDITED);
    });
 
+   it('hands a data session back its unsaved edits under the default grace, and reports nothing', async () => {
+      const { services, uri, built } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect(services);
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+
+      head.server.lose();
+      expect(textDocuments.isRevertPending(uri)).toBe(true);
+      head = connect(services);
+      await session.connected();
+
+      expect(reported).toEqual([]);
+      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(built()).toBe(EDITED);
+   });
+
    it('broadcasts a lost session’s revert once, when the grace runs out, to a connection that watches nothing', async () => {
       const { services, uri, built } = await boot(GRACE_MS);
       const head = connect(services);
@@ -230,7 +268,28 @@ describe('revert grace over the data head', () => {
       expect(observer.events.find(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID)?.document.uri).toBe(uri);
    });
 
-   it('broadcasts no revert for a lost session’s document another session opens within the grace', async () => {
+   it('opens a lost session’s document from disk for a session of another connection within the grace, and broadcasts the revert', async () => {
+      const { services, uri, built } = await boot(GRACE_MS);
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const head = connect(services);
+      const other = connect(services);
+      const watcher = connect(services);
+      const reverts = (): number => watcher.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID).length;
+      await head.proxy.createSession({ clientId: 'form#lost' });
+      const onDisk = await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, basedOn: 'anything' });
+
+      head.server.lose();
+      await other.proxy.createSession({ clientId: 'tree#other' });
+      const opened = await other.proxy.openModelDocument({ uri, clientId: 'tree#other' });
+
+      expect(opened.root).toEqual(onDisk.root);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      await waitFor(() => built() === CLEAN && reverts() > 0, { timeoutMs: 2000 });
+   });
+
+   it('broadcasts no revert for a lost session’s document it opens again within the grace', async () => {
       const { services, uri } = await boot(GRACE_MS);
       const head = connect(services);
       const observer = connect(services);
@@ -239,11 +298,11 @@ describe('revert grace over the data head', () => {
       await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, basedOn: 'anything' });
 
       head.server.lose();
-      await observer.proxy.createSession({ clientId: 'form#back' });
-      await observer.proxy.openModelDocument({ uri, clientId: 'form#back' });
+      await observer.proxy.createSession({ clientId: 'form#lost' });
+      await observer.proxy.openModelDocument({ uri, clientId: 'form#lost' });
       // A build the reopen's write drives, which a revert mark left behind
       // by the close would take for the revert.
-      await observer.proxy.updateModelDocument({ uri, clientId: 'form#back', model: CLEAN, basedOn: 'anything' });
+      await observer.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: CLEAN, basedOn: 'anything' });
       await outlastRevert();
 
       expect(observer.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID)).toEqual([]);

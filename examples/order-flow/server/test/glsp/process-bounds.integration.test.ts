@@ -20,9 +20,9 @@
  *
  * Every assertion goes through the real write path — a recording command derives
  * a patch from the transfer projection, the reconciling state persists it via
- * `ModelService.update`, and the document is re-parsed — so the serialized text
- * is checked alongside the AST. A layout mutation the serializer could not
- * express would fail here rather than at runtime.
+ * its client session's `updateAll`, and the document is re-parsed — so the
+ * serialized text is checked alongside the AST. A layout mutation the
+ * serializer could not express would fail here rather than at runtime.
  */
 
 import 'reflect-metadata';

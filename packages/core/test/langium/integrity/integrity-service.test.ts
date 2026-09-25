@@ -426,7 +426,7 @@ interface CorrectionsHarness {
    fileSystemProvider: RecordingFileSystemProvider;
    /** URIs passed to the (stubbed) document builder's reconciliation methods. */
    builderCalls: { reparse: string[]; reparseAndRelink: string[] };
-   /** URIs of the tasks queued through the (stubbed) document manager's disk queue. */
+   /** URIs of the tasks queued through the (stubbed) file-system task queue. */
    diskTasks: string[];
 }
 
@@ -458,8 +458,8 @@ function makeCorrectionsProbe(
                   builderCalls.reparseAndRelink.push(document.uri.toString());
                }
             },
-            AstDocumentManager: {
-               queueDiskTask: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {
+            FileSystemTaskQueue: {
+               enqueue: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {
                   diskTasks.push(uri);
                   runningDiskTasks++;
                   try {

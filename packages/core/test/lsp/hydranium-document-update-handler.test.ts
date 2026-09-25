@@ -25,6 +25,8 @@ import {
    type HydraniumDocumentUpdateHandlerOptions
 } from '../../src/lsp/hydranium-document-update-handler.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
+import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
+import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
 interface DispatchCall {
@@ -112,8 +114,8 @@ interface ServicesStubOptions {
    loggedDebug?: string[];
    /** Drives `TextDocuments.onDidSaveInLanguageClient`. */
    languageClientSaved?: Emitter<{ uri: string }>;
-   /** Drives `AstDocumentManager.queueDiskTask`. Defaults to a per-URI chain, as the real manager queues. */
-   queueDiskTask?: <T>(uri: string, task: () => Promise<T>) => Promise<T>;
+   /** Drives `FileSystemTaskQueue.enqueue`. Defaults to the real queue. */
+   enqueue?: <T>(uri: string, task: () => Promise<T>) => Promise<T>;
    /** Clock bound on the `Clock` slot. Pass a `makeFakeClock()` to drive the debounce timer; defaults to a real `SystemClock`. */
    clock?: Clock;
    /**
@@ -133,17 +135,9 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
    const markNextReasonCalls = opts.markNextReasonCalls;
    const loggedErrors = opts.loggedErrors;
    const loggedWarnings = opts.loggedWarnings;
-   const diskQueues = new Map<string, Promise<unknown>>();
-   const queueDiskTask =
-      opts.queueDiskTask ??
-      (<T>(uri: string, task: () => Promise<T>): Promise<T> => {
-         const result = (diskQueues.get(uri) ?? Promise.resolve()).then(task);
-         diskQueues.set(
-            uri,
-            result.catch(() => undefined)
-         );
-         return result;
-      });
+   const fileSystemTaskQueue = opts.enqueue
+      ? { enqueue: opts.enqueue }
+      : new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() } });
    // `DefaultDocumentUpdateHandler` constructor subscribes to
    // `services.lsp.LanguageServer.onInitialize` / `onInitialized` — stub
    // both as no-op subscribers so construction completes.
@@ -175,7 +169,7 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
             onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event
          },
          SelfSaveRegistry: { isRegistered: selfSaveRegistered },
-         AstDocumentManager: { queueDiskTask },
+         FileSystemTaskQueue: fileSystemTaskQueue,
          // The handler reads the file mtime through the FileSystemProvider
          // seam, so these tests need no filesystem at all; the Node provider's
          // own stat behaviour is covered by its own tests.
@@ -645,7 +639,7 @@ describe('HydraniumDocumentUpdateHandler — editor saves', () => {
       const languageClientSaved = new Emitter<{ uri: string }>();
       const services = makeServicesStub({ clock: makeFakeClock(), languageClientSaved, ...opts });
       const handler = new HydraniumDocumentUpdateHandler(services, handlerOptions);
-      const queue = <T>(task: () => Promise<T>): Promise<T> => services.workspace.AstDocumentManager.queueDiskTask(SAVED_URI, task);
+      const queue = <T>(task: () => Promise<T>): Promise<T> => services.workspace.FileSystemTaskQueue.enqueue(SAVED_URI, task);
       return { handler, queue, editorSaved: () => languageClientSaved.fire({ uri: SAVED_URI }) };
    }
 
@@ -754,7 +748,7 @@ describe('HydraniumDocumentUpdateHandler — editor saves', () => {
       const loggedErrors: string[] = [];
       const { handler } = makeHandler({
          loggedErrors,
-         queueDiskTask: () => {
+         enqueue: () => {
             throw new Error('queue gone');
          }
       });

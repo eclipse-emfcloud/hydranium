@@ -34,9 +34,9 @@
  * # Why this needs an LSP connection
  *
  * Booted headless (`createOrderFlowServices` +
- * `initializeWorkspaceProgrammatically`, driving `ModelService.update`) both
- * cases below pass **with `dedupeDiagnostics` disabled**, so a headless version
- * of this suite asserts nothing. The reason is stated outright in
+ * `initializeWorkspaceProgrammatically`, driving a client session's `update`)
+ * both cases below pass **with `dedupeDiagnostics` disabled**, so a headless
+ * version of this suite asserts nothing. The reason is stated outright in
  * `rebuildCanonical`: *"the bridge only exists under a `Connection`, so the
  * facade stands in for it headless."* Headless there is exactly ONE build of the
  * URI, no race, and nothing to duplicate. **A headless adopter test cannot reach

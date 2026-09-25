@@ -128,7 +128,7 @@ describe('order-flow serializers — one per grammar, routed per URI', () => {
 
    it('serializes the transfer projection byte-identically to the AST', async () => {
       // The data head's write path (`DataServer.updateModelDocument` →
-      // `ModelService.update` → `modelToText`) hands the serializer a TRANSFER model,
+      // `ClientSession.update` → `modelToText`) hands the serializer a TRANSFER model,
       // where every cross-reference is a plain string id rather than a Langium
       // `Reference`. The serializers here replace the generic property walker with
       // hand-written per-`$type` emitters, so nothing about that shape is exercised by

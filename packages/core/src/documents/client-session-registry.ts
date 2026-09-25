@@ -13,20 +13,23 @@ import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
 import { DuplicateClientIdError, SessionClosedError } from './client-session-errors.js';
 
 /**
- * What a client session states about one of its opens, kept per
- * `(session, uri)` for as long as that open lasts.
+ * What a client session states about one of its opens, kept by the session
+ * and readable only while that open lasts.
  *
  * Any object type: an adopter declares the fields its own open path reads and
- * passes that type as a session's `TOpenOptions`. Stored per open rather than
+ * passes that type as a session's `TOpenOptions`. Kept per open rather than
  * per document, so two sessions opening one document with different options
  * each keep their own.
  */
 export type OpenOptions = object;
 
 /**
- * `'closing'` covers the span in which a session's opens are being closed. The
- * id is still taken then, and the session can open nothing more, so an open
- * issued from a close listener cannot outlive the session that made it.
+ * A session is `'live'` from its registration, which is synchronous, so no
+ * state comes before it. `'closing'` covers the span in which the session's
+ * opens are being closed: the id is still taken, and the session can open
+ * nothing more, so an open issued from a close listener cannot outlive the
+ * session that made it. An id with no state has no session: it was never
+ * registered, or has closed.
  */
 export type ClientSessionState = 'live' | 'closing';
 
@@ -73,15 +76,14 @@ export const RESERVED_CLIENT_IDS: readonly string[] = [...FRAMEWORK_CLIENT_IDS, 
 export class ClientSessionRegistry {
    protected readonly sessions = new Map<string, ClientSessionState>();
    protected readonly clientsByUri = new Map<CanonicalUri, Set<string>>();
-   /** Each client's opens, with the options it opened them with. */
-   protected readonly opensByClient = new Map<string, Map<CanonicalUri, OpenOptions | undefined>>();
+   protected readonly opensByClient = new Map<string, Set<CanonicalUri>>();
    protected readonly reservedIds: ReadonlySet<string> = new Set(RESERVED_CLIENT_IDS);
    protected readonly sessionClosedEmitter = new Emitter<ClientSessionClosedEvent>();
    /**
     * The documents whose last open closed with a lost connection and whose
-    * revert is deferred, each with the timer that runs it. An open of such a
-    * document cancels its timer, which is what keeps the unsaved text for a
-    * client that comes back.
+    * revert is deferred, each with the timer that runs it. Any open of such a
+    * document cancels its timer; the store decides whether the opener keeps the
+    * unsaved text.
     */
    protected readonly pendingReverts = new Map<CanonicalUri, Disposable>();
 
@@ -132,7 +134,7 @@ export class ClientSessionRegistry {
    }
 
    /**
-    * Record that `clientId` opened `uri`, with no options. Returns `false` when
+    * Record that `clientId` opened `uri`. Returns `false` when
     * it already had it open, in which case nothing changes.
     *
     * Throws {@link SessionClosedError} for a session that is closing.
@@ -146,10 +148,10 @@ export class ClientSessionRegistry {
          return false;
       }
       if (!opens) {
-         opens = new Map();
+         opens = new Set();
          this.opensByClient.set(clientId, opens);
       }
-      opens.set(uri, undefined);
+      opens.add(uri);
       let clients = this.clientsByUri.get(uri);
       if (!clients) {
          clients = new Set();
@@ -193,25 +195,12 @@ export class ClientSessionRegistry {
 
    /** The URIs `clientId` has open, in the order it opened them. */
    opensOf(clientId: string): CanonicalUri[] {
-      return [...(this.opensByClient.get(clientId)?.keys() ?? [])];
+      return [...(this.opensByClient.get(clientId) ?? [])];
    }
 
    /** Every document open in at least one client, with the clients that have it open. */
    openDocuments(): Array<{ readonly uri: CanonicalUri; readonly clients: string[] }> {
       return [...this.clientsByUri].map(([uri, clients]) => ({ uri, clients: [...clients] }));
-   }
-
-   /** The options `clientId` opened `uri` with, or `undefined` when it gave none or does not have it open. */
-   openOptions(uri: CanonicalUri, clientId: string): OpenOptions | undefined {
-      return this.opensByClient.get(clientId)?.get(uri);
-   }
-
-   /** Replace the options of an existing open. Does nothing when `clientId` does not have `uri` open. */
-   setOpenOptions(uri: CanonicalUri, clientId: string, options: OpenOptions | undefined): void {
-      const opens = this.opensByClient.get(clientId);
-      if (opens?.has(uri)) {
-         opens.set(uri, options);
-      }
    }
 
    /** Record `timer` as the deferred revert of `uri`. */
@@ -232,8 +221,9 @@ export class ClientSessionRegistry {
 
    /**
     * Forget every session, open and deferred revert without announcing
-    * anything. Subscriptions stay, so a listener registered before the clear
-    * hears the sessions that end after it.
+    * anything, for a test double that resets between tests. Subscriptions
+    * stay, so a listener registered before the clear hears the sessions that
+    * end after it.
     */
    clear(): void {
       this.sessions.clear();

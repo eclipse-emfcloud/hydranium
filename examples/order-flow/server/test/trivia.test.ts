@@ -965,7 +965,7 @@ describe('trivia preservation', () => {
       expect(await writeBack(makeServices())).toContain('// leads the whole file');
    });
 
-   it('carries trivia through ModelService.update, the form-editor write path', async () => {
+   it('carries trivia through ClientSession.update, the form-editor write path', async () => {
       // The wiring, not the service: `modelToText` serializes the transfer model
       // and reattaches. Without it this file comes back with its explanatory
       // header gone and `task Pay writes …` split across two lines.
@@ -988,9 +988,9 @@ describe('trivia preservation', () => {
       // re-serialized output. A built document carries computed properties the
       // output — freshly parsed, never built — does not, so a comparison over own
       // keys finds every candidate different and matches nothing. Driving this
-      // through `ModelService.update` is what puts a built document on the source
-      // side; every other rename case here parses its document from a string and
-      // so cannot see the difference.
+      // through a client session's `update` is what puts a built document on
+      // the source side; every other rename case here parses its document from
+      // a string and so cannot see the difference.
       const { harness, workspace } = await makeScratchWorkspaceHarness(scratch =>
          scratch.write('orders/rename.process', ['process Renamable for Order {', '   // about Pay', '   task Pay', '}', ''].join('\n'))
       );
