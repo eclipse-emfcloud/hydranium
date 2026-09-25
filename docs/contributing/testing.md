@@ -253,7 +253,7 @@ rather than failing the test, and Vitest does not report it. Read the log.
      `getOrCreateDocument` all read from there, so a parse-only fixture breaks
      the moment anything rebuilds.
    - **`runUpdatePipeline(shared, args)`** (`@hydranium/core/testing`) — drive
-     the rewrite chain plus the serializer the way `ModelService.update` does,
+     the rewrite chain plus the serializer the way a session's `update` does,
      with both resolved per URI. Hand-chaining the rewrites instead snapshots
      the registry, and a chain that has fallen behind still compiles and passes.
    - **`makeFakeDataPort` / `makeCapturingDataClient`**

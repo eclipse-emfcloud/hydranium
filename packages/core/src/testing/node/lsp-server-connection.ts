@@ -301,7 +301,7 @@ export interface LspServerConnection extends Harness {
     *
     * **An egress push is asynchronous well past the call that triggers it** —
     * the framework coalesces per URI and drives the sync from a build-phase
-    * settle, so a `ModelService.update` resolves long before the push is sent.
+    * settle, so a session's `update` resolves long before the push is sent.
     * Record `appliedEdits.length`, drive the edit, then await this; reading the
     * capture on the line after the write proves nothing.
     */

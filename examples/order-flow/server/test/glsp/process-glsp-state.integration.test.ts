@@ -130,7 +130,11 @@ async function openDiagram(): Promise<OpenDiagram> {
       layoutText: () => documents.getDocument(URI.parse(harness.state.layoutUri))?.textDocument.getText(),
       documentVersion: () => processDocument().textDocument.version,
       foreignWrite: async text => {
-         await services.shared.model.ModelService.update({ uri: rootUri, model: text, clientId: 'text-editor', basedOn: 'anything' });
+         // A repeat open changes nothing, so every write can open first.
+         const models = services.shared.model.ModelService;
+         const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
+         await editor.open(rootUri);
+         await editor.update({ uri: rootUri, model: text, basedOn: 'anything' });
       },
       apply: async action => {
          const before = harness.actions.length;

@@ -9,8 +9,8 @@
 
 // Round-trips each grammar through its serializer: parse the source, serialize
 // the model, compare the text. The serializer is the parser's inverse, so this
-// is the assertion that keeps `ModelService.update` / `save` writing files the
-// language server can read back.
+// is the assertion that keeps a client session's `update` / `save` writing
+// files the language server can read back.
 //
 // The transfer case is the one that catches the mistake worth catching.
 // `ModelService.modelToText` short-circuits only a RAW STRING, so a typed model

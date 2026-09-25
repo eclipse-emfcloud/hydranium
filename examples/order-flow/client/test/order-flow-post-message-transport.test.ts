@@ -61,6 +61,7 @@ import { createMessageConnection } from 'vscode-jsonrpc/node';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OrderFlowPropertiesModel } from '../src/data/order-flow-properties-model';
 import { ClonePipeEnd } from './testing/clone-pipe';
+import { thirdPartyWrite } from './testing/third-party-write.js';
 
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
 
@@ -219,7 +220,7 @@ describe('order-flow data head over a structured-clone hop', () => {
 
       const foreign = (await currentRoot(uri)) as ProcessModel;
       const server = await session!.connected();
-      await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: { ...foreign, name: 'RenamedByOther' }, basedOn: 'anything' });
+      await thirdPartyWrite(server, THIRD_PARTY, uri, { ...foreign, name: 'RenamedByOther' });
 
       await waitFor(() => model!.fields.find(field => field.name === 'name')?.value === 'RenamedByOther', {
          message: 'no server-initiated update crossed the clone boundary'
@@ -237,7 +238,7 @@ describe('order-flow data head over a structured-clone hop', () => {
 
          const foreign = (await currentRoot(uri)) as ProcessModel;
          const server = await session!.connected();
-         await server.updateModelDocument({ uri, clientId: THIRD_PARTY, model: { ...foreign, subject: 'LineItem' }, basedOn: 'anything' });
+         await thirdPartyWrite(server, THIRD_PARTY, uri, { ...foreign, subject: 'LineItem' });
 
          expect(await pinned.setField('name', 'Fulfilment')).toEqual({ status: 'merged' });
 

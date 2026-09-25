@@ -402,9 +402,9 @@ src/language-server/bookstore-serializer.ts
 //
 // Without it every structured write fails: the framework's default binding at
 // `services.serializer.Serializer` THROWS, because a concrete syntax is
-// language knowledge no framework can derive. `ModelService.update` / `save`,
-// the data head's `saveModelDocument` and a GLSP `SaveModelAction` all reach
-// it.
+// language knowledge no framework can derive. A client session's `update` /
+// `save`, the data head's `saveModelDocument` and a GLSP `SaveModelAction`
+// all reach it.
 //
 // `AbstractSerializer`'s generic property walk lays out FORMAT-structured
 // output — its YAML and JSON subclasses are what it exists for — and cannot
@@ -1212,8 +1212,8 @@ test/serialization.test.ts
 ==============================================================================
 // Round-trips each grammar through its serializer: parse the source, serialize
 // the model, compare the text. The serializer is the parser's inverse, so this
-// is the assertion that keeps `ModelService.update` / `save` writing files the
-// language server can read back.
+// is the assertion that keeps a client session's `update` / `save` writing
+// files the language server can read back.
 //
 // The transfer case is the one that catches the mistake worth catching.
 // `ModelService.modelToText` short-circuits only a RAW STRING, so a typed model

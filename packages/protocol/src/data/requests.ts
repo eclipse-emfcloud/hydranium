@@ -43,8 +43,8 @@ export interface GetProjectForUriArgs {
 /**
  * Update a document's content. Wire-side projection of the facade's
  * {@link TransferUpdateArgs}; structurally identical so the data-server RPC
- * handler can forward straight to the in-process `ModelService.update`
- * without an args mapping.
+ * handler can forward straight to the caller's session `update` without an
+ * args mapping.
  */
 export type TransferUpdateDocumentArgs<TTransfer> = TransferUpdateArgs<TTransfer>;
 

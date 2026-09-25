@@ -422,9 +422,10 @@ describe('the headless locale seam', () => {
  * needs a test that drives the append window deterministically rather than
  * waiting for load to open it.
  *
- * What it does add over the single-payload suites above: those read one publish,
- * and a write fans out several. A render that stopped covering a rebuild-driven
- * publish while still covering the first-open one would pass every one of them.
+ * What it does add over the suites above: those read the publish of a first
+ * open, and this one reads only what a write publishes once the opens have
+ * settled. A render that stopped covering a rebuild-driven publish while still
+ * covering the first-open one would pass every one of them.
  *
  * Needs a real connection for the same reason the dedupe suite does: headless
  * there is exactly ONE build of the URI and no second pass to race.
@@ -443,15 +444,14 @@ describe('rendering across a racing rebuild', () => {
 
    /**
     * Drive a write that provokes two builds and return EVERY message published
-    * for the URI as a result.
+    * for the URI as a result of it, and nothing the opens published.
     *
-    * Every payload, not the next one. A write fans out several publishes and the
-    * one carrying an appended diagnostic is not necessarily the one a
-    * `nextDiagnostics` wait samples — `LspServerConnection.diagnostics`
-    * documents the tool for a fan-out, which is to record the length before
-    * acting and read the tail.
+    * Every payload, not the next one: the one carrying an appended diagnostic
+    * is not necessarily the one a `nextDiagnostics` wait samples.
+    * `LspServerConnection.diagnostics` documents the tool, which is to record
+    * the length before acting and read the tail once the builds have settled.
     */
-   async function messagesAcrossRace(): Promise<{ messages: string[]; payloadCount: number }> {
+   async function messagesAcrossRace(): Promise<string[]> {
       scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-race-' });
       const workspace = scratch;
       let shared: OrderFlowSharedServices | undefined;
@@ -476,30 +476,41 @@ describe('rendering across a racing rebuild', () => {
       // document to react to. Without it the facade is the only builder and
       // there is no second build to race.
       booted.openDocument(uri, text, 'order-flow-domain');
+      const session = shared.model.ModelService.createSession('render-race', 'render-race');
+      await session.open(uri);
+
+      // The opens publish too, and a count taken before those publishes land
+      // lets their payloads pass for the write's. The first request returns
+      // only once the server has taken the didOpen, the read only once every
+      // build queued by then has finished (a write would cancel the one
+      // running), and the second request only once every publish sent before
+      // it has arrived.
+      const lock = shared.workspace.WorkspaceLock;
+      const settle = async (): Promise<void> => {
+         await booted.hover(uri, { line: 0, character: 0 });
+         await lock.read(() => undefined);
+         await booted.hover(uri, { line: 0, character: 0 });
+      };
+      await settle();
 
       const before = booted.diagnostics.length;
-      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'render-race', basedOn: 'anything' });
-      await booted.nextDiagnostics(uri);
-      // Let any FOLLOWING publish from the second build land too, or the tail
-      // holds only the first payload and an unrendered append escapes.
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await session.update({ uri, model: `${text}\n// touched\n`, basedOn: 'anything' });
+      // `update` resolves before the builds it queued publish.
+      await settle();
 
-      const payloads = booted.diagnostics.slice(before).filter(published => published.uri === uri);
-      return {
-         messages: payloads.flatMap(published => published.diagnostics.map(sentence)),
-         payloadCount: payloads.length
-      };
+      return booted.diagnostics
+         .slice(before)
+         .filter(published => published.uri === uri)
+         .flatMap(published => published.diagnostics.map(sentence));
    }
 
-   it('publishes no unrendered diagnostic, in any payload of the fan-out', async () => {
-      const { messages, payloadCount } = await messagesAcrossRace();
+   it('publishes no unrendered diagnostic, in any payload the write puts out', async () => {
+      const messages = await messagesAcrossRace();
 
-      // The premise, asserted rather than assumed: a write really does fan out
-      // more than one publish here. At one payload this suite would be a slower
-      // copy of the single-publish ones above and its extra reach imaginary.
-      expect(payloadCount).toBeGreaterThan(1);
-      // Non-vacuous next: the intended error has to be in there at all, or an
-      // empty fan-out satisfies the absence assertion while proving nothing.
+      // Non-vacuous first: the write's own publish has to carry the intended
+      // error, or an empty tail satisfies the absence assertion while proving
+      // nothing. The tail starts once the opens have settled, so none of their
+      // payloads can stand in for it.
       expect(messages).toContain(RENDERED_UNRESOLVED);
       // The discriminating read. An entry appended after the pass carries
       // Langium's English, so the English is what a leak looks like — a count
@@ -558,7 +569,9 @@ describe('the applyEdit undo label', () => {
       booted.openDocument(uri, text, ProcessLanguageMetaData.languageId);
 
       const pending = booted.nextAppliedEdit(uri);
-      await shared.model.ModelService.update({ uri, model: `${text}\n// touched\n`, clientId: 'edit-label', basedOn: 'anything' });
+      const session = shared.model.ModelService.createSession('edit-label', 'edit-label');
+      await session.open(uri);
+      await session.update({ uri, model: `${text}\n// touched\n`, basedOn: 'anything' });
       return (await pending).params.label;
    }
 

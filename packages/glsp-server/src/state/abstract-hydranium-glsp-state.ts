@@ -103,19 +103,18 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * `undefined` for GLSP's placeholder client, and when the id was held by
     * another participant, in which case the diagram does not load.
     *
-    * A write through `ModelService` under `clientId` acts as this session: it
-    * writes only a document the session has open and opens nothing. A one-shot
-    * write to a document outside the write set goes through
+    * Every write of the diagram goes through this session, which writes only a
+    * document it has open and opens nothing. A one-shot write to a document
+    * outside the write set goes through
     * {@link ClientSession.withOpen}, and a document the diagram brings into
     * existence through {@link ClientSession.create}.
     */
    modelSession?: ClientSession<AstNode>;
 
    /**
-    * {@link modelSession}, or a throw without one. A write without a session
-    * must fail: the diagram never loaded or has ended, and a write under
-    * `clientId` would act for whoever holds that id, or open the document for
-    * an id nothing closes.
+    * {@link modelSession}, or a throw without one: the diagram never loaded or
+    * has ended. Looking `clientId` up through `ModelService.getSession` instead
+    * would write as whichever participant holds that id.
     */
    protected requireModelSession(): ClientSession<AstNode> {
       if (!this.modelSession) {
@@ -282,8 +281,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * until the next one, then re-read from the document store.
     *
     * Threaded by `HydraniumGlspRecordingCommand` into
-    * {@link updateSourceModel} so the downstream `ModelService.update` /
-    * `.save` call gates against what the command was authored on. See
+    * {@link updateSourceModel} so the downstream session `update` / `save`
+    * gates against what the command was authored on. See
     * `@hydranium/protocol#ConflictError` for the detection contract.
     *
     * **This, not a number read at write time, is what a write must be gated
@@ -595,9 +594,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * intersection at the recording-command call site.
     *
     * `basedOn` is the snapshot version taken at command start by
-    * `HydraniumGlspRecordingCommand.execute`. Adopters that route through
-    * `ModelService.update` / `.save` forward it as the args' `basedOn` field;
-    * adopters whose write path doesn't go through `ModelService` ignore it.
+    * `HydraniumGlspRecordingCommand.execute`. Adopters that write through the
+    * diagram's session forward it as the args' `basedOn` field; adopters whose
+    * write path doesn't go through the session ignore it.
     * `'anything'` when the writer is not the recording command (an external
     * storage refresh, an undo replaying a recorded patch), which is a write
     * authored against no particular server version.

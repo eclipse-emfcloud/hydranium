@@ -144,7 +144,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     * Diagnostics as of the last snapshot.
     *
     * Trustworthy straight after {@link open}, which reads twice for exactly
-    * that reason, and straight after a write: `ModelService.update` awaits the
+    * that reason, and straight after a write: a session's `update` awaits the
     * whole build — validation included — before its phase wait, and a wait for
     * an already-reached phase resolves at once. The bound is the build's
     * default validation categories, so a check an adopter registered as `slow`

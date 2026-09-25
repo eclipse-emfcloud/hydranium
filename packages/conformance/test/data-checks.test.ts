@@ -36,9 +36,9 @@ describe('buildDataChecks', () => {
       expect(skipped[0].skipReason).toContain('`connectSibling`');
    });
 
-   it('plans four server-level checks plus fourteen grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, connectSibling, languages: [fixture] })).toHaveLength(18);
-      expect(buildDataChecks({ connect, connectSibling, languages: [fixture, fixture] })).toHaveLength(32);
+   it('plans four server-level checks plus fifteen grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, connectSibling, languages: [fixture] })).toHaveLength(19);
+      expect(buildDataChecks({ connect, connectSibling, languages: [fixture, fixture] })).toHaveLength(34);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -53,7 +53,7 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, connectSibling, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(18);
+      expect(checks).toHaveLength(19);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
@@ -72,7 +72,7 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, connectSibling, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(18);
+      expect(checks).toHaveLength(19);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
@@ -98,12 +98,12 @@ describe('buildDataChecks', () => {
       );
       // getProjects shape, getProjects non-empty, createSession and
       // waitForReady separately, plus valid-envelope, invalid-diagnostics, the
-      // diagnostic-params check, the session write, save, connection-end, close
-      // and create checks
-      // and the folder-URI reference query — none of which needs an edit. The
-      // cascade and set checks need one, so they are not among them even
-      // though this fixture supplies a `dependent`.
-      expect(runnable).toHaveLength(13);
+      // diagnostic-params check, the session write, save, unregistered-id,
+      // connection-end, close and create checks and the folder-URI reference
+      // query — none of which needs an edit. The cascade and set checks need
+      // one, so they are not among them even though this fixture supplies a
+      // `dependent`.
+      expect(runnable).toHaveLength(14);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

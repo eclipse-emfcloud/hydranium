@@ -155,7 +155,7 @@ const GLSP_HEAD_DOCUMENT = `${WORKSPACE_ROOT_URI}/orders/fulfillment.process`;
  * reads it out of the same Langium store the GLSP head wrote into.
  *
  * The values are the AST's, not the file's: a `ChangeBoundsOperation` goes
- * through `ModelService.update`, which rewrites the in-memory text document and
+ * through the diagram's client session, which rewrites the in-memory text document and
  * rebuilds. Nothing reaches the seeded filesystem until an explicit save.
  */
 const LAYOUT_DOCUMENT = `${WORKSPACE_ROOT_URI}/orders/fulfillment.layout`;

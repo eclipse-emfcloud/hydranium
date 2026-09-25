@@ -200,9 +200,9 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('refuses to write without a session, rather than writing under a client id nothing closes', async () => {
-         // A flat write under an id that is not a live session opens the
-         // document for that id, and nothing ever closes it.
+      it('refuses to write without a session, rather than writing under an id it does not hold', async () => {
+         // Without a session the state has nothing to write through; looking
+         // the id up would write as whoever holds it.
          const harness = makeHarness();
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));

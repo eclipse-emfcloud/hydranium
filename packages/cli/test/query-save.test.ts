@@ -27,7 +27,10 @@ interface StubCalls {
    sequence: string[];
 }
 
-function makeStubProxy(calls: StubCalls, options: { failSave?: boolean; failClose?: boolean } = {}): DataServerProtocol<FakeRoot> {
+function makeStubProxy(
+   calls: StubCalls,
+   options: { failSave?: boolean; failEnd?: boolean; noFile?: boolean; failCreate?: string; failOpen?: string } = {}
+): DataServerProtocol<FakeRoot> {
    return {
       async getModelDocument(args) {
          calls.getModelDocument.push(args);
@@ -49,18 +52,32 @@ function makeStubProxy(calls: StubCalls, options: { failSave?: boolean; failClos
          });
       },
       async openModelDocument(args) {
-         calls.sequence.push(`open ${args.clientId} ${args.uri} ${args.text ?? ''}`);
+         calls.sequence.push(`open ${args.clientId} ${args.uri}`);
+         if (options.failOpen) {
+            throw new Error(options.failOpen);
+         }
          return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' });
       },
-      async closeModelDocument(args) {
-         calls.sequence.push(`close ${args.clientId} ${args.uri}`);
-         if (options.failClose) {
-            throw new Error('close refused');
+      async createSession(args) {
+         calls.sequence.push(`session ${args.clientId}`);
+      },
+      async closeSession(args) {
+         calls.sequence.push(`end ${args.clientId}`);
+         if (options.failEnd) {
+            throw new Error('end refused');
          }
       },
-      createSession: () => Promise.reject(new Error('not exercised')),
-      closeSession: () => Promise.reject(new Error('not exercised')),
-      createModelDocument: () => Promise.reject(new Error('not exercised')),
+      async createModelDocument(args) {
+         calls.sequence.push(`create ${args.clientId} ${args.uri} ${args.text}`);
+         if (options.failCreate) {
+            throw new Error(options.failCreate);
+         }
+         if (!options.noFile) {
+            throw new Error(`Cannot create ${args.uri}: the file exists`);
+         }
+         return TransferDocument.create<FakeRoot>(args.uri, 0, { $type: 'FakeRoot', name: 'created' });
+      },
+      closeModelDocument: () => Promise.reject(new Error('not exercised')),
       updateModelDocuments: () => Promise.reject(new Error('not exercised')),
       watchModelDocument: () => Promise.reject(new Error('not exercised')),
       unwatchModelDocument: () => Promise.reject(new Error('not exercised')),
@@ -111,9 +128,7 @@ describe('runSave', () => {
       expect(parsed.root.name).toBe('name:literal');
    });
 
-   it('opens the document with the content before saving, and closes it afterwards, also when the save fails', async () => {
-      // Opened with the content as its seed, so a file that does not exist yet
-      // is created from it rather than read from disk.
+   it('saves through a session that opens the document first and ends afterwards, also when the save fails', async () => {
       const saved = emptyCalls();
       await runSave({
          serverCommand: 'unused',
@@ -133,23 +148,55 @@ describe('runSave', () => {
          })
       ).rejects.toThrow('disk refused');
 
+      // Created only when the server finds no file; an existing one is opened.
       const expected = [
-         'open hydranium-cli file:///workspace/A.fake name:literal',
+         'session hydranium-cli',
+         'create hydranium-cli file:///workspace/A.fake name:literal',
+         'open hydranium-cli file:///workspace/A.fake',
          'save hydranium-cli file:///workspace/A.fake',
-         'close hydranium-cli file:///workspace/A.fake'
+         'end hydranium-cli'
       ];
       expect(saved.sequence).toEqual(expected);
       expect(failed.sequence).toEqual(expected);
    });
 
-   it("reports a failed save's error, not the failing close after it", async () => {
+   it('creates the document from the content when there is no file to open', async () => {
+      const calls = emptyCalls();
+      await runSave({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/New.fake',
+         content: 'name:literal',
+         write: () => undefined,
+         __proxyForTest: makeStubProxy(calls, { noFile: true })
+      });
+      expect(calls.sequence).toEqual([
+         'session hydranium-cli',
+         'create hydranium-cli file:///workspace/New.fake name:literal',
+         'save hydranium-cli file:///workspace/New.fake',
+         'end hydranium-cli'
+      ]);
+   });
+
+   it('reports why the create failed as well, when the open after it fails too', async () => {
       await expect(
          runSave({
             serverCommand: 'unused',
             uri: 'file:///workspace/A.fake',
             content: 'name:literal',
             write: () => undefined,
-            __proxyForTest: makeStubProxy(emptyCalls(), { failSave: true, failClose: true })
+            __proxyForTest: makeStubProxy(emptyCalls(), { failCreate: 'create refused by policy', failOpen: 'open refused' })
+         })
+      ).rejects.toThrow(/open refused[\s\S]*create refused by policy/);
+   });
+
+   it("reports a failed save's error, not the failing session end after it", async () => {
+      await expect(
+         runSave({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            content: 'name:literal',
+            write: () => undefined,
+            __proxyForTest: makeStubProxy(emptyCalls(), { failSave: true, failEnd: true })
          })
       ).rejects.toThrow('disk refused');
    });

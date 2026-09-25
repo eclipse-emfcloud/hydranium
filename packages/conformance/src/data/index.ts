@@ -21,6 +21,7 @@ import {
    isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
+   isSessionClosedError,
    ReferenceSource,
    SyntheticStep,
    TransferDocument,
@@ -45,11 +46,12 @@ import { type LanguageFixture, resolveDeferred, resolveModel } from '../model.js
  * `events`, `builds` and `dispose`) with NO adapter. `extends Harness` gives the kit the
  * universal `dispose()` teardown.
  *
- * The kit seeds documents purely through the proxy: `updateModelDocument` is
- * an upsert (it creates a cold URI from the payload, not just modifies an
- * existing one), so the slice needs no services-level open hook. The adopter
- * only has to stand the server up READY in its `connect` — see
- * {@link DataConformanceOptions.connect}.
+ * The kit seeds documents purely through the proxy, as client sessions: it
+ * registers one with `createSession`, opens the document, or creates it with
+ * `createModelDocument` when there is no file to open, and writes it. So the
+ * head under test must implement sessions, and the slice needs no
+ * services-level open hook. The adopter only has to stand the server up READY
+ * in its `connect` — see {@link DataConformanceOptions.connect}.
  */
 export interface DataConformanceDriver<
    TTransfer extends TransferElement,
@@ -106,26 +108,72 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
    readonly suiteTitle?: string;
 }
 
-/** Client id the kit seeds/edits documents under (the originating author). */
-const AUTHOR = 'conformance-author';
-/** Client id the kit subscribes under — distinct from {@link AUTHOR} so the echo is recognisable. */
+/** Client id the kit subscribes under; a watch needs no session. */
 const SUBSCRIBER = 'conformance-subscriber';
-/**
- * Client id for a write made BEFORE any subscription exists. Distinct from
- * {@link AUTHOR} so an event caused by it is recognisable: a head that fans
- * notifications out regardless of its subscription table is otherwise
- * indistinguishable from one that honours the table, since both deliver
- * something for the post-subscribe write.
- */
-const SEEDER = 'conformance-seeder';
 
 /**
  * A fresh session id per check. A fixed one would be refused as a duplicate
  * by a head whose `connect` reuses one server across checks, whenever an
  * earlier check failed before ending its session.
  */
-function sessionId(): string {
-   return `conformance-session#${globalThis.crypto.randomUUID()}`;
+function sessionId(label = 'conformance-session'): string {
+   return `${label}#${globalThis.crypto.randomUUID()}`;
+}
+
+/** Register a session under a fresh id labelled `label`, and answer the id. */
+async function startSession<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   label: string
+): Promise<string> {
+   const clientId = sessionId(label);
+   await driver.proxy.createSession({ clientId, label });
+   return clientId;
+}
+
+/**
+ * Create `model` for the session `clientId`, then open it, since a fixture may
+ * name a document that exists nowhere but in the kit. A failed create is
+ * dropped when the open succeeds, so a head whose create is broken fails only
+ * the create check; an open that fails reports both failures.
+ */
+async function openOrCreate<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   clientId: string,
+   model: { readonly uri: string; readonly text: string }
+): Promise<void> {
+   const created = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
+   const opened = await rejectionOf(driver.proxy.openModelDocument({ uri: model.uri, clientId }));
+   if (opened !== undefined) {
+      throw new Error(`Could not seed ${model.uri}: ${String(opened)}; creating it failed with ${String(created)}`, { cause: opened });
+   }
+}
+
+/**
+ * Write `model` to its URI under a new session labelled `label`, and answer the
+ * session's id. The session keeps the document open until the driver is
+ * disposed: the kit writes nothing to disk, so closing it would revert the
+ * document to what disk holds.
+ */
+async function seed<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   model: { readonly uri: string; readonly text: string },
+   label = 'conformance-seeder'
+): Promise<string> {
+   const clientId = await startSession(driver, label);
+   await openOrCreate(driver, clientId, model);
+   await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' });
+   return clientId;
+}
+
+/** A new session labelled `label` with `uri` open, for a write after the seed; answers its id. */
+async function openAs<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   uri: string,
+   label = 'conformance-author'
+): Promise<string> {
+   const clientId = await startSession(driver, label);
+   await driver.proxy.openModelDocument({ uri, clientId });
+   return clientId;
 }
 
 /**
@@ -241,8 +289,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       body: async () => {
          const driver = await connect();
          try {
-            const clientId = sessionId();
-            await driver.proxy.createSession({ clientId, label: 'conformance' });
+            const clientId = await startSession(driver, 'conformance-session');
             const duplicate = await rejectionOf(driver.proxy.createSession({ clientId }));
             assert.ok(isDuplicateClientIdError(duplicate), `a second createSession under a live id was not refused: ${String(duplicate)}`);
             await driver.proxy.closeSession({ clientId });
@@ -283,7 +330,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // Resolved AFTER `connect`, which is the whole point of allowing a
                // thunk: the fixture may name a workspace `connect` just created.
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               await seed(driver, model);
                // `includeDiagnostics` for the same reason the invalid check
                // passes it: a synchronous read settles at the integrity-settled
                // phase, so an empty array without it can mean "validation has
@@ -318,7 +365,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(invalid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               await seed(driver, model);
                // Diagnostics are a validation-phase product; a synchronous read settles at the
                // integrity-settled phase by default, so request validation explicitly here.
                // Safe despite `includeDiagnostics` waiting rather than forcing a build: the
@@ -337,7 +384,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(invalid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               await seed(driver, model);
                const document = await driver.proxy.getModelDocument({ uri: model.uri, includeDiagnostics: true });
 
                // Conditional rather than fixture-driven, and deliberately so: what
@@ -368,9 +415,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
-               const clientId = sessionId();
-               await driver.proxy.createSession({ clientId });
+               await seed(driver, model);
+               const clientId = await startSession(driver, 'conformance-session');
                const write = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
 
                const unopened = await rejectionOf(driver.proxy.updateModelDocument(write));
@@ -393,9 +439,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
-               const clientId = sessionId();
-               await driver.proxy.createSession({ clientId });
+               await seed(driver, model);
+               const clientId = await startSession(driver, 'conformance-session');
                const save = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
 
                const unopened = await rejectionOf(driver.proxy.saveModelDocument(save));
@@ -405,6 +450,29 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                await driver.proxy.openModelDocument({ uri: model.uri, clientId });
                await driver.proxy.saveModelDocument(save);
                await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a document request under an id no session was registered for fails ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await seed(driver, model);
+               const clientId = sessionId('conformance-unregistered');
+
+               // Opened or written under an id that is no session, a document
+               // would stay open for a client whose end nothing ever reports.
+               const open = await rejectionOf(driver.proxy.openModelDocument({ uri: model.uri, clientId }));
+               assert.ok(isSessionClosedError(open), `a document opened under an unregistered id: ${String(open)}`);
+               const write = await rejectionOf(
+                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+               );
+               assert.ok(isSessionClosedError(write), `a document was written under an unregistered id: ${String(write)}`);
             } finally {
                driver.dispose();
             }
@@ -422,9 +490,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  let driverOpen = true;
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
-                    const clientId = sessionId();
-                    await driver.proxy.createSession({ clientId });
+                    await seed(driver, model);
+                    const clientId = await startSession(driver, 'conformance-session');
                     await driver.proxy.openModelDocument({ uri: model.uri, clientId });
                     const sibling = await connectSibling(driver);
                     try {
@@ -457,9 +524,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
-               const clientId = sessionId();
-               await driver.proxy.createSession({ clientId });
+               await seed(driver, model);
+               const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.openModelDocument({ uri: model.uri, clientId });
 
                await driver.proxy.closeSession({ clientId });
@@ -484,9 +550,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(valid);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
-               const clientId = sessionId();
-               await driver.proxy.createSession({ clientId });
+               await seed(driver, model);
+               const clientId = await startSession(driver, 'conformance-session');
                // A sibling of the valid model, so the new document's language
                // and project are the ones the fixture already exercises.
                const slash = model.uri.lastIndexOf('/') + 1;
@@ -534,7 +599,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        return;
                     }
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+                    await seed(driver, model);
 
                     // Default to the folder holding the valid model: a sibling of
                     // it is where a create flow would put the new file.
@@ -582,10 +647,10 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  const driver = await connect();
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+                    const seeder = await seed(driver, model);
                     await driver.proxy.updateModelDocument({
                        uri: model.uri,
-                       clientId: AUTHOR,
+                       clientId: seeder,
                        model: resolveDeferred(edit.to),
                        basedOn: 'anything'
                     });
@@ -606,14 +671,15 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  const driver = await connect();
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
+                    const seeder = await seed(driver, model);
+                    const author = await openAs(driver, model.uri);
 
                     // The version the gate is meant to accept, read BEFORE the
                     // foreign edit that supersedes it.
                     const stale = await driver.proxy.getModelDocument({ uri: model.uri });
                     await driver.proxy.updateModelDocument({
                        uri: model.uri,
-                       clientId: SEEDER,
+                       clientId: seeder,
                        model: resolveDeferred(edit.to),
                        basedOn: 'anything'
                     });
@@ -622,7 +688,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     await driver.proxy
                        .updateModelDocument({
                           uri: model.uri,
-                          clientId: AUTHOR,
+                          clientId: author,
                           model: model.text,
                           basedOn: stale.version
                        })
@@ -640,7 +706,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     const fresh = await driver.proxy.getModelDocument({ uri: model.uri });
                     await driver.proxy.updateModelDocument({
                        uri: model.uri,
-                       clientId: AUTHOR,
+                       clientId: author,
                        model: resolveDeferred(edit.to),
                        basedOn: fresh.version
                     });
@@ -671,10 +737,9 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     try {
                        const model = resolveModel(valid);
                        const other = resolveModel(dependent);
-                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
-                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text, basedOn: 'anything' });
-                       const clientId = sessionId();
-                       await driver.proxy.createSession({ clientId });
+                       await seed(driver, model);
+                       await seed(driver, other);
+                       const clientId = await startSession(driver, 'conformance-session');
                        const first = await driver.proxy.openModelDocument({ uri: model.uri, clientId });
                        const second = await driver.proxy.openModelDocument({ uri: other.uri, clientId });
                        const edited = resolveDeferred(edit.to);
@@ -721,18 +786,19 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     try {
                        const model = resolveModel(valid);
                        const other = resolveModel(dependent);
-                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
-                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text, basedOn: 'anything' });
+                       await seed(driver, model);
+                       await seed(driver, other);
                        // Watch ONLY the referenced document. The dependent is left
                        // unwatched on purpose: that is the state in which no other
                        // channel can report it, and the state a workspace view is in
                        // for every document it displays without opening.
                        await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+                       const author = await openAs(driver, model.uri);
                        const before = driver.builds.length;
 
                        await driver.proxy.updateModelDocument({
                           uri: model.uri,
-                          clientId: AUTHOR,
+                          clientId: author,
                           model: resolveDeferred(edit.to),
                           basedOn: 'anything'
                        });
@@ -763,26 +829,33 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  const driver = await connect();
                  try {
                     const model = resolveModel(valid);
-                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
+                    // The seeder's write comes BEFORE any subscription, under an id
+                    // distinct from the author's so an event it caused is
+                    // recognisable: a head that fans notifications out regardless
+                    // of its subscription table is otherwise indistinguishable from
+                    // one that honours the table, since both deliver something for
+                    // the post-subscribe write.
+                    const seeder = await seed(driver, model);
+                    const author = await openAs(driver, model.uri);
                     await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
                     await driver.proxy.updateModelDocument({
                        uri: model.uri,
-                       clientId: AUTHOR,
+                       clientId: author,
                        model: resolveDeferred(edit.to),
                        basedOn: 'anything'
                     });
-                    await waitFor(() => driver.events.some(event => event.sourceClientId === AUTHOR), {
+                    await waitFor(() => driver.events.some(event => event.sourceClientId === author), {
                        message: `no onDocumentUpdated event for ${model.uri} after the post-subscription update`
                     });
                     const last = driver.events[driver.events.length - 1];
                     assert.strictEqual(last.document.uri, model.uri);
-                    assert.strictEqual(last.sourceClientId, AUTHOR);
+                    assert.strictEqual(last.sourceClientId, author);
                     // Nothing from before the subscription. Waiting for the
                     // post-subscribe event first is what makes this provable: the
                     // two notifications share one ordered connection, so a seeding
                     // event that was ever going to arrive has arrived by now.
                     assert.ok(
-                       !driver.events.some(event => event.sourceClientId === SEEDER),
+                       !driver.events.some(event => event.sourceClientId === seeder),
                        'an onDocumentUpdated event arrived for the update made BEFORE watchModelDocument'
                     );
                  } finally {

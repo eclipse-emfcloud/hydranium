@@ -253,6 +253,15 @@ describe('order-flow cross-head write smoke (data socket in, LSP wire out)', () 
          // publish awaited below cannot be a leftover from the boot.
          expect(spawned().diagnostics).toHaveLength(0);
 
+         // A data write acts as a session that has the document open. The open
+         // rebuilds the document through the LSP head's text-change bridge, and
+         // its clean `.process` publish has to land before the write's window
+         // starts counting, or it answers for the write.
+         const beforeOpen = spawned().diagnostics.length;
+         await proxy.createSession({ clientId: 'cross-head-l4' });
+         await proxy.openModelDocument({ uri: domainUri, clientId: 'cross-head-l4' });
+         await awaitCascade(processUri, beforeOpen);
+
          // Recorded BEFORE the write, because a write fans out several publishes.
          const beforeWrite = spawned().diagnostics.length;
          await proxy.updateModelDocument({

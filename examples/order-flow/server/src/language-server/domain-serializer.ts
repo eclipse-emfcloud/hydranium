@@ -25,8 +25,8 @@ import {
 
 /**
  * Serializer for the `*.domain` language. Emits source that re-parses to an
- * equivalent AST, which is what makes `ModelService.update` / `save` write
- * files the language server can read back on the next build.
+ * equivalent AST, which is what makes a client session's `update` / `save`
+ * write files the language server can read back on the next build.
  *
  * Layout mirrors the grammar exactly:
  *

@@ -6,6 +6,11 @@ once the author label on its writes, the key it recognises its own echoes by,
 and the owner of every document it has open. A session opens what it works on,
 writes only what it has open, and ending it closes everything it has open.
 
+Every open and every write through `ModelService` goes through a session; the
+service itself has no open, update or save.
+The editor behind the LSP head is the one participant without a session: it
+opens and edits over its connection under the reserved id `language-client`.
+
 ## Starting a session
 
 <!-- snippet-preamble
@@ -33,24 +38,30 @@ its own participants. Once a session has ended its id is free again.
 as the caller whose id arrived with the request.
 
 To use a session class of your own, override `DefaultModelService.newSession`
-and narrow its return type. `createSession` registers the id and checks it
-before `newSession` runs, so an override cannot skip either.
+and narrow its return type, handing the session `this.sessionWriter()`.
+`createSession` registers the id and checks it before `newSession` runs, so an
+override cannot skip either.
+
+`DefaultModelService` keeps `open`, `close`, `update`, `updateAll` and `save`
+as protected methods, and `sessionWriter()` binds every session's opens and
+writes to them. Override one of them to change how every session opens or
+writes.
 
 ## The handle
 
 | Member | Meaning |
 | --- | --- |
 | `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
-| `create(uri, text)` | Create a document with `text` and open it; fails if the file exists or any client, the session included, has the URI open |
+| `create(uri, text)` | Create a document with `text` and open it; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
 | `close(uri)` | Close this session's open of `uri` |
 | `withOpen(uri, fn)` | Open, run `fn`, and close again when `fn` settles, unless the session already had `uri` open |
 | `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
-| `dispose()` | End the session: close everything it has open and free its id |
+| `dispose(cause?)` | End the session: close everything it has open and free its id |
 
-`update` and `save` take the same arguments as `ModelService.update` and
-`ModelService.save`, without `clientId`: the session supplies its own.
+`update` and `save` take `TransferUpdateArgs` and `TransferSaveArgs` without
+`clientId`: the session supplies its own.
 
 ## Open and close
 
@@ -101,19 +112,10 @@ document and every text applies, in one synchronous step. A `ConflictError` or
 `DocumentNotOpenError` for any document of the set is thrown before any text
 applies, so a set never ends half-written. It resolves to the rebuilt
 documents in the order given, and refuses a set that names one document twice.
-`ModelService.updateAll({ clientId, updates })` does the same for any client
-id: it opens nothing, so the id must have every URI open.
 
 The step relies on `AstDocumentManager.update` applying its text before its
 first await, as the framework's does. An override that awaits before applying
 lets another write land between two documents of the set.
-
-## Writes by a client id that is not a session
-
-`ModelService.update` and `ModelService.save` called with a client id that is
-not a live session keep their older behaviour. They open the document for that
-id first, and create it from the payload when no file exists; nothing closes
-that open until the caller does.
 
 ## Errors on the wire
 
@@ -154,11 +156,17 @@ code, and a message saying so, for an id the connection never registered.
 
 `closeSession({ clientId })` ends the session: it closes everything the session
 has open, drops its watches on the connection, and frees the id. When the
-connection closes, every session it registered ends the same way. Either way a
-later request under the id from that connection fails rather than opening
-anything, until the connection registers the id again. A request carrying an
-id that is not a registered session keeps the per-client behaviour described
-above.
+connection closes, every session it registered ends the same way, as lost
+rather than closed, which lets the documents it was the last to have open wait
+out the revert grace (see [Last close](#last-close)); so does a session another
+connection takes over with its resume token. Either way a later request under
+the id from that connection fails rather than opening anything, until the
+connection registers the id again.
+
+Every document request acts as a session, and one carrying an id the connection
+never registered fails with the `SessionClosedError` code. A head that serves
+the data protocol therefore implements sessions; the conformance kit seeds its
+fixtures through them. Watching needs no session.
 
 ## `DataSession`
 
@@ -219,10 +227,11 @@ had open. It does not send its unsaved edits again:
   edits; they stay open.
 
 A document that cannot be re-opened is reported with the message
-`DATA_SESSION_RESTORE_FAILED`, and forgotten. Where the server reverts a
-document on its last close, it does so at once on a lost connection too, so a
-session that was a document's only client loses its unsaved edits in any
-reconnect, and is told so.
+`DATA_SESSION_RESTORE_FAILED`, and forgotten. A session that was a document's
+only client keeps its unsaved edits across a reconnect only when it re-opens
+the document within the server's revert grace; with the default grace of `0`
+the document reverts when the connection is lost, and the session loses its
+unsaved edits and is told so.
 
 To hand out a subclass of `DataSession`, pass `sessionFactory` in the
 connection's options.
@@ -269,12 +278,7 @@ of the set through `openForWrite`; a state whose write set can name a document
 that does not exist yet overrides it to `create` the document, since the
 session's writes open nothing. The single-document states write through the session's
 `update`. Every state refuses to write without a session, so a write after the
-diagram ended fails instead of opening its document for an id nothing closes.
-
-Code of your own that calls `ModelService.update` or `save` under a live
-diagram's GLSP client id acts as that session too: it opens nothing, and fails
-with `DocumentNotOpenError` for a document the diagram does not have open. Write
-such a document through `state.modelSession.withOpen`, as below.
+diagram ended fails.
 
 A save persists the text of every document the session has open: the source
 document, the write set, and the documents that left the write set since the
@@ -325,10 +329,47 @@ resolves when that one lands, and rejects with its error when it fails. The
 framework binds the manager without options, so turning this on means binding
 `AstDocumentManager` to a `DefaultAstDocumentManager` constructed with them.
 
-The language server reverts a file to what is on disk when its last client
-closes it. The revert waits for the file's queue to drain first, so a save
-issued before the close is not reverted past; a client that opens the file
-meanwhile keeps its text, and no revert follows.
+## Last close
+
+When the last client with a document open closes it, the text store releases the
+document and rebuilds it from disk, for every head and for a server with no
+language server at all. The unsaved edits of its last client are discarded with
+it. The revert is decided under the workspace write lock, after the file's disk
+queue has drained, so a save issued before the close is not reverted past; a
+client that opens or re-creates the file meanwhile keeps its text, and no revert
+follows. A document with no file behind it, created and never saved, is removed
+from the workspace instead. Only `file:` documents revert; a document of another
+scheme the adopter loaded stays in the workspace as it is. A change the LSP head
+still has debounced for the document is dropped: a `file:` document's revert
+rebuilds it, and a document of another scheme keeps its last build.
+
+`TextDocuments.onDidCloseLastOpen` fires when a document is released, just
+before its revert.
+
+<!-- snippet-preamble
+import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/core';
+-->
+
+```ts
+const sharedModule = {
+   workspace: {
+      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs: 5_000 })
+   }
+};
+```
+
+`revertGraceMs` in `HydraniumTextDocumentsOptions` defers the revert of a
+document whose last close came from a lost connection: a data connection that
+closed, or a session a reconnecting client took over with its resume token.
+The store keeps the document, and its unsaved text, for that long. Any
+client's open within the grace, an editor attaching over the LSP head
+included, cancels the revert and inherits the unsaved text; a `create` of the
+URI is refused meanwhile. Meanwhile the document is open for no client, and
+`TextDocuments.isRevertPending(uri)` answers `true`; the integrity service
+treats it as open, so none of its unsaved text reaches disk. A close the
+client makes itself, `closeSession`, and a session's `dispose()` revert at
+once, whatever the grace. The default is `0`: the revert follows at once, and
+the document is released in the close itself rather than on a timer.
 
 ## `withOpen`
 
@@ -354,17 +395,20 @@ await session.withOpen(uri, () => session.save({ uri, model, basedOn }));
 
 ## `create`
 
-`create(uri, text)` fails when a file exists at `uri`, or when any client, the
-session itself included, has the URI open, including a client whose open lands
-while the create is under way: of two creates of one URI, at most one succeeds.
-Otherwise it opens a document holding `text` for the session. The document
-exists in memory only; it reaches disk with the first `save`.
+`create(uri, text)` fails when a file exists at `uri`, when the URI waits out
+the revert grace, or when any client, the session itself included, has the URI
+open, including a client whose open lands while the create is under way: of
+two creates of one URI, at most one succeeds. Otherwise it opens a document
+holding `text` for the session. The document exists in memory only; it reaches
+disk with the first `save`.
 
 ## Ending a session
 
 `dispose()` closes every document the session has open, each through the
 ordinary close, and frees the id, all before it returns. A second `dispose()`
-does nothing. Every other member throws `SessionClosedError` from then on,
+does nothing. `dispose('lost')` ends the session as its connection going away
+does, so each document it was the last to have open waits out the revert
+grace. Every other member throws `SessionClosedError` from then on,
 synchronously, before returning a promise.
 
 An `open` or `create` still in flight when the session ends is rejected with
@@ -393,9 +437,22 @@ beside them, `snapshot`, `getDocument`, `isOpen` and the `on…` subscriptions.
 ## One LSP connection per server process
 
 The LSP head is one participant with the fixed id `language-client`, which is
-why no session can take that id. Langium binds one LSP connection to a
-shared-services tree, and the language-client state the text store keeps is
-keyed by URI alone, so a server process serves one LSP connection.
+why no session can take that id. It is not a session: its opens come over the
+LSP connection, and an LSP disconnect ends the server process. Langium binds
+one LSP connection to a shared-services tree, and the language-client state
+the text store keeps is keyed by URI alone, so a server process serves one LSP
+connection.
+
+## Known limits
+
+- A browser tab that closes can await no save; `beforeunload` can only prompt.
+- A write in flight when the backend process is killed is lost. The Node file
+  system provider writes a staging file first, so after a crash disk holds the
+  old file or the new one, except for a hard-linked file, which is written in
+  place and can be torn. Nothing calls `fsync`, so a power loss is not covered.
+- With the default grace of `0`, a client that reconnects after a lost
+  connection finds its sole-client documents reverted: other sessions see the
+  revert, and the reconnecting session reports its unsaved edits lost.
 
 ## Logs
 

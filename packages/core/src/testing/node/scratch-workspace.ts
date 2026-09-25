@@ -14,7 +14,7 @@
  *
  * Any test that drives a **write path** needs one, and the reason is not
  * obvious enough to rediscover per suite. The writes themselves are usually
- * in-memory — `ModelService.update` goes to the multi-client text store, and
+ * in-memory — a session's `update` goes to the multi-client text store, and
  * only `save` reaches disk — but a rebuild also runs the integrity rules, and
  * their default `'silent'` sync mode persists repairs through
  * `WritableFileSystemProvider.writeFile`. So a write-path test pointed at a

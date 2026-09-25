@@ -12,19 +12,19 @@ import {
    type CanonicalUri,
    asSnapshotVersion,
    ConflictError,
-   Disposable as HydraniumDisposable,
    isConflictError,
    Logger,
-   type OpenModelArgs,
+   type TransferElement,
    type Tracer
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hydranium/langium';
-import { type Disposable } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
+import { DocumentNotOpenError } from '../../../src/documents/client-session-errors.js';
+import { type ClientSession } from '../../../src/langium/model-service/client-session.js';
 import { DefaultModelService, type ModelService } from '../../../src/langium/model-service/model-service.js';
 import { type ServerSharedServices } from '../../../src/langium/module.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
@@ -33,7 +33,8 @@ import {
    makeCapturingLogger,
    makeFakeAstNode,
    makeNoopSharedServices,
-   makeTestServices
+   makeTestServices,
+   type StubHydraniumTextDocuments
 } from '../../../src/testing/index.js';
 import { ReentrantWriteLockError, setWriteLockScope } from '../../../src/langium/workspace/write-lock-scope.js';
 import { nodeWriteLockScope } from '../../../src/node/write-lock-scope-node.js';
@@ -81,8 +82,30 @@ class DelayedModelService<TAst extends AstNode> extends DefaultModelService<TAst
    }
 }
 
+/**
+ * A session of `service` under `clientId` that has `uri` open in the stub
+ * store, as its own open would leave it. Writes open nothing, so a write test
+ * starts from here.
+ */
+function openSession<TTransfer extends TransferElement = TransferElement>(
+   service: ModelService<FakeRoot, AstDiagnostic, TTransfer>,
+   store: StubHydraniumTextDocuments,
+   clientId: string,
+   text = 'name: a\n',
+   uri = URI_A
+): ClientSession<FakeRoot, AstDiagnostic, TTransfer> {
+   const session = service.createSession('test', clientId);
+   if (store.get(uri)) {
+      store.attachClient(uri, clientId);
+   } else {
+      store.seedOpen(uri, text, clientId);
+   }
+   return session;
+}
+
 function buildService(slowUpdateWarnMs?: number): {
    service: DelayedModelService<FakeRoot>;
+   session: ClientSession<FakeRoot>;
    lines: CapturedLine[];
 } {
    const { logger, lines } = makeCapturingLogger();
@@ -95,14 +118,14 @@ function buildService(slowUpdateWarnMs?: number): {
       seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
    });
    const service = new DelayedModelService<FakeRoot>(bundle.services, { slowUpdateWarnMs });
-   return { service, lines };
+   return { service, session: openSession(service, bundle.textDocuments, 'test-client'), lines };
 }
 
 // Passing `model` as a string bypasses the framework's `serialize` path
 // (which reads from `services.ServiceRegistry`, absent from the test
 // bundle) — the slow-warn test only needs the update path to run, not
 // to actually serialise.
-const updateArgs = { uri: URI_A, clientId: 'test-client', model: 'name: a\n', basedOn: 'anything' as const };
+const updateArgs = { uri: URI_A, model: 'name: a\n', basedOn: 'anything' as const };
 
 describe('ModelService readiness gate', () => {
    /**
@@ -171,16 +194,16 @@ describe('ModelService readiness gate', () => {
 
 describe('ModelService slow-warn', () => {
    it('emits no warn line when `slowUpdateWarnMs` is undefined (default)', async () => {
-      const { service, lines } = buildService(undefined);
+      const { service, session, lines } = buildService(undefined);
       service.setDelay(10);
-      await service.update(updateArgs);
+      await session.update(updateArgs);
       expect(lines.filter(line => line.level === 'warn')).toEqual([]);
    });
 
    it('emits a warn line when elapsed exceeds the configured threshold', async () => {
-      const { service, lines } = buildService(5);
+      const { service, session, lines } = buildService(5);
       service.setDelay(20);
-      await service.update(updateArgs);
+      await session.update(updateArgs);
       const warns = lines.filter(line => line.level === 'warn');
       expect(warns).toHaveLength(1);
       expect(warns[0].message).toMatch(/Slow update: \d+ms ≥ 5ms/);
@@ -188,17 +211,17 @@ describe('ModelService slow-warn', () => {
    });
 
    it('does not warn when elapsed is below the configured threshold', async () => {
-      const { service, lines } = buildService(10_000);
+      const { session, lines } = buildService(10_000);
       // No delay — update should complete in single-digit milliseconds.
-      await service.update(updateArgs);
+      await session.update(updateArgs);
       expect(lines.filter(line => line.level === 'warn')).toEqual([]);
    });
 
    it('does not double-emit on the cancel path (warn fires once per update)', async () => {
-      const { service, lines } = buildService(5);
+      const { service, session, lines } = buildService(5);
       service.setDelay(20);
-      await service.update(updateArgs);
-      await service.update(updateArgs);
+      await session.update(updateArgs);
+      await session.update(updateArgs);
       expect(lines.filter(line => line.level === 'warn')).toHaveLength(2);
    });
 });
@@ -207,10 +230,10 @@ describe('ModelService update profiling', () => {
    afterEach(() => Logger.setLevel('info'));
 
    it('emits a per-stage profile breakdown of the update chain at debug level', async () => {
-      const { service, lines } = buildService(undefined);
+      const { session, lines } = buildService(undefined);
       Logger.setLevel('debug');
 
-      await service.update(updateArgs);
+      await session.update(updateArgs);
 
       const profileLines = lines.filter(line => line.message.includes('[profile model-update')).map(line => line.message);
       expect(profileLines.some(message => message.includes('serialize'))).toBe(true);
@@ -219,10 +242,10 @@ describe('ModelService update profiling', () => {
    });
 
    it('opens no profile session at the default info level', async () => {
-      const { service, lines } = buildService(undefined);
+      const { service, session, lines } = buildService(undefined);
       const profileSpy = vi.spyOn(service.boundTracer, 'profile');
 
-      await service.update(updateArgs);
+      await session.update(updateArgs);
 
       // The ALLOCATION, not the output. Two neighbouring mechanisms already
       // suppress the lines — the session re-checks the level in `report`, and
@@ -239,13 +262,14 @@ describe('ModelService update profiling', () => {
  * seeded into both LangiumDocuments (so `waitForDocumentState` can read
  * a fake document back) and TextDocuments (so `version(uri)` returns a
  * meaningful current version to compare against the caller's based-on
- * version). The service uses the default `rebuild` shape — the
- * gating-check sits ahead of the build pipeline so the delayed-rebuild
- * stub from the slow-warn tests isn't needed here.
+ * version), open for the session `editor-1`. The service keeps the default
+ * `rebuild`: the gate sits ahead of the build pipeline, so no delayed rebuild
+ * is needed.
  */
 function buildConflictBundle(currentVersion = 1): {
    bundle: ReturnType<typeof makeTestServices<FakeRoot>>;
    service: ModelService<FakeRoot>;
+   session: ClientSession<FakeRoot>;
 } {
    const bundle = makeTestServices<FakeRoot>({
       serialize: (_uri, root) => `name:${(root as unknown as FakeRoot).name}`,
@@ -253,7 +277,7 @@ function buildConflictBundle(currentVersion = 1): {
          { uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: currentVersion } }
       ]
    });
-   bundle.textDocuments.seedOpen(URI_A, `v${currentVersion}`, 'editor-1');
+   const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1', `v${currentVersion}`);
    // `seedOpen` always seeds at v1; bump by issuing change notifications
    // until the stub reaches `currentVersion`.
    for (let next = 2; next <= currentVersion; next++) {
@@ -262,16 +286,16 @@ function buildConflictBundle(currentVersion = 1): {
          'editor-1'
       );
    }
-   return { bundle, service: bundle.modelService };
+   return { bundle, service: bundle.modelService, session };
 }
 
 describe('ModelService conflict gating', () => {
    it('throws ConflictError when args.basedOn is stale relative to the current text-document version', async () => {
-      const { service } = buildConflictBundle(3);
-      const staleArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: asSnapshotVersion(2) };
+      const { session } = buildConflictBundle(3);
+      const staleArgs = { uri: URI_A, model: 'name:newer\n', basedOn: asSnapshotVersion(2) };
       let captured: unknown;
       try {
-         await service.update(staleArgs);
+         await session.update(staleArgs);
       } catch (error) {
          captured = error;
       }
@@ -282,37 +306,28 @@ describe('ModelService conflict gating', () => {
       expect(err.actualVersion).toBe(3);
    });
 
-   it('throws ConflictError for a based-on write to a URI the store has never seen', async () => {
-      // `update` is an upsert, so a cold URI is CREATED by this call — and a
-      // caller claiming to have based it on v5 has based it on nothing. Every
-      // other case here seeds an open document, so this is the only cover for
-      // the cold branch. It is deliberately insensitive to WHERE the gate reads
-      // its version: a cold URI answers 0 before the upsert's open and 0 after
-      // it, which is why moving that read left this behaviour intact.
-      const { service } = buildConflictBundle(3);
-      const coldArgs = { uri: 'file:///never-seen.fake', clientId: 'editor-1', model: 'name:cold\n', basedOn: asSnapshotVersion(5) };
-      let captured: unknown;
-      try {
-         await service.update(coldArgs);
-      } catch (error) {
-         captured = error;
-      }
-      expect(isConflictError(captured)).toBe(true);
-      expect((captured as ConflictError).actualVersion).toBe(0);
+   it('refuses a write to a URI no client has open, and creates nothing', async () => {
+      const { bundle, session } = buildConflictBundle(3);
+      const coldUri = 'file:///never-seen.fake';
+
+      await expect(session.update({ uri: coldUri, model: 'name:cold\n', basedOn: 'anything' })).rejects.toBeInstanceOf(
+         DocumentNotOpenError
+      );
+
+      expect(bundle.textDocuments.get(coldUri)).toBeUndefined();
+      expect(bundle.astDocumentManager.isOpen(coldUri)).toBe(false);
    });
 
    it("does not gate when args.basedOn is 'anything'", async () => {
-      const { bundle, service } = buildConflictBundle(3);
-      const forcedArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: 'anything' as const };
-      await service.update(forcedArgs);
+      const { bundle, session } = buildConflictBundle(3);
+      await session.update({ uri: URI_A, model: 'name:newer\n', basedOn: 'anything' });
       // The update applied — text-document changes recorded.
       expect(bundle.textDocuments.changes.find(change => change.text === 'name:newer\n')).toBeDefined();
    });
 
    it('proceeds when args.basedOn matches the current text-document version, returning the post-build AST envelope', async () => {
-      const { bundle, service } = buildConflictBundle(3);
-      const matchingArgs = { uri: URI_A, clientId: 'editor-1', model: 'name:matched\n', basedOn: asSnapshotVersion(3) };
-      const doc = await service.update(matchingArgs);
+      const { bundle, session } = buildConflictBundle(3);
+      const doc = await session.update({ uri: URI_A, model: 'name:matched\n', basedOn: asSnapshotVersion(3) });
       // Text-document store records the bumped version (3 → 4) — the stub
       // `AstDocumentManager.update` increments by one. The returned AST
       // envelope's `version` mirrors the underlying `LangiumDocument.textDocument.version`;
@@ -325,9 +340,10 @@ describe('ModelService conflict gating', () => {
    });
 
    it('save() gates on the same based-on version (delegates to update)', async () => {
-      const { service } = buildConflictBundle(3);
-      const staleSave = { uri: URI_A, clientId: 'editor-1', model: 'name:newer\n', basedOn: asSnapshotVersion(1) };
-      await expect(service.save(staleSave)).rejects.toBeInstanceOf(ConflictError);
+      const { session } = buildConflictBundle(3);
+      await expect(session.save({ uri: URI_A, model: 'name:newer\n', basedOn: asSnapshotVersion(1) })).rejects.toBeInstanceOf(
+         ConflictError
+      );
    });
 });
 
@@ -336,41 +352,14 @@ describe('ModelService conflict gating under concurrency', () => {
       bundle.textDocuments.changes.map(change => change.text).filter(text => text.startsWith('name:'));
 
    it('rejects the second of two same-version updates with the stock service and a string payload', async () => {
-      const { bundle, service } = buildConflictBundle(3);
+      const { bundle, service, session } = buildConflictBundle(3);
+      const other = openSession(service, bundle.textDocuments, 'editor-2');
       const results = await Promise.allSettled([
-         service.update({ uri: URI_A, clientId: 'editor-1', model: 'name:first\n', basedOn: asSnapshotVersion(3) }),
-         service.update({ uri: URI_A, clientId: 'editor-2', model: 'name:second\n', basedOn: asSnapshotVersion(3) })
+         session.update({ uri: URI_A, model: 'name:first\n', basedOn: asSnapshotVersion(3) }),
+         other.update({ uri: URI_A, model: 'name:second\n', basedOn: asSnapshotVersion(3) })
       ]);
       expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
       expect(appliedTexts(bundle)).toEqual(['name:first\n']);
-   });
-
-   it('applies a based-on write that creates a URI the store has never seen', async () => {
-      // The upsert's own open assigns the version from the incoming text, so a
-      // gate re-checked at apply sees a number the caller's write produced.
-      const { bundle, service } = buildConflictBundle(3);
-      const coldUri = 'file:///never-seen.fake';
-
-      await service.update({ uri: coldUri, clientId: 'editor-1', model: 'name:cold\n', basedOn: asSnapshotVersion(0) });
-
-      expect(bundle.textDocuments.get(coldUri)?.getText()).toBe('name:cold\n');
-   });
-
-   it('rejects the second of two based-on writes that both found the URI new', async () => {
-      // Both find no document at the door; the first open creates it, the
-      // second only attaches, so the second's write is not the one that made
-      // the version.
-      const { bundle, service } = buildConflictBundle(3);
-      const coldUri = 'file:///never-seen.fake';
-
-      const results = await Promise.allSettled([
-         service.update({ uri: coldUri, clientId: 'editor-1', model: 'name:first\n', basedOn: asSnapshotVersion(0) }),
-         service.update({ uri: coldUri, clientId: 'editor-2', model: 'name:second\n', basedOn: asSnapshotVersion(0) })
-      ]);
-
-      expect(results[0].status).toBe('fulfilled');
-      expect(results[1].status === 'rejected' && isConflictError(results[1].reason)).toBe(true);
-      expect(bundle.textDocuments.get(coldUri)?.getText()).toBe('name:first\n');
    });
 });
 
@@ -638,7 +627,7 @@ describe('ModelService write-lock reentrancy detection', () => {
  */
 describe('ModelService update supersession', () => {
    function buildSupersessionService(): {
-      service: ModelService<FakeRoot>;
+      session: ClientSession<FakeRoot>;
       lines: CapturedLine[];
       bundle: ReturnType<typeof makeTestServices<FakeRoot>>;
    } {
@@ -651,18 +640,18 @@ describe('ModelService update supersession', () => {
       // Current text-doc version = 1, matching `args.basedOn` at v1 so the
       // conflict gate stays inert; `AstDocumentManager.update` then bumps
       // to v2, making `appliedVersion = 2`.
-      bundle.textDocuments.seedOpen(URI_A, 'v1', 'editor-1');
-      return { service, lines, bundle };
+      const session = openSession(service, bundle.textDocuments, 'editor-1', 'v1');
+      return { session, lines, bundle };
    }
 
    const supersessionLines = (lines: CapturedLine[]): CapturedLine[] => lines.filter(line => /Update to v\d+ ready/.test(line.message));
 
    it('logs "ready" without the superseded suffix when no newer version overtakes', async () => {
-      const { service, lines } = buildSupersessionService();
+      const { session, lines } = buildSupersessionService();
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
       try {
-         await service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', basedOn: asSnapshotVersion(1) });
+         await session.update({ uri: URI_A, model: 'a', basedOn: asSnapshotVersion(1) });
          const ready = supersessionLines(lines);
          expect(ready).toHaveLength(1);
          expect(ready[0].message).toMatch(/Update to v\d+ ready$/);
@@ -673,16 +662,16 @@ describe('ModelService update supersession', () => {
    });
 
    it('logs "ready at vN (superseded)" yet still resolves when a newer version overtakes before settling', async () => {
-      const { service, lines, bundle } = buildSupersessionService();
+      const { session, lines, bundle } = buildSupersessionService();
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
       try {
          // Hold the NEXT waitUntil — update #1's rebuild — so a concurrent
          // writer can overtake the version before update #1 settles.
          const gate = bundle.documentBuilder.gateNextWaitUntil();
-         const inFlight = service.update({ uri: URI_A, clientId: 'editor-1', model: 'a', basedOn: asSnapshotVersion(1) });
+         const inFlight = session.update({ uri: URI_A, model: 'a', basedOn: asSnapshotVersion(1) });
          // Spin the microtask queue until update #1 has driven its await chain
-         // (open → apply text → rebuild's DocumentBuilder.update → Logger.time)
+         // (apply text → rebuild's DocumentBuilder.update → Logger.time)
          // all the way to the gated `waitUntil`. A fixed tick count is fragile —
          // the chain is several awaits deep, so a too-low count releases the gate
          // before `waitUntil` reassigns its resolver and the update would hang on
@@ -739,10 +728,10 @@ describe('ModelService rebuild and save', () => {
       const bundle = makeTestServices<FakeRoot>({
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
-      bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
       // Pass `model` as a string to bypass the rewrite + serialize path; no
       // `version` so the conflict gate is inert (covered elsewhere).
-      await bundle.modelService.save({ uri: URI_A, clientId: 'editor-1', model: 'name: saved\n', basedOn: 'anything' });
+      await session.save({ uri: URI_A, model: 'name: saved\n', basedOn: 'anything' });
       // update applied the new text...
       const change = bundle.textDocuments.changes.find(entry => entry.text === 'name: saved\n');
       expect(change).toBeDefined();
@@ -753,27 +742,16 @@ describe('ModelService rebuild and save', () => {
 });
 
 /**
- * The LSP-client sync. One
- * persistent `onDocumentPhase(IntegrityService.SettledState)` listener mirrors
- * server-side changes back to the language client via two distinct mechanisms:
- *  - **LSP sync** (open in the language client) → coalesced `applyEditToLanguageClient`,
- *    routed by **content**: the shadow no-ops the RPC when Monaco already matches,
- *    so a Monaco echo and a cascade-unchanged doc both cost nothing. Author is
- *    irrelevant on this path.
- *  - **nothing** (held only by another client) → only a FIRST `didOpen` reads a
- *    stage, and a language client opening a held URI attaches instead.
- *  - **pending staging** (closed in every client) → `stagePendingContent`
- *    for the eventual first `didOpen`, which the default text store never
- *    reaches — it keeps no author for a document nobody holds — and the stub
- *    reaches on request. Gated by **provenance**: stage only a
- *    genuine client edit (`hasKnownAuthor && isTriggeringEdit`). An internal build
- *    (no author — `getAuthor` → `undefined` — from startup, a cascade relink, or
- *    a didClose-reload) is NOT staged: its text equals disk or is a transient
- *    teardown flush, and staging it would pre-stage every file on boot / resurrect
- *    discarded content on reopen.
- * Integrity corrections need no special casing: the corrected text lands in the
- * synced store in place, so an open corrected doc takes the LSP-sync path. The
- * listener re-derives from the settled state every time, so it is self-healing.
+ * The LSP-client sync. One persistent
+ * `onDocumentPhase(IntegrityService.SettledState)` listener mirrors server-side
+ * changes of a document open in the language client back to it through a
+ * coalesced `applyEditToLanguageClient`, routed by **content**: the shadow
+ * no-ops the RPC when Monaco already matches, so a Monaco echo and a
+ * cascade-unchanged doc both cost nothing. A document the language client does
+ * not have open gets nothing. Integrity corrections need no special casing:
+ * the corrected text lands in the synced store in place, so an open corrected
+ * doc takes the same path. The listener re-derives from the settled state
+ * every time, so it is self-healing.
  */
 describe('ModelService LSP-client sync', () => {
    /** A settled-phase document carrying the post-build text. */
@@ -788,98 +766,50 @@ describe('ModelService LSP-client sync', () => {
       }
    }
 
-   /**
-    * Bundle whose stub `AstDocumentManager` reports fixed open / direct-change /
-    * author verdicts — the inputs the drain reads. When `author` is omitted it
-    * defaults to a real client id so the staging tests exercise the "genuine
-    * client edit" path; pass `author: undefined` explicitly to exercise the
-    * internal-build gate (no client authored the version — `getAuthor` reports
-    * `undefined`). (The open path never reads the author — it returns before the
-    * `getAuthor` call.)
-    */
-   function buildSyncBundle(verdict: { open: boolean; direct: boolean; author?: string }): ReturnType<typeof makeTestServices<FakeRoot>> {
+   /** Bundle whose document is open in the language client or, with `open: false`, in no client. */
+   function buildSyncBundle(verdict: { open: boolean }): ReturnType<typeof makeTestServices<FakeRoot>> {
       const bundle = makeTestServices<FakeRoot>({
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
-      const documents = bundle.astDocumentManager as unknown as {
-         isTriggeringEdit: () => boolean;
-         getAuthor: () => string | undefined;
-      };
-      // `syncToLanguageClient` routes on the text store's open-state predicates:
-      // open in the language client → `applyEditToLanguageClient`; held by no
-      // client → staging path. (The egress translates the canonical key to the
-      // recorded client URI; presence is all the routing needs.)
+      // `syncToLanguageClient` routes on the text store's open-state predicate:
+      // open in the language client → `applyEditToLanguageClient`. (The egress
+      // translates the canonical key to the recorded client URI; presence is
+      // all the routing needs.)
       if (verdict.open) {
          bundle.textDocuments.seedOpenInLanguageClient(URI_A);
       }
-      documents.isTriggeringEdit = () => verdict.direct;
-      documents.getAuthor = () => ('author' in verdict ? verdict.author : 'form-client');
       return bundle;
    }
 
-   it('applyEdits an open doc when it settles (LSP-sync path ignores authorship)', async () => {
-      const bundle = buildSyncBundle({ open: true, direct: true });
+   it('applyEdits an open doc when it settles', async () => {
+      const bundle = buildSyncBundle({ open: true });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
       expect(bundle.textDocuments.appliedEdits.map(edit => ({ uri: edit.uri, text: edit.text }))).toEqual([{ uri: URI_A, text: 'name:b' }]);
       expect(bundle.textDocuments.staged).toEqual([]);
    });
 
-   it('applyEdits an open doc even when only cascade-affected (integrity corrections ride this path)', async () => {
-      // No direct change: an open corrected doc still syncs, because the corrected
-      // text is in the store and the shadow decides delivery.
-      const bundle = buildSyncBundle({ open: true, direct: false });
+   it('applyEdits an open doc with integrity corrections, which ride this path', async () => {
+      // The corrected text is in the store and the shadow decides delivery.
+      const bundle = buildSyncBundle({ open: true });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:corrected'));
       await drainSync();
       expect(bundle.textDocuments.appliedEdits.map(edit => edit.text)).toEqual(['name:corrected']);
    });
 
-   it('stages (no applyEdit) a client-authored direct change to a URI no client holds', async () => {
-      // A known author for a document nobody holds is a state the default text
-      // store never reports; the stub reports it on request, which is how the
-      // stage stays pinned for a store that does.
-      const bundle = buildSyncBundle({ open: false, direct: true, author: 'form-client' });
+   it('pushes and stages nothing for a document the language client does not have open', async () => {
+      // Every write needs an open, so no client edit ever settles on a document
+      // no client has open, and nothing is carried to a language client's next
+      // open either.
+      const bundle = buildSyncBundle({ open: false });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
-      await drainSync();
-      expect(bundle.textDocuments.appliedEdits).toEqual([]);
-      expect(bundle.textDocuments.staged).toEqual([{ uri: URI_A, text: 'name:b' }]);
-   });
-
-   it('does NOT stage a client-authored change to a URI another client still holds', async () => {
-      // A language client opening this URI attaches to the held entry and is
-      // refreshed from the store; only a first open reads a stage, so one
-      // staged here would never be read.
-      const bundle = buildSyncBundle({ open: false, direct: true, author: 'form-client' });
-      bundle.textDocuments.seedOpen(URI_A, 'name:a', 'form-client');
-      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
-      await drainSync();
-      expect(bundle.textDocuments.appliedEdits).toEqual([]);
-      expect(bundle.textDocuments.staged).toEqual([]);
-   });
-
-   it('does NOT stage a closed internal-build change (no author) — disk stays authoritative', async () => {
-      // The provenance gate: a directly-changed-but-not-client-authored build
-      // (startup, cascade relink, didClose-reload reports no author) must not
-      // stage, or it would pre-stage every file on boot and resurrect discarded
-      // content on reopen.
-      const bundle = buildSyncBundle({ open: false, direct: true, author: undefined });
-      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
-      await drainSync();
-      expect(bundle.textDocuments.appliedEdits).toEqual([]);
-      expect(bundle.textDocuments.staged).toEqual([]);
-   });
-
-   it('skips a closed cascade-affected doc whose text did not change (no stage, no applyEdit)', async () => {
-      // Not directly changed and not open: nothing the client needs.
-      const bundle = buildSyncBundle({ open: false, direct: false, author: 'form-client' });
-      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:a'));
       await drainSync();
       expect(bundle.textDocuments.appliedEdits).toEqual([]);
       expect(bundle.textDocuments.staged).toEqual([]);
    });
 
    it('re-syncs on every settle (self-healing) — not a one-shot enrolment', async () => {
-      const bundle = buildSyncBundle({ open: true, direct: true });
+      const bundle = buildSyncBundle({ open: true });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
       // A later settle of the same doc (re-open refresh / recovery build) re-syncs
@@ -898,7 +828,7 @@ describe('ModelService LSP-client sync', () => {
     * shadow, so the re-push is a full replace, which lands on any buffer.
     */
    it('re-pushes once when the language client rejects the versioned diff', async () => {
-      const bundle = buildSyncBundle({ open: true, direct: true });
+      const bundle = buildSyncBundle({ open: true });
       let calls = 0;
       bundle.textDocuments.setApplyEditHandler(() => ({ applied: ++calls > 1 }));
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
@@ -907,7 +837,7 @@ describe('ModelService LSP-client sync', () => {
    });
 
    it('bounds the re-push at one, so a client that refuses everything does not spin', async () => {
-      const bundle = buildSyncBundle({ open: true, direct: true });
+      const bundle = buildSyncBundle({ open: true });
       bundle.textDocuments.setApplyEditHandler(() => ({ applied: false }));
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
@@ -923,7 +853,7 @@ describe('ModelService LSP-client sync', () => {
       // `['name:b','name:c','name:b']`. That happens when the settle starts a
       // second, concurrent drain chain and the two pushes cannot see each
       // other's pending slot, which is the re-entrancy `queueSync` closes.
-      const bundle = buildSyncBundle({ open: true, direct: true });
+      const bundle = buildSyncBundle({ open: true });
       let calls = 0;
       bundle.textDocuments.setApplyEditHandler(() => {
          if (++calls === 1) {
@@ -992,7 +922,7 @@ class RecordingModelService extends DefaultModelService<FakeRoot, AstDiagnostic,
 
 describe('ModelService modelToText serialize gating', () => {
    function buildRecordingService(): {
-      service: RecordingModelService;
+      session: ClientSession<FakeRoot, AstDiagnostic, FakeRoot>;
       order: string[];
    } {
       const order: string[] = [];
@@ -1000,21 +930,35 @@ describe('ModelService modelToText serialize gating', () => {
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
          modelService: services => new RecordingModelService(services, order)
       });
-      bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
-      return { service: bundle.modelService as RecordingModelService, order };
+      return { session: openSession(bundle.modelService, bundle.textDocuments, 'editor-1'), order };
    }
 
    it('serialises a structured (object) payload', async () => {
-      const { service, order } = buildRecordingService();
+      const { session, order } = buildRecordingService();
       // No `version` → conflict gate inert; the structured root drives the
       // `serialize(uri, rewriteModel(model))` branch of `modelToText`.
-      await service.update({ uri: URI_A, clientId: 'editor-1', model: { $type: 'FakeRoot', name: 'x' }, basedOn: 'anything' });
+      await session.update({ uri: URI_A, model: { $type: 'FakeRoot', name: 'x' }, basedOn: 'anything' });
       expect(order).toEqual(['serialize']);
    });
 
    it('bypasses serialize for a pre-serialised string payload', async () => {
-      const { service, order } = buildRecordingService();
-      await service.update({ uri: URI_A, clientId: 'editor-1', model: 'name: x\n', basedOn: 'anything' });
+      const { session, order } = buildRecordingService();
+      await session.update({ uri: URI_A, model: 'name: x\n', basedOn: 'anything' });
+      expect(order).toEqual([]);
+   });
+
+   it.each(['update', 'updateAll'] as const)('runs no serializer for a %s of a document the session does not have open', async method => {
+      // The serializer is the adopter's code and need not be side-effect free,
+      // so a write the open check refuses must not reach it.
+      const { session, order } = buildRecordingService();
+      const model = { $type: 'FakeRoot', name: 'x' } as const;
+      const unopened = 'file:///never-opened.fake';
+      const write =
+         method === 'update'
+            ? session.update({ uri: unopened, model, basedOn: 'anything' })
+            : session.updateAll({ updates: [{ uri: unopened, model, basedOn: 'anything' }] });
+
+      await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
       expect(order).toEqual([]);
    });
 });
@@ -1079,7 +1023,7 @@ describe('ModelService per-state convenience methods', () => {
  */
 describe('ModelService update stopwatch allocation', () => {
    function buildCountingService(slowUpdateWarnMs?: number): {
-      service: DelayedModelService<FakeRoot>;
+      session: ClientSession<FakeRoot>;
       stopwatchCalls: () => number;
    } {
       const clock = makeFakeClock();
@@ -1094,53 +1038,19 @@ describe('ModelService update stopwatch allocation', () => {
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
       const service = new DelayedModelService<FakeRoot>(bundle.services, { slowUpdateWarnMs });
-      return { service, stopwatchCalls: () => calls };
+      return { session: openSession(service, bundle.textDocuments, 'test-client'), stopwatchCalls: () => calls };
    }
 
    it('does not allocate a stopwatch when slowUpdateWarnMs is undefined', async () => {
-      const { service, stopwatchCalls } = buildCountingService(undefined);
-      await service.update(updateArgs);
+      const { session, stopwatchCalls } = buildCountingService(undefined);
+      await session.update(updateArgs);
       expect(stopwatchCalls()).toBe(0);
    });
 
    it('allocates a stopwatch when slowUpdateWarnMs is configured', async () => {
-      const { service, stopwatchCalls } = buildCountingService(5);
-      await service.update(updateArgs);
+      const { session, stopwatchCalls } = buildCountingService(5);
+      await session.update(updateArgs);
       expect(stopwatchCalls()).toBe(1);
-   });
-});
-
-/**
- * Pins the `open({ uri, clientId, text })` call shape inside `update`.
- * `update` is an upsert: a cold URI is created from the serialised payload,
- * so the text and identifying fields must all be forwarded to `open`. The
- * capture asserts on the whole args object, so a dropped field is caught
- * rather than defaulting silently.
- */
-describe('ModelService update open() arguments', () => {
-   class OpenCapturingService extends DefaultModelService<FakeRoot> {
-      readonly openArgs: OpenModelArgs[] = [];
-      override async open(args: OpenModelArgs): Promise<Disposable> {
-         this.openArgs.push(args);
-         return HydraniumDisposable.EMPTY;
-      }
-      override async rebuild(): Promise<never> {
-         return undefined as never;
-      }
-   }
-
-   it('forwards uri, clientId, and serialised text to open', async () => {
-      const bundle = makeTestServices<FakeRoot>({
-         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
-      });
-      const service = new OpenCapturingService(bundle.services);
-      // The capturing `open` override swallows the real open, which is what
-      // materialises the synced document — seed it so the downstream content
-      // apply finds an open document.
-      bundle.textDocuments.seedOpen(URI_A, '', 'test-client');
-      await service.update({ uri: URI_A, clientId: 'test-client', model: 'name: payload\n', basedOn: 'anything' });
-      expect(service.openArgs).toHaveLength(1);
-      expect(service.openArgs[0]).toEqual({ uri: URI_A, clientId: 'test-client', text: 'name: payload\n' });
    });
 });
 

@@ -9,11 +9,11 @@
 
 import type { CanonicalUri } from '@hydranium/protocol';
 import type { ApplyWorkspaceEditResult } from 'vscode-languageserver';
-import { Disposable } from 'vscode-languageserver';
+import { Disposable, Emitter } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
 import { ClientSessionRegistry } from '../documents/client-session-registry.js';
-import type { ClientTextDocumentChangeEvent, HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import type { ClientTextDocumentChangeEvent, HydraniumTextDocuments, LastOpenClosedEvent } from '../documents/hydranium-text-documents.js';
 
 /** Snapshot of an open document tracked by the stub. */
 export interface StubTextDocumentEntry {
@@ -28,7 +28,8 @@ export interface StubTextDocumentEntry {
  * reads from on test paths — the content channel
  * (`notifyDidChangeTextDocument` / `applyContentChange` / `version` /
  * `getAuthor`), the open-state probes (`isOpenInLanguageClient` /
- * `isOpenInAnyClient` / `isOpenInClient` / `openDocuments`), the push channel
+ * `isOpenInAnyClient` / `isOpenInClient` / `isRevertPending` /
+ * `openDocuments`), the push channel
  * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
  * the save / close notifications, and the client-session table
  * (`registerSession` / `closeSession` / `onDidCloseSession` and the open
@@ -69,13 +70,16 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'getAuthor'
    | 'isOpenInLanguageClient'
    | 'isOpenInAnyClient'
+   | 'isRevertPending'
    | 'applyEditToLanguageClient'
    | 'stagePendingContent'
    | 'openDocuments'
    | 'isOpenInClient'
+   | 'attachClient'
    | 'registerSession'
    | 'closeSession'
    | 'onDidCloseSession'
+   | 'onDidCloseLastOpen'
    | 'openOptions'
    | 'setOpenOptions'
 > {
@@ -100,7 +104,11 @@ export interface StubHydraniumTextDocuments extends Pick<
    seedOpen(uri: string, text: string, clientId: string): void;
    /** Mark `uri` as open in the LSP textual language client (drives {@link isOpenInLanguageClient}). */
    seedOpenInLanguageClient(uri: string): void;
-   /** Synchronously deliver `onDidClose` to subscribers. */
+   /**
+    * Synchronously deliver `onDidClose` to subscribers, then `onDidCloseLastOpen`
+    * when no client has `uri` open any more. The stub keeps no revert grace, so
+    * a last close is announced at once.
+    */
    fireClose(uri: string, clientId: string): void;
    /**
     * Drop recorded state. Useful for `beforeEach` resets.
@@ -145,6 +153,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    // stand in for canonical URIs (one stub-boundary cast, like `fireClose`).
    const sessions = new ClientSessionRegistry();
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
+   const lastOpenClosed = new Emitter<LastOpenClosedEvent>();
 
    const stub: StubHydraniumTextDocuments = {
       get changes() {
@@ -230,6 +239,12 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       isOpenInClient(uri, clientId) {
          return sessions.isOpenIn(key(uri), clientId);
       },
+      isRevertPending(uri) {
+         return sessions.isRevertPending(key(uri));
+      },
+      attachClient(uri, clientId) {
+         return docs.has(uri) && sessions.addOpen(key(uri), clientId);
+      },
       registerSession(clientId) {
          sessions.register(clientId);
       },
@@ -247,6 +262,9 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       },
       get onDidCloseSession() {
          return sessions.onDidCloseSession;
+      },
+      get onDidCloseLastOpen() {
+         return lastOpenClosed.event;
       },
       openOptions(uri, clientId) {
          return sessions.openOptions(key(uri), clientId);
@@ -285,13 +303,16 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          if (holder && holder.clientId === clientId) {
             docs.delete(uri);
          }
-         sessions.removeOpen(key(uri), clientId);
+         const removed = sessions.removeOpen(key(uri), clientId);
          if (clientId === LANGUAGE_CLIENT_ID) {
             languageClientOpen.delete(uri);
          }
          const event = { document: { uri } as unknown as TextDocument, clientId } as ClientTextDocumentChangeEvent<TextDocument>;
          for (const listener of closeListeners.slice()) {
             listener(event);
+         }
+         if (removed && !sessions.isOpen(key(uri))) {
+            lastOpenClosed.fire({ uri: key(uri) });
          }
       },
       reset() {

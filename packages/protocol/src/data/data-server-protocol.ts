@@ -93,35 +93,32 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]>;
 
    /**
-    * Open a document for an editor session and return its current state.
-    * Registers `(uri, clientId)` with the multi-client document manager
-    * (so concurrent editors share one built document) and returns the
-    * document at the server's configured target phase — the same shape
-    * {@link getModelDocument} returns, except that `version` is taken from
-    * the text-document store so the caller's first `basedOn` write
-    * cannot self-conflict. Idempotent in registration terms: opening an
-    * already-open document refreshes the client registration. Note it does
-    * NOT avoid a rebuild — a second client attaching triggers
-    * `refreshContent`, which fires a change event, so mounting a form on a
-    * document already open in a text editor rebuilds it.
+    * Open a document for the client session `clientId` and return its current
+    * state. `clientId` must be a session this connection registered with
+    * {@link createSession}; any other id fails with the closed-session code,
+    * as every document request here does. The document is read from disk
+    * unless a client has it open already, so the request carries no
+    * `languageId`, `version` or `text` seed. Returns the document at
+    * the server's configured target phase — the same shape
+    * {@link getModelDocument} returns, except that `version` is taken from the
+    * text-document store so the caller's first `basedOn` write cannot
+    * self-conflict. A repeat open changes nothing.
     *
-    * The default `DataServer` impl delegates to `ModelService.open` then
-    * reads the built state. Pair with {@link watchModelDocument} to receive
-    * subsequent build-phase events (open returns a one-shot snapshot;
-    * later validation diagnostics arrive on the watch channel).
+    * Pair with {@link watchModelDocument} to receive subsequent build-phase
+    * events (open returns a one-shot snapshot; later validation diagnostics
+    * arrive on the watch channel).
     */
-   openModelDocument(args: OpenModelArgs): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+   openModelDocument(args: Pick<OpenModelArgs, 'uri' | 'clientId' | 'options'>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
 
    /**
-    * Close an editor session for `(uri, clientId)`. Counterpart to
-    * {@link openModelDocument}; the underlying document stays built until
-    * every registered client has closed. The default `DataServer` impl
-    * delegates to `ModelService.close` and ALSO releases any watch for the
-    * same `(uri, clientId)` (closing a session frees its own watch — a
-    * forgotten {@link unwatchModelDocument} would otherwise leak dispatch;
-    * the implicit unwatch is idempotent). `watchModelDocument` is NOT
-    * coupled the other way: opening does not force a watch, so a snapshot
-    * reader can open without streaming.
+    * Close the session's open of `uri`. Counterpart to
+    * {@link openModelDocument}; the document stays open until every client
+    * has closed it, and the last close reverts it to disk. The default
+    * `DataServer` impl ALSO releases any watch for the same
+    * `(uri, clientId)` (a forgotten {@link unwatchModelDocument} would
+    * otherwise leak dispatch; the implicit unwatch is idempotent).
+    * `watchModelDocument` is NOT coupled the other way: opening does not force
+    * a watch, so a snapshot reader can open without streaming.
     */
    closeModelDocument(args: CloseModelArgs): Promise<void>;
 
@@ -134,14 +131,15 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    getModelDocument(args: GetModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>>;
 
    /**
-    * Update a document's content. The response carries the latest built
-    * state including diagnostics; callers observe convergence via that
-    * response.
+    * Update a document's content as the session `clientId`, which must have
+    * it open. The response carries the latest built state including
+    * diagnostics; callers observe convergence via that response.
     */
    updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
 
    /**
-    * Persist a document to disk. The response is the post-save document
+    * Write a document as the session `clientId`, which must have it open, and
+    * persist it to disk. The response is the post-save document
     * state (matches the file on disk). Save semantics depend on the
     * filesystem-provider wiring; rejection paths surface as awaited
     * promise rejections.

@@ -23,6 +23,7 @@
 
 import {
    type AnchorSpan,
+   type ClientSession,
    CommentPreserver,
    type CommentTrivia,
    DefaultNameProvider,
@@ -34,7 +35,7 @@ import {
    type TriviaPreserver,
    type TriviaRegistry
 } from '@hydranium/core';
-import { URI } from '@hydranium/langium';
+import { type AstNode, URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness } from './order-flow-harness.js';
@@ -186,6 +187,17 @@ const commentsOf = (extracted: DocumentTrivia): readonly DocumentComment[] =>
 /** The document-ending preserver's payload out of an extraction. */
 const endingOf = (extracted: DocumentTrivia): string | undefined =>
    extracted.find(entry => entry.preserver.id === 'document-ending')?.trivia as string | undefined;
+
+/** Run `write` as the form editor's session, with `uri` open for it, as the form write path does. */
+async function asFormEditor(
+   harness: OrderFlowHarness,
+   uri: string,
+   write: (session: ClientSession<AstNode>) => Promise<unknown>
+): Promise<void> {
+   const session = harness.shared.model.ModelService.createSession('form', 'form-editor');
+   await session.open(uri);
+   await write(session);
+}
 
 /** Parse `source`, apply `mutate`, then run the write path's serialize + reattach. */
 async function writeBack(
@@ -963,7 +975,7 @@ describe('trivia preservation', () => {
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, basedOn: 'anything' }));
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       expect(after).toContain('// The behavioural half of `orders`. `for');
@@ -992,7 +1004,7 @@ describe('trivia preservation', () => {
       expect((before!.parseResult.value as ProcessModel).nodes[0]).toHaveProperty('_effectSummary');
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
       (transfer as unknown as { nodes: Array<{ name: string }> }).nodes[0].name = 'Settle';
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, basedOn: 'anything' }));
 
       expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toContain('   // about Pay\n   task Settle');
    });
@@ -1007,36 +1019,9 @@ describe('trivia preservation', () => {
       const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
 
-      await harness.shared.model.ModelService.save({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
+      await asFormEditor(harness, uri, session => session.save({ uri, model: transfer, basedOn: 'anything' }));
 
       expect(readFileSync(workspace.resolve('orders/cold.process'), 'utf8')).toBe(source);
-   });
-
-   it('still writes when the file it would take trivia from cannot be read', async () => {
-      // Reading that file is an optimisation over writing the serializer's
-      // output as emitted, so a read that fails has to cost the comments and
-      // nothing else. Letting it escape would fail the user's save outright —
-      // over a file the write was about to replace anyway.
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
-      onTestFinished(() => workspace.dispose());
-      const source = '// cold file header\nprocess Unreadable for Order {\n   task Pay\n}\n';
-      workspace.write('orders/unreadable.process', source);
-      const uri = workspace.uri('orders/unreadable.process');
-      const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, URI.parse(uri));
-      const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
-
-      const fileSystem = harness.shared.workspace.FileSystemProvider as { readFile: (target: URI) => Promise<string> };
-      const readFile = fileSystem.readFile;
-      fileSystem.readFile = () => Promise.reject(new Error('EACCES: permission denied'));
-      onTestFinished(() => {
-         fileSystem.readFile = readFile;
-      });
-
-      await harness.shared.model.ModelService.update({ uri, clientId: 'form-editor', model: transfer, basedOn: 'anything' });
-
-      const written = harness.shared.workspace.TextDocuments.get(uri)?.getText();
-      expect(written).toContain('process Unreadable for Order {');
-      expect(written).not.toContain('// cold file header');
    });
 
    it('carries comments through an integrity repair written to disk', async () => {

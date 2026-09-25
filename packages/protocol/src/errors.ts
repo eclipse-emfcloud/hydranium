@@ -47,7 +47,7 @@ export interface ConflictErrorData extends HydraniumMessageData {
 }
 
 /**
- * Thrown by `ModelService.update` / `ModelService.save` when the caller-
+ * Thrown by a client session's `update` / `save` when the caller-
  * supplied based-on version no longer matches the server's current text-
  * document version for the same URI — i.e. the snapshot the caller
  * authored against has been superseded by an intervening edit.

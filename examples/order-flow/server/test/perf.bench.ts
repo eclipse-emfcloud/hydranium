@@ -436,6 +436,12 @@ const editVariantB = `${editVariantA}\n// bench edit\n`;
 const diagramOpened = warm.lsp.nextDiagnostics(diagramDocUri);
 warm.lsp.openDocument(diagramDocUri, fs.readFileSync(diagramDocPath, 'utf-8'), 'process', 1);
 await diagramOpened;
+// A data write acts as a session with the document open; registered once, since
+// every iteration writes under the same ids.
+for (const clientId of ['bench-text', 'bench-concurrent']) {
+   await warm.data.proxy.createSession({ clientId });
+   await warm.data.proxy.openModelDocument({ uri: editedDocUri, clientId });
+}
 let editToggle = 0;
 let concurrentToggle = false;
 
@@ -504,8 +510,13 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
          const reconnect = makeDataServerHarness<BenchDataServer, TransferDomainModel | TransferProcessModel>({
             server: channel => new BenchDataServer(channel, warm.services.shared)
          });
+         await reconnect.proxy.createSession({ clientId: 'bench-reconnect' });
          await reconnect.proxy.openModelDocument({ uri: diagramDocUri, clientId: 'bench-reconnect' });
          await reconnect.proxy.watchModelDocument({ uri: diagramDocUri, clientId: 'bench-reconnect' });
+         // The in-process pair's dispose never reaches the server's close
+         // listener, so the session that frees the id for the next iteration is
+         // ended here.
+         reconnect.server.dispose();
          reconnect.dispose();
          recordSample(probeObservations.reconnect, performance.now() - started);
       },

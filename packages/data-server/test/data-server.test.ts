@@ -15,6 +15,7 @@ import {
    type CanonicalUri,
    createRpcProxy,
    Disposable,
+   isSessionClosedError,
    LatencyCollector,
    ReferenceSource,
    resolvedFromResponseError,
@@ -117,9 +118,9 @@ class PlainFailureServer extends TestDataServer {
 
 /**
  * Fails the snapshot an open returns, leaving everything before it intact.
- * `openModelDocument` takes the model-service hold and records it BEFORE
- * fetching that snapshot, so this is the injection that shows whether a failed
- * open releases what it took.
+ * `openModelDocument` opens the document for the session BEFORE fetching that
+ * snapshot, so this is the injection that shows whether a failed open releases
+ * what it took.
  */
 class FailingSnapshotServer extends TestDataServer {
    override async getModelDocument(): Promise<never> {
@@ -159,6 +160,20 @@ const URI_B = 'file:///workspace/B.fake';
 function fireRebuild(bundle: Bundle, document: LangiumDocument, cancelToken?: Parameters<Bundle['documentBuilder']['firePhase']>[2]): void {
    bundle.documentBuilder.firePhase(DocumentState.Linked, document);
    bundle.documentBuilder.firePhase(DocumentState.Validated, document, cancelToken);
+}
+
+/**
+ * Register `clientId` as a session over the connection and give it `uri` open,
+ * as the session's own open leaves it in the stub store. A document request
+ * acts as a session, so every write test starts here.
+ */
+async function openAs(proxy: TestHarness['proxy'], bundle: Bundle, clientId: string, uri = URI_A): Promise<void> {
+   await proxy.createSession({ clientId });
+   if (bundle.textDocuments.get(uri)) {
+      bundle.textDocuments.attachClient(uri, clientId);
+   } else {
+      bundle.textDocuments.seedOpen(uri, 'name:initial', clientId);
+   }
 }
 
 describe('DataServer', () => {
@@ -250,13 +265,49 @@ describe('DataServer', () => {
       }, 30_000);
    });
 
+   describe('a document request under an id no session was registered for', () => {
+      const unregistered = 'never-registered';
+
+      it.each([
+         ['openModelDocument', (proxy: TestHarness['proxy']) => proxy.openModelDocument({ uri: URI_A, clientId: unregistered })],
+         [
+            'updateModelDocument',
+            (proxy: TestHarness['proxy']) =>
+               proxy.updateModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', basedOn: 'anything' })
+         ],
+         [
+            'saveModelDocument',
+            (proxy: TestHarness['proxy']) =>
+               proxy.saveModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', basedOn: 'anything' })
+         ],
+         ['closeModelDocument', (proxy: TestHarness['proxy']) => proxy.closeModelDocument({ uri: URI_A, clientId: unregistered })]
+      ])('fails %s with the closed-session code and opens, writes and saves nothing', async (_method, request) => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            const failure = await request(proxy).then(
+               () => undefined,
+               (error: unknown) => error
+            );
+
+            expect(isSessionClosedError(failure)).toBe(true);
+            expect(bundle.textDocuments.isOpenInClient(URI_A, unregistered)).toBe(false);
+            expect(bundle.textDocuments.changes).toEqual([]);
+            expect(bundle.fileSystem.writes).toEqual([]);
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
    describe('updateModelDocument', () => {
       it('applies a structured payload and the next getModelDocument reflects it', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
          const { proxy, pair } = makeHarness(bundle.services);
          try {
+            await openAs(proxy, bundle, 'editor-1');
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
@@ -277,9 +328,9 @@ describe('DataServer', () => {
       it('accepts a serialised-string payload — parseModel handles deserialisation', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
          const { proxy, pair } = makeHarness(bundle.services);
          try {
+            await openAs(proxy, bundle, 'editor-1');
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
@@ -295,9 +346,10 @@ describe('DataServer', () => {
       it('propagates the clientId to authorship via HydraniumTextDocuments', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
          const { proxy, pair } = makeHarness(bundle.services);
          try {
+            await openAs(proxy, bundle, 'editor-1');
+            await openAs(proxy, bundle, 'data-server-tools');
             await proxy.updateModelDocument({
                uri: URI_A,
                clientId: 'data-server-tools',
@@ -315,9 +367,9 @@ describe('DataServer', () => {
       it('writes via the framework WritableFileSystemProvider and registers the mtime with SelfSaveRegistry', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
          const { proxy, pair } = makeHarness(bundle.services);
          try {
+            await openAs(proxy, bundle, 'editor-1');
             await proxy.saveModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
@@ -335,7 +387,6 @@ describe('DataServer', () => {
       it('fires onDocumentSaved on the local client when a subscriber exists for the URI', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(URI_A, 'name:initial', 'editor-1');
 
          const savedEvents: { uri: string; sourceClientId: string }[] = [];
          const localClient: DataClientProtocol<FakeRoot, FakeDiagnostic> = {
@@ -366,6 +417,8 @@ describe('DataServer', () => {
             }
          );
          try {
+            await openAs(proxy, bundle, 'editor-1');
+            await openAs(proxy, bundle, 'editor-2');
             // Without a subscription, the save fires no onDocumentSaved event (per-URI gate).
             await proxy.saveModelDocument({
                uri: URI_A,
@@ -410,7 +463,6 @@ describe('DataServer', () => {
             documentUriPolicy: linkAware
          });
          bundle.documents.set(REAL, { $type: 'FakeRoot', name: 'initial' });
-         bundle.textDocuments.seedOpen(LINK, 'name:initial', 'editor-1');
 
          const savedEvents: { uri: string; sourceClientId: string }[] = [];
          const localClient: DataClientProtocol<FakeRoot, FakeDiagnostic> = {
@@ -441,6 +493,9 @@ describe('DataServer', () => {
             }
          );
          try {
+            // The stub store keys by the URI as given, and the write reaches it
+            // under the canonical one.
+            await openAs(proxy, bundle, 'editor-2', REAL);
             await proxy.watchModelDocument({ uri: LINK, clientId: 'sub-1' });
             await proxy.saveModelDocument({
                uri: LINK,
@@ -527,6 +582,7 @@ describe('DataServer', () => {
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { server, proxy, events, pair } = makeHarness(bundle.services);
          try {
+            await openAs(proxy, bundle, 'sub-1');
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
             const internal = server as unknown as { subscriptions: Map<string, unknown> };
             expect(internal.subscriptions.size).toBe(1);
@@ -544,52 +600,25 @@ describe('DataServer', () => {
          }
       });
 
-      it('closes a dead client’s open documents on teardown', async () => {
+      it('ends a dead client’s sessions on teardown, which closes their documents', async () => {
          // The hazard exists only for a client that dies WITHOUT closing, so this
-         // never calls closeModelDocument. Teardown is driven through `dispose()`
-         // rather than by destroying the transport: `dispose()` is what the
-         // `connection.onClose` handler calls, and that wiring has its own test
-         // below — a MessageConnection's own `dispose()` fires the dispose emitter
-         // and not the close one, so disposing the pair would not reach it.
-         //
-         // The observable is the store's per-URI open-client set, one layer below
-         // the `isOpenInAnyClient` the residency and revert decisions read.
+         // never calls closeModelDocument or closeSession. Teardown is driven
+         // through `dispose()` rather than by destroying the transport: a
+         // MessageConnection's own `dispose()` fires the dispose emitter and not
+         // the close one, so disposing the pair would not reach the server.
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { server, proxy, pair } = makeHarness(bundle.services);
          try {
+            await proxy.createSession({ clientId: 'doomed' });
             await proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' });
             // Open BEFORE the teardown, or "not open after" is satisfied by it
             // never having been open at all.
-            expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual(['doomed']);
+            expect(bundle.textDocuments.isOpenInClient(URI_A, 'doomed')).toBe(true);
 
             server.dispose();
-            await tick();
 
-            expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual([]);
-         } finally {
-            pair.dispose();
-         }
-      });
-
-      it('drains only the holds still outstanding, not every URI it ever opened', async () => {
-         // Pairs with the drain above, which a teardown that blindly closed every
-         // URI it had seen would also satisfy. A graceful close has to remove the
-         // record, or the drain fires a second close for a document another client
-         // may by then legitimately hold.
-         const bundle = buildBundle();
-         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
-         const { server, proxy, pair } = makeHarness(bundle.services);
-         try {
-            await proxy.openModelDocument({ uri: URI_A, clientId: 'polite' });
-            await proxy.closeModelDocument({ uri: URI_A, clientId: 'polite' });
-            const internal = server as unknown as { openedDocuments: Map<string, Set<string>> };
-            expect(internal.openedDocuments.size).toBe(0);
-
-            server.dispose();
-            await tick();
-
-            expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual([]);
+            expect(bundle.textDocuments.isOpenInClient(URI_A, 'doomed')).toBe(false);
          } finally {
             pair.dispose();
          }
@@ -840,14 +869,13 @@ describe('DataServer', () => {
    });
 
    /**
-    * An open that fails after it has already taken the hold.
+    * An open that fails after it has already opened the document.
     *
-    * `openModelDocument` opens through the model service, records the hold, and
-    * only then builds the snapshot it answers with. A snapshot that rejects
-    * fails the RPC, so the client sees no open and issues no close — and the
-    * hold sits there until an explicit close that never comes, or until the
-    * connection goes. A per-panel open over a long-lived shared connection is
-    * where that gap is longest.
+    * `openModelDocument` opens through the session and only then builds the
+    * snapshot it answers with. A snapshot that rejects fails the RPC, so the
+    * client sees no open and issues no close — and the open sits there until
+    * an explicit close that never comes, or until the session ends. A
+    * long-lived session is where that gap is longest.
     */
    describe('openModelDocument when the snapshot fails', () => {
       function failingHarness(bundle: Bundle): DataServerHarness<FailingSnapshotServer, FakeRoot, FakeDiagnostic> {
@@ -856,54 +884,17 @@ describe('DataServer', () => {
          });
       }
 
-      it('releases the hold it took', async () => {
-         // The store's per-URI open-client set is the observable, one layer
+      it('releases the open it took', async () => {
+         // The manager's per-URI open-client set is the observable, one layer
          // below the `isOpenInAnyClient` the residency and revert decisions read.
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { proxy, pair } = failingHarness(bundle);
          try {
+            await proxy.createSession({ clientId: 'doomed' });
             await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
 
             expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual([]);
-         } finally {
-            pair.dispose();
-         }
-      });
-
-      it('keeps the open record when the rollback close itself fails, so teardown retries it', async () => {
-         // Forgetting the record before the close has landed gives a FAILED
-         // close the same effect as a successful one: the hold survives on the
-         // document store and the connection-close drain no longer knows to
-         // release it, which is the leak the rollback exists to prevent.
-         const bundle = buildBundle();
-         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
-         const { server, proxy, pair } = failingHarness(bundle);
-         try {
-            (bundle.astDocumentManager as unknown as { close: () => Promise<void> }).close = () =>
-               Promise.reject(new Error('close refused'));
-
-            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
-
-            const internal = server as unknown as { openedDocuments: Map<string, Set<string>> };
-            expect([...(internal.openedDocuments.get(URI_A) ?? [])]).toEqual(['doomed']);
-         } finally {
-            pair.dispose();
-         }
-      });
-
-      it('forgets the open record, so teardown fires no second close', async () => {
-         // Pairs with the release above: dropping the model-service hold while
-         // leaving the bookkeeping entry makes `dispose` close a URI this server
-         // no longer holds, which another client may by then legitimately hold.
-         const bundle = buildBundle();
-         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
-         const { server, proxy, pair } = failingHarness(bundle);
-         try {
-            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed' })).rejects.toThrow(/snapshot refused/);
-
-            const internal = server as unknown as { openedDocuments: Map<string, Set<string>> };
-            expect(internal.openedDocuments.size).toBe(0);
          } finally {
             pair.dispose();
          }
@@ -1166,6 +1157,75 @@ describe('DataServer', () => {
          } finally {
             onCloseSpy.mockRestore();
             pair.dispose();
+         }
+      });
+   });
+
+   describe('why a session ends', () => {
+      // The cause decides whether a document the session was the last to have
+      // open waits out the store's revert grace, so it is read where it
+      // reaches the store.
+      function endings(bundle: Bundle): Array<{ clientId: string; cause: unknown }> {
+         const recorded: Array<{ clientId: string; cause: unknown }> = [];
+         const closeSession = bundle.textDocuments.closeSession.bind(bundle.textDocuments);
+         bundle.textDocuments.closeSession = (clientId: string, cause?: unknown) => {
+            recorded.push({ clientId, cause });
+            closeSession(clientId);
+         };
+         return recorded;
+      }
+
+      it('ends a session as lost when its connection closes', async () => {
+         const bundle = buildBundle();
+         const recorded = endings(bundle);
+         const pair = makeDuplexConnectionPair();
+         const closeListeners: Array<() => void> = [];
+         const onClose = pair.left.onClose.bind(pair.left);
+         const spy = vi.spyOn(pair.left, 'onClose').mockImplementation((listener: () => void): Disposable => {
+            closeListeners.push(listener);
+            return onClose(listener);
+         });
+         const server = new TestDataServer(pair.left, bundle.services);
+         try {
+            await server.createSession({ clientId: 'dropped' });
+            closeListeners.forEach(listener => listener());
+            expect(recorded).toEqual([{ clientId: 'dropped', cause: 'lost' }]);
+         } finally {
+            spy.mockRestore();
+            pair.dispose();
+         }
+      });
+
+      it('ends a session on purpose on closeSession and on dispose', async () => {
+         const bundle = buildBundle();
+         const recorded = endings(bundle);
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'closed' });
+            await proxy.createSession({ clientId: 'disposed' });
+            await proxy.closeSession({ clientId: 'closed' });
+            server.dispose();
+            expect(recorded).toEqual([
+               { clientId: 'closed', cause: 'closed' },
+               { clientId: 'disposed', cause: 'closed' }
+            ]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('ends a session as lost when a registration with its resume token takes it over', async () => {
+         const bundle = buildBundle();
+         const recorded = endings(bundle);
+         const first = makeHarness(bundle.services);
+         const second = makeHarness(bundle.services);
+         try {
+            await first.proxy.createSession({ clientId: 'resumed', resumeToken: 'token' });
+            await second.proxy.createSession({ clientId: 'resumed', resumeToken: 'token' });
+            expect(recorded).toEqual([{ clientId: 'resumed', cause: 'lost' }]);
+         } finally {
+            first.pair.dispose();
+            second.pair.dispose();
          }
       });
    });

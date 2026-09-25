@@ -177,7 +177,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
        * Tighten Langium's read-only `FileSystemProvider` slot to
        * {@link WritableFileSystemProvider}. The framework's save path
        * ({@link AstDocumentManager.save}, integrity corrections,
-       * `ModelService.save`) requires write semantics — a read-only slot
+       * a session's `save`) requires write semantics — a read-only slot
        * type forces an `as WritableFileSystemProvider` cast at the binding
        * line and defers the failure of a read-only implementation to the
        * first save. The `.`-entry default is

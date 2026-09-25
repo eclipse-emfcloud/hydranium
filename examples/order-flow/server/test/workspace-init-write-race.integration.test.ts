@@ -164,12 +164,15 @@ describe.each(BARRIER_PHASES)('a write that lands during workspace initializatio
          const domainUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.ordersDomain)).toString();
          const processUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.fulfillmentProcess)).toString();
 
-         // Issuing the write cancels the suspended initial build synchronously,
-         // inside this call. Deliberately not awaited before the release below:
-         // the write queues on the very lock the init still holds.
-         const write = modelService.update({
+         // The open reads the file in the disk queue and takes no lock, so it
+         // completes while the init still holds the write lock.
+         const session = modelService.createSession('init-race', 'init-race');
+         await session.open(domainUri);
+         // Issuing the write cancels the suspended initial build. Deliberately
+         // not awaited before the release below: the write queues on the very
+         // lock the init still holds.
+         const write = session.update({
             uri: domainUri,
-            clientId: 'init-race',
             model: DOMAIN_TEXT_WITHOUT_STATUS,
             basedOn: 'anything'
          });

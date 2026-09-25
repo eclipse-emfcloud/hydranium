@@ -67,7 +67,7 @@ export function isInsideWriteLock(): boolean {
 /**
  * Thrown when the model facade is reached from inside a workspace write-lock
  * holder — typically an integrity rule or build-phase pass writing through
- * `ModelService.update` / `save` / `rebuild` during a build.
+ * a session's `update` / `save` or `ModelService.rebuild` during a build.
  *
  * Named rather than a bare `Error` because the remedy is specific and worth
  * pointing at: either move the write out of the build (integrity rules that

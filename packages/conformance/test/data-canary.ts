@@ -43,6 +43,7 @@ import {
    isDocumentSource,
    isSnapshotVersion,
    isSyntheticSource,
+   SessionClosedError,
    TransferDocument
 } from '@hydranium/protocol';
 import type {
@@ -175,7 +176,9 @@ export interface CanaryDefects {
    readonly sessionIdsReused?: boolean;
    /** `closeSession` leaves the id taken, so it can never identify a session again. */
    readonly sessionIdsKept?: boolean;
-   /** A session's write of a document it has not opened opens it, as a plain client's does. */
+   /** An id no session was registered for opens and writes documents. */
+   readonly plainClientWrites?: boolean;
+   /** A session's write of a document it has not opened opens it. */
    readonly implicitSessionOpen?: boolean;
    /** `closeModelDocument` leaves the session's open in place. */
    readonly closeKeepsOpen?: boolean;
@@ -368,10 +371,14 @@ export class CanaryDataServer {
       return documents;
    }
 
-   /** A live session writes only what it has open; any other id writes as a plain client. */
+   /** A live session writes only what it has open; any other id writes nothing. */
    private assertSessionMayWrite(clientId: string, uri: string): void {
       const opens = this.sessions.get(clientId);
-      if (!opens || opens.has(uri)) {
+      if (!opens) {
+         this.assertPlainClientAllowed(clientId);
+         return;
+      }
+      if (opens.has(uri)) {
          return;
       }
       if (this.defects.implicitSessionOpen) {
@@ -379,6 +386,12 @@ export class CanaryDataServer {
          return;
       }
       throw new DocumentNotOpenError(uri, clientId);
+   }
+
+   private assertPlainClientAllowed(clientId: string): void {
+      if (!this.defects.plainClientWrites) {
+         throw new SessionClosedError(clientId);
+      }
    }
 
    private assertBasedOn(uri: string, basedOn: TransferUpdateDocumentArgs<CanaryRoot>['basedOn']): void {
@@ -430,13 +443,18 @@ export class CanaryDataServer {
    }
 
    async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
-      this.sessions.get(args.clientId)?.add(args.uri);
+      const opens = this.sessions.get(args.clientId);
+      if (!opens) {
+         this.assertPlainClientAllowed(args.clientId);
+      }
+      opens?.add(args.uri);
       return this.envelope(args.uri);
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
-      // A plain client's close releases nothing: the canary keeps no per-client
-      // state outside sessions.
+      if (!this.sessions.has(args.clientId)) {
+         this.assertPlainClientAllowed(args.clientId);
+      }
       if (!this.defects.closeKeepsOpen) {
          this.sessions.get(args.clientId)?.delete(args.uri);
       }

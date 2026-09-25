@@ -150,7 +150,7 @@ describe('FullTextHydraniumGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('refuses to write without a session, rather than writing under a client id nothing closes', async () => {
+      it('refuses to write without a session, rather than writing under an id it does not hold', async () => {
          const harness = makeHarness();
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));

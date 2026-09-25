@@ -24,10 +24,10 @@ import { withDataServer } from '../spawn-data-server.js';
  * `clientId` defaults to `'hydranium-cli'` — adopters wanting a richer
  * identity (per-user, per-script) override.
  *
- * The document is opened first and closed after the save, so the command
- * writes only what it has open and leaves nothing open behind it. The open
- * carries the content as its seed, which a file that does not exist yet is
- * created from.
+ * The command saves as a client session under `clientId`: it registers the
+ * session, creates the document from the content when there is no file,
+ * opens it otherwise, saves, and ends the session, which leaves nothing open
+ * behind it.
  */
 export interface SaveCommandOptions {
    readonly serverCommand: string;
@@ -69,26 +69,41 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
 }
 
 /**
- * Open `uri`, save `model` to it, and close it again whether the save succeeded
- * or not. A close that fails after a failed save is swallowed: the save's error
- * is the one the user needs.
+ * Save `model` to `uri` as the session `clientId`, and end the session whether
+ * the save succeeded or not. An end that fails after a failed save is
+ * swallowed: the save's error is the one the user needs.
  */
 async function saveOpened(
-   server: Pick<DataServerProtocol<TransferElement>, 'openModelDocument' | 'saveModelDocument' | 'closeModelDocument'>,
+   server: Pick<
+      DataServerProtocol<TransferElement>,
+      'createSession' | 'openModelDocument' | 'createModelDocument' | 'saveModelDocument' | 'closeSession'
+   >,
    uri: string,
    clientId: string,
    model: string
 ): Promise<unknown> {
-   await server.openModelDocument({ uri, clientId, text: model });
+   await server.createSession({ clientId, label: 'hydranium-cli' });
    let saved: unknown;
    try {
+      // The server creates a document only when it finds no file and no
+      // client has it open; anything else is opened. An open that fails
+      // reports why the create failed too, since that may be the real cause.
+      await server.createModelDocument({ uri, clientId, text: model }).catch((created: unknown) =>
+         server.openModelDocument({ uri, clientId }).catch((opened: unknown) => {
+            throw new Error(`Cannot save ${uri}: ${describe(opened)} (creating it failed first: ${describe(created)})`, { cause: created });
+         })
+      );
       saved = await server.saveModelDocument({ uri, clientId, model, basedOn: 'anything' });
    } catch (error: unknown) {
-      await server.closeModelDocument({ uri, clientId }).catch(() => undefined);
+      await server.closeSession({ clientId }).catch(() => undefined);
       throw error;
    }
-   await server.closeModelDocument({ uri, clientId });
+   await server.closeSession({ clientId });
    return saved;
+}
+
+function describe(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
 }
 
 /**

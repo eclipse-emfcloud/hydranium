@@ -125,9 +125,10 @@ lifecycle to a multi-client scenario:
   it; the data-server response then reads a fresh snapshot from that shared
   entry. A textual `didOpen` attach can separately refresh the build. Neither
   path replaces shared content with the caller's optional seed.
-- Between open and close, any client may send `update`s through
-  [`ModelService.update`](../../packages/core/src/langium/model-service/model-service.ts).
-  Its `basedOn` check runs before serialization or mutation; a successful
+- Between open and close, a client may send `update`s through its
+  [client session](client-sessions.md), which fails for a document the session
+  does not have open. The `basedOn` check runs before serialization or
+  mutation and again where the text applies; a successful
   content change is installed by
   [`AstDocumentManager.update`](../../packages/core/src/documents/ast-document-manager.ts),
   which advances the server-owned version and records the *author*. The
@@ -140,9 +141,12 @@ lifecycle to a multi-client scenario:
   request — the "shadow path"
   ([`LanguageClientTextShadow`](../../packages/core/src/documents/language-client-text-shadow.ts)).
 - After the last client closes the document, the shared text and editor shadow
-  are released, while the server's content-version sequence is retained. File
-  URIs then receive the normal disk-backed close rebuild; non-file URIs remain
-  indexed for adopter-controlled lifecycle handling.
+  are released, while the server's content-version sequence is retained. The
+  text store then rebuilds file URIs from disk for every head, the LSP head and
+  a headless server alike; non-file URIs remain indexed for adopter-controlled
+  lifecycle handling. After a lost connection the release can wait out a
+  configured grace, within which a reconnecting client finds its unsaved text
+  (see [Last close](client-sessions.md#last-close)).
 
 A data-server client's `DataSession` is a client session registered over its
 connection (see [Client sessions](client-sessions.md)). It pairs an
@@ -155,7 +159,8 @@ If an open's snapshot fails, the open it made is closed again. If watch
 registration fails, the session closes the document it just opened. A close
 that fails leaves the document open until the session ends.
 
-Saving is a separate boundary: [`ModelService.save`](../../packages/core/src/langium/model-service/model-service.ts)
+Saving is a separate boundary: a session's `save`
+([`ModelService`](../../packages/core/src/langium/model-service/model-service.ts))
 builds through the update path, then
 [`AstDocumentManager.save`](../../packages/core/src/documents/ast-document-manager.ts)
 writes the current store text to disk only when it differs. A successful model

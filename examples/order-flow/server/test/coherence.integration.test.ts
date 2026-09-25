@@ -60,8 +60,8 @@ import {
 import { NodeFileSystem } from '@hydranium/core/node';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { DocumentState, URI } from '@hydranium/langium';
-import { Deferred, isConflictError, type TransferDocument } from '@hydranium/protocol';
-import type { TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
+import { Deferred, isConflictError, isSessionClosedError, type TransferDocument } from '@hydranium/protocol';
+import type { DataServerProtocol, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
 import { ErrorCodes } from 'vscode-jsonrpc';
 import { Diagnostic, type PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
 import { readFileSync } from 'node:fs';
@@ -221,6 +221,12 @@ class HeldDataServer extends DataServer<OrderFlowTransfer> {
    }
 }
 
+/** Register `clientId` as a session on the data connection and open `uri` for it, which every data write needs. */
+async function openOverData(proxy: DataServerProtocol<OrderFlowTransfer>, clientId: string, uri: string): Promise<void> {
+   await proxy.createSession({ clientId });
+   await proxy.openModelDocument({ uri, clientId });
+}
+
 /**
  * Boot all three heads over ONE shared tree, on a throwaway copy of the sample
  * workspace. Fresh per test so an in-memory edit never leaks between tests.
@@ -295,6 +301,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       // observes the shared validation pipeline.
       const reDiagnosed = lsp.nextDiagnostics(processUri);
 
+      await openOverData(data.proxy, 'coherence-data', processUri);
       const edited = await data.proxy.updateModelDocument({
          uri: processUri,
          clientId: 'coherence-data',
@@ -322,7 +329,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
    it(
       'crosses a data-head .domain edit to .process diagnostics in the other grammar',
       async () => {
-         const { lsp, data, uri } = await bootHeads();
+         const { shared, lsp, data, uri } = await bootHeads();
          const domainUri = uri(WORKSPACE_FILES.ordersDomain);
          const processUri = uri(WORKSPACE_FILES.fulfillmentProcess);
 
@@ -333,6 +340,12 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          // cannot be read off the wire; it has to be provoked, which is what the
          // control half does.
          expect(lsp.diagnostics).toHaveLength(0);
+         // The data head writes only what it has open. The open rebuilds the
+         // document through the LSP head's text-change bridge, so its publishes
+         // are let settle before any window below starts counting.
+         await openOverData(data.proxy, 'coherence-data', domainUri);
+         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
+         await tick(100);
 
          // Control half — a HARMLESS `.domain` edit, doing double duty: it proves
          // the cross-grammar cascade fires at all, and it establishes that
@@ -432,7 +445,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       const textDocuments = shared.workspace.TextDocuments;
 
       lsp.openDocument(processUri, initial, 'process', 1);
-      await data.proxy.openModelDocument({ uri: processUri, clientId: 'stale-data-client' });
+      await openOverData(data.proxy, 'stale-data-client', processUri);
       await data.proxy.watchModelDocument({ uri: processUri, clientId: 'stale-data-client' });
       expect(textDocuments.isOpenInClient(processUri, 'stale-data-client')).toBe(true);
       const snapshot = await data.proxy.getModelDocument({ uri: processUri });
@@ -472,6 +485,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          server: channel => new DataServer<OrderFlowTransfer>(channel, shared)
       });
       try {
+         await reconnected.proxy.createSession({ clientId: 'reconnected-data' });
          const reopened = await reconnected.proxy.openModelDocument({ uri: processUri, clientId: 'reconnected-data' });
          expect(reopened.root?.$type).toBe('ProcessModel');
          expect((reopened.root as ProcessModel).nodes.map(node => node.name)).toContain('Archive');
@@ -521,7 +535,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
 
       try {
          lsp.openDocument(processUri, initial, 'process', 1);
-         await held.proxy.openModelDocument({ uri: processUri, clientId: 'held-data-client' });
+         await openOverData(held.proxy, 'held-data-client', processUri);
          const snapshot = await held.proxy.getModelDocument({ uri: processUri });
          lsp.changeDocument(processUri, EDITED_PROCESS_TEXT, 2);
          await waitFor(() => textDocuments.version(processUri) > snapshot.version, {
@@ -551,9 +565,11 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          expect(await clientOutcome).toMatchObject({ code: ErrorCodes.PendingResponseRejected });
          expect(textDocuments.isOpenInClient(processUri, 'held-data-client')).toBe(false);
 
+         // The connection's session ended with it, so the released write fails
+         // as that session's calls do, before the version gate is consulted.
          held.server.release.resolve();
          await waitFor(() => held.server.late !== undefined, { message: 'the released write never ran' });
-         await expect(held.server.late).rejects.toSatisfy(isConflictError);
+         await expect(held.server.late).rejects.toSatisfy(isSessionClosedError);
          expect(textDocuments.get(processUri)?.getText()).toBe(EDITED_PROCESS_TEXT);
          expect(textDocuments.isOpenInClient(processUri, 'held-data-client')).toBe(false);
       } finally {

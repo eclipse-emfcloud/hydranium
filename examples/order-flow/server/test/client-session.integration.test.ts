@@ -123,7 +123,8 @@ describe('ModelService.createSession', () => {
    it('refuses an id a client already has documents open under', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;
-      await models.open({ uri, clientId: 'wire-1' });
+      // A client that is not a session: the manager records opens for any id.
+      await harness.shared.workspace.AstDocumentManager.open({ uri, clientId: 'wire-1' });
 
       expect(() => models.createSession('form', 'wire-1')).toThrow(DuplicateClientIdError);
    });
@@ -175,7 +176,7 @@ describe('ClientSession writes', () => {
       const textDocuments = harness.shared.workspace.TextDocuments;
       // Another client keeps the document in the store, so a write that skipped
       // the check at apply would land rather than fail for want of a document.
-      await models.open({ uri, clientId: 'bystander' });
+      await models.createSession('bystander').open(uri);
       const session = models.createSession('form');
       await session.open(uri);
 
@@ -221,7 +222,7 @@ describe('ClientSession writes', () => {
       const textDocuments = harness.shared.workspace.TextDocuments;
       // Another client keeps the document in the store, so a save that skipped
       // the check would find text to write.
-      await models.open({ uri, clientId: 'bystander' });
+      await models.createSession('bystander').open(uri);
       const session = models.createSession('form');
       await session.open(uri);
       // The rebuild of the applied text parses it before the save goes on.
@@ -240,7 +241,7 @@ describe('ClientSession writes', () => {
    it('fails a save whose session ended after its text applied, and writes nothing', async () => {
       const { harness, uri, path } = await boot();
       const models = harness.shared.model.ModelService;
-      await models.open({ uri, clientId: 'bystander' });
+      await models.createSession('bystander').open(uri);
       const session = models.createSession('form');
       await session.open(uri);
       harness.shared.workspace.DocumentBuilder.onDocumentPhase(DocumentState.Parsed, document => {
@@ -252,14 +253,6 @@ describe('ClientSession writes', () => {
       await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
 
       expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
-   });
-
-   it('keeps the flat update an upsert for an id that is not a session', async () => {
-      const { harness, uri } = await boot();
-
-      await harness.shared.model.ModelService.update({ uri, clientId: 'legacy', model: EDITED, basedOn: 'anything' });
-
-      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, 'legacy')).toBe(true);
    });
 });
 
@@ -341,9 +334,9 @@ describe('ClientSession.updateAll', () => {
       await session.open(otherUri);
       const before = textDocuments.version(uri);
       const otherBefore = textDocuments.version(otherUri);
-      interveneWhileSerialising(harness, OTHER_FILE, () =>
-         models.update({ uri: otherUri, clientId: 'bystander', model: `${CLEAN}\n`, basedOn: 'anything' })
-      );
+      const bystander = models.createSession('bystander');
+      await bystander.open(otherUri);
+      interveneWhileSerialising(harness, OTHER_FILE, () => bystander.update({ uri: otherUri, model: `${CLEAN}\n`, basedOn: 'anything' }));
 
       const write = session.updateAll({
          updates: [
@@ -364,7 +357,7 @@ describe('ClientSession.updateAll', () => {
       const textDocuments = harness.shared.workspace.TextDocuments;
       // A bystander keeps the other document in the store, so the write fails
       // for want of the session's open rather than for want of a document.
-      await models.open({ uri: otherUri, clientId: 'bystander' });
+      await models.createSession('bystander').open(otherUri);
       const session = models.createSession('diagram');
       await session.open(uri);
       await session.open(otherUri);
@@ -575,7 +568,7 @@ describe('ClientSession.create', () => {
    it('refuses a URI another client has open, even one not yet on disk', async () => {
       const { harness, newUri } = await boot();
       const models = harness.shared.model.ModelService;
-      await models.open({ uri: newUri, clientId: 'other', text: CLEAN });
+      await models.createSession('other').create(newUri, CLEAN);
       const session = models.createSession('form');
 
       await expect(session.create(newUri, EDITED)).rejects.toThrow(/open/);
@@ -631,7 +624,7 @@ describe('ClientSession.create races', () => {
             injected = true;
             notifyDidOpen({ textDocument: { ...params.textDocument, text: EDITED } }, 'other');
             notifyDidOpen(params, clientId);
-            queueMicrotask(() => void models.close({ uri: newUri, clientId: 'other' }));
+            queueMicrotask(() => textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: newUri } }, 'other'));
             return;
          }
          notifyDidOpen(params, clientId);
@@ -680,7 +673,7 @@ describe('DefaultModelService.newSession', () => {
 
    class LabellingModelService extends DefaultModelService<AstNode> {
       protected override newSession(clientId: string, label: string): LabelledSession {
-         return new LabelledSession(this, this.services, clientId, label);
+         return new LabelledSession(this, this.sessionWriter(), this.services, clientId, label);
       }
    }
 
