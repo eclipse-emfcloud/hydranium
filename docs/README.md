@@ -54,6 +54,9 @@ constraint behind it.
 - [**Document layers**](concepts/document-layers.md) — the four things
   "document" means, why the last two are deliberately not one type, and why
   there is no transfer→AST converter.
+- [**Client sessions**](concepts/client-sessions.md) — how a participant opens,
+  writes and closes documents through a session handle, and what ending a
+  session or deleting a file closes.
 - [**Shared vs. language DI scope**](concepts/shared-vs-language-di-scope.md) —
   which services live once per process and which once per grammar.
 - [**Build-pipeline registries**](concepts/build-pipeline-registries.md) — how

@@ -8,3 +8,4 @@
  ********************************************************************************/
 
 export * from './model-service.js';
+export * from './client-session.js';

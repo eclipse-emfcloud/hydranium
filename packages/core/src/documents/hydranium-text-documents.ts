@@ -20,7 +20,7 @@
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
-import { UriUtils } from '@hydranium/langium';
+import { type URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
    type ApplyWorkspaceEditResult,
@@ -49,6 +49,7 @@ import { type DocumentUri, TextDocument, type TextDocumentContentChangeEvent } f
 import { type CanonicalUri, type LanguageClientUri, asLanguageClientUri, DisposableCollection, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { LANGUAGE_CLIENT_ID } from './client-ids.js';
+import { type ClientSessionClosedEvent, ClientSessionRegistry, type OpenOptions } from './client-session-registry.js';
 import { isFullReplace, LanguageClientTextShadow } from './language-client-text-shadow.js';
 
 /**
@@ -97,8 +98,6 @@ export interface HydraniumTextDocumentsOptions<T extends TextDocument = TextDocu
  * change that caused it.
  */
 export interface DocumentTrackingRecord {
-   /** Client ids currently holding this document open (multi-client membership). */
-   readonly clients: Set<string>;
    /** Author of each version, sparse-indexed by the SHARED (server-assigned) version number. */
    readonly versionAuthors: string[];
    /**
@@ -252,7 +251,8 @@ function contentHash(text: string): string {
  * Multi-client text-document tracking on top of Langium's `NormalizedTextDocuments`.
  *
  * Adds the framework features used by the integrity, model-server, and GLSP layers:
- *   - Per-document client membership (multiple clients can attach to the same URI).
+ *   - Per-document client membership (multiple clients can attach to the same
+ *     URI) and the client-session table, both kept by {@link __sessions}.
  *   - A SERVER-OWNED shared version sequence: per-URI, monotonic across
  *     close/reopen cycles, advancing exactly when the synced content changes.
  *     Client-declared version ids (Monaco's buffer numbering) feed only a
@@ -270,14 +270,19 @@ function contentHash(text: string): string {
  */
 export class HydraniumTextDocuments<T extends TextDocument = TextDocument> extends NormalizedTextDocuments<T> {
    /**
-    * Per-URI client-facing tracking ({@link DocumentTrackingRecord}): client
-    * membership, version-author history, and integrity-staged pending content,
-    * keyed by normalized URI. One record per URI so the last-client close clears
-    * every axis atomically. The language-client diff baseline stays in
-    * {@link __shadow} (its own abstraction); the parsed-document store stays in
-    * the inherited `__syncedDocuments`.
+    * Per-URI client-facing tracking ({@link DocumentTrackingRecord}), keyed by
+    * canonical URI. One record per URI, so dropping it clears every axis at
+    * once. Which client has the document open is kept apart, in
+    * {@link __sessions}.
     */
    protected __documents = new Map<CanonicalUri, DocumentTrackingRecord>();
+
+   /**
+    * Which client has which document open, and which client ids are registered
+    * sessions. Every open-state predicate on this class reads it, so an open
+    * recorded anywhere else is invisible to the last-close transition.
+    */
+   protected readonly __sessions = new ClientSessionRegistry();
 
    /**
     * Per-URI shared-version continuity across close/reopen cycles
@@ -496,7 +501,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // the update) from "incoming version older than ours" (stale race).
             const reason =
                lastSeen === td.version ? `already at version ${lastSeen}` : `incoming version ${td.version} older than current ${lastSeen}`;
-            this.logUri(uri, `Ignore update by ${clientId}: ${reason}`, 'debug');
+            this.logUri(uri, `Ignore update by ${this.formatClientId(clientId)}: ${reason}`, 'debug');
             return;
          }
          record.clientVersions.set(clientId, td.version);
@@ -562,7 +567,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
                return;
             }
          }
-         this.log(document.uri, `Update to version ${document.version} by ${clientId}${changed ? '' : ' (content unchanged)'}`);
+         this.log(
+            document.uri,
+            `Update to version ${document.version} by ${this.formatClientId(clientId)}${changed ? '' : ' (content unchanged)'}`
+         );
          this.__onDidChangeContent.fire(Object.freeze({ document, clientId }));
       }
    }
@@ -596,22 +604,23 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.__syncedDocuments.set(key, document);
          this.setAuthor(key, document.version, clientId);
       }
-      this.log(document.uri, `Update to version ${document.version} by ${clientId}${changed ? '' : ' (content unchanged)'}`);
+      this.log(
+         document.uri,
+         `Update to version ${document.version} by ${this.formatClientId(clientId)}${changed ? '' : ' (content unchanged)'}`
+      );
       this.__onDidChangeContent.fire(Object.freeze({ document, clientId }));
       return document.version;
    }
 
    public notifyDidCloseTextDocument(event: DidCloseTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const uri = this.documentKey(event.textDocument.uri);
-      if (!this.isOpenInClient(uri, clientId)) {
+      if (!this.__sessions.removeOpen(uri, clientId)) {
          return;
       }
-      const closingRecord = this.__documents.get(uri);
-      closingRecord?.clients.delete(clientId);
-      closingRecord?.clientVersions.delete(clientId);
+      this.__documents.get(uri)?.clientVersions.delete(clientId);
       const syncedDocument = this.__syncedDocuments.get(uri);
       if (syncedDocument !== undefined) {
-         this.log(syncedDocument.uri, `Closed synced document: ${syncedDocument.version} by ${clientId}`);
+         this.log(syncedDocument.uri, `Closed synced document: ${syncedDocument.version} by ${this.formatClientId(clientId)}`);
          this.__onDidClose.fire(Object.freeze({ document: syncedDocument, clientId }));
 
          if (clientId === LANGUAGE_CLIENT_ID) {
@@ -623,7 +632,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.__shadow.invalidate(droppedUri);
             this.__pendingPushes.delete(droppedUri);
          }
-         if (!this.__documents.get(uri)?.clients.size) {
+         if (!this.__sessions.isOpen(uri)) {
             // Last client closed the document; delete sync state. The downstream
             // "rebuild from disk for file URIs / drop from index for ephemeral
             // URIs" decision lives in `HydraniumDocumentUpdateHandler.didCloseDocument`,
@@ -668,7 +677,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    public notifyDidSaveTextDocument(event: DidSaveTextDocumentParams, clientId = LANGUAGE_CLIENT_ID): void {
       const syncedDocument = this.__syncedDocuments.get(this.documentKey(event.textDocument.uri));
       if (syncedDocument !== undefined) {
-         this.log(syncedDocument.uri, `Saved synced document: ${syncedDocument.version} by ${clientId}`);
+         this.log(syncedDocument.uri, `Saved synced document: ${syncedDocument.version} by ${this.formatClientId(clientId)}`);
          this.__onDidSave.fire(Object.freeze({ document: syncedDocument, clientId }));
       }
    }
@@ -698,9 +707,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          return;
       }
       let document = this.__syncedDocuments.get(uri);
+      const existingClients = this.__sessions.clientsOf(uri);
+      this.__sessions.addOpen(uri, clientId);
       const record = this.trackingFor(uri);
-      const existingClients = [...record.clients];
-      record.clients.add(clientId);
       // Baseline the per-client staleness guard at the version id the client
       // declared for its own buffer (client-owned per LSP).
       record.clientVersions.set(clientId, td.version);
@@ -723,7 +732,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          const sequence = this.__versionSequences.get(uri);
          const version =
             sequence === undefined ? td.version : sequence.contentHash === contentHash(text) ? sequence.version : sequence.version + 1;
-         this.log(uri, `Open document: Version ${version} by ${clientId} [first client${source}]`);
+         this.log(uri, `Open document: Version ${version} by ${this.formatClientId(clientId)} [first client${source}]`);
          document = this.configuration.create(uri, td.languageId, version, text);
          this.__syncedDocuments.set(uri, document);
          this.setAuthor(uri, version, clientId);
@@ -786,9 +795,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (!document || this.isOpenInClient(key, clientId)) {
          return false;
       }
+      const existingClients = this.__sessions.clientsOf(key);
+      this.__sessions.addOpen(key, clientId);
       const record = this.trackingFor(key);
-      const existingClients = [...record.clients];
-      record.clients.add(clientId);
       record.clientVersions.set(clientId, document.version);
       this.logClientJoined(key, clientId, document.version, existingClients);
       return true;
@@ -797,8 +806,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    protected logClientJoined(uri: DocumentUri, clientId: string, version: number, existingClients: readonly string[]): void {
       this.log(
          uri,
-         `Attach client: ${clientId} joined existing document (version ${version}, ` +
-            `now open in: ${[...existingClients, clientId].join(', ')})`
+         `Attach client: ${this.formatClientId(clientId)} joined existing document (version ${version}, ` +
+            `now open in: ${[...existingClients, clientId].map(id => this.formatClientId(id)).join(', ')})`
       );
    }
 
@@ -808,7 +817,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          // Trigger a (re-)build by firing a change event.
          const timer = this.startTimerForUri(
             syncedDocument.uri,
-            `Refresh synced document: Version ${syncedDocument.version} by ${clientId}`
+            `Refresh synced document: Version ${syncedDocument.version} by ${this.formatClientId(clientId)}`
          );
          this.__onDidChangeContent.fire(Object.freeze({ document: syncedDocument, clientId }));
          timer.dispose();
@@ -846,7 +855,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    protected trackingFor(uri: CanonicalUri): DocumentTrackingRecord {
       let record = this.__documents.get(uri);
       if (!record) {
-         record = { clients: new Set(), versionAuthors: [], clientVersions: new Map() };
+         record = { versionAuthors: [], clientVersions: new Map() };
          this.__documents.set(uri, record);
       }
       return record;
@@ -989,17 +998,17 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * True iff any client still holds `uri` open. Distinct from {@link isOpen},
     * which reads `__syncedDocuments` — that map is cleared only AFTER the
     * `onDidClose` event fires for the last client, so `isOpen` returns `true`
-    * during the close event itself. `isOpenInAnyClient` reads the tracking
-    * record's `clients` set, which is updated BEFORE the fire, so an `onDidClose`
+    * during the close event itself. `isOpenInAnyClient` reads the open table
+    * ({@link __sessions}), which is updated BEFORE the fire, so an `onDidClose`
     * subscriber that finds this `false` knows the last client just closed and a
     * disk re-read / rebuild can proceed.
     */
    isOpenInAnyClient(uri: DocumentUri): boolean {
-      return (this.__documents.get(this.documentKey(uri))?.clients.size ?? 0) > 0;
+      return this.__sessions.isOpen(this.documentKey(uri));
    }
 
    isOpenInClient(uri: DocumentUri, client: string): boolean {
-      return !!this.__documents.get(this.documentKey(uri))?.clients.has(client);
+      return this.__sessions.isOpenIn(this.documentKey(uri), client);
    }
 
    isOpenInLanguageClient(uri: DocumentUri): boolean {
@@ -1010,14 +1019,14 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    isOnlyOpenInClient(uri: DocumentUri, client: string): boolean {
-      const key = this.documentKey(uri);
-      return this.__documents.get(key)?.clients.size === 1 && this.isOpenInClient(key, client);
+      const clients = this.__sessions.clientsOf(this.documentKey(uri));
+      return clients.length === 1 && clients[0] === client;
    }
 
    /**
     * Every document currently held open by at least one client, with the client
-    * ids holding it. Reads the same per-URI tracking records as
-    * {@link isOpenInAnyClient}, so it reflects a last-client close immediately.
+    * ids holding it. Reads the same open table as {@link isOpenInAnyClient}, so
+    * it reflects a last-client close immediately.
     *
     * Diagnostics-oriented — the server-state snapshot lists these so an operator
     * can see WHY a document is pinned: a document that lingers here after its
@@ -1025,13 +1034,99 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * under a shedding policy, explains why its CST is never shed).
     */
    openDocuments(): OpenDocument[] {
-      const result: OpenDocument[] = [];
-      for (const [uri, tracking] of this.__documents) {
-         if (tracking.clients.size > 0) {
-            result.push({ uri, clients: [...tracking.clients] });
+      return this.__sessions.openDocuments();
+   }
+
+   /** Fires once a client session has ended, after every document it had open was closed. */
+   get onDidCloseSession(): Event<ClientSessionClosedEvent> {
+      return this.__sessions.onDidCloseSession;
+   }
+
+   /**
+    * Start a client session under `clientId`. Throws `DuplicateClientIdError`
+    * where {@link ClientSessionRegistry.register} refuses the id.
+    */
+   registerSession(clientId: string): void {
+      this.__sessions.register(clientId);
+      this.tracer.info(`Session started: ${this.formatClientId(clientId)}`);
+      this.tracer.trace(`Session started: ${clientId}`);
+   }
+
+   /**
+    * End the client session `clientId`: close every document it has open, then
+    * free the id. Immediate — each close runs the ordinary close path before
+    * this returns. A no-op for an id that is not a registered session.
+    */
+   closeSession(clientId: string): void {
+      if (!this.__sessions.isRegistered(clientId)) {
+         return;
+      }
+      try {
+         for (const uri of this.__sessions.beginClose(clientId)) {
+            this.notifyDidCloseTextDocument({ textDocument: { uri } }, clientId);
+         }
+      } finally {
+         this.__sessions.unregister(clientId);
+         this.tracer.info(`Session closed: ${this.formatClientId(clientId)}`);
+         this.tracer.trace(`Session closed: ${clientId}`);
+      }
+   }
+
+   /** The options `clientId` opened `uri` with, or `undefined` when it gave none or does not have it open. */
+   openOptions(uri: DocumentUri, clientId: string): OpenOptions | undefined {
+      return this.__sessions.openOptions(this.documentKey(uri), clientId);
+   }
+
+   /** Replace the options of an existing open. Does nothing when `clientId` does not have `uri` open. */
+   setOpenOptions(uri: DocumentUri, clientId: string, options: OpenOptions | undefined): void {
+      this.__sessions.setOpenOptions(this.documentKey(uri), clientId, options);
+   }
+
+   /**
+    * The file behind `uri` was deleted: close every open of it except the
+    * language client's.
+    *
+    * The editor's open is left alone because the editor owns it: it keeps the
+    * buffer of a deleted file and goes on sending changes for it, and a store
+    * that had closed the document would drop every one of them until the editor
+    * reopened.
+    */
+   notifyDocumentDeleted(uri: DocumentUri): void {
+      const key = this.documentKey(uri);
+      for (const clientId of this.__sessions.clientsOf(key)) {
+         if (clientId !== LANGUAGE_CLIENT_ID) {
+            this.notifyDidCloseTextDocument({ textDocument: { uri: key } }, clientId);
          }
       }
-      return result;
+   }
+
+   /**
+    * Remove the document for `uri`, closing every open of it first — the
+    * editor's included, since the document it would keep editing is gone.
+    *
+    * The base removes the synced document without consulting the open table,
+    * which leaves every open recorded against a document that no longer exists:
+    * the store then answers that the URI is open, and the next open attaches to
+    * nothing.
+    */
+   override delete(uri: string | URI | T): void {
+      const key = this.documentKey((typeof uri === 'object' && 'uri' in uri ? uri.uri : uri).toString());
+      for (const clientId of this.__sessions.clientsOf(key)) {
+         this.notifyDidCloseTextDocument({ textDocument: { uri: key } }, clientId);
+      }
+      super.delete(key);
+   }
+
+   /**
+    * A client id as log lines print it. An id containing `#` is cut eight
+    * characters after its last `#`, which leaves a minted `label#uuid` as the
+    * label and enough of the UUID to tell sessions apart; an id without `#`
+    * prints whole. The full id goes out at trace level wherever a session
+    * starts or ends.
+    */
+   protected formatClientId(clientId: string): string {
+      const separator = clientId.lastIndexOf('#');
+      return separator < 0 ? clientId : clientId.slice(0, separator + 9);
    }
 
    /**

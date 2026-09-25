@@ -131,6 +131,7 @@ const SNIPPET_TARGETS = [
       ].join('\n')
    },
    { readme: 'docs/concepts/framework-vs-adopter.md', host: 'examples/order-flow/server' },
+   { readme: 'docs/concepts/client-sessions.md', host: 'examples/order-flow/server' },
    // Hosted by the BROWSER example, not the server one: its fence names
    // `@hydranium/glsp-server/browser`, and only a package that declares the
    // dependency should be able to reach it. The fence's own preamble supplies

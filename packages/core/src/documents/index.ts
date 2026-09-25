@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 export * from './client-ids.js';
+export * from './client-session-errors.js';
+export * from './client-session-registry.js';
 export * from './language-client-text-shadow.js';
 export * from './hydranium-text-documents.js';
 export * from './ast-document-manager.js';
