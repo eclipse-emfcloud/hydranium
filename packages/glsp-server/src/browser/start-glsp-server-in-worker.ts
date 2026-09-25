@@ -14,43 +14,38 @@ import {
    WorkerServerLauncher,
    createAppModule
 } from '@eclipse-glsp/server/browser.js';
-import { Container, type ContainerModule } from 'inversify';
-import type { Logger } from '@hydranium/protocol';
+import { Container, injectable, type ContainerModule } from 'inversify';
+import { createMessagePortTransport, type Logger, type TransferredMessagePort } from '@hydranium/protocol';
+import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
 import type { IntegratedServer } from '@hydranium/core';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
 
+// Re-exported so the type of this head's `context` still resolves from here.
+export type { TransferredMessagePort } from '@hydranium/protocol';
+
 /**
- * A `MessagePort` the host transferred into the worker, described structurally.
+ * The worker launcher every {@link startGlspServerInWorker} head runs on: GLSP's
+ * own, with its connection built over `createMessagePortTransport` rather than
+ * over `BrowserMessageReader`/`BrowserMessageWriter`, which never report a
+ * close. So the client disposing its connection closes this one, and upstream
+ * disposes the server instance, and with it every client session, as it does
+ * when a socket closes.
  *
- * This package inherits `tsconfig.base.json`'s `lib: ["ES2022"]` and so compiles
- * without the DOM lib, which is what keeps `document` / `window` compile errors
- * here — so `MessagePort` has no name either and the contract has to be spelled
- * out.
+ * Requires `context`: unlike upstream it never falls back to the worker global.
  *
- * **The member set is chosen to admit a `MessagePort` and REJECT a `Worker` or
- * the worker global**, both of which the launcher's own reader would otherwise
- * accept. Only a port needs starting, so `start` is what tells the three apart,
- * and naming it here turns "never bind a head to the global" from a rule in a
- * document into a compile error at the call site.
- *
- * **That compile error happens at the ADOPTER, not here.** This project resolves
- * neither `MessagePort` nor `Worker` as a type, so nothing in this package can
- * demonstrate the rejection; a host compiling its worker against `lib.webworker`
- * (or a page against `lib.dom`) is where the names resolve and the guard bites.
- * Measured there: passing the worker global fails with `Property 'start' is
- * missing in type 'DedicatedWorkerGlobalScope'`.
- *
- * `addEventListener` is not a discriminator — `postMessage` plus `start` already
- * excludes the other two — and nothing in this module calls any of the three
- * (the reader assigns `onmessage`, which starts a port implicitly). It is listed
- * because it is part of what the reader uses, so the interface reads as the
- * contract rather than as a minimal trick.
+ * **The install needs a single `vscode-jsonrpc`.** The connection comes from
+ * this package's copy, and GLSP's request and notification types from the copy
+ * `@eclipse-glsp/protocol` resolves. With two copies, a typed notification or
+ * request GLSP sends throws `Unknown parameter structure auto`, because the
+ * connection compares the type's parameter-structure marker by identity.
  */
-export interface TransferredMessagePort {
-   postMessage(message: unknown): void;
-   addEventListener(type: 'message', listener: (event: unknown) => void, options?: unknown): void;
-   start(): void;
+@injectable()
+export class HydraniumGlspWorkerServerLauncher extends WorkerServerLauncher {
+   protected override createConnection(options: WorkerLaunchOptions): MessageConnection {
+      const transport = createMessagePortTransport(options.context as unknown as TransferredMessagePort);
+      return createMessageConnection(transport.reader, transport.writer);
+   }
 }
 
 /**
@@ -66,14 +61,15 @@ export interface BrowserGlspServerOptions {
    /**
     * The port the host transferred into the worker for this head.
     *
-    * **Required, and that is the whole point.** GLSP's
-    * `WorkerServerLauncher.createConnection` falls back to the worker global
-    * when it is omitted, and a head on the global receives every other head's
-    * traffic — `BrowserMessageReader` filters nothing, so this is not a race
-    * under load but every message delivered to the wrong reader. The global is
-    * unusable even for a single head, because the launcher posts its startup
-    * string through the global `postMessage` regardless of the connection it
-    * was given, and no JSON-RPC reader can parse that.
+    * **Required: the worker global is no substitute.** A head on the global
+    * receives every other head's traffic — a reader filters nothing, so this is
+    * not a race under load but every message delivered to the wrong reader — and
+    * GLSP's launcher posts its startup string through the global `postMessage`
+    * regardless of the connection it was given, which no JSON-RPC reader parses.
+    * Unlike upstream's, this head's launcher never falls back to the global.
+    *
+    * The page's end must connect through `createMessagePortTransport` as well:
+    * the head reads its close signal from the port, and posts one on it.
     */
    readonly context: TransferredMessagePort;
    /**
@@ -126,8 +122,9 @@ export interface BrowserGlspServerOptions {
  *   below. There is no transport handshake to wait on: the port arrived live,
  *   and the launcher's own readiness signal is a string it posts on the worker
  *   global, which nothing here reads.
- * - `stopped` resolves when the connection closes, and rejects on a connection
- *   error.
+ * - `stopped` resolves when the connection closes, which the client disposing
+ *   its connection causes, and rejects on a connection error. Nothing reports a
+ *   page that dies, because the port cannot.
  */
 export function startGlspServerInWorker(options: BrowserGlspServerOptions): IntegratedServer {
    const lifecycle = options.logger;
@@ -145,7 +142,7 @@ export function startGlspServerInWorker(options: BrowserGlspServerOptions): Inte
    const appContainer = new Container();
    appContainer.load(glspAppModule, createGlspFrameworkOverrides(options.createLogger), ...(options.appModules ?? []));
 
-   const launcher = appContainer.resolve<WorkerServerLauncher>(WorkerServerLauncher);
+   const launcher = appContainer.resolve<WorkerServerLauncher>(HydraniumGlspWorkerServerLauncher);
    // Additional module rather than an app-container binding, as on Node: the
    // launcher loads these into the per-connection SERVER container, the only
    // tier where the adopter's `ServerModule` binding of `GLSPServer` is
@@ -153,10 +150,10 @@ export function startGlspServerInWorker(options: BrowserGlspServerOptions): Inte
    launcher.configure(options.serverModule, createGlspServerOverrides());
 
    try {
-      // Upstream declares `WorkerLaunchOptions.context` as `Worker`, narrower
-      // than the `MessagePort | Worker | DedicatedWorkerGlobalScope` its own
-      // `BrowserMessageReader` accepts — so the value that is CORRECT here is
-      // the one the declaration names as wrong.
+      // Upstream declares `WorkerLaunchOptions.context` as `Worker`, and
+      // `HydraniumGlspWorkerServerLauncher.createConnection` reads it as a
+      // port — so the value that is CORRECT here is the one the declaration
+      // names as wrong.
       //
       // **The cast is currently redundant, and is kept deliberately.** `Worker`
       // does not resolve under this package's `lib`, so `skipLibCheck` leaves

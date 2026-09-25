@@ -18,7 +18,9 @@
  * identity, open/watch ordering, echo recognition), the inbound
  * fan-out (`DataEvents`), and the two halves of the hop for hosts whose
  * client cannot hold a socket — `createPostMessageTransport` on the client
- * side and `relayToPostMessageChannel` on the side that does hold it.
+ * side and `relayToPostMessageChannel` on the side that does hold it, and
+ * `createMessagePortTransport` for a head's worker `MessagePort`, at either
+ * end, which the GLSP worker head uses too.
  *
  * **Neutral, and gate-enforced so.** Nothing here imports a host package or a
  * Node builtin, which is what lets one client tier serve a Theia frontend, a VS

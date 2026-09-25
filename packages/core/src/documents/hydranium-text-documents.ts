@@ -1496,6 +1496,31 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
+    * Close every document the language client has open, as a `didClose` for
+    * each would, so each last close reverts. For a host whose editor connection
+    * can end while the process lives on, such as a worker whose port's peer
+    * closed: the language client is no session, so nothing else closes them.
+    *
+    * It first waits for the workspace initialization the open handler waits
+    * for, so an open that arrived before the close is closed too; closing at
+    * once would leave that open to land afterwards, held by a client that is
+    * gone.
+    */
+   async closeLanguageClientDocuments(): Promise<void> {
+      await this.services.workspace.WorkspaceManager.workspaceInitialized;
+      for (const uri of this.__sessions.opensOf(LANGUAGE_CLIENT_ID)) {
+         // Every spelling the client opened the file under, since the close
+         // below drops only the canonical one's.
+         const clientUris = this.__documents.get(uri)?.languageClientUris;
+         for (const clientUri of clientUris ?? []) {
+            this.invalidateLanguageClientText(clientUri);
+         }
+         clientUris?.clear();
+         this.notifyDidCloseTextDocument({ textDocument: { uri } });
+      }
+   }
+
+   /**
     * The file behind `uri` was deleted: close every open of it except the
     * language client's.
     *

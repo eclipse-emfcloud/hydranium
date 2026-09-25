@@ -53,6 +53,7 @@ declare const myDiagramModule: DiagramModule;
 declare const transferredPort: {
    postMessage(message: unknown): void;
    addEventListener(type: 'message', listener: (event: unknown) => void, options?: unknown): void;
+   removeEventListener(type: 'message', listener: (event: unknown) => void, options?: unknown): void;
    start(): void;
 };
 -->
@@ -97,7 +98,7 @@ That property is worth more than it looks, and what it does and does not buy is
 Heads share one Langium store, so they share one worker. Never bind a head to
 the worker global.
 
-- `BrowserMessageReader` filters nothing, so two heads reading the global each
+- A reader filters nothing, so two heads reading the global each
   receive the other's traffic. This is not a race that appears under load; it is
   every message delivered to the wrong reader.
 - The global is unusable even for a *single* head, because GLSP's
@@ -109,6 +110,25 @@ So: the page creates one `MessageChannel` per head and transfers the ports into
 the worker in a bootstrap message; the global carries bootstrap and that stray
 handshake only. Designing this in from the first head costs nothing; retrofitting
 it when the second arrives touches every call site.
+
+A port also reports no close: Chromium has no `close` event on `MessagePort`,
+Firefox and WebKit have not committed to one, and
+`BrowserMessageReader`/`BrowserMessageWriter` fire none. A head then never
+learns that its client went away, and keeps its documents open. So connect a
+head's port through `createMessagePortTransport` from
+`@hydranium/protocol` at BOTH ends. `startGlspServerInWorker` already does so
+at the worker's end. Disposing a connection posts a close signal after
+everything it wrote, and the other end's connection closes, as it does when a
+socket closes: the data head ends the client's sessions as lost, and GLSP
+disposes its client sessions. The LSP head has no session to end and a worker
+has no process to exit, so the host passes the LSP reader's close on to
+`TextDocuments.closeLanguageClientDocuments()`, which closes the editor's
+documents as a `didClose` for each would. For a connection at its default
+parallelism and message strategy, the close waits until that end's connection
+has dispatched every message sent before the signal, under either
+`vscode-jsonrpc` runtime, so a `closeSession` already sent still ends its
+session as closed. A page or a worker that dies ends nothing, because the port
+cannot report it.
 
 Measured with all three heads live: each head's port carries only its own
 protocol — no LSP method on the data port, no GLSP action on either — and the
@@ -242,8 +262,8 @@ declare const store: FileSystemStore;
 import { persistentFileSystem } from '@hydranium/core';
 
 // AWAITED before the services exist, and that is the ordering contract rather
-// than a convenience: a `BrowserMessageReader` starts its port on construction
-// but drops every message until `startLanguageServer` calls `listen`, so an
+// than a convenience: `createMessagePortTransport` starts its port as it is
+// built but drops every message until `startLanguageServer` calls `listen`, so an
 // `initialize` arriving during a later await is lost with no error anywhere.
 const fileSystem = await persistentFileSystem({
    store,

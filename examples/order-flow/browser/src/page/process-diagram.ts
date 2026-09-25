@@ -49,7 +49,8 @@ import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { BrowserMessageReader, BrowserMessageWriter, createMessageConnection } from 'vscode-jsonrpc/browser';
+import { createMessagePortTransport } from '@hydranium/protocol';
+import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
 // on equal specificity — the same ordering the VS Code diagram bundle depends
@@ -106,9 +107,10 @@ const noContextMenuModule = new ContainerModule(bind => {
  */
 export async function mountProcessDiagram(glspPort: MessagePort, sourceUri: string, onReport: (report: string) => void): Promise<string> {
    // No `connection.listen()` here: `BaseJsonrpcGLSPClient.start` calls it, and
-   // a second call throws. The reader also assigns `port.onmessage`, which
-   // starts the port implicitly.
-   const connection = createMessageConnection(new BrowserMessageReader(glspPort), new BrowserMessageWriter(glspPort));
+   // a second call throws. Both ends use `createMessagePortTransport`; see it
+   // for why.
+   const transport = createMessagePortTransport(glspPort);
+   const connection = createMessageConnection(transport.reader, transport.writer);
    const glspClient = new BaseJsonrpcGLSPClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: connection });
 
    const diagramOptions: IDiagramOptions = {

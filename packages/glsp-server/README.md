@@ -66,7 +66,7 @@ GLSP server init, and no peer declaration can prevent a nested copy. Add an
 | subpath     | holds                                                                                                                                                                   | platform        |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
 | `.`         | Composition and the head itself: app / diagram modules, state, storage, submission, command, dispatcher, computed-bounds, validation, logging, `serviceIdentifier`.       | browser-neutral |
-| `./browser` | `startGlspServerInWorker` and `BrowserGlspServerOptions` — the web-worker bringup on GLSP's `WorkerServerLauncher`.                                                       | browser-only    |
+| `./browser` | `startGlspServerInWorker`, `BrowserGlspServerOptions`, `HydraniumGlspWorkerServerLauncher` — the web-worker bringup on GLSP's `WorkerServerLauncher`.                     | browser-only    |
 | `./node`    | `startGlspServer`, `GlspServerOptions`, `StartedGlspServer` — the socket bringup on GLSP's `SocketServerLauncher`.                                                        | Node-only       |
 | `./testing` | `makeGlspHarness`, `makeNoopGlspLogger`, `makeCapturingGlspLogger`.                                                                                                      | browser-neutral |
 
@@ -85,7 +85,8 @@ Each subpath also has a `./lib/…` twin for consumers on
 
 Build the app container, load `HydraniumGlspAppModule` plus your own app modules,
 and hand the result to `startGlspServer` (or `startGlspServerInWorker`, whose
-`context` is a required transferred `MessagePort`). Per diagram open, storage
+`context` is a required transferred `MessagePort` whose page end connects
+through `createMessagePortTransport`). Per diagram open, storage
 loads the document, your GModel factory renders it, and user operations travel
 back into the shared AST through the recording command, after which the GModel is
 re-derived and every listener on that document is notified. The module-by-module

@@ -7,14 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
-import {
-   BrowserMessageReader,
-   BrowserMessageWriter,
-   createMessageConnection,
-   Emitter,
-   type MessageConnection
-} from 'vscode-jsonrpc/browser';
+import { createMessagePortTransport, renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { createMessageConnection, Emitter, type MessageConnection } from 'vscode-jsonrpc/browser';
 
 /**
  * The host half of the data head for a page talking to a worker.
@@ -32,6 +26,7 @@ import {
 export class WorkerDataPort implements DataPort {
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose = this.disposeEmitter.event;
+   protected disposed = false;
 
    constructor(protected readonly port: MessagePort) {}
 
@@ -40,9 +35,21 @@ export class WorkerDataPort implements DataPort {
     * there is nothing to open — but the connection must be `listen()`ing before
     * it is returned, because the RPC proxy queues calls on this promise and
     * never listens itself.
+    *
+    * Both ends use `createMessagePortTransport`; see it for why.
+    *
+    * **Rejects once this port is disposed, and a disposed port cannot be
+    * reused** — the one exception to `DataPort.connect`'s rule that a rejection
+    * leaves the port reusable. The dispose drops the current connection, which
+    * signals its end, and the worker's end of the port then stays closed: a
+    * later connection over it would send requests nothing answers, and hang.
     */
    connect(): Promise<MessageConnection> {
-      const connection = createMessageConnection(new BrowserMessageReader(this.port), new BrowserMessageWriter(this.port));
+      if (this.disposed) {
+         return Promise.reject(new Error('WorkerDataPort: the port is disposed, and the data head behind it has ended'));
+      }
+      const transport = createMessagePortTransport(this.port);
+      const connection = createMessageConnection(transport.reader, transport.writer);
       connection.listen();
       return Promise.resolve(connection);
    }
@@ -60,6 +67,7 @@ export class WorkerDataPort implements DataPort {
    }
 
    dispose(): void {
+      this.disposed = true;
       this.disposeEmitter.fire();
       this.disposeEmitter.dispose();
    }
