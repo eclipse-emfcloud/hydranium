@@ -45,7 +45,7 @@
  * are silent.
  */
 
-import { BrowserMessageReader, BrowserMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
+import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
 import {
    InitializedNotification,
    InitializeRequest,
@@ -56,6 +56,7 @@ import {
    UnregistrationRequest
 } from 'vscode-languageserver-protocol';
 import {
+   createMessagePortTransport,
    DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
@@ -489,8 +490,10 @@ function bootstrapWorker(): WorkerChannels {
       data.port2,
       glsp.port2
    ]);
+   // Both ends use `createMessagePortTransport`; see it for why.
+   const lspTransport = createMessagePortTransport(lsp.port1);
    return {
-      lsp: createMessageConnection(new BrowserMessageReader(lsp.port1), new BrowserMessageWriter(lsp.port1)),
+      lsp: createMessageConnection(lspTransport.reader, lspTransport.writer),
       dataPort: data.port1,
       glspPort: glsp.port1,
       workspace,
@@ -521,9 +524,10 @@ const PAGE_SESSION_LABEL = 'order-flow-browser-page';
  * One connection for the whole page, not one per read.
  *
  * A second connection over the same port would be a second JSON-RPC connection
- * on it, and `BrowserMessageReader` assigns `port.onmessage` — so the later
- * reader silently replaces the earlier one and the first connection's replies
- * stop arriving. A second interested party takes a second session off this one
+ * on it, and both readers see every message — so each receives the other's
+ * replies, and since the two number their requests independently, a reply can
+ * settle the wrong connection's request. Disposing either would also end the
+ * head for both. A second interested party takes a second session off this one
  * instead, which costs no transport and keeps the echo filter meaningful: two
  * parties sharing one `clientId` read each other's writes as their own echoes
  * and ignore them.

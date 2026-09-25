@@ -20,20 +20,23 @@
  * **It runs headless, without a browser**, which is the point — the whole
  * browser-only surface would otherwise be covered by nothing inside
  * `npm run check`. Node's `worker_threads` `MessagePort` satisfies
- * `BrowserMessageReader` / `BrowserMessageWriter`: it accepts an `onmessage`
- * assignment (which starts it) and has `addEventListener`. Measured, not
- * assumed. The one thing Node's main thread lacks is a global `postMessage`,
- * which `WorkerServerLauncher.run` calls unconditionally — so the tests install
- * one, and that stub is also the observation point for the third test below.
+ * `createMessagePortTransport`: it has `addEventListener` and `start`, and like
+ * a browser's port it clones and keeps order. Neither end calls `close()` on
+ * its port before a test's teardown: Node's port would report that, and a
+ * browser's reports nothing. The one thing Node's main thread lacks is a
+ * global `postMessage`, which `WorkerServerLauncher.run` calls unconditionally
+ * — so the tests install one, and that stub is also the observation point for
+ * the startup-string test below.
  */
 
 import { ServerModule, WORKER_START_UP_COMPLETE_MSG } from '@eclipse-glsp/server/browser.js';
 import { JsonrpcGLSPClient } from '@eclipse-glsp/protocol';
-import { MessageChannel, type MessagePort as NodeMessagePort } from 'node:worker_threads';
-import { BrowserMessageReader, BrowserMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
+import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { IntegratedServer } from '@hydranium/core';
-import { startGlspServerInWorker, type TransferredMessagePort } from '../src/browser/index.js';
+import { createMessagePortTransport } from '@hydranium/protocol';
+import { makeMessagePortPair, type MessagePortPair } from '@hydranium/protocol/testing/node';
+import { startGlspServerInWorker } from '../src/browser/index.js';
 import { makeCapturingGlspLogger, type CapturingGlspLogger } from '../src/testing/index.js';
 
 /**
@@ -78,29 +81,15 @@ function stubGlobalPostMessage(): GlobalPostMessageStub {
    };
 }
 
-/**
- * A Node `MessagePort` in the slot the option types as a transferred browser
- * one.
- *
- * The declared type is deliberately structural (see
- * {@link TransferredMessagePort}) so that a `Worker` and the worker global are
- * rejected; Node's port satisfies the same three members at runtime, and the
- * cast records that this is a test substituting one platform's port for the
- * other's rather than working around the type.
- */
-function asTransferredPort(port: NodeMessagePort): TransferredMessagePort {
-   return port as unknown as TransferredMessagePort;
-}
-
 describe('startGlspServerInWorker', () => {
-   let channel: MessageChannel;
+   let ports: MessagePortPair;
    let globalPostMessage: GlobalPostMessageStub;
    let capturing: CapturingGlspLogger;
    let clientConnection: MessageConnection | undefined;
    let server: IntegratedServer | undefined;
 
    beforeEach(() => {
-      channel = new MessageChannel();
+      ports = makeMessagePortPair();
       globalPostMessage = stubGlobalPostMessage();
       capturing = makeCapturingGlspLogger();
    });
@@ -110,24 +99,20 @@ describe('startGlspServerInWorker', () => {
       clientConnection = undefined;
       server = undefined;
       globalPostMessage.restore();
-      channel.port1.close();
-      channel.port2.close();
+      ports.dispose();
    });
 
    /** Start a head on `port2` and return a client connection on `port1`. */
    function startHeadAndConnect(): MessageConnection {
       server = startGlspServerInWorker({
-         context: asTransferredPort(channel.port2),
+         context: ports.port2,
          createLogger: () => capturing.logger,
          serverModule: new ServerModule()
       });
-      // Spelled as the reader's own parameter type rather than as `MessagePort`,
-      // which this project cannot name as a type at all. It buys no CHECKING:
-      // that parameter's declared union does not resolve here either, so
-      // `skipLibCheck` degrades it and any value would satisfy the cast. It is
-      // the honest spelling of the intent, not a guard.
-      const clientPort = channel.port1 as unknown as ConstructorParameters<typeof BrowserMessageReader>[0];
-      const connection = createMessageConnection(new BrowserMessageReader(clientPort), new BrowserMessageWriter(clientPort));
+      // The page's end speaks the same transport as the head's, so a dispose
+      // here reaches the head as a close.
+      const transport = createMessagePortTransport(ports.port1);
+      const connection = createMessageConnection(transport.reader, transport.writer);
       connection.listen();
       clientConnection = connection;
       return connection;
@@ -162,10 +147,9 @@ describe('startGlspServerInWorker', () => {
    it('posts the launcher startup string on the global and nothing on the port', async () => {
       const connection = startHeadAndConnect();
       const fromPort: unknown[] = [];
-      // Alongside the reader rather than instead of it: `addEventListener` does
-      // not start a port, and the reader's `onmessage` assignment already did,
-      // so both handlers see every inbound message.
-      channel.port1.addEventListener('message', event => fromPort.push((event as MessageEvent).data));
+      // Alongside the reader rather than instead of it: the transport already
+      // started the port, and both listeners see every inbound message.
+      ports.port1.addEventListener('message', event => fromPort.push((event as { readonly data: unknown }).data));
 
       await connection.sendRequest(JsonrpcGLSPClient.InitializeRequest, {
          applicationId: 'test-app',
@@ -197,5 +181,19 @@ describe('startGlspServerInWorker', () => {
       // to the LSP connection instead).
       expect(capturing.lines.length).toBeGreaterThan(0);
       expect(capturing.lines.map(line => line.message).join('\n')).toContain('GLSP server worker connection established');
+   });
+
+   it('stops when the client disposes its connection', async () => {
+      const connection = startHeadAndConnect();
+      await connection.sendRequest(JsonrpcGLSPClient.InitializeRequest, {
+         applicationId: 'test-app',
+         protocolVersion: '1.0.0'
+      });
+
+      connection.dispose();
+
+      // `stopped` settles on the same connection close that makes upstream
+      // dispose the server instance, and with it every client session.
+      await expect(server?.stopped).resolves.toBeUndefined();
    });
 });

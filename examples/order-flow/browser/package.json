@@ -19,6 +19,7 @@
     "generate": "node scripts/generate-workspace-seed.mjs",
     "lint": "eslint src test --max-warnings 0",
     "start": "node scripts/serve.mjs",
+    "test": "vitest run",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:headed": "playwright test --tsconfig tsconfig.e2e.json --headed",
     "test:e2e:install": "playwright install chromium",

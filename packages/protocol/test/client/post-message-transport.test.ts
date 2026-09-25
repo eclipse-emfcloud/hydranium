@@ -117,4 +117,24 @@ describe('createPostMessageTransport', () => {
 
       expect(received).toEqual([notification('ns/four', 4)]);
    });
+
+   it('rejects a write the channel throws on, and reports it as a writer error', async () => {
+      // What `postMessage` does with a value structured clone refuses: it
+      // throws a `DataCloneError` synchronously, before anything is sent.
+      const refused = new Error('could not be cloned');
+      const refusing: PostMessageChannel = {
+         post: () => {
+            throw refused;
+         },
+         onMessage: () => ({ dispose: () => undefined })
+      };
+      const transport = track(createPostMessageTransport(refusing));
+
+      const errors: unknown[] = [];
+      track(transport.writer.onError(([error, message]) => errors.push([error, message])));
+      const written = transport.writer.write(notification('ns/five', 5));
+
+      await expect(written).rejects.toBe(refused);
+      expect(errors).toEqual([[refused, notification('ns/five', 5)]]);
+   });
 });

@@ -592,9 +592,13 @@ beside them, `snapshot`, `getDocument`, `isOpen` and the `on…` subscriptions.
 
 The LSP head is one participant with the fixed id `language-client`, which is
 why no session can take that id. It is not a session: its opens come over the
-LSP connection, and an LSP disconnect ends the server process. Langium binds
-one LSP connection to a shared-services tree, and the language-client state
-the text store keeps is keyed by URI alone, so a server process serves one LSP
+LSP connection, and an LSP disconnect ends the server process. A head in a
+worker outlives its connection, and a `MessagePort` itself reports no close:
+the port transport's in-band close signal does, and on it the host calls
+`TextDocuments.closeLanguageClientDocuments()`, which closes the language
+client's documents as a `didClose` for each would. Langium binds one LSP
+connection to a shared-services tree, and the language-client state the text
+store keeps is keyed by URI alone, so a server process serves one LSP
 connection.
 
 ## Known limits
@@ -604,6 +608,12 @@ connection.
   system provider writes a staging file first, so after a crash disk holds the
   old file or the new one, except for a hard-linked file, which is written in
   place and can be torn. Nothing calls `fsync`, so a power loss is not covered.
+- A worker `MessagePort` reports no end of its own. Over
+  `createMessagePortTransport` a head learns of a client that disposes its
+  connection, but a page or a worker that dies ends no session. A language
+  server in a worker keeps running when its port's client goes, unlike one on
+  stdio, which exits when its input ends; only the language client's documents
+  are closed.
 - An editor save whose wait runs past `willSaveGateMs`, or whose `didSave`
   comes later than that, can land before or after a server write of the same
   file. The cap that ran out is logged.

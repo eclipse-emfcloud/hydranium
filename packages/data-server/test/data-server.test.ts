@@ -63,6 +63,7 @@ import {
 import { defaultDataServerDiagnostics as browserDefaultDiagnostics } from '../src/default-diagnostics.browser.js';
 import { nodeDataServerDiagnostics } from '../src/node/node-diagnostics-provider.js';
 import { type DataServerHarness, makeDataServerHarness } from '../src/testing/data-server-harness.js';
+import { recordSessionEndings } from './session-endings.js';
 
 // ============================================================
 // Fake AST + diagnostic types — keep tests grammar-free.
@@ -1169,18 +1170,7 @@ describe('DataServer', () => {
    });
 
    describe('why a session ends', () => {
-      // The cause decides whether a document the session was the last to have
-      // open waits out the store's revert grace, so it is read where it
-      // reaches the store.
-      function endings(bundle: Bundle): Array<{ clientId: string; cause: unknown }> {
-         const recorded: Array<{ clientId: string; cause: unknown }> = [];
-         const closeSession = bundle.textDocuments.closeSession.bind(bundle.textDocuments);
-         bundle.textDocuments.closeSession = (clientId: string, cause?: unknown) => {
-            recorded.push({ clientId, cause });
-            closeSession(clientId);
-         };
-         return recorded;
-      }
+      const endings = (bundle: Bundle) => recordSessionEndings(bundle.textDocuments);
 
       it('ends a session as lost when its connection closes', async () => {
          const bundle = buildBundle();

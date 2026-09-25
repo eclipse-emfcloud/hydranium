@@ -546,7 +546,7 @@ The framework-level version of what this package learned —
 what a browser host must accommodate, and why — is
 [`docs/concepts/browser-hosting.md`](../../../docs/concepts/browser-hosting.md).
 
-## Three things to know before changing it
+## What to know before changing it
 
 - **No head may bind the worker global.** Each gets a `MessagePort` transferred
   at bootstrap. `src/head-channels.ts` explains why — briefly, GLSP's launcher
@@ -561,10 +561,21 @@ what a browser host must accommodate, and why — is
   validation off, so a client that connects and waits sees a healthy server
   reporting nothing at all. Asking for the trailing validating build is the
   host's job; `src/worker/order-flow-worker.ts` does it and says why.
+- **A `MessagePort` reports no close.** All three ports therefore go through
+  `createMessagePortTransport` at both ends: disposing a connection posts a
+  close signal, and the head at the other end tears down as it does when a
+  socket closes, ending the page's sessions. The language client has no
+  session, so on the LSP port's close the worker closes its documents through
+  `closeLanguageClientDocuments`. A page or a worker that dies still ends
+  nothing, because the port cannot say so. Here that costs nothing, since the
+  worker dies with the page, and the page never disposes a connection, so the
+  signal is wiring for a host that does. A disposed
+  `WorkerDataPort` refuses to connect again, because the worker's end of its
+  port stays closed.
 - **Nothing asynchronous may sit between the LSP reader and `listen`.** The
   stored workspace is restored *before* the connection is constructed, and that
-  is not tidiness: `BrowserMessageReader` starts its port as it is built but fires
-  into an emitter with no listener until `startLanguageServer` calls `listen`, so
+  is not tidiness: `createMessagePortTransport` starts its port as it is built
+  but drops every message until `startLanguageServer` calls `listen`, so
   an `initialize` that arrives during an intervening `await` is dropped — no
   error, no reply, a page that waits forever. `persistentFileSystem` is
   asynchronous for exactly this reason, so the wait happens where it is safe.

@@ -138,7 +138,7 @@ bound per `DiagramModule` — there is no framework GModel factory.
 | --- | --- | --- |
 | `launcher/` | `.` | `HydraniumGlspAppModule` (DI app-module + `configureAdditionalBindings` hook) and `AbstractHydraniumGlspDiagramModule` — the abstract `DiagramModule` base an adopter subclasses to declare which grammar a diagram type edits, plus the `bindDiagramLanguage` binder it applies; the framework-overrides module both bringups share is deliberately not re-exported |
 | `node/` | `./node` | `startGlspServer` (socket launcher, GLSP `SocketServerLauncher`) |
-| `browser/` | `./browser` | `startGlspServerInWorker` (web-worker launcher, GLSP `WorkerServerLauncher`, on a transferred `MessagePort`) |
+| `browser/` | `./browser` | `startGlspServerInWorker` (web-worker launcher, `HydraniumGlspWorkerServerLauncher` over GLSP's `WorkerServerLauncher`, on a transferred `MessagePort`) |
 | `state/` | `.` | base state classes (`AbstractHydraniumGlspState`, `Reconciling…`, `FullText…`), `HydraniumGlspIndex`, the `HydraniumTypes` DI token registry |
 | `storage/` | `.` | `HydraniumGlspStorage` (load/save + settle/parse-error seams) + `SaveDeliveryPolicy` |
 | `submission/` | `.` | `HydraniumGlspSubmissionHandler` (readyEvent-gated submit) |
@@ -157,13 +157,13 @@ bound per `DiagramModule` — there is no framework GModel factory.
 which binds the `HydraniumTypes.*` tokens against the shared services) + adopter
 `appModules`, resolves GLSP's `SocketServerLauncher`, and listens.
 `startGlspServerInWorker(options)` (`browser/start-glsp-server-in-worker.ts`)
-mirrors that structure over `WorkerServerLauncher` and drops the socket
-lifecycle; its `context` is a required transferred `MessagePort`. Per diagram
-open, `HydraniumGlspStorage` registers the GLSP client id as a client session
-and loads the document through it, the adopter GModel factory renders it, and
-user operations run through `HydraniumGlspRecordingCommand` back into the shared
-AST ([client sessions](client-sessions.md#over-the-glsp-head)). Detail +
-gotchas: the `hydranium-glsp-server` skill.
+mirrors that structure over `HydraniumGlspWorkerServerLauncher` and drops the
+socket lifecycle; its `context` is a required transferred `MessagePort`. Per
+diagram open, `HydraniumGlspStorage` registers the GLSP client id as a client
+session and loads the document through it, the adopter GModel factory renders
+it, and user operations run through `HydraniumGlspRecordingCommand` back into
+the shared AST ([client sessions](client-sessions.md#over-the-glsp-head)).
+Detail + gotchas: the `hydranium-glsp-server` skill.
 
 ---
 

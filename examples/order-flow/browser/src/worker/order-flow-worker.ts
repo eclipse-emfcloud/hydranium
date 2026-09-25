@@ -61,9 +61,9 @@ import type {
 // check every other host does.
 import { lspLatencyOptions, startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
-import { LatencyCollector } from '@hydranium/protocol';
+import { createMessagePortTransport, LatencyCollector } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
-import { BrowserMessageReader, BrowserMessageWriter, createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
+import { createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
 import {
    type BootstrapMessage,
@@ -101,24 +101,25 @@ addEventListener('unhandledrejection', event => reportError('unhandled rejection
  * The services are built around the LSP connection, exactly as the Node entry
  * builds them around a stdio one — which is why this function, and not the
  * bootstrap handler, owns their creation.
+ *
+ * The page's end of the port closing ends the editor's connection, but not the
+ * worker, which the other heads share. The language client holds no session,
+ * so its documents are closed here, each reverting as its last close does.
  */
 function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latency: LatencyCollector): OrderFlowSharedServices {
-   // `BrowserMessageReader` assigns `port.onmessage`, which starts a
-   // `MessagePort` implicitly — so no `port.start()` here. Adding one is
-   // harmless; omitting it would be fatal only if the reader had used
-   // `addEventListener` instead, which is the more common spelling and the
-   // reason this is worth stating rather than leaving to be re-derived.
+   // Both ends use `createMessagePortTransport`; see it for why.
    //
    // **The filesystem is handed in ALREADY RESTORED, and that ordering is not
-   // stylistic.** The reader starts its port as it is constructed but drops
-   // every message until `startLanguageServer` calls `listen`, so an `await`
-   // between these two statements loses the `initialize` the page has already
-   // sent — no error, no reply, a page that waits forever. Everything
-   // asynchronous therefore happens before this function is called.
+   // stylistic.** The transport starts its port as it is built but drops every
+   // message until `startLanguageServer` calls `listen`, so an `await` between
+   // these statements loses the `initialize` the page has already sent — no
+   // error, no reply, a page that waits forever. Everything asynchronous
+   // therefore happens before this function is called.
+   const transport = createMessagePortTransport(port);
    const connection = createConnection(
       withHydraniumLspFeatures(ProposedFeatures.all),
-      new BrowserMessageReader(port),
-      new BrowserMessageWriter(port),
+      transport.reader,
+      transport.writer,
       lspLatencyOptions(latency)
    );
    const { shared } = createOrderFlowServices(
@@ -128,6 +129,7 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
       { highlightKeywords: true, highlightComments: true }
    );
    startLanguageServer(shared);
+   transport.reader.onClose(() => void shared.workspace.TextDocuments.closeLanguageClientDocuments());
    return shared;
 }
 
@@ -144,7 +146,9 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
  * message before they exist.
  */
 function startDataHead(port: MessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
-   const connection = createMessageConnection(new BrowserMessageReader(port), new BrowserMessageWriter(port));
+   // Both ends use `createMessagePortTransport`; see it for why.
+   const transport = createMessagePortTransport(port);
+   const connection = createMessageConnection(transport.reader, transport.writer);
    new DataServer<OrderFlowTransferRoot>(connection, shared, { latency });
    connection.listen();
 }

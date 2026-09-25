@@ -1690,7 +1690,18 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       expect(docs.get(REAL)).toBeUndefined();
    });
 
-   function makeConnectedStore(): { docs: HydraniumTextDocuments<TextDocument>; recorded: RecordedApplyEdit[] } {
+   /** Shows what the store keeps per client-facing URI, which no public read reaches. */
+   class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      languageClientState(uri: string): { uris: string[]; shadowed: string[]; pending: string[] } {
+         return {
+            uris: [...(this.__documents.get(this.documentKey(uri))?.languageClientUris ?? [])].sort(),
+            shadowed: [LINK, REAL].filter(clientUri => this.__shadow.isTracked(clientUri)).sort(),
+            pending: [...this.__pendingPushes.keys()].sort()
+         };
+      }
+   }
+
+   function makeConnectedStore(): { docs: InspectableTextDocuments; recorded: RecordedApplyEdit[] } {
       const recorded: RecordedApplyEdit[] = [];
       const logger = makeLogger();
       const services = {
@@ -1708,7 +1719,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
             DocumentUriPolicy: linkAware
          }
       } as unknown as ServerSharedServices;
-      return { docs: new HydraniumTextDocuments<TextDocument>(services), recorded };
+      return { docs: new InspectableTextDocuments(services), recorded };
    }
 
    const targetUriOf = (rec: RecordedApplyEdit): string =>
@@ -1745,6 +1756,28 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       // A settled-text push reaches BOTH tabs, each addressed at its own spelling.
       await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
       expect(recorded.map(targetUriOf).sort()).toEqual([LINK, REAL].sort());
+   });
+
+   it('forgets every spelling the language client opened the file under once it closes', async () => {
+      const { docs } = makeConnectedStore();
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      // Another client keeps the document, so its record outlives the close.
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } }, 'form-client');
+      await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
+      const both = { uris: [LINK, REAL].sort(), shadowed: [LINK, REAL].sort(), pending: [LINK, REAL].sort() };
+      expect(docs.languageClientState(REAL)).toEqual(both);
+
+      await docs.closeLanguageClientDocuments();
+
+      expect(docs.isOpenInLanguageClient(REAL)).toBe(false);
+      expect(docs.languageClientState(REAL)).toEqual({ uris: [], shadowed: [], pending: [] });
    });
 
    it("keys a push to the second tab against that tab's own buffer, not the synced text", async () => {

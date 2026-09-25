@@ -14,9 +14,18 @@
  * revert build is dispatched and whether it is at all.
  */
 
-import { makeFakeClock, type FakeClock } from '@hydranium/protocol/testing';
+import { createMessagePortTransport, Deferred } from '@hydranium/protocol';
+import { makeFakeClock, type FakeClock, waitFor } from '@hydranium/protocol/testing';
+import { makeMessagePortPair } from '@hydranium/protocol/testing/node';
 import { URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
+import { createConnection, type WatchDog } from 'vscode-languageserver';
+import {
+   createProtocolConnection,
+   DidChangeTextDocumentNotification,
+   DidOpenTextDocumentNotification,
+   type ProtocolConnection
+} from 'vscode-languageserver-protocol/node';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
@@ -26,6 +35,7 @@ import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-u
 import { makeNoopTracer } from '../../src/testing/index.js';
 
 const FILE = URI.file('/hydranium-test/revert.a').toString();
+const OTHER_FILE = URI.file('/hydranium-test/other.a').toString();
 const DISK = 'on disk\n';
 const EDITED = 'edited\n';
 
@@ -56,7 +66,11 @@ interface RevertRig {
    jumpWallClock(ms: number): void;
 }
 
-function makeRig(revertGraceMs?: number): RevertRig {
+/**
+ * `workspaceInitialized` stands for the workspace manager's gate, which the
+ * store's LSP open handler awaits; it defaults to already settled.
+ */
+function makeRig(revertGraceMs?: number, workspaceInitialized: Promise<unknown> = Promise.resolve()): RevertRig {
    const clock = makeFakeClock();
    const builds: Array<{ changed: string[]; deleted?: string[]; reason: string | undefined }> = [];
    const errors: string[] = [];
@@ -65,7 +79,7 @@ function makeRig(revertGraceMs?: number): RevertRig {
    const fileSystemTaskQueue = new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } });
    let lockTail: Promise<unknown> = Promise.resolve();
    let nextBuildFailure: Error | undefined;
-   const onDisk = new Set<string>([FILE]);
+   const onDisk = new Set<string>([FILE, OTHER_FILE]);
    let existenceChecks = 0;
    let wallOffsetMs = 0;
    const noop = makeNoopTracer();
@@ -85,7 +99,7 @@ function makeRig(revertGraceMs?: number): RevertRig {
       Tracer: { for: () => tracer },
       workspace: {
          DocumentUriPolicy: uriPolicy,
-         WorkspaceManager: { ready: Promise.resolve() },
+         WorkspaceManager: { ready: Promise.resolve(), workspaceInitialized },
          WorkspaceLock: { write: (action: (token: unknown) => unknown) => lockTail.then(() => action(undefined)) },
          DocumentBuilder: {
             markNextReason: (reason: string | undefined) => {
@@ -612,5 +626,94 @@ describe('HydraniumTextDocuments — revert grace', () => {
 
       clock.advance(1000);
       expect(released).toEqual([FILE]);
+   });
+});
+
+/** A watchdog whose `exit` does nothing, since the connection runs in the test's own process. */
+const NO_EXIT: WatchDog = { shutdownReceived: false, initialize: () => undefined, exit: () => undefined };
+
+/**
+ * The store listening on the worker end of a real `worker_threads` port, as
+ * the LSP head in a worker does, releasing the language client's documents
+ * once the port's peer closes; and the editor's connection on the other end.
+ */
+function listenOnWorkerPort(docs: HydraniumTextDocuments<TextDocument>): {
+   editor: ProtocolConnection;
+   /** Settles once the worker's end has seen the close, after the store was told. */
+   closed: Promise<void>;
+   dispose(): void;
+} {
+   const ports = makeMessagePortPair();
+   const worker = createMessagePortTransport(ports.port2);
+   const connection = createConnection(logger => createProtocolConnection(worker.reader, worker.writer, logger), NO_EXIT, undefined);
+   docs.listen(connection);
+   worker.reader.onClose(() => void docs.closeLanguageClientDocuments());
+   const closed = new Deferred<void>();
+   worker.reader.onClose(() => closed.resolve());
+   connection.listen();
+   const page = createMessagePortTransport(ports.port1);
+   const editor = createProtocolConnection(page.reader, page.writer);
+   editor.listen();
+   return {
+      editor,
+      closed: closed.promise,
+      dispose: () => {
+         connection.dispose();
+         ports.dispose();
+      }
+   };
+}
+
+function openInEditor(editor: ProtocolConnection, uri: string): Promise<void> {
+   return editor.sendNotification(DidOpenTextDocumentNotification.type, {
+      textDocument: { uri, languageId: 'plaintext', version: 1, text: DISK }
+   });
+}
+
+describe('HydraniumTextDocuments — a language client whose worker port closes', () => {
+   it('closes every document the editor held, and each reverts', async () => {
+      const { docs, builds } = makeRig();
+      const port = listenOnWorkerPort(docs);
+      try {
+         await openInEditor(port.editor, FILE);
+         await openInEditor(port.editor, OTHER_FILE);
+         await port.editor.sendNotification(DidChangeTextDocumentNotification.type, {
+            textDocument: { uri: FILE, version: 2 },
+            contentChanges: [{ text: EDITED }]
+         });
+         await waitFor(() => docs.get(FILE)?.getText() === EDITED && docs.get(OTHER_FILE) !== undefined);
+
+         port.editor.dispose();
+
+         await waitFor(() => builds.length === 2);
+         expect(builds).toEqual([
+            { changed: [FILE], reason: 'didClose' },
+            { changed: [OTHER_FILE], reason: 'didClose' }
+         ]);
+         expect(docs.isOpenInClient(FILE, LANGUAGE_CLIENT_ID)).toBe(false);
+         expect(docs.get(FILE)).toBeUndefined();
+      } finally {
+         port.dispose();
+      }
+   });
+
+   it('closes an open that is still waiting for the workspace when the port closes', async () => {
+      const initialized = new Deferred<void>();
+      const { docs, builds } = makeRig(undefined, initialized.promise);
+      const port = listenOnWorkerPort(docs);
+      try {
+         await openInEditor(port.editor, FILE);
+         port.editor.dispose();
+         // The open was handled before the close, so both now wait for the
+         // workspace.
+         await port.closed;
+         initialized.resolve();
+
+         await waitFor(() => builds.length === 1);
+         expect(docs.isOpenInClient(FILE, LANGUAGE_CLIENT_ID)).toBe(false);
+         expect(docs.get(FILE)).toBeUndefined();
+      } finally {
+         port.dispose();
+      }
    });
 });
