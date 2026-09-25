@@ -12,7 +12,7 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } f
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import { AstDocument, type ServerSharedServices } from '@hydranium/core';
+import { AstDocument, type ClientSession, type ServerSharedServices } from '@hydranium/core';
 import { type BasedOn, asSnapshotVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -37,7 +37,7 @@ interface FakeDocument {
    uri: { toString(): string };
    state: DocumentState;
    parseResult: { value: AstNode };
-   textDocument?: { version: number };
+   textDocument?: { version: number; getText?(): string };
 }
 
 /**
@@ -64,6 +64,8 @@ interface Harness {
    throwConflictOnNextUpdate: boolean;
    nextUpdatedRoot: TestRoot;
    validatedRoot: TestRoot;
+   /** Text the store holds for every URI; the stub parser turns it into a root labelled with it. */
+   storeText: string;
    resolve: (
       baseline: TestSourceModel,
       attempted: TestSourceModel,
@@ -88,6 +90,7 @@ function makeHarness(): Harness {
       throwConflictOnNextUpdate: false,
       nextUpdatedRoot: makeRoot('updated'),
       validatedRoot: makeRoot('validated'),
+      storeText: 'stored',
       resolve: async (_baseline, attempted) => ({ status: 'merged', merged: attempted })
    };
 }
@@ -112,6 +115,12 @@ function createState(harness: Harness): TestReconcilingState {
       workspace: {
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
+         },
+         TextDocuments: {
+            get: (uri: string) => ({ version: harness.documents.get(uri)?.textDocument?.version ?? 0, getText: () => harness.storeText })
+         },
+         LangiumDocumentFactory: {
+            fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
          }
       },
       model: {
@@ -156,7 +165,14 @@ function createState(harness: Harness): TestReconcilingState {
    container.bind(ClientId).toConstantValue('test-client');
    container.bind(ModelState).to(TestReconcilingState).inSingletonScope();
    container.bind(TestReconcilingState).toService(ModelState);
-   return container.get(TestReconcilingState);
+   const state = container.get(TestReconcilingState);
+   // The diagram's session forwards to the service under its own id, as the
+   // framework's does, so the recorded calls carry that id.
+   state.modelSession = {
+      clientId: 'test-client',
+      update: (args: object) => sharedServices.model.ModelService.update({ ...args, clientId: 'test-client' } as UpdateCall)
+   } as unknown as ClientSession<AstNode>;
+   return state;
 }
 
 describe('ReconcilingTransferHydraniumGlspState', () => {
@@ -184,7 +200,21 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('persists via ModelService.update with uri/model/clientId/basedOn and captures the returned root', async () => {
+      it('refuses to write without a session, rather than writing under a client id nothing closes', async () => {
+         // A flat write under an id that is not a live session opens the
+         // document for that id, and nothing ever closes it.
+         const harness = makeHarness();
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.modelSession = undefined;
+
+         await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5))).rejects.toThrow(
+            /No client session/
+         );
+         expect(harness.updateCalls).toEqual([]);
+      });
+
+      it('persists through the diagram session with uri/model/basedOn and captures the returned root', async () => {
          const harness = makeHarness();
          harness.nextUpdatedRoot = makeRoot('persisted');
          const state = createState(harness);
@@ -262,7 +292,8 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          harness.documents.set('file:///a.a', {
             uri: { toString: () => 'file:///a.a' },
             state: DocumentState.Validated,
-            parseResult: { value: refreshed }
+            parseResult: { value: refreshed },
+            textDocument: { version: 0, getText: () => 'stored' }
          });
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
@@ -305,10 +336,12 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' })).rejects.toThrow('boom');
       });
 
-      it('resolves the conflict against the captured baseline and a grammar-projection refetch', async () => {
+      it('resolves the conflict against the captured baseline and a refetch parsed from the stored text', async () => {
+         // Not the built root: operation handlers edit that one in place.
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
-         harness.validatedRoot = makeRoot('server-current');
+         harness.validatedRoot = makeRoot('built');
+         harness.storeText = 'server-current';
          let seenBaseline: TestSourceModel | undefined;
          let seenRefetch: TestSourceModel | undefined;
          harness.resolve = async (baseline, _attempted, refetch) => {

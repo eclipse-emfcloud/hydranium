@@ -227,6 +227,82 @@ reconnect, and is told so.
 To hand out a subclass of `DataSession`, pass `sessionFactory` in the
 connection's options.
 
+## Over the GLSP head
+
+Each GLSP client session is one client session. `HydraniumGlspStorage`
+registers the GLSP client id as its id when the GLSP client session starts,
+taking the id as given, and hands the session to the diagram's state as
+`modelSession`. GLSP's placeholder client, `TEMPORARY_CLIENT_ID`, which exists
+only to enumerate action kinds, registers nothing.
+
+A GLSP client id can still be live as another participant's: a reloaded client
+reconnects under its old id before the server has noticed the old connection
+close, which ends that connection's sessions a moment later. The storage then
+registers nothing when its GLSP session starts, and registers again when the
+diagram loads; while the id is held, the load waits up to two seconds
+(`sessionWaitMs`) for its holder to end. When the id is still held after that,
+the diagram does not load: the client gets a rejection naming the id, and the
+user a message saying the diagram's identifier is in use, with
+`DIAGRAM_SESSION_REFUSED` as its code. A save of such a diagram fails the same
+way. Taking the id over would end the other participant's session, and working
+without one would share its opens, so its close would close the diagram's
+documents too.
+
+The diagram opens its source document through the session when it loads, and
+every document of its write set (`trackSecondaryDocument`) as the document
+joins. A document that leaves the write set stays open until the diagram's next
+save, which saves it and then closes it, so leaving never reverts the diagram's
+unsaved edits to it. Disposing the storage, when the GLSP client session ends,
+the diagram's client detaches or the storage finds its GLSP session gone, ends
+the session, which closes everything it has open.
+
+`ReconcilingMultiDocumentGlspState` writes the documents of the write set that
+changed in one `updateAll` on the session, so a conflict on any of them leaves
+every one as it was. Each is gated: the source document on the `basedOn` the
+recording command took, each other document on `secondaryBasedOn`, by default
+the version it had when the source root was last read. Override
+`secondaryBasedOn` to return `'anything'` to force a document's writes. A
+conflict on any document goes to the state's conflict resolver for the whole
+set, and a write based on `'anything'`, which a merged retry and an undo or
+redo pass, forces every document. Before writing, the state opens each document
+of the set through `openForWrite`; a state whose write set can name a document
+that does not exist yet overrides it to `create` the document, since the
+session's writes open nothing. The single-document states write through the session's
+`update`. Every state refuses to write without a session, so a write after the
+diagram ended fails instead of opening its document for an id nothing closes.
+
+Code of your own that calls `ModelService.update` or `save` under a live
+diagram's GLSP client id acts as that session too: it opens nothing, and fails
+with `DocumentNotOpenError` for a document the diagram does not have open. Write
+such a document through `state.modelSession.withOpen`, as below.
+
+A save persists the text of every document the session has open: the source
+document, the write set, and the documents that left the write set since the
+last save. A document only another client has open is not saved. Every save
+takes its text in one step, so a GLSP client session that ends during the save
+closes nothing before its text is taken.
+
+A write to a document outside the write set goes through the session's
+`withOpen`, based on the version `ModelService.snapshot` returned when the
+element was read. A new file goes through `create`:
+
+<!-- snippet-preamble
+import type { AbstractHydraniumGlspState } from '@hydranium/glsp-server';
+import type { AstNode } from '@hydranium/langium';
+import type { SnapshotVersion } from '@hydranium/protocol';
+declare const state: AbstractHydraniumGlspState<AstNode>;
+declare const uri: string;
+declare const model: string;
+declare const basedOn: SnapshotVersion;
+-->
+
+```ts
+const session = state.modelSession;
+if (session) {
+   await session.withOpen(uri, () => session.update({ uri, model, basedOn }));
+}
+```
+
 ## Disk writes
 
 Every disk access of a file the framework makes on the server goes through one

@@ -102,6 +102,78 @@ describe('reconcileByPatchReplay', () => {
       }
    });
 
+   test('reports conflict when the foreign writer appended the same element the user appends', async () => {
+      // Replayed, the append would insert the element a second time.
+      const baseline = { items: [{ id: 'a' }] };
+      const attempted = { items: [{ id: 'a' }, { id: 'b' }] };
+      const fresh = { items: [{ id: 'a' }, { id: 'b' }] };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('reports conflict when the foreign writer appended the same element with its keys in another order', async () => {
+      const baseline = { items: [{ id: 'a', v: 1 }] };
+      const attempted = {
+         items: [
+            { id: 'a', v: 1 },
+            { id: 'b', v: 2 }
+         ]
+      };
+      const fresh = {
+         items: [
+            { id: 'a', v: 1 },
+            { v: 2, id: 'b' }
+         ]
+      };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('reports conflict when the foreign writer appended the same element with an undefined-valued key', async () => {
+      const baseline = { items: [{ id: 'a' }] };
+      const attempted = { items: [{ id: 'a' }, { id: 'b' }] };
+      const fresh = { items: [{ id: 'a' }, { id: 'b', note: undefined }] };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('merges an insert beside a different element the foreign writer inserted into the same array', async () => {
+      const baseline = { items: [{ id: 'a' }] };
+      const attempted = { items: [{ id: 'a' }, { id: 'b' }] };
+      const fresh = { items: [{ id: 'a' }, { id: 'c' }] };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } });
+   });
+
+   test('reports conflict when the foreign writer added the key the user adds', async () => {
+      // Replayed, the `add` would replace the foreign value.
+      const baseline: { entity: Record<string, number> } = { entity: {} };
+      const attempted = { entity: { name: 1 } };
+      const fresh = { entity: { name: 2 } };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('merges an added key beside a different key the foreign writer added', async () => {
+      const baseline: { entity: Record<string, number> } = { entity: {} };
+      const attempted = { entity: { name: 1 } };
+      const fresh = { entity: { other: 2 } };
+
+      const result = await reconcileByPatchReplay(baseline, attempted, async () => fresh);
+
+      expect(result).toEqual({ status: 'merged', merged: { entity: { other: 2, name: 1 } } });
+   });
+
    test('reports unavailable when the refetch yields nothing', async () => {
       const baseline = { entity: { name: 'X' } };
       const attempted = { entity: { name: 'Y' } };

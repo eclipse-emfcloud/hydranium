@@ -34,9 +34,9 @@ import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
  *   and on a `ConflictError` consult the injected `conflictResolver` and act
  *   on the merged / no-op / conflict / unavailable outcome.
  * - {@link persist} / {@link refetch} — the only I/O seams. Defaults route
- *   through `ModelService.update` / `.validated` (reachable from the base via
- *   `sharedServices.model`); adopters whose document round-trip differs
- *   override these without touching the orchestration.
+ *   through the diagram session's `update` and `ModelService.validated`;
+ *   adopters whose document round-trip differs override these without
+ *   touching the orchestration.
  *
  * Adopters whose source model is whole-document text (a bare `{ text }`
  * source model) or that are read-only do NOT extend this class — they extend
@@ -103,30 +103,26 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
 
    /**
     * Persist hook — the only write-side I/O. Default routes the structured
-    * model through `ModelService.update` (serialize → reparse), opting into
-    * the `ConflictError` gate when `version` is given. Adopters whose document
+    * model through the diagram session's `update` (serialize → reparse),
+    * opting into the `ConflictError` gate unless `basedOn` is `'anything'`,
+    * and throws without a session. Adopters whose document
     * round-trip differs override this; the orchestration in
     * {@link updateSourceModel} is unchanged.
     */
    protected async persist(model: TSourceModel, basedOn: BasedOn): Promise<{ root: TRoot }> {
-      const document = await this.sharedServices.model.ModelService.update({
-         uri: this._sourceUri,
-         model,
-         clientId: this.clientId,
-         basedOn
-      });
+      const document = await this.requireModelSession().update({ uri: this._sourceUri, model, basedOn });
       return document as unknown as { root: TRoot };
    }
 
    /**
-    * Refetch hook — reads the current settled server root as a persisted-shape
+    * Refetch hook — the stored text parsed afresh, as a persisted-shape
     * projection (or `undefined` when unavailable). The `conflictResolver`
     * replays the user's intent against this fresh state. Default uses
-    * `ModelService.validated` + the framework encoder's `'grammar'` mode;
-    * adopters override alongside {@link persist}.
+    * {@link AbstractHydraniumGlspState.readFreshRoot} + the framework
+    * encoder's `'grammar'` mode; adopters override alongside {@link persist}.
     */
    protected async refetch(): Promise<TSourceModel | undefined> {
-      const fresh = await this.sharedServices.model.ModelService.validated(this._sourceUri).catch(() => undefined);
-      return fresh ? (this.sharedServices.model.TransferEncoder.toTransfer(fresh.root, 'grammar') as unknown as TSourceModel) : undefined;
+      const fresh = await this.readFreshRoot(this._sourceUri);
+      return fresh ? (this.sharedServices.model.TransferEncoder.toTransfer(fresh, 'grammar') as unknown as TSourceModel) : undefined;
    }
 }

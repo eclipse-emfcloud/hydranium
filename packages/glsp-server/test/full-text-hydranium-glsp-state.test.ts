@@ -12,7 +12,7 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-gl
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import type { ServerSharedServices } from '@hydranium/core';
+import type { ClientSession, ServerSharedServices } from '@hydranium/core';
 import { type BasedOn, asSnapshotVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -98,7 +98,7 @@ function createState(harness: Harness): TestFullTextState {
    ]);
    const sharedServices = {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      workspace: { LangiumDocuments: { getDocument: () => undefined } },
+      workspace: { TextDocuments: { get: () => undefined }, LangiumDocuments: { getDocument: () => undefined } },
       ServiceRegistry: registry,
       model: {
          ModelService: {
@@ -122,7 +122,14 @@ function createState(harness: Harness): TestFullTextState {
    container.bind(ClientId).toConstantValue('test-client');
    container.bind(ModelState).to(TestFullTextState).inSingletonScope();
    container.bind(TestFullTextState).toService(ModelState);
-   return container.get(TestFullTextState);
+   const state = container.get(TestFullTextState);
+   // The diagram's session forwards to the service under its own id, as the
+   // framework's does, so the recorded calls carry that id.
+   state.modelSession = {
+      clientId: 'test-client',
+      update: (args: object) => sharedServices.model.ModelService.update({ ...args, clientId: 'test-client' } as UpdateCall)
+   } as unknown as ClientSession<AstNode>;
+   return state;
 }
 
 describe('FullTextHydraniumGlspState', () => {
@@ -143,7 +150,17 @@ describe('FullTextHydraniumGlspState', () => {
    });
 
    describe('updateSourceModel', () => {
-      it('pushes the text payload through ModelService.update and captures the returned root', async () => {
+      it('refuses to write without a session, rather than writing under a client id nothing closes', async () => {
+         const harness = makeHarness();
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.modelSession = undefined;
+
+         await expect(state.updateSourceModel({ text: 'new document text' })).rejects.toThrow(/No client session/);
+         expect(harness.updateCalls).toEqual([]);
+      });
+
+      it('pushes the text payload through the diagram session and captures the returned root', async () => {
          const harness = makeHarness();
          harness.nextUpdatedRoot = makeRoot('reparsed');
          const state = createState(harness);

@@ -82,10 +82,11 @@ function idOf(diagram: GlspHarness<OrderFlowGlspState>, name: string): string {
  * asserts against a save that has not run. The write this test is about is the
  * only unambiguous evidence the save finished.
  *
- * Sound as a barrier for BOTH documents' WRITES, because the flush writes the
- * primary before the secondary: by the time the layout lands, the process
- * file's write has already happened or already been skipped. It is NOT a
- * barrier for the save ANNOUNCEMENTS — see {@link waitForSaveAnnouncements}.
+ * A barrier for the file it reads and nothing else. The flush saves every
+ * document of the write set concurrently, each in its own file-system lane, so
+ * when the layout lands the process file's lane may still be comparing against
+ * disk. A check on the other file has to wait for both announcements first —
+ * see {@link waitForSaveAnnouncements}.
  */
 async function waitForFileToContain(path: string, needle: string): Promise<void> {
    for (let attempt = 0; attempt < 200; attempt++) {
@@ -139,7 +140,10 @@ describe('order-flow .process save', () => {
       await waitForFileToContain(layoutPath, 'node Pay at 300, 220 size 200, 80');
       // The document it did not change is not rewritten. Byte equality, because
       // the losses are formatting: the leading comment, the wrapped `task` lines
-      // and the trailing newline all survive only an untouched file.
+      // and the trailing newline all survive only an untouched file. Compared
+      // once both saves announced, or it passes before the process file's
+      // lane has decided whether to write.
+      await waitForSaveAnnouncements(2);
       expect(readFileSync(processPath, 'utf8')).toBe(processOnDisk);
    });
 
@@ -166,14 +170,17 @@ describe('order-flow .process save', () => {
 
       diagram.dispatch(SaveModelAction.create());
       await waitForFileToContain(layoutPath, 'node Pay at 300, 220 size 200, 80');
+      // Both lanes finish before either mtime is read, so the process file's
+      // cannot be read before its lane decided whether to write.
+      await waitForSaveAnnouncements(2);
 
       expect(statSync(processPath).mtimeMs).toBe(processMtime);
       expect(statSync(layoutPath).mtimeMs).not.toBe(layoutMtime);
       // Every document in the write set announces, written or not: a consumer
-      // that clears a dirty marker on save must not have to know which. Both
-      // are awaited before the order is asserted, so a missing announcement
-      // fails as a timeout naming what arrived rather than as a wrong order.
-      await waitForSaveAnnouncements(2);
-      expect(savedUris).toEqual([diagram.state.sourceUri, diagram.state.layoutUri]);
+      // that clears a dirty marker on save must not have to know which. The
+      // lanes run concurrently, so the announcements come in no fixed order;
+      // sorted rather than a set, so a duplicate announcement still fails. A
+      // missing one has already failed above as a timeout naming what arrived.
+      expect([...savedUris].sort()).toEqual([diagram.state.sourceUri, diagram.state.layoutUri].sort());
    });
 });

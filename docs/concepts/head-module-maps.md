@@ -159,9 +159,11 @@ which binds the `HydraniumTypes.*` tokens against the shared services) + adopter
 `startGlspServerInWorker(options)` (`browser/start-glsp-server-in-worker.ts`)
 mirrors that structure over `WorkerServerLauncher` and drops the socket
 lifecycle; its `context` is a required transferred `MessagePort`. Per diagram
-open, `HydraniumGlspStorage` loads the document, the adopter GModel factory
-renders it, and user operations run through `HydraniumGlspRecordingCommand` back
-into the shared AST. Detail + gotchas: the `hydranium-glsp-server` skill.
+open, `HydraniumGlspStorage` registers the GLSP client id as a client session
+and loads the document through it, the adopter GModel factory renders it, and
+user operations run through `HydraniumGlspRecordingCommand` back into the shared
+AST ([client sessions](client-sessions.md#over-the-glsp-head)). Detail +
+gotchas: the `hydranium-glsp-server` skill.
 
 ---
 
