@@ -24,7 +24,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { asSnapshotVersion, type BasedOn } from '../../src/model-service/based-on';
-import type { TransferUpdateArgs } from '../../src/model-service/args';
+import type { TransferUpdateDocumentArgs } from '../../src/data/requests';
 import { TransferDocument } from '../../src/transfer-document';
 import type { TransferElement } from '../../src/transfer-element';
 
@@ -33,6 +33,7 @@ interface Root extends TransferElement {
 }
 
 const URI_A = 'file:///a.x';
+const CLIENT = 'client-1';
 
 /** Stands in for a live handle's counter: the same `number` type, read at write time. */
 declare const liveVersion: number;
@@ -41,18 +42,18 @@ function typeAssertions(): void {
    const snapshot = TransferDocument.create<Root>(URI_A, 7, { $type: 'TypeOne' });
 
    // Accepted: the version a read returned, sent straight back.
-   const fromRead: TransferUpdateArgs<Root> = {
+   const fromRead: TransferUpdateDocumentArgs<Root> = {
       uri: URI_A,
-      clientId: 'client',
+      clientId: CLIENT,
       model: { $type: 'TypeOne' },
       basedOn: snapshot.version
    };
    void fromRead;
 
    // Accepted: the explicit opt-out.
-   const ungated: TransferUpdateArgs<Root> = {
+   const ungated: TransferUpdateDocumentArgs<Root> = {
       uri: URI_A,
-      clientId: 'client',
+      clientId: CLIENT,
       model: { $type: 'TypeOne' },
       basedOn: 'anything'
    };
@@ -80,7 +81,7 @@ function typeAssertions(): void {
    void misspelled;
 
    // @ts-expect-error omitting it is a compile error, which is why it is required
-   const omitted: TransferUpdateArgs<Root> = { uri: URI_A, clientId: 'client', model: { $type: 'TypeOne' } };
+   const omitted: TransferUpdateDocumentArgs<Root> = { uri: URI_A, clientId: CLIENT, model: { $type: 'TypeOne' } };
    void omitted;
 
    // Accepted: the escape hatch, for a caller who genuinely knows the version's

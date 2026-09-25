@@ -16,10 +16,7 @@ import {
    type MaybePromise,
    ObservableValue,
    type Tracer,
-   type TransferElement,
-   type TransferSaveArgs,
-   type TransferUpdateAllArgs,
-   type TransferUpdateArgs
+   type TransferElement
 } from '@hydranium/protocol';
 import { type AstNode, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
@@ -30,6 +27,24 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServices } from '../module.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type ModelService } from './model-service.js';
+
+/** What a session's `update` and `save` write into one document; the session supplies its own client id. */
+export interface ClientSessionWriteArgs<TTransfer> {
+   uri: string;
+   /** The whole structured model root, or its serialised textual form. */
+   model: TTransfer | string;
+   /**
+    * The version the write was authored against, or `'anything'` to write
+    * unconditionally. Required, so an ungated write is a decision the caller
+    * makes rather than a field it forgot.
+    */
+   basedOn: BasedOn;
+}
+
+/** What a session's `updateAll` writes, all or none. */
+export interface ClientSessionUpdateAllArgs<TTransfer> {
+   updates: ClientSessionWriteArgs<TTransfer>[];
+}
 
 /**
  * One participant's handle on the documents it works on, started by
@@ -75,18 +90,15 @@ export interface ClientSession<
     * URI at most one succeeds.
     */
    create(uri: string, text: string): Promise<void>;
-   update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    /**
     * Write several documents this session has open, all or none: a
     * `ConflictError` or `DocumentNotOpenError` for any of them is thrown before
     * any text applies. Resolves to the rebuilt documents, in the order given.
     */
-   updateAll(
-      args: Omit<TransferUpdateAllArgs<TTransfer>, 'clientId'>,
-      cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>[]>;
+   updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
    /** Write `args.model` as {@link update} does, then persist the document. */
-   save(args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    /** Close this session's open of `uri`, at once. A no-op when it does not have `uri` open. */
    close(uri: string): Promise<void>;
    /**
@@ -190,20 +202,17 @@ export class DefaultClientSession<
       return this.createDocument(uri, text);
    }
 
-   update(args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.updateDocument(args, cancelToken);
    }
 
-   updateAll(
-      args: Omit<TransferUpdateAllArgs<TTransfer>, 'clientId'>,
-      cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>[]> {
+   updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]> {
       this.assertLive();
       return this.updateDocuments(args, cancelToken);
    }
 
-   save(args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.saveDocument(args, cancelToken);
    }
@@ -278,13 +287,11 @@ export class DefaultClientSession<
     * `ClientSessionFactoryOptions.slowUpdateWarnMs` is set.
     */
    protected async updateDocument(
-      args: Omit<TransferUpdateArgs<TTransfer>, 'clientId'>,
+      args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<AstDocument<TAst, TDiagnostic>> {
       const service = this.modelService;
       const slowWarn = this.slowUpdateWarn && { threshold: this.slowUpdateWarn, stopwatch: this.services.Clock.stopwatch() };
-      // Canonical once at the door: the store keys every spelling of a file
-      // to one registration.
       const uri = this.canonicalKey(args.uri);
       const profile = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (profile ? profile.scope(stage, fn) : fn());
@@ -330,7 +337,7 @@ export class DefaultClientSession<
     * lets another write land between two documents of the set.
     */
    protected async updateDocuments(
-      args: Omit<TransferUpdateAllArgs<TTransfer>, 'clientId'>,
+      args: ClientSessionUpdateAllArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<AstDocument<TAst, TDiagnostic>[]> {
       const service = this.modelService;
@@ -371,7 +378,7 @@ export class DefaultClientSession<
     * the write completes whatever the session does next.
     */
    protected async saveDocument(
-      args: Omit<TransferSaveArgs<TTransfer>, 'clientId'>,
+      args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<AstDocument<TAst, TDiagnostic>> {
       const doc = await this.updateDocument(args, cancelToken);

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { TransferSaveArgs, TransferUpdateAllArgs, TransferUpdateArgs } from '../model-service/args';
+import type { BasedOn } from '../model-service/based-on';
 
 /** Get the current state of a single document. The server returns the latest built version. */
 export interface GetModelDocumentArgs {
@@ -41,15 +41,33 @@ export interface GetProjectForUriArgs {
 }
 
 /**
- * Update a document's content. Wire-side projection of the facade's
- * {@link TransferUpdateArgs}; structurally identical so the data-server RPC
- * handler can forward straight to the caller's session `update` without an
- * args mapping.
+ * Update a document the session `clientId` has open. Generic over `TTransfer`
+ * so adopters parameterise the structured shape against their grammar's
+ * transfer-model overlay; passing a string is always allowed.
  */
-export type TransferUpdateDocumentArgs<TTransfer> = TransferUpdateArgs<TTransfer>;
+export interface TransferUpdateDocumentArgs<TTransfer> {
+   /** Document URI. */
+   uri: string;
+   /** The id of a live session registered on this connection. */
+   clientId: string;
+   /** The whole structured model root, or its serialised textual form. */
+   model: TTransfer | string;
+   /**
+    * What this write was authored against. A `SnapshotVersion` is compared
+    * against the server's current text-document version for `uri` and throws
+    * `ConflictError` on mismatch; `'anything'` writes unconditionally.
+    *
+    * **Required so that an ungated write is a decision rather than an
+    * omission.** An optional gate is indistinguishable from a forgotten one at
+    * the call site, and a file of twenty writes hides the one that lost the
+    * field. Nothing else here can see that, since the defect is an absence.
+    */
+   basedOn: BasedOn;
+}
 
-/** Persist a document to disk. Wire-side projection of {@link TransferSaveArgs}. */
-export type TransferSaveDocumentArgs<TTransfer> = TransferSaveArgs<TTransfer>;
+/** Update a document the session `clientId` has open, then persist it to disk. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface TransferSaveDocumentArgs<TTransfer> extends TransferUpdateDocumentArgs<TTransfer> {}
 
 /** Register a client session on the connection. */
 export interface CreateSessionArgs {
@@ -76,23 +94,31 @@ export interface CloseSessionArgs {
 /** Create a document that exists nowhere yet, open for the session creating it. */
 export interface CreateModelDocumentArgs {
    uri: string;
-   /** A live session registered on the connection. */
+   /** The id of a live session registered on this connection. */
    clientId: string;
    /** The document's initial content; it reaches disk with the first save. */
    text: string;
 }
 
-/** Write several documents a session has open, all or none. Wire-side projection of {@link TransferUpdateAllArgs}. */
-export type TransferUpdateDocumentsArgs<TTransfer> = TransferUpdateAllArgs<TTransfer>;
+/**
+ * Write several documents a session has open, all or none. `clientId` is on
+ * the set rather than on each update: an id per update would allow a set
+ * mixing clients, which the server would have to refuse.
+ */
+export interface TransferUpdateDocumentsArgs<TTransfer> {
+   /** The id of a live session registered on this connection. */
+   clientId: string;
+   updates: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>[];
+}
 
 /**
  * Identifies a per-document watch on the data server. Shared by both
  * `watchModelDocument` and `unwatchModelDocument` — the `(uri, clientId)`
  * pair is the watch key, so unwatching names the same watch that was
  * started. The `clientId` identifies the originator the same way it does
- * on facade-side mutations (`TransferUpdateArgs.clientId`,
- * `TransferSaveArgs.clientId`): it keys the per-`(uri, clientId)` watch
- * bucket so multiple watchers on the same wire stay distinct, AND it lets
+ * on the document writes (`TransferUpdateDocumentArgs.clientId`,
+ * `TransferSaveDocumentArgs.clientId`): it keys the per-`(uri, clientId)`
+ * watch bucket so multiple watchers on the same wire stay distinct, AND it lets
  * each watcher recognise its own echo on inbound `onDocumentUpdated` events
  * (the wire shape's `sourceClientId` carries the originating mutation's
  * `clientId`).

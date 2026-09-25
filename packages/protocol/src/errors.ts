@@ -60,9 +60,9 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * `err.data` (the instance is reconstructed as a generic
  * `ResponseError`, so subclass getters / fields do not survive).
  *
- * Detection is driven by the required `basedOn` field on
- * `TransferUpdateArgs` / `TransferSaveArgs`; a caller with no meaningful
- * based-on version passes `'anything'` and gets no gating.
+ * Detection is driven by the required `basedOn` field of every write
+ * request; a caller with no meaningful based-on version passes
+ * `'anything'` and gets no gating.
  *
  * Three reasonable adopter recovery strategies:
  *

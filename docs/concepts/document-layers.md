@@ -126,8 +126,8 @@ went with it" needs a snapshot, and needs the version so it can later say
 which state its edit was based on.
 
 That version field is load-bearing rather than informational: an in-process
-caller sends it straight back as `TransferUpdateArgs.basedOn` /
-`TransferSaveArgs.basedOn` to arm the conflict gate. Its type is
+caller sends it straight back as the `basedOn` of its write
+(`ClientSessionWriteArgs.basedOn`) to arm the conflict gate. Its type is
 `SnapshotVersion`, a branded `number`, so the field a write declares itself
 based on can only be filled from a read. It is a server-owned counter that
 advances iff
@@ -194,7 +194,7 @@ correctness decision rather than a filter.
 | Mode | Contains | For |
 | --- | --- | --- |
 | `'full'` (default) | every own property, including computed scalars and synthetic child mirrors | the wire shape clients consume |
-| `'grammar'` | only the grammar-declared properties, each carrying the node's own authored value | the baseline a write diffs and a serializer round-trips |
+| `'grammar'` | only the grammar-declared properties, each carrying the node's own authored value | the base a write diffs and a serializer round-trips |
 
 **`'grammar'` is defined by what it guarantees, not by what it omits.** It is the
 *authored state* — what the document actually declares — which is what makes it
@@ -211,7 +211,7 @@ inheritance-resolved field, a preference-dependent label — and it is called in
 shape diffable and acyclic but no longer authored, and the two consequences are
 both silent: a property inherited from elsewhere diffs as a local edit whenever
 its source moves, and a forward-write reconcile measures the user's intent
-against a baseline the document never contained. The framework scopes the hook
+against a base the document never contained. The framework scopes the hook
 for you; the thing to remember is *why* it is scoped, because the same reasoning
 applies to any extension that reaches the grammar shape.
 
@@ -223,7 +223,7 @@ read. Two write styles are in play, and they read at different moments:
 - **Snapshot-diff** — project the model, edit the projection, write the result.
   The version to declare is the one the projection carried, because that is the
   state the edit is expressed against. `ReconcilingMultiDocumentGlspState` works
-  this way: it takes a baseline at `setSourceRoot` and diffs against it.
+  this way: it takes a base at `setSourceRoot` and diffs against it.
 - **Live-AST** — resolve a node, mutate it in place, write the document it
   belongs to. The version to declare is the one the *read* returned, immediately
   before mutating, because that is the content the mutation assumed.

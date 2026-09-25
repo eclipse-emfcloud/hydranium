@@ -19,6 +19,7 @@ import {
    type AstDocument,
    type ClientSession,
    type ClientSessionFactory,
+   type ClientSessionWriteArgs,
    DefaultClientSession,
    DocumentNotOpenError,
    DuplicateClientIdError,
@@ -27,7 +28,7 @@ import {
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { asSnapshotVersion, isConflictError, type TransferElement, type TransferUpdateArgs } from '@hydranium/protocol';
+import { asSnapshotVersion, isConflictError, type TransferElement } from '@hydranium/protocol';
 import { type CancellationToken } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -775,7 +776,7 @@ describe('ClientSessionFactory', () => {
       class CountingSession extends DefaultClientSession<AstNode> {
          updates = 0;
          protected override updateDocument(
-            args: Omit<TransferUpdateArgs<TransferElement>, 'clientId'>,
+            args: ClientSessionWriteArgs<TransferElement>,
             cancelToken?: CancellationToken
          ): Promise<AstDocument<AstNode>> {
             this.updates++;

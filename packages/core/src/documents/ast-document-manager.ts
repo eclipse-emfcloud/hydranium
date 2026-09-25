@@ -114,9 +114,8 @@ export interface AstDocument<TAst extends AstNode, TDiagnostic extends AstDiagno
     * Text-document version this snapshot was taken at — read from
     * `LangiumDocument.textDocument.version`. Symmetric with
     * `TransferDocument.version` on the wire side: an in-process caller that
-    * holds an `AstDocument` and mutates it sends this straight back as
-    * `TransferUpdateArgs.basedOn` / `TransferSaveArgs.basedOn`, and the
-    * conflict gate arms on it.
+    * holds an `AstDocument` and mutates it sends this straight back as the
+    * `basedOn` of its session's write, and the conflict gate arms on it.
     */
    version: SnapshotVersion;
 }

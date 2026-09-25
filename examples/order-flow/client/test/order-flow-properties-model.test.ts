@@ -25,7 +25,7 @@
  *
  * **Why two wirings of the same objects.** The conflict tests construct the
  * model over a `DataEvents` that nothing fires into, which pins its
- * baseline. That is not a mock: it is the state a real panel is in between its
+ * base. That is not a mock: it is the state a real panel is in between its
  * last refresh and its next push, and it is the only way to make the stale-write
  * deterministic — driving it through the live subscription would race the
  * server's notification against the test's next request, so the conflict would
@@ -144,7 +144,7 @@ function followingModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
 }
 
 /**
- * A model whose baseline is pinned, because its events object is not the one
+ * A model whose base is pinned, because its events object is not the one
  * bound to the connection. See the suite doc for why this is the honest way to
  * make a stale write deterministic.
  */

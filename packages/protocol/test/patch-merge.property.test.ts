@@ -48,7 +48,7 @@ const jsonValue = recursiveJson.value;
 const jsonObject = fc.dictionary(safeKey, jsonValue, { maxKeys: 5 });
 
 /**
- * An object sentinel used as the baseline value at every EDITED key. A leaf edit
+ * An object sentinel used as the base value at every EDITED key. A leaf edit
  * (scalar) can never equal it, so each edit is guaranteed to be a real change
  * (no accidental `no-op`) and stays a `replace`/`add` — never silently a value
  * coincidence — without any fragile deep-equality precondition.
@@ -84,25 +84,25 @@ describe('patch-merge property tests', () => {
             // Need at least one of each for the property to have teeth.
             fc.pre(userSpecs.length > 0 && foreignSpecs.length > 0);
 
-            const baseline: JsonRecord = {};
+            const base: JsonRecord = {};
             for (const spec of specs) {
-               baseline[spec.key] = spec.role === 'filler' ? spec.fillerVal : SENTINEL();
+               base[spec.key] = spec.role === 'filler' ? spec.fillerVal : SENTINEL();
             }
-            const attempted = deepClone(baseline);
+            const ours = deepClone(base);
             for (const spec of userSpecs) {
-               attempted[spec.key] = spec.editVal;
+               ours[spec.key] = spec.editVal;
             }
-            const fresh = deepClone(baseline);
+            const theirs = deepClone(base);
             for (const spec of foreignSpecs) {
-               fresh[spec.key] = spec.editVal;
+               theirs[spec.key] = spec.editVal;
             }
-            // Both intents on disjoint paths: fresh with the user edits layered on top.
-            const expected = deepClone(fresh);
+            // Both intents on disjoint paths: theirs with the user edits layered on top.
+            const expected = deepClone(theirs);
             for (const spec of userSpecs) {
                expected[spec.key] = spec.editVal;
             }
 
-            const outcome = await reconcileByPatchReplay(baseline, attempted, async () => deepClone(fresh));
+            const outcome = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs));
 
             expect(outcome.status).toBe('merged');
             if (outcome.status === 'merged') {
@@ -125,22 +125,22 @@ describe('patch-merge property tests', () => {
             // Keep the collision on the shared key alone.
             fc.pre(!others.some(other => other.key === sharedKey));
 
-            const baseline: JsonRecord = { [sharedKey]: SENTINEL() };
+            const base: JsonRecord = { [sharedKey]: SENTINEL() };
             for (const other of others) {
-               baseline[other.key] = other.val;
+               base[other.key] = other.val;
             }
-            // Both writers move the shared key off the baseline (object) sentinel to a scalar,
+            // Both writers move the shared key off the base (object) sentinel to a scalar,
             // so the user op is a guarded `replace` and the foreign value trips its test op.
-            const attempted = deepClone(baseline);
-            attempted[sharedKey] = userVal;
-            const fresh = deepClone(baseline);
-            fresh[sharedKey] = foreignVal;
+            const ours = deepClone(base);
+            ours[sharedKey] = userVal;
+            const theirs = deepClone(base);
+            theirs[sharedKey] = foreignVal;
 
-            const outcome = await reconcileByPatchReplay(baseline, attempted, async () => deepClone(fresh));
+            const outcome = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs));
 
             expect(outcome.status).toBe('conflict');
             if (outcome.status === 'conflict') {
-               expect(outcome.fresh).toEqual(fresh);
+               expect(outcome.theirs).toEqual(theirs);
             }
          })
       );
@@ -148,11 +148,11 @@ describe('patch-merge property tests', () => {
 
    it('idempotence: reconciling an unchanged root is a no-op and skips the refetch', async () => {
       await fc.assert(
-         fc.asyncProperty(jsonObject, async baseline => {
+         fc.asyncProperty(jsonObject, async base => {
             let refetched = false;
-            const outcome = await reconcileByPatchReplay(baseline, deepClone(baseline), async () => {
+            const outcome = await reconcileByPatchReplay(base, deepClone(base), async () => {
                refetched = true;
-               return baseline;
+               return base;
             });
             expect(outcome.status).toBe('no-op');
             expect(refetched).toBe(false);
@@ -176,7 +176,7 @@ describe('patch-merge property tests', () => {
             for (const key of keys) {
                server[key] = SENTINEL();
             }
-            let userBaseline = deepClone(server);
+            let userBase = deepClone(server);
 
             for (let i = 0; i < pairCount; i++) {
                const userKey = keys[2 * i];
@@ -184,18 +184,18 @@ describe('patch-merge property tests', () => {
                // A foreign writer commits to its own field, then the user replays their
                // edit (on a disjoint field) against the freshly-fetched server state.
                server[foreignKey] = editVals[2 * i + 1];
-               const attempted = deepClone(userBaseline);
-               attempted[userKey] = editVals[2 * i];
+               const ours = deepClone(userBase);
+               ours[userKey] = editVals[2 * i];
                const snapshot = deepClone(server);
 
-               const outcome = await reconcileByPatchReplay(userBaseline, attempted, async () => snapshot);
+               const outcome = await reconcileByPatchReplay(userBase, ours, async () => snapshot);
 
                expect(outcome.status).toBe('merged');
                if (outcome.status !== 'merged') {
                   return;
                }
                server = outcome.merged;
-               userBaseline = deepClone(outcome.merged);
+               userBase = deepClone(outcome.merged);
             }
 
             // Every interleaved intent survived the full sequence — none lost, none duplicated.

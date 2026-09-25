@@ -29,9 +29,8 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
    /**
     * The document version this snapshot was taken at — sourced from the
     * server's text-document version counter. A caller that mutates the document
-    * subsequently sends this straight back as `TransferUpdateArgs.basedOn` (or
-    * `TransferSaveArgs.basedOn`), and the server rejects a stale-based update
-    * with `ConflictError`.
+    * subsequently sends this straight back as `TransferUpdateDocumentArgs.basedOn`, and
+    * the server rejects a stale-based update with `ConflictError`.
     *
     * See `@hydranium/protocol#errors` for the conflict-detection contract.
     */

@@ -480,10 +480,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * **Parsed afresh, never the built root.** Operation handlers edit the
     * built root in place, so until a rebuild replaces it, it already holds
     * the edit being reconciled, and replaying the edit onto it applies it
-    * twice. The fresh root is parsed, not linked: an encoder hook reading a
+    * twice. The root is parsed, not linked: an encoder hook reading a
     * reference's `ref` sees `undefined` on it.
     */
-   protected async readFreshRoot(uri: string): Promise<AstNode | undefined> {
+   protected async readCurrentRoot(uri: string): Promise<AstNode | undefined> {
       const modelService = this.sharedServices.model.ModelService;
       if (!(await modelService.validated(uri).catch(() => undefined))) {
          return undefined;

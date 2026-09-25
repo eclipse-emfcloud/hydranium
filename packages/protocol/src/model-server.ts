@@ -14,17 +14,19 @@
  * over `TRoot`.
  */
 
-import type { TransferClientArgs } from './model-service/args';
 import type { ReferenceCandidate } from './model-service/reference-candidate';
 
 // ---------------------------------------------------------------------------
 // Client / server arguments
 // ---------------------------------------------------------------------------
 
-// `TransferClientArgs` / `TransferUpdateArgs` / `TransferSaveArgs` live in
-// `./model-service/args.ts` and are re-exported by the main barrel via
-// `./model-service`. The legacy LSP-style protocol (Open / Close / events)
-// defined here only consumes them as a supertype.
+/** Identifies a client-document binding. */
+export interface TransferClientArgs {
+   /** Document URI. */
+   uri: string;
+   /** Stable identifier for the client invoking the operation. */
+   clientId: string;
+}
 
 /** Open a document on behalf of a client. */
 export interface OpenModelArgs extends TransferClientArgs {

@@ -105,6 +105,7 @@ export const referenceSettleTimeoutError = (elapsedMs: number): HydraniumRespons
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './diagnostics-provider.js';
 import type {
    ClientSession,
+   ClientSessionWriteArgs,
    ClientTextDocumentChangeEvent,
    HydraniumLanguageServices,
    LogNameOptions,
@@ -619,15 +620,15 @@ export class DataServer<
    }
 
    // ============================================================
-   // DataServerProtocol implementation — delegates to ModelService.
+   // DataServerProtocol implementation
    // ============================================================
    //
-   // The lifecycle methods (`get` / `update` / `save` / `ready`) forward
-   // straight to `ModelService` and encode the returned `AstDocument` on
-   // the wire boundary via `encoder.astDocumentToTransferDocument`.
-   // Adopters customising lifecycle behaviour (normalisation, supersession,
-   // settled-phase choice, etc.) override on the ModelService subclass —
-   // no override on DataServer is needed.
+   // Reads go to `ModelService`; a request that opens or writes a document
+   // goes to the session this connection registered under its `clientId`.
+   // Each answer is encoded on the wire boundary via
+   // `encoder.astDocumentToTransferDocument`. To change how documents are
+   // read, override on the ModelService subclass; to change how they are
+   // written, on the session class the bound `ClientSessionFactory` builds.
 
    async createSession(args: CreateSessionArgs): Promise<void> {
       // After teardown nothing would ever end a session registered now, and its
@@ -710,11 +711,22 @@ export class DataServer<
    }
 
    async updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]> {
-      const astDocuments = await this.requireSession(args.clientId).updateAll(args);
+      const astDocuments = await this.requireSession(args.clientId).updateAll({
+         updates: args.updates.map(update => this.toSessionWrite(update))
+      });
       return astDocuments.map(
          astDocument =>
             this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>
       );
+   }
+
+   /**
+    * The session write a wire write request carries. Only the fields a session
+    * takes: a field an adopter adds to a request reaches the session only
+    * through an override of this.
+    */
+   protected toSessionWrite(request: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>): ClientSessionWriteArgs<TTransfer> {
+      return { uri: request.uri, model: request.model, basedOn: request.basedOn };
    }
 
    /**
@@ -791,12 +803,12 @@ export class DataServer<
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.requireSession(args.clientId).update(args);
+      const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.requireSession(args.clientId).save(args);
+      const astDocument = await this.requireSession(args.clientId).save(this.toSessionWrite(args));
       return this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>;
    }
 

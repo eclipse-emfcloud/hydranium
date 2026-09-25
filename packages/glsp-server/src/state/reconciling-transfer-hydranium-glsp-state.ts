@@ -27,9 +27,9 @@ import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
  *   field-level shape is what lets `fast-json-patch` diff per field, so undo /
  *   redo and forward-write reconcile act per field instead of clobbering the
  *   whole document.
- * - {@link baseline} — the last in-sync projection, captured on every
+ * - {@link base} — the last in-sync projection, captured on every
  *   {@link setSourceRoot}. A forward-write conflict reconciles the user's
- *   intent (baseline → attempted) against the fresh server root.
+ *   intent (base → ours) against the server's current root (theirs).
  * - {@link updateSourceModel} — the concrete reconcile template: persist,
  *   and on a `ConflictError` consult the injected `conflictResolver` and act
  *   on the merged / no-op / conflict / unavailable outcome.
@@ -52,12 +52,12 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
 {
    /**
     * Last in-sync source-model projection, captured on every
-    * {@link setSourceRoot} (initial load + post-update). The baseline a
+    * {@link setSourceRoot} (initial load + post-update). The base a
     * forward-write conflict reconciles against: it stays the pre-command
     * state because operation handlers mutate `_sourceRoot` in place during
     * `execute` while `setSourceRoot` only re-runs once the write commits.
     */
-   protected baseline?: TSourceModel;
+   protected base?: TSourceModel;
 
    /**
     * Persisted-shape projection of the current source root, consumed by GLSP's
@@ -73,13 +73,13 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
 
    override setSourceRoot(uri: string, root: TRoot): void {
       super.setSourceRoot(uri, root);
-      this.baseline = this.sourceModel;
+      this.base = this.sourceModel;
    }
 
    /**
     * Persist `model` back to the document store, then capture the resulting
     * AST root. On a `ConflictError` (the based-on version was superseded),
-    * reconcile the user's intent against the fresh server root via the bound
+    * reconcile the user's intent against the server's current root via the bound
     * `conflictResolver` and act on the outcome — one declarative policy
     * (force = last-writer-wins, reconciling = field-level merge) shared with
     * undo / redo.
@@ -94,7 +94,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
             this.setSourceRoot(this._sourceUri, root);
          },
          refetch: () => this.refetch(),
-         baseline: this.baseline,
+         base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
          onConflictDropped: () => this.refreshSourceRoot()
@@ -116,13 +116,13 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
 
    /**
     * Refetch hook — the stored text parsed afresh, as a persisted-shape
-    * projection (or `undefined` when unavailable). The `conflictResolver`
-    * replays the user's intent against this fresh state. Default uses
-    * {@link AbstractHydraniumGlspState.readFreshRoot} + the framework
+    * projection (or `undefined` when unavailable): theirs, which the
+    * `conflictResolver` replays the user's intent onto. Default uses
+    * {@link AbstractHydraniumGlspState.readCurrentRoot} + the framework
     * encoder's `'grammar'` mode; adopters override alongside {@link persist}.
     */
    protected async refetch(): Promise<TSourceModel | undefined> {
-      const fresh = await this.readFreshRoot(this._sourceUri);
-      return fresh ? (this.sharedServices.model.TransferEncoder.toTransfer(fresh, 'grammar') as unknown as TSourceModel) : undefined;
+      const theirs = await this.readCurrentRoot(this._sourceUri);
+      return theirs ? (this.sharedServices.model.TransferEncoder.toTransfer(theirs, 'grammar') as unknown as TSourceModel) : undefined;
    }
 }

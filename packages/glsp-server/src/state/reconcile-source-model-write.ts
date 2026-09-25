@@ -26,8 +26,8 @@ export interface SourceModelWriteHooks<TModel> {
    persist(model: TModel, basedOn: BasedOn): Promise<void>;
    /** Current server-side projection, or `undefined` when unavailable. */
    refetch(): Promise<TModel | undefined>;
-   /** Last in-sync projection the user's intent is measured against. */
-   readonly baseline: TModel | undefined;
+   /** The last in-sync projection the user's intent is measured against. */
+   readonly base: TModel | undefined;
    readonly conflictResolver: ConflictResolver;
    readonly logger: Logger;
    /** Invoked when the edit is dropped, so the caller can resync its own state. */
@@ -54,7 +54,7 @@ export async function reconcileSourceModelWrite<TModel extends object>(
       if (!isConflictError(err)) {
          throw err;
       }
-      const outcome = await hooks.conflictResolver.resolve(hooks.baseline ?? model, model, () => hooks.refetch());
+      const outcome = await hooks.conflictResolver.resolve(hooks.base ?? model, model, () => hooks.refetch());
       switch (outcome.status) {
          case 'merged':
             await hooks.persist(outcome.merged, 'anything');

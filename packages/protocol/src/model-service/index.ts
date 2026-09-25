@@ -7,11 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// Subpath barrel for the in-process `ModelService` facade contract. The
-// implementation lives in `@hydranium/core`; this package owns the
-// argument types so both the framework facade and the data-server wire
-// protocol can structurally agree on the lifecycle shape.
+// Generic payload types the data protocol shares with core: the based-on
+// version, which the server's model service checks writes against, and the
+// reference candidates, which core's scope and completion code produce.
 
-export * from './args';
 export * from './based-on';
 export * from './reference-candidate';

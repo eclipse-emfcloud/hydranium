@@ -10,8 +10,8 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type ClientSession } from '@hydranium/core';
-import { type BasedOn, type TransferElement, type TransferUpdateAllArgs } from '@hydranium/protocol';
+import { type ClientSession, type ClientSessionWriteArgs } from '@hydranium/core';
+import { type BasedOn, type TransferElement } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -69,10 +69,10 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
 {
    /**
     * Last in-sync projection across the whole write set, captured on every
-    * {@link setSourceRoot}. Same role as the single-document baseline: the state a
+    * {@link setSourceRoot}. Same role as the single-document base: the state a
     * forward-write conflict reconciles the user's intent against.
     */
-   protected baseline?: MultiDocumentSourceModel<TPrimary>;
+   protected base?: MultiDocumentSourceModel<TPrimary>;
 
    /**
     * Projection of the primary plus every registered secondary, in the framework
@@ -99,21 +99,21 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    override setSourceRoot(uri: string, root: TRoot): void {
       super.setSourceRoot(uri, root);
       this.trackWriteSet(uri);
-      this.baseline = this.sourceModel;
+      this.base = this.sourceModel;
    }
 
    /**
     * Register the secondary documents that belong to the primary at `uri`, via
     * {@link AbstractHydraniumGlspState.trackSecondaryDocument}. Called on every
     * {@link setSourceRoot}, after the primary is captured (so `sourceUri` is
-    * current) and BEFORE the baseline is taken (so the baseline includes them).
+    * current) and BEFORE the base is taken (so the base includes them).
     * Default: no secondaries.
     *
     * This hook exists because that ordering is a trap an adopter would otherwise
     * hit silently. Registering from an overridden `setSourceRoot` *after*
-    * `super.setSourceRoot(...)` runs too late — the baseline has already been
+    * `super.setSourceRoot(...)` runs too late — the base has already been
     * captured without the secondaries, so the first conflict reconcile measures
-    * the user's intent against a baseline missing half the write set and the
+    * the user's intent against a base missing half the write set and the
     * secondary edits look like foreign changes. Registering *before* the super
     * call is too early for a URI derived from the new primary. Overriding this
     * instead removes the choice.
@@ -135,7 +135,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
             this.setSourceRoot(this._sourceUri, root);
          },
          refetch: () => this.refetch(),
-         baseline: this.baseline,
+         base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
          onConflictDropped: () => this.refreshSourceRoot()
@@ -153,12 +153,12 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * ({@link requireModelSession}).
     */
    protected async persist(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn): Promise<{ root: TRoot }> {
-      const primaryChanged = this.hasChanged(this.baseline?.primary, model.primary);
-      const updates: TransferUpdateAllArgs<TransferElement>['updates'] = primaryChanged
+      const primaryChanged = this.hasChanged(this.base?.primary, model.primary);
+      const updates: ClientSessionWriteArgs<TransferElement>[] = primaryChanged
          ? [{ uri: this._sourceUri, model: model.primary, basedOn }]
          : [];
       for (const [uri, secondary] of Object.entries(model.secondaries)) {
-         if (this.hasChanged(this.baseline?.secondaries[uri], secondary)) {
+         if (this.hasChanged(this.base?.secondaries[uri], secondary)) {
             updates.push({ uri, model: secondary, basedOn: basedOn === 'anything' ? 'anything' : this.secondaryBasedOn(uri) });
          }
       }
@@ -174,7 +174,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    }
 
    /**
-    * Whether `candidate` differs from the baseline projection of the same
+    * Whether `candidate` differs from the base projection of the same
     * document, and therefore needs writing.
     *
     * **Skipping unchanged documents is correctness, not an optimisation.** A
@@ -189,8 +189,8 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * the same shape, so key order is stable and a string compare is sound here;
     * it is also cheap enough to run per document per write.
     */
-   protected hasChanged(baseline: object | undefined, candidate: object): boolean {
-      return baseline === undefined || JSON.stringify(baseline) !== JSON.stringify(candidate);
+   protected hasChanged(base: object | undefined, candidate: object): boolean {
+      return base === undefined || JSON.stringify(base) !== JSON.stringify(candidate);
    }
 
    /**
@@ -217,25 +217,25 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
 
    /**
     * Refetch hook — the current projection across the write set, each document
-    * read through {@link AbstractHydraniumGlspState.readFreshRoot}, used by the
-    * conflict resolver to replay the user's intent against fresh state.
+    * read through {@link AbstractHydraniumGlspState.readCurrentRoot}: theirs,
+    * which the conflict resolver replays the user's intent onto.
     * Returns `undefined` when the PRIMARY cannot be read, since a reconcile
     * without it has nothing to merge into; an unreadable secondary is omitted the
     * same way {@link sourceModel} omits one.
     */
    protected async refetch(): Promise<MultiDocumentSourceModel<TPrimary> | undefined> {
-      const fresh = await this.readFreshRoot(this._sourceUri);
-      if (!fresh) {
+      const theirs = await this.readCurrentRoot(this._sourceUri);
+      if (!theirs) {
          return undefined;
       }
       const secondaries: Record<string, TransferElement> = {};
       for (const uri of this.secondaryUris) {
-         const root = await this.readFreshRoot(uri);
+         const root = await this.readCurrentRoot(uri);
          if (root) {
             secondaries[uri] = this.projectRoot(root);
          }
       }
-      return { primary: this.projectRoot<TPrimary>(fresh), secondaries };
+      return { primary: this.projectRoot<TPrimary>(theirs), secondaries };
    }
 
    /** Project a currently-loaded document's root, or `undefined` when it is not loaded. */

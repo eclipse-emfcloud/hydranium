@@ -90,8 +90,8 @@ interface Harness {
    /** Store documents that are also a built document's text document, by URI. */
    readonly sharedTextDocuments: Map<string, { version: number; getText(): string }>;
    resolve: (
-      baseline: TestComposite,
-      attempted: TestComposite,
+      base: TestComposite,
+      ours: TestComposite,
       refetch: () => Promise<TestComposite | undefined>
    ) => Promise<ReconcileOutcome<TestComposite>>;
 }
@@ -127,8 +127,8 @@ function seedSharingStore(harness: Harness, uri: string, label: string): void {
 
 @injectable()
 class TestMultiState extends ReconcilingMultiDocumentGlspState<TestRoot, TestPrimary> {
-   get exposedBaseline(): TestComposite | undefined {
-      return this.baseline;
+   get exposedBase(): TestComposite | undefined {
+      return this.base;
    }
 }
 
@@ -153,7 +153,7 @@ function makeHarness(): Harness {
       validated: new Map(),
       store: new Map(),
       sharedTextDocuments: new Map(),
-      resolve: async (_baseline, attempted) => ({ status: 'merged', merged: attempted })
+      resolve: async (_base, ours) => ({ status: 'merged', merged: ours })
    };
 }
 
@@ -205,12 +205,10 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
       }
    };
    const conflictResolver: ConflictResolver = {
-      resolve: (baseline, attempted, refetch) =>
-         harness.resolve(
-            baseline as TestComposite,
-            attempted as TestComposite,
-            refetch as () => Promise<TestComposite | undefined>
-         ) as Promise<ReconcileOutcome<never>>
+      resolve: (base, ours, refetch) =>
+         harness.resolve(base as TestComposite, ours as TestComposite, refetch as () => Promise<TestComposite | undefined>) as Promise<
+            ReconcileOutcome<never>
+         >
    };
    const container = new Container();
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(sharedServices as unknown as ServerSharedServices);
@@ -551,7 +549,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
-         harness.validated.set(DIAGRAM_URI, makeRoot('fresh'));
+         harness.validated.set(DIAGRAM_URI, makeRoot('theirs'));
          harness.conflictOn = SEMANTIC_URI;
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
@@ -574,11 +572,11 @@ describe('ReconcilingMultiDocumentGlspState', () => {
       it('drops the edit and resyncs on a conflict outcome', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
-         harness.validated.set(DIAGRAM_URI, makeRoot('fresh'));
+         harness.validated.set(DIAGRAM_URI, makeRoot('theirs'));
          harness.conflictOn = DIAGRAM_URI;
          harness.resolve = async () => ({
             status: 'conflict',
-            fresh: { primary: { $type: 'TestRoot', label: 'fresh' }, secondaries: {} }
+            theirs: { primary: { $type: 'TestRoot', label: 'theirs' }, secondaries: {} }
          });
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
@@ -631,9 +629,9 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          harness.conflictOn = DIAGRAM_URI;
          // No validated root registered for the primary → refetch fails.
          let refetched: TestComposite | undefined | 'not-called' = 'not-called';
-         harness.resolve = async (_baseline, attempted, refetch) => {
+         harness.resolve = async (_base, ours, refetch) => {
             refetched = await refetch();
-            return { status: 'merged', merged: attempted };
+            return { status: 'merged', merged: ours };
          };
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
@@ -657,7 +655,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          harness.validated.set(DIAGRAM_URI, makeRoot('diagram'));
          harness.validated.set(SEMANTIC_URI, built);
          harness.conflictOn = SEMANTIC_URI;
-         harness.resolve = (baseline, attempted, refetch) => new ReconcilingConflictResolver().resolve(baseline, attempted, refetch);
+         harness.resolve = (base, ours, refetch) => new ReconcilingConflictResolver().resolve(base, ours, refetch);
 
          await state.updateSourceModel(
             {
@@ -680,14 +678,14 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, OTHER_URI, 'other', 1);
          harness.validated.set(DIAGRAM_URI, makeRoot('built-primary'));
          harness.validated.set(SEMANTIC_URI, makeRoot('built-semantic'));
-         harness.store.set(DIAGRAM_URI, { version: 2, text: 'fresh-primary' });
-         harness.store.set(SEMANTIC_URI, { version: 2, text: 'fresh-semantic' });
+         harness.store.set(DIAGRAM_URI, { version: 2, text: 'theirs-primary' });
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'theirs-semantic' });
          // OTHER_URI deliberately has no validated root.
          harness.conflictOn = DIAGRAM_URI;
          let refetched: TestComposite | undefined;
-         harness.resolve = async (_baseline, attempted, refetch) => {
+         harness.resolve = async (_base, ours, refetch) => {
             refetched = await refetch();
-            return { status: 'merged', merged: attempted };
+            return { status: 'merged', merged: ours };
          };
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
@@ -696,12 +694,12 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1));
 
-         expect(refetched?.primary).toEqual({ $type: 'TestRoot', label: 'fresh-primary' });
-         expect(refetched?.secondaries).toEqual({ [SEMANTIC_URI]: { $type: 'TestRoot', label: 'fresh-semantic' } });
+         expect(refetched?.primary).toEqual({ $type: 'TestRoot', label: 'theirs-primary' });
+         expect(refetched?.secondaries).toEqual({ [SEMANTIC_URI]: { $type: 'TestRoot', label: 'theirs-semantic' } });
       });
    });
 
-   describe('baseline', () => {
+   describe('base', () => {
       it('captures the whole write set on setSourceRoot', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
@@ -712,7 +710,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          // Re-capture now that the secondary is registered.
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
 
-         expect(state.exposedBaseline).toEqual({
+         expect(state.exposedBase).toEqual({
             primary: { $type: 'TestRoot', label: 'diagram' },
             secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'semantic' } }
          });
