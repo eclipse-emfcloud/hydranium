@@ -381,14 +381,24 @@ class RecordingFileSystemProvider {
    readonly onDisk = new Map<string, string>();
    /** Runs while a read is pending, before it answers. */
    duringRead: () => void = () => undefined;
+   /** Whether a disk-queue task is running; set by the harness's queue double. */
+   inDiskQueue: () => boolean = () => false;
+   /** Every read and write made while no disk-queue task was running. */
+   readonly outsideDiskQueue: string[] = [];
 
    readFile(uri: { toString(): string }): Promise<string> {
+      if (!this.inDiskQueue()) {
+         this.outsideDiskQueue.push(`read ${uri.toString()}`);
+      }
       this.duringRead();
       const content = this.onDisk.get(uri.toString());
       return content === undefined ? Promise.reject(new Error(`no such file: ${uri.toString()}`)) : Promise.resolve(content);
    }
 
    writeFile(uri: { toString(): string } | string, content: string): Promise<void> {
+      if (!this.inDiskQueue()) {
+         this.outsideDiskQueue.push(`write ${uri.toString()}`);
+      }
       this.writes.push({ uri: uri.toString(), content });
       return Promise.resolve();
    }
@@ -410,6 +420,8 @@ interface CorrectionsHarness {
    fileSystemProvider: RecordingFileSystemProvider;
    /** URIs passed to the (stubbed) document builder's reconciliation methods. */
    builderCalls: { reparse: string[]; reparseAndRelink: string[] };
+   /** URIs of the tasks queued through the (stubbed) document manager's disk queue. */
+   diskTasks: string[];
 }
 
 function makeCorrectionsProbe(
@@ -419,6 +431,9 @@ function makeCorrectionsProbe(
    const textDocuments = new RecordingTextDocuments();
    const fileSystemProvider = new RecordingFileSystemProvider();
    const builderCalls = { reparse: [] as string[], reparseAndRelink: [] as string[] };
+   const diskTasks: string[] = [];
+   let runningDiskTasks = 0;
+   fileSystemProvider.inDiskQueue = () => runningDiskTasks > 0;
    const syncMode = typeof options === 'string' ? options : options.syncMode;
    const onReparse = typeof options === 'string' ? undefined : options.onReparse;
    const services = makeIntegrityServices({
@@ -436,6 +451,17 @@ function makeCorrectionsProbe(
                reparseAndRelink: async (document: LangiumDocument) => {
                   builderCalls.reparseAndRelink.push(document.uri.toString());
                }
+            },
+            AstDocumentManager: {
+               queueDiskTask: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {
+                  diskTasks.push(uri);
+                  runningDiskTasks++;
+                  try {
+                     return await task();
+                  } finally {
+                     runningDiskTasks--;
+                  }
+               }
             }
             // syncCorrections asks the text store directly whether any client
             // holds the document (`isOpenInAnyClient` canonicalizes internally,
@@ -446,7 +472,7 @@ function makeCorrectionsProbe(
       serializer: { Serializer: { serializeAst: () => serializeResult } }
    });
    const probe = new CorrectionsProbe(services, syncMode ? { syncMode } : {});
-   return { probe, textDocuments, fileSystemProvider, builderCalls };
+   return { probe, textDocuments, fileSystemProvider, builderCalls, diskTasks };
 }
 
 /** A `LangiumDocument` carrying real text plus a mutable parse-result value. */
@@ -537,14 +563,16 @@ describe('IntegrityService corrections sync', () => {
       expect(textDocuments.stagedContent).toEqual([]);
    });
 
-   it('writes corrected text to disk for a closed file in silent mode', async () => {
-      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+   it('writes corrected text to disk for a closed file in silent mode, through its disk queue', async () => {
+      const { probe, textDocuments, fileSystemProvider, diskTasks } = makeCorrectionsProbe('silent');
       textDocuments.openInLanguageClient = false;
       const td = TextDocument.create('file:///closed.fake', 'fake', 3, 'corrected');
 
       await probe.syncCorrectionsNow(td);
 
       expect(fileSystemProvider.writes).toEqual([{ uri: 'file:///closed.fake', content: 'corrected' }]);
+      expect(diskTasks).toEqual(['file:///closed.fake']);
+      expect(fileSystemProvider.outsideDiskQueue).toEqual([]);
       expect(textDocuments.setAuthorCalls).toEqual([]);
    });
 
@@ -879,8 +907,8 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
       });
    }
 
-   it('writes a held file in silent mode when its source is what disk holds', async () => {
-      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+   it('writes a held file in silent mode when its source is what disk holds, reading and writing in one disk-queue task', async () => {
+      const { probe, textDocuments, fileSystemProvider, diskTasks } = makeCorrectionsProbe('silent');
       textDocuments.openInOtherClient = true;
       fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
       const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
@@ -889,6 +917,8 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
       await probe.syncCorrectionsNow(td, 'saved');
 
       expect(fileSystemProvider.writes).toEqual([{ uri: 'file:///held.fake', content: 'corrected' }]);
+      expect(diskTasks).toEqual(['file:///held.fake']);
+      expect(fileSystemProvider.outsideDiskQueue).toEqual([]);
       expect(textDocuments.stagedContent).toEqual([]);
    });
 

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   type CanonicalUri,
    type CloseModelArgs,
    type Tracer,
    type TransferSavedEvent,
@@ -178,7 +179,18 @@ export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic extends AstD
 >;
 
 /** Construction options for {@link AstDocumentManager}. */
-export type AstDocumentManagerOptions = LogNameOptions;
+export interface AstDocumentManagerOptions extends LogNameOptions {
+   /**
+    * Skip a queued save of a URI when a newer save of it is queued behind. The
+    * newer save took its text later, so disk ends the same with fewer writes.
+    * A skipped save announces nothing and takes the newer save's outcome: it
+    * resolves when that one lands and rejects with its error when it fails,
+    * since disk then holds neither text. Defaults to `false`: every save
+    * writes. The framework binds the manager without options, so turning this
+    * on means rebinding `AstDocumentManager` with them.
+    */
+   readonly coalesceSaves?: boolean;
+}
 
 /**
  * The document slot the model server and the integrity service talk to:
@@ -201,7 +213,28 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
 
    /** Apply `text` as `clientId`'s edit. Resolves to the resulting text-document version. */
    update(uri: string, text: string, clientId: string): Promise<number>;
+   /**
+    * Write the document's current text to disk through the URI's disk queue.
+    * The text is taken when this is called, so saves of one URI land in the
+    * order they were called.
+    */
    save(uri: string, clientId: string): Promise<void>;
+
+   /**
+    * Run `task` once every disk task already queued for `uri` has settled, and
+    * before any queued after it. Every server-side disk access of a file that
+    * must not interleave with its saves goes through here: two writes of one
+    * file that bypass it can land in either order, and the older text then
+    * stays on disk. Tasks of different URIs run in parallel. A task that has
+    * nothing to do still resolves once the tasks before it have settled.
+    *
+    * A task must not await a build, nor a save, another disk task or an open
+    * of a document no client has open, all of the same URI: a build's
+    * integrity repair queues its own write here and the build waits for it,
+    * and such an open reads the file here, so a task waiting on either queued
+    * behind it never resolves, which wedges the URI's queue for good.
+    */
+   queueDiskTask<T>(uri: string, task: () => Promise<T>): Promise<T>;
 
    onUpdate(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
    onSave(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void | Promise<void>): Disposable;
@@ -251,6 +284,17 @@ export class DefaultAstDocumentManager<
 > implements AstDocumentManager<TAst, TDiagnostic> {
    protected lastUpdate?: UpdateInfo;
 
+   /**
+    * Per canonical URI, the settling of the last disk task queued for it; the
+    * next task chains behind it. An entry leaves once its URI's queue is idle.
+    * Kept outside the workspace lock, whose `write` cancels the write before
+    * it: a save cancelled that way reports success for text it never wrote.
+    */
+   protected readonly diskQueues = new Map<CanonicalUri, Promise<void>>();
+   /** Per canonical URI, the newest save queued for it, which {@link coalesceSaves} lets older queued saves defer to. */
+   protected readonly newestSaves = new Map<CanonicalUri, Promise<void>>();
+   protected readonly coalesceSaves: boolean;
+
    protected readonly textDocuments: HydraniumTextDocuments<TextDocument>;
    protected readonly fileSystemProvider: WritableFileSystemProvider;
    protected readonly langiumDocs: LangiumDocuments;
@@ -268,6 +312,7 @@ export class DefaultAstDocumentManager<
       this.documentBuilder = services.workspace.DocumentBuilder;
       this.uriPolicy = services.workspace.DocumentUriPolicy;
       this.tracer = services.Tracer.for(options.logName ?? 'AstDocumentManager').trace('instantiated');
+      this.coalesceSaves = options.coalesceSaves ?? false;
       this.textDocuments.onDidOpen(event =>
          this.open({ clientId: event.clientId, uri: event.document.uri, languageId: event.document.languageId })
       );
@@ -469,6 +514,12 @@ export class DefaultAstDocumentManager<
     * callers don't need to pass it — the manager owns content and version
     * sequencing.
     *
+    * The text is taken synchronously, before the save waits in the URI's disk
+    * queue; the compare and the write run in the queue. Taken later, a save
+    * that waits behind another writes whatever the store holds when its turn
+    * comes, edits made after the call included, and announces that text under
+    * its own client id.
+    *
     * **The write is skipped when the file already holds that text; the
     * notification is not.** A save announces that the content is on disk, which
     * is true either way — so a subscriber clearing a dirty marker or reacting to
@@ -487,15 +538,52 @@ export class DefaultAstDocumentManager<
          throw new Error(`Document ${uri} hasn't been opened for saving yet`);
       }
       const text = document.getText();
-      if (!(await this.matchesDisk(canonical, text))) {
-         await this.tracer.with(canonical).time(
+      let supersededBy: Promise<void> | undefined;
+      const saved: Promise<void> = this.queueDiskTask(canonical, async () => {
+         const newest = this.newestSaves.get(canonical);
+         if (this.coalesceSaves && newest !== saved) {
+            supersededBy = newest;
+            return;
+         }
+         await this.writeSave(canonical, text, clientId);
+      })
+         .then(() => supersededBy)
+         .finally(() => {
+            if (this.newestSaves.get(canonical) === saved) {
+               this.newestSaves.delete(canonical);
+            }
+         });
+      this.newestSaves.set(canonical, saved);
+      return saved;
+   }
+
+   /** Write `text` to `uri` unless the file already holds it, then announce the save. Runs inside the URI's disk queue. */
+   protected async writeSave(uri: CanonicalUri, text: string, clientId: string): Promise<void> {
+      if (!(await this.matchesDisk(uri, text))) {
+         await this.tracer.with(uri).time(
             `Write file (${text.length} bytes, from ${clientId})`,
             // Async write so a slow disk does not block the event loop for the duration of the fs call.
-            () => this.fileSystemProvider.writeFile(UriUtils.toUri(canonical), text),
+            () => this.fileSystemProvider.writeFile(UriUtils.toUri(uri), text),
             'debug'
          );
       }
-      this.textDocuments.notifyDidSaveTextDocument({ textDocument: TextDocumentIdentifier.create(canonical), text }, clientId);
+      this.textDocuments.notifyDidSaveTextDocument({ textDocument: TextDocumentIdentifier.create(uri), text }, clientId);
+   }
+
+   queueDiskTask<T>(uri: string, task: () => Promise<T>): Promise<T> {
+      const key = this.uriPolicy.canonicalUri(uri);
+      const result = (this.diskQueues.get(key) ?? Promise.resolve()).then(task);
+      const settled = result.then(
+         () => undefined,
+         () => undefined
+      );
+      this.diskQueues.set(key, settled);
+      void settled.then(() => {
+         if (this.diskQueues.get(key) === settled) {
+            this.diskQueues.delete(key);
+         }
+      });
+      return result;
    }
 
    /**
@@ -540,7 +628,14 @@ export class DefaultAstDocumentManager<
       version = 0,
       text?: string
    ): Promise<TextDocumentItem> {
-      return { uri, languageId, version, text: text ?? (await this.fileSystemProvider.readFile(UriUtils.toUri(uri))) };
+      // Read in the disk queue: a read beside a queued save of the file returns
+      // the text from before it, and the document then opens on that.
+      return {
+         uri,
+         languageId,
+         version,
+         text: text ?? (await this.queueDiskTask(uri, () => this.fileSystemProvider.readFile(UriUtils.toUri(uri))))
+      };
    }
 
    /**

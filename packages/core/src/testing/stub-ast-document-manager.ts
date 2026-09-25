@@ -24,8 +24,9 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  * Minimal stub of {@link AstDocumentManager} for use in test
  * harnesses. Implements just the methods the framework's
  * `ModelService` calls (`open` / `close` / `update` / `save` /
- * `isOpen` / `getDocument`); `onSave` / `onClientClosed` forward to the
- * underlying stub text-document manager, `onUpdate` is driven explicitly
+ * `isOpen` / `getDocument`) and a disk queue that runs each task at once;
+ * `onSave` / `onClientClosed` forward to the underlying stub text store,
+ * `onUpdate` is driven explicitly
  * through {@link StubAstDocumentManager.emitUpdate} because the stub tree runs
  * no build phases to emit from, and the remaining read helpers
  * (`isTriggeringEdit`, `getAuthor`) throw if invoked — tests that need them
@@ -52,6 +53,7 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extend
    | 'isOpen'
    | 'update'
    | 'save'
+   | 'queueDiskTask'
    | 'onUpdate'
    | 'onSave'
    | 'onClientClosed'
@@ -150,6 +152,9 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
          const text = textDocuments.get(uri)?.getText() ?? '';
          await fileSystem.writeFile(UriUtils.toUri(uri), text);
          textDocuments.notifyDidSaveTextDocument({ textDocument: { uri }, text }, clientId);
+      },
+      queueDiskTask<T>(_uri: string, task: () => Promise<T>): Promise<T> {
+         return task();
       },
       // Registers the listener but never calls it by itself — the real manager
       // emits from a `DocumentBuilder.onDocumentPhase(Validated)` hook and the

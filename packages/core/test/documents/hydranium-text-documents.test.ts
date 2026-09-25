@@ -19,6 +19,7 @@ import { TextDocument as TextDocumentImpl } from 'vscode-languageserver-textdocu
 import type { TextDocument, TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
+import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 
@@ -569,6 +570,41 @@ describe('HydraniumTextDocuments author history and pending content', () => {
          LANGUAGE_CLIENT_ID
       );
       expect(docs.get(URI)?.getText()).toBe('disk-again\n');
+   });
+});
+
+describe('HydraniumTextDocuments.commitRepair', () => {
+   function openAt(docs: HydraniumTextDocuments<TextDocument>, text: string): void {
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 4, text } }, 'A');
+   }
+
+   it('commits a repair as a new version authored by the integrity id, without a change event', () => {
+      // A new version is what a based-on gate and an echo filter key on; a
+      // repair under the old version is invisible to both. No change event,
+      // because the repair rides the build under way.
+      const { docs } = makeDocs();
+      openAt(docs, 'dup\n');
+      const changes: string[] = [];
+      docs.onDidChangeContent(event => changes.push(event.clientId));
+
+      const commit = docs.commitRepair(URI, 'dup\n', 'repaired\n');
+
+      expect(commit.status).toBe('committed');
+      expect(docs.get(URI)?.getText()).toBe('repaired\n');
+      expect(docs.version(URI)).toBe(5);
+      expect(docs.getAuthor(URI, 5)).toBe(INTEGRITY_CLIENT_ID);
+      expect(docs.getAuthor(URI, 4)).toBe('A');
+      expect(changes).toEqual([]);
+   });
+
+   it('keeps the version when the repair leaves the text as it is', () => {
+      const { docs } = makeDocs();
+      openAt(docs, 'same\n');
+
+      docs.commitRepair(URI, 'same\n', 'same\n');
+
+      expect(docs.version(URI)).toBe(4);
+      expect(docs.getAuthor(URI)).toBe('A');
    });
 });
 

@@ -9,10 +9,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { type CanonicalUri } from '@hydranium/protocol';
+import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState } from '@hydranium/langium';
 import { URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
+import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
@@ -37,7 +38,7 @@ const URI_B = 'file:///B.fake';
  * `LangiumDocuments` (seeded with `URI_A`) stay, since the real manager reads
  * them as plain slots.
  */
-function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy } = {}): {
+function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; managerOptions?: AstDocumentManagerOptions } = {}): {
    manager: DefaultAstDocumentManager<FakeRoot>;
    textDocuments: HydraniumTextDocuments;
    builder: ReturnType<typeof makeTestServices<FakeRoot>>['documentBuilder'];
@@ -54,7 +55,7 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy } = {}
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
    } as ServerSharedServices;
-   const manager = new DefaultAstDocumentManager<FakeRoot>(services);
+   const manager = new DefaultAstDocumentManager<FakeRoot>(services, opts.managerOptions);
    return { manager, textDocuments, builder: bundle.documentBuilder, documents: bundle.documents, fileSystem: bundle.fileSystem };
 }
 
@@ -633,5 +634,211 @@ describe('AstDocumentManager isOpen / isTriggeringEdit', () => {
       builder.fireOnUpdate([URI.parse('file:///My Folder/x.fake')], []);
       expect(manager.isTriggeringEdit('file:///My Folder/x.fake')).toBe(true);
       expect(manager.isTriggeringEdit('file:///My%20Folder/x.fake')).toBe(true);
+   });
+});
+
+type StubFileSystem = ReturnType<typeof makeTestServices<FakeRoot>>['fileSystem'];
+
+/**
+ * Park reads until released, oldest first; each answers with text no save
+ * writes, so every save goes on to write. `uri` limits parking to that file and
+ * `limit` to the first reads; `releaseAll` also stops any later read parking.
+ */
+function parkReads(
+   fileSystem: StubFileSystem,
+   options: { uri?: string; limit?: number } = {}
+): { parked: () => number; releaseOldest: () => void; releaseAll: () => void } {
+   const waiting: Array<() => void> = [];
+   let parked = 0;
+   let released = false;
+   fileSystem.readFile = async (target: URI): Promise<string> => {
+      if (!released && parked < (options.limit ?? Infinity) && (options.uri === undefined || target.toString() === options.uri)) {
+         parked++;
+         await new Promise<void>(resolve => waiting.push(resolve));
+      }
+      return '';
+   };
+   return {
+      parked: () => parked,
+      releaseOldest: () => waiting.shift()?.(),
+      releaseAll: () => {
+         released = true;
+         waiting.splice(0).forEach(resolve => resolve());
+      }
+   };
+}
+
+/** Fail the write of `content`; every other write is recorded as usual. */
+function failWriteOf(fileSystem: StubFileSystem, content: string): void {
+   const write = fileSystem.writeFile.bind(fileSystem);
+   fileSystem.writeFile = async (uri: URI, text: string): Promise<void> => {
+      if (text === content) {
+         throw new Error('EACCES');
+      }
+      return write(uri, text);
+   };
+}
+
+/** Back the stub with a map, so a read returns what the last write left; writes park while `parkWrites` holds them. */
+function backWithDisk(fileSystem: StubFileSystem, disk: Map<string, string>): { parkWrites: () => () => void } {
+   let gate: Promise<void> | undefined;
+   fileSystem.readFile = async (target: URI): Promise<string> => {
+      const content = disk.get(target.toString());
+      if (content === undefined) {
+         throw new Error('ENOENT');
+      }
+      return content;
+   };
+   fileSystem.writeFile = async (target: URI, content: string): Promise<void> => {
+      await gate;
+      disk.set(target.toString(), content);
+   };
+   return {
+      parkWrites: () => {
+         let release: () => void = () => undefined;
+         gate = new Promise<void>(resolve => {
+            release = resolve;
+         });
+         return () => {
+            gate = undefined;
+            release();
+         };
+      }
+   };
+}
+
+async function openForSave(manager: DefaultAstDocumentManager<FakeRoot>, uri: string, text: string): Promise<void> {
+   await manager.open({ uri, clientId: 'c1', languageId: 'plaintext', version: 0, text });
+}
+
+describe('AstDocumentManager disk queue', () => {
+   it("writes each save's text, taken when the save was called, in the order the saves were called", async () => {
+      const { manager, fileSystem } = makeManagerHarness();
+      await openForSave(manager, URI_A, 'first\n');
+      const reads = parkReads(fileSystem, { limit: 1 });
+
+      const first = manager.save(URI_A, 'c1');
+      await waitFor(() => reads.parked() === 1);
+      await manager.update(URI_A, 'second\n', 'c1');
+      const second = manager.save(URI_A, 'c1');
+      await manager.update(URI_A, 'third\n', 'c1');
+      const third = manager.save(URI_A, 'c1');
+      // Long enough for a save that does not wait behind the parked one to finish.
+      await tick(20);
+      reads.releaseAll();
+      await Promise.all([first, second, third]);
+
+      expect(fileSystem.writes.map(write => write.content)).toEqual(['first\n', 'second\n', 'third\n']);
+   });
+
+   it('keeps saves of different URIs parallel', async () => {
+      const { manager, fileSystem } = makeManagerHarness();
+      await openForSave(manager, URI_A, 'a\n');
+      await openForSave(manager, URI_B, 'b\n');
+      const reads = parkReads(fileSystem, { uri: URI_A });
+
+      const saveA = manager.save(URI_A, 'c1');
+      await waitFor(() => reads.parked() === 1);
+      const savedB = await Promise.race([manager.save(URI_B, 'c1').then(() => true), tick(50).then(() => false)]);
+
+      expect(savedB).toBe(true);
+      expect(fileSystem.writes.map(write => write.content)).toEqual(['b\n']);
+      reads.releaseAll();
+      await saveA;
+   });
+
+   it('runs a queued disk task after the saves queued before it', async () => {
+      const { manager, fileSystem } = makeManagerHarness();
+      await openForSave(manager, URI_A, 'saved\n');
+      const reads = parkReads(fileSystem);
+      const order: string[] = [];
+
+      const save = manager.save(URI_A, 'c1');
+      await waitFor(() => reads.parked() === 1);
+      const task = manager.queueDiskTask(URI_A, async () => {
+         order.push(`task after ${fileSystem.writes.length} write`);
+         return 'result';
+      });
+      await tick();
+      expect(order).toEqual([]);
+      reads.releaseAll();
+
+      await expect(task).resolves.toBe('result');
+      await save;
+      expect(order).toEqual(['task after 1 write']);
+   });
+
+   it('opens a closed document from disk only after a save queued for it has written', async () => {
+      // The closing client's save is still writing when another client opens
+      // the file: an open reading beside it starts from the text before that
+      // save, and its own next save writes the older text back.
+      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      const disk = new Map([[URI_A, 'old\n']]);
+      const { parkWrites } = backWithDisk(fileSystem, disk);
+      await manager.open({ uri: URI_A, clientId: 'A', languageId: 'plaintext' });
+      await manager.update(URI_A, 'saved-by-A\n', 'A');
+      const release = parkWrites();
+      const save = manager.save(URI_A, 'A');
+      await manager.close({ uri: URI_A, clientId: 'A' });
+      await tick();
+
+      const reopened = manager.open({ uri: URI_A, clientId: 'B', languageId: 'plaintext' });
+      await tick();
+      release();
+      await Promise.all([save, reopened]);
+
+      expect(textDocuments.get(URI_A)?.getText()).toBe('saved-by-A\n');
+   });
+
+   describe('with coalesceSaves', () => {
+      it('skips an older queued save that a newer one is queued behind, and resolves it once the newer one has written', async () => {
+         const { manager, textDocuments, fileSystem } = makeManagerHarness({ managerOptions: { coalesceSaves: true } });
+         await openForSave(manager, URI_A, 'first\n');
+         const announced: string[] = [];
+         textDocuments.onDidSave(event => announced.push(event.document.getText()));
+         const reads = parkReads(fileSystem);
+
+         const first = manager.save(URI_A, 'c1');
+         await waitFor(() => reads.parked() === 1);
+         await manager.update(URI_A, 'second\n', 'c1');
+         let secondResolved = false;
+         const second = manager.save(URI_A, 'c1').then(() => {
+            secondResolved = true;
+         });
+         await manager.update(URI_A, 'third\n', 'c1');
+         const third = manager.save(URI_A, 'c1');
+         reads.releaseOldest();
+         // The next save to read parks here; with the second skipped, it is the third.
+         await waitFor(() => reads.parked() === 2);
+         await tick();
+         expect(secondResolved).toBe(false);
+         reads.releaseAll();
+         await Promise.all([first, second, third]);
+
+         expect(fileSystem.writes.map(write => write.content)).toEqual(['first\n', 'third\n']);
+         // A skipped save announces nothing; the save that wrote announces it.
+         expect(announced).toHaveLength(2);
+      });
+
+      it("takes the newer save's failure for a skipped save", async () => {
+         // Disk then holds neither text, so reporting the skipped save as
+         // landed would claim a write that never happened.
+         const { manager, fileSystem } = makeManagerHarness({ managerOptions: { coalesceSaves: true } });
+         await openForSave(manager, URI_A, 'first\n');
+         const reads = parkReads(fileSystem, { limit: 1 });
+         failWriteOf(fileSystem, 'third\n');
+
+         const first = manager.save(URI_A, 'c1');
+         await waitFor(() => reads.parked() === 1);
+         await manager.update(URI_A, 'second\n', 'c1');
+         const second = manager.save(URI_A, 'c1');
+         await manager.update(URI_A, 'third\n', 'c1');
+         const third = manager.save(URI_A, 'c1');
+         reads.releaseAll();
+
+         const results = await Promise.allSettled([first, second, third]);
+         expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected', 'rejected']);
+         expect(fileSystem.writes.map(write => write.content)).toEqual(['first\n']);
+      });
    });
 });

@@ -37,7 +37,7 @@ import { describe, expect, it } from 'vitest';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { type LangiumDocument, URI } from '@hydranium/langium';
 import { Disposable } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/testing';
+import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { LANGUAGE_CLIENT_ID } from '../../../src/documents/client-ids.js';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -83,6 +83,7 @@ function makeComposition(): Composition {
          SelfSaveRegistry: { isRegistered: () => false },
          FileSystemProvider: { mtimeMs: async () => undefined },
          DocumentUriPolicy: new DefaultDocumentUriPolicy(),
+         AstDocumentManager: { queueDiskTask: (_uri: string, task: () => Promise<unknown>) => task() },
          BuildPhasePassService: {
             register: (pass: CapturedPass) => {
                capturedPass = pass;
@@ -145,7 +146,7 @@ function cstNodeCount(document: LangiumDocument): number {
 }
 
 describe('CST shed on close — real ref-counting through the real close trigger', () => {
-   it('a document open in two clients sheds only after the LAST client closes', () => {
+   it('a document open in two clients sheds only after the LAST client closes', async () => {
       const { dispatches, pass, clock, document, open, close } = makeComposition();
 
       // Multi-client shape: two clients attach to the same URI.
@@ -160,12 +161,14 @@ describe('CST shed on close — real ref-counting through the real close trigger
       // Partial close: the other client still holds the URI — the handler
       // suppresses the rebuild entirely, so nothing can arm the timer.
       close('form-editor');
+      await tick();
       expect(dispatches).toEqual([]);
       clock.advance(IDLE_MS * 100);
       expect(cstNodeCount(document)).toBe(2);
 
       // Last close: the handler dispatches the rebuild for exactly this URI.
       close(LANGUAGE_CLIENT_ID);
+      await waitFor(() => dispatches.length > 0);
       expect(dispatches).toEqual([[DOC_URI]]);
 
       // The triggered rebuild reaches Validated with the (now closed) document

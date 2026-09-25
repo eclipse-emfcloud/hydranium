@@ -8,15 +8,15 @@
  ********************************************************************************/
 
 /**
- * Whether an integrity repair of an OPEN document leaves the store's version
- * alone.
+ * How far an integrity repair of an OPEN document moves the store's version:
+ * exactly one step, authored by the integrity id.
  *
- * The re-versioning `resyncDocument` performs after a repair exists for a
- * document no client holds open, whose re-parse renumbers it from a factory
- * default. An open document is the opposite case: the factory hands back the
- * store's OWN text-document instance, whose version the store assigns and which
- * this path must not move — a bump here would advance a counter every
- * based-on holder is gating on, mid-build, for a write nobody made.
+ * The repair is a content change, so it is a version of its own. The
+ * re-versioning `resyncDocument` runs after a repair serves a document no
+ * client holds open, whose re-parse renumbers it from a factory default. An
+ * open document is the opposite case: the factory hands back the store's OWN
+ * text-document instance, and applying that re-versioning to it restores the
+ * number captured before the repair, rolling the store back under the repair.
  *
  * The real store is required. The guard rests on `reconcileExternalContent`
  * answering `undefined` for anything currently synced, and the framework's own
@@ -24,6 +24,7 @@
  * cases apart.
  */
 
+import { INTEGRITY_CLIENT_ID } from '@hydranium/core';
 import { DocumentState, URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isDomainModel } from '../src/language-server/ast.js';
@@ -75,7 +76,7 @@ afterEach(() => {
 });
 
 describe('an integrity repair of an open document', () => {
-   it('does not move the version the store assigned', async () => {
+   it('steps the version the store assigned once, under the integrity id', async () => {
       scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN));
       const { harness, workspace } = scratch;
       const uri = URI.file(workspace.resolve(FILE));
@@ -114,12 +115,12 @@ describe('an integrity repair of an open document', () => {
 
       const document = harness.shared.workspace.LangiumDocuments.getDocument(uri)!;
 
-      // The edit is the last thing that assigned a version; the repair rode it
-      // rather than minting one. Read back through the store AND off the
-      // document, because they are the same instance on this path and a bump
-      // through either spelling is the failure.
-      expect(textDocuments.version(uriString)).toBe(versionAfterTheEdit);
-      expect(document.textDocument.version).toBe(versionAfterTheEdit);
+      // The repair is the one version after the edit. Read back through the
+      // store AND off the document, because they are the same instance on this
+      // path and a roll-back through either spelling is the failure.
+      expect(textDocuments.version(uriString)).toBe(versionAfterTheEdit + 1);
+      expect(document.textDocument.version).toBe(versionAfterTheEdit + 1);
+      expect(textDocuments.getAuthor(uriString, versionAfterTheEdit + 1)).toBe(INTEGRITY_CLIENT_ID);
       expect(textDocuments.isOpenInLanguageClient(uriString)).toBe(true);
    });
 });

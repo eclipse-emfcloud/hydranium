@@ -49,6 +49,7 @@ import { type DocumentUri, TextDocument, type TextDocumentContentChangeEvent } f
 import { type CanonicalUri, type LanguageClientUri, asLanguageClientUri, DisposableCollection, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { LANGUAGE_CLIENT_ID } from './client-ids.js';
+import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
 import { type ClientSessionClosedEvent, ClientSessionRegistry, type OpenOptions } from './client-session-registry.js';
 import { isFullReplace, LanguageClientTextShadow } from './language-client-text-shadow.js';
 
@@ -955,10 +956,12 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * its own numbering, so requiring the two to agree would refuse every commit
     * on the path this exists for. Content is the thing both sides can be held to.
     *
-    * The version is KEPT rather than stepped, and no change event is fired: the
-    * repair rides the build already under way, so minting a version would
-    * invalidate the based-on token every watcher just took, and an event would
-    * re-enter the build that is mid-flight.
+    * A changed text is a new version authored by {@link INTEGRITY_CLIENT_ID}.
+    * Kept at the old version, the repair is invisible to every reader keyed on
+    * versions: a write based on the unrepaired version passes the based-on gate
+    * and replaces the repair, and an echo filter credits the repair to the
+    * client whose edit it corrected. No change event is fired: the repair
+    * rides the build already under way, and an event would re-enter it.
     */
    commitRepair(uri: DocumentUri, parsedFrom: string, repaired: string): RepairCommit<T> {
       const key = this.documentKey(uri);
@@ -970,11 +973,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.logUri(key, 'Refuse repair commit: the open document moved on from the text the AST was parsed from', 'debug');
          return { status: 'stale' };
       }
+      if (repaired === parsedFrom) {
+         return { status: 'committed', document };
+      }
       // Reassigned rather than mutated in place: the default configuration
       // updates and returns the SAME instance, but an adopter-supplied one may
       // return a new object, and the store must end up holding whichever it is.
-      const updated = this.configuration.update(document, [{ text: repaired }], document.version);
+      const updated = this.configuration.update(document, [{ text: repaired }], document.version + 1);
       this.__syncedDocuments.set(key, updated);
+      this.setAuthor(key, updated.version, INTEGRITY_CLIENT_ID);
+      this.log(updated.uri, `Update to version ${updated.version} by ${this.formatClientId(INTEGRITY_CLIENT_ID)} (repair)`);
       return { status: 'committed', document: updated };
    }
 
