@@ -22,6 +22,7 @@ import {
    type OpenModelArgs,
    type Tracer,
    type TransferSaveArgs,
+   type TransferUpdateAllArgs,
    type TransferUpdateArgs
 } from '@hydranium/protocol';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
@@ -267,6 +268,15 @@ export interface ModelService<
    validated(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
 
    update(args: TransferUpdateArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   /**
+    * Write several documents as `args.clientId`, all or none: every document is
+    * serialised first, then every open check and `basedOn` gate runs and every
+    * text is applied in one synchronous step, so a `ConflictError` or a
+    * `DocumentNotOpenError` leaves every document as it was. Opens nothing:
+    * the client must have each URI open, whether or not it is a session.
+    * Resolves to the rebuilt documents, in the order given.
+    */
+   updateAll(args: TransferUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
    save(args: TransferSaveArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
 
    open(args: OpenModelArgs): Promise<Disposable>;
@@ -842,6 +852,43 @@ export class DefaultModelService<
          this.tracer.debug(`Conflict on ${uri}: based-on v${basedOn} stale, server at v${currentVersion}`);
          throw new ConflictError(uri, basedOn, currentVersion);
       }
+   }
+
+   /**
+    * Checked at the door as well as at apply, so a stale set is refused before
+    * any adopter serialiser runs.
+    *
+    * The apply step relies on `AstDocumentManager.update` applying its text
+    * before its first await, as the default does: an override that awaits first
+    * lets another write land between two documents of the set.
+    */
+   async updateAll(args: TransferUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]> {
+      const { clientId, updates } = args;
+      const textDocuments = this.services.workspace.TextDocuments;
+      const uris = updates.map(update => this.uriPolicy.canonicalUri(update.uri));
+      if (new Set(uris).size !== uris.length) {
+         throw new Error(`updateAll names a document more than once: ${uris.join(', ')}`);
+      }
+      updates.forEach((update, i) => this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i])));
+      const texts: string[] = [];
+      for (const [i, update] of updates.entries()) {
+         texts.push(await this.modelToText(uris[i], update.model, cancelToken));
+      }
+      // One synchronous step from the first check to the last apply: an await
+      // anywhere in it lets a close or another write land after its document
+      // was checked, and a set half-applied before a later check fails is what
+      // this method exists to rule out.
+      updates.forEach((update, i) => {
+         if (!textDocuments.isOpenInClient(uris[i], clientId)) {
+            throw new DocumentNotOpenError(uris[i], clientId);
+         }
+         this.checkBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
+      });
+      const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], clientId));
+      await Promise.all(applied);
+      // Through the public `rebuild`, as in `update`, so an adopter override
+      // stays in the path.
+      return Promise.all(uris.map(uri => this.rebuild(uri, undefined, cancelToken)));
    }
 
    /**

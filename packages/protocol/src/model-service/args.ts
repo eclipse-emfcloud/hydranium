@@ -54,6 +54,15 @@ export interface TransferUpdateArgs<T> extends TransferClientArgs {
 }
 
 /**
+ * Write several documents as one client, all or none. `clientId` is on the set
+ * rather than on each update because the set is one client's write.
+ */
+export interface TransferUpdateAllArgs<T> {
+   clientId: string;
+   updates: Omit<TransferUpdateArgs<T>, 'clientId'>[];
+}
+
+/**
  * Persist a document to disk via the in-process facade. Same `model`
  * shape as {@link TransferUpdateArgs}.
  */

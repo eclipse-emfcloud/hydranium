@@ -8,27 +8,27 @@
  ********************************************************************************/
 
 /**
- * Several participants over one data connection.
+ * Several participants over one data connection, each a client session the
+ * server registered.
  *
- * The assertions worth having read the clientId the SERVER received, not the
- * one the session reports: the server keys its holds and watches per
- * `(uri, clientId)`, so a stamp that never reaches the wire buys nothing.
+ * The assertions read what the SERVER received, and in what order: the server
+ * keys its opens and watches per `(uri, clientId)`, and the session model rests
+ * on the registration arriving before the session's first call and on a close
+ * arriving after the calls it must not overtake. Only the wire shows either.
  *
- * Every close asserted here is fired WITHOUT being awaited — a `Disposable`
- * cannot be, and a close issued after its caller is gone has nobody to hand a
- * promise to — so arrival is polled, never timed. A fixed delay buys no
- * margin: the crossing costs event-loop turns and no wall time, so the delay
- * expires on a clock the delivery does not run on, and any stall inside it
- * fails the assertion. `tick` stays right for the assertions that are an
- * ABSENCE, which no amount of polling can establish.
+ * Closes fired without being awaited are polled for, never timed. `tick` stays
+ * right for the assertions that are an ABSENCE, which no amount of polling can
+ * establish.
  */
 
 import { describe, expect, it } from 'vitest';
-import type { MessageConnection } from 'vscode-jsonrpc';
+import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
 import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
 import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
-import { DATA_SERVER_WIRE_PREFIX } from '../../src/data';
+import { DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '../../src/client/data-session';
+import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol } from '../../src/data';
+import { DuplicateClientIdError, isDuplicateClientIdError } from '../../src/errors';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
@@ -39,142 +39,204 @@ interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
 }
 
+type Method = 'createSession' | 'closeSession' | 'open' | 'create' | 'watch' | 'close' | 'update' | 'updates' | 'save';
+
 interface ServerCall {
-   readonly method: 'open' | 'watch' | 'close' | 'update';
-   readonly uri: string;
+   readonly method: Method;
    readonly clientId: string;
+   readonly uri?: string;
+   readonly basedOn?: unknown;
+   readonly model?: unknown;
+   /** For `updates`: each update's `uri` and `basedOn`. */
+   readonly updates?: readonly { readonly uri: string; readonly basedOn: unknown }[];
 }
 
 const URI_A = 'file:///a.x';
 const URI_B = 'file:///b.x';
 const URI_C = 'file:///c.x';
+const MODEL = { $type: 'TypeOne' } as const;
 
-function document(uri: string): unknown {
-   return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [] };
+function document(uri: string, version = 1): unknown {
+   return { uri, version, root: { $type: 'TypeOne' }, diagnostics: [] };
+}
+
+/** A promise a test releases by hand, for holding a server handler open. */
+interface Gate {
+   readonly promise: Promise<void>;
+   release(): void;
+}
+
+function gate(): Gate {
+   let release!: () => void;
+   const promise = new Promise<void>(resolve => {
+      release = resolve;
+   });
+   return { promise, release };
+}
+
+/** Knobs a lifecycle test needs and a plain echo cannot give it. Read per call, so a test can flip them. */
+interface ServerBehaviour {
+   /** Held before the readiness gate answers. */
+   readyGate?: Promise<void>;
+   /** Held before an open answers. */
+   openGate?: Promise<void>;
+   /**
+    * The version an open and an update of a URI answer with. Absent, an update
+    * answers 1 and an open the count of opens so far, so a re-open is told
+    * apart from the first.
+    */
+   versions?: Map<string, number>;
+   /** Held before the registration answers. */
+   createGate?: Promise<void>;
+   /** Held before an update answers. */
+   updateGate?: Promise<void>;
+   /** Held before a save answers. */
+   saveGate?: Promise<void>;
+   /** Refuse every registration as a duplicate id. */
+   refuseSessions?: boolean;
+   failWatch?: boolean;
 }
 
 /**
- * Knobs a lifecycle test needs and a plain echo cannot give it.
- *
- * `watchGate` holds the WATCH handler open, which is what makes the window
- * inside `openDocument` — between the open landing and the URI being tracked —
- * addressable at all; without it the window is microtasks wide and a test of it
- * would be a timing bet. `failClose` makes a close reject, which is the only way
- * to observe whether a failed close stays tracked for retry.
+ * Bind a server that records every call, on one connection generation. The
+ * `calls` array is shared across generations, and an open answers with a
+ * version counting every open so far, so a re-open is told apart from the
+ * first.
  */
-interface ServerBehaviour {
-   readonly watchGate?: Promise<void>;
-   /** Mutable, so a test can refuse a close and then let a later retry through. */
-   failClose?: boolean;
-   /**
-    * Make `watchModelDocument` reject. Mutable and read per call, so a test can
-    * let one open succeed and fail the next — the shape that decides whether a
-    * rollback closes a hold this attempt took or one that predated it.
-    */
-   failWatch?: boolean;
-   /**
-    * Reject only the next `n` watch calls, counting down as they arrive. A
-    * boolean cannot express the overlapping case: both opens are in flight
-    * before either handler runs, so flipping a flag between the two calls
-    * changes it long before the first one reads it.
-    */
-   failNextWatches?: number;
-   /**
-    * Reject `openModelDocument` from the given call number onward (1-based), so
-    * a test can let one open take its hold and fail the next outright. An open
-    * that fails has no hold of its own and no rollback path, which is what makes
-    * it the peer a deferring rollback cannot rely on.
-    */
-   failOpenFromCall?: number;
-   /**
-    * Holds the OPEN handler open for the calls {@link failOpenFromCall} selects.
-    * Without it the second open rejects before the first open's watch has even
-    * been issued, so the two never actually overlap and the test proves nothing
-    * about concurrency — it just happens to resolve in the safe order.
-    */
-   readonly openGate?: Promise<void>;
-}
-
-/** Bind a server that records the `(method, uri, clientId)` of every call. */
-function recordingServer(connection: MessageConnection, behaviour: ServerBehaviour = {}): ServerCall[] {
-   const calls: ServerCall[] = [];
-   const record =
-      (method: ServerCall['method']) =>
-      async (args: { uri: string; clientId: string }): Promise<unknown> => {
-         calls.push({ method, uri: args.uri, clientId: args.clientId });
-         return document(args.uri);
-      };
-   let openCalls = 0;
+function recordingServer(connection: MessageConnection, calls: ServerCall[], behaviour: ServerBehaviour): void {
+   const record = (
+      method: Method,
+      args: { clientId: string; uri?: string; basedOn?: unknown; model?: unknown; updates?: { uri: string; basedOn: unknown }[] }
+   ): void => {
+      const call: ServerCall = { method, clientId: args.clientId };
+      calls.push({
+         ...call,
+         ...(args.uri !== undefined ? { uri: args.uri } : {}),
+         ...(args.basedOn !== undefined ? { basedOn: args.basedOn } : {}),
+         ...(args.model !== undefined ? { model: args.model } : {}),
+         ...(args.updates !== undefined ? { updates: args.updates.map(update => ({ uri: update.uri, basedOn: update.basedOn })) } : {})
+      });
+   };
    const target = {
-      waitForReady: async (): Promise<void> => undefined,
-      openModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
-         openCalls += 1;
-         if (behaviour.failOpenFromCall !== undefined && openCalls >= behaviour.failOpenFromCall) {
-            await behaviour.openGate;
-            throw new Error('open refused');
-         }
-         return record('open')(args);
+      waitForReady: async (): Promise<void> => {
+         await behaviour.readyGate;
       },
-      watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
-         await behaviour.watchGate;
-         const result = await record('watch')(args);
-         if (behaviour.failNextWatches !== undefined && behaviour.failNextWatches > 0) {
-            behaviour.failNextWatches -= 1;
-            throw new Error('watch refused');
+      createSession: async (args: { clientId: string }): Promise<void> => {
+         record('createSession', args);
+         await behaviour.createGate;
+         if (behaviour.refuseSessions) {
+            throw new DuplicateClientIdError(args.clientId);
          }
+      },
+      closeSession: async (args: { clientId: string }): Promise<void> => {
+         record('closeSession', args);
+      },
+      openModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         record('open', args);
+         await behaviour.openGate;
+         return document(args.uri, behaviour.versions?.get(args.uri) ?? calls.filter(call => call.method === 'open').length);
+      },
+      createModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         record('create', args);
+         return document(args.uri);
+      },
+      watchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
+         record('watch', args);
          if (behaviour.failWatch) {
             throw new Error('watch refused');
          }
-         return result;
       },
-      closeModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
-         const result = await record('close')(args);
-         if (behaviour.failClose) {
-            throw new Error('close refused');
-         }
-         return result;
+      closeModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
+         record('close', args);
       },
-      updateModelDocument: record('update')
+      updateModelDocument: async (args: { uri: string; clientId: string; basedOn: unknown; model: unknown }): Promise<unknown> => {
+         record('update', args);
+         await behaviour.updateGate;
+         return document(args.uri, behaviour.versions?.get(args.uri) ?? 1);
+      },
+      updateModelDocuments: async (args: { clientId: string; updates: { uri: string; basedOn: unknown }[] }): Promise<unknown> => {
+         record('updates', args);
+         return args.updates.map(update => document(update.uri, behaviour.versions?.get(update.uri) ?? 1));
+      },
+      saveModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+         record('save', args);
+         await behaviour.saveGate;
+         return document(args.uri);
+      }
    };
    bindRpcMethods(
       connection,
       target,
-      ['waitForReady', 'openModelDocument', 'watchModelDocument', 'closeModelDocument', 'updateModelDocument'],
-      {
-         methodNamespace: DATA_SERVER_WIRE_PREFIX
-      }
+      [
+         'waitForReady',
+         'createSession',
+         'closeSession',
+         'openModelDocument',
+         'createModelDocument',
+         'watchModelDocument',
+         'closeModelDocument',
+         'updateModelDocument',
+         'updateModelDocuments',
+         'saveModelDocument'
+      ],
+      { methodNamespace: DATA_SERVER_WIRE_PREFIX }
    );
-   return calls;
 }
 
-function harness(behaviour: ServerBehaviour = {}): {
-   connection: DataConnection<ProbeElement>;
-   calls: ServerCall[];
-   port: FakeDataPort;
+interface Harness {
+   readonly connection: DataConnection<ProbeElement>;
+   readonly calls: ServerCall[];
+   readonly port: FakeDataPort;
+   /** Drop the current transport, as a host does when its connection dies. */
+   dropTransport(): void;
    dispose(): void;
-} {
-   const pair = makeDuplexConnectionPair();
-   const calls = recordingServer(pair.left, behaviour);
-   const port = makeFakeDataPort({ connect: () => pair.right });
-   const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
+}
+
+function harness(behaviour: ServerBehaviour = {}, boundMs?: number): Harness {
+   const calls: ServerCall[] = [];
+   const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
+   const port = makeFakeDataPort({
+      connect: () => {
+         const pair = makeDuplexConnectionPair();
+         pairs.push(pair);
+         recordingServer(pair.left, calls, behaviour);
+         return pair.right;
+      }
+   });
+   const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>(), {
+      sessionFactory: boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs)
+   });
    return {
       connection,
       calls,
       port,
+      dropTransport: () => {
+         port.fireDispose();
+         pairs.at(-1)?.dispose();
+      },
       dispose: () => {
          connection.dispose();
-         pair.dispose();
+         pairs.forEach(pair => pair.dispose());
       }
    };
 }
 
-const opens = (calls: readonly ServerCall[]): ServerCall[] => calls.filter(call => call.method === 'open');
-const closes = (calls: readonly ServerCall[]): ServerCall[] => calls.filter(call => call.method === 'close');
+/** A session with a short in-flight bound, handed out through `sessionFactory`. */
+class BoundedSession extends DataSession<ProbeElement> {
+   protected override readonly settleBeforeCloseMs: number;
+
+   constructor(clientId: string, host: DataSessionHost<ProbeElement, DataServerProtocol<ProbeElement>>, label: string, boundMs: number) {
+      super(clientId, host, label);
+      this.settleBeforeCloseMs = boundMs;
+   }
+}
+
+const of = (calls: readonly ServerCall[], ...methods: Method[]): ServerCall[] => calls.filter(call => methods.includes(call.method));
 
 describe('DataConnection lifecycle hooks', () => {
    it('reports connecting then ready around the two waits', async () => {
       const pair = makeDuplexConnectionPair();
-      recordingServer(pair.left);
+      recordingServer(pair.left, [], {});
       const port = makeFakeDataPort({ connect: () => pair.right });
       const steps: string[] = [];
       const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>(), {
@@ -208,91 +270,60 @@ describe('DataConnection lifecycle hooks', () => {
    });
 });
 
-describe('DataConnection sessions', () => {
-   it('stamps each session its own clientId on the wire', async () => {
-      const { connection, calls, dispose } = harness();
-      try {
-         const panel = connection.createSession('panel');
-         const tree = connection.createSession('tree');
-
-         await panel.openDocument({ uri: URI_A });
-         await tree.openDocument({ uri: URI_A });
-
-         // One connection, one document, two holders — which is the whole point
-         // of the split. A session taking its identity from the transport would
-         // send 'panel' twice and the server would see a single holder.
-         expect(opens(calls).map(call => call.clientId)).toEqual(['panel', 'tree']);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('stamps the session clientId on a write the caller did not supply one for', async () => {
-      const { connection, calls, dispose } = harness();
-      try {
-         const tree = connection.createSession('tree');
-         await tree.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: 'anything' });
-
-         expect(calls.filter(call => call.method === 'update')).toEqual([{ method: 'update', uri: URI_A, clientId: 'tree' }]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('recognises only its own echo', () => {
+describe('DataConnection.createSession', () => {
+   it('mints label#uuid by default and takes a fixed id as given', () => {
       const { connection, dispose } = harness();
       try {
-         const panel = connection.createSession('panel');
-         const tree = connection.createSession('tree');
+         const first = connection.createSession('panel');
+         const second = connection.createSession('panel');
+         const fixed = connection.createSession('tree', 'tree-1');
 
-         // Sharing one identity would make both answer the same way for both
-         // ids, so the disagreement is the property.
-         expect(panel.isOwnEcho('panel')).toBe(true);
-         expect(panel.isOwnEcho('tree')).toBe(false);
-         expect(tree.isOwnEcho('tree')).toBe(true);
+         expect(first.clientId).toMatch(/^panel#[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+         expect(second.clientId).not.toBe(first.clientId);
+         expect(first.label).toBe('panel');
+         expect(fixed.clientId).toBe('tree-1');
+         expect(connection.createSession().clientId).toMatch(/^session#/);
       } finally {
          dispose();
       }
    });
 
-   it('releases only the disposing session holds and leaves the connection usable', async () => {
-      const { connection, calls, dispose } = harness();
+   it('registers each session on the wire, and queues its calls behind the registration', async () => {
+      const registration = gate();
+      const { connection, calls, dispose } = harness({ createGate: registration.promise });
       try {
-         const panel = connection.createSession('panel');
-         const tree = connection.createSession('tree');
-         await panel.openDocument({ uri: URI_A });
-         await tree.openDocument({ uri: URI_B });
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+         const opening = panel.openDocument({ uri: URI_A });
+         const writing = tree.updateDocument({ uri: URI_B, model: MODEL, basedOn: 'anything' });
+         await waitFor(() => of(calls, 'createSession').length === 2);
+         await tick(5);
 
-         panel.dispose();
-         await waitFor(() => closes(calls).length > 0);
+         expect(of(calls, 'open', 'update')).toEqual([]);
+         registration.release();
+         await Promise.all([opening, writing]);
 
-         // A round trip AFTER the close landed, so a wrongly-issued close for
-         // the other session has had a full exchange to arrive before the
-         // count is read — and it proves the connection outlives its session.
-         await tree.openDocument({ uri: URI_C });
-
-         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
-         expect(opens(calls).map(call => call.uri)).toEqual([URI_A, URI_B, URI_C]);
+         const order = calls.map(call => `${call.method}:${call.clientId}`);
+         expect(order.slice(0, 2)).toEqual(['createSession:panel', 'createSession:tree']);
+         expect([...order.slice(2)].sort()).toEqual(['open:panel', 'update:tree', 'watch:panel']);
       } finally {
+         registration.release();
          dispose();
       }
    });
 
-   it('detaches its sessions on dispose rather than closing over a dying wire', async () => {
-      const { connection, calls, dispose } = harness();
+   it('fails every call of a session the server refused to register', async () => {
+      const { connection, dispose } = harness({ refuseSessions: true });
       try {
-         const panel = connection.createSession('panel');
-         await panel.openDocument({ uri: URI_A });
+         const panel = connection.createSession('panel', 'panel');
 
-         connection.dispose();
-         await tick();
+         const rejection = await panel.openDocument({ uri: URI_A }).then(
+            () => undefined,
+            (error: unknown) => error
+         );
 
-         // The server drains every hold on a connection it sees close, so a
-         // close here would travel over the connection being disposed. The
-         // session-dispose case above is what proves closes are sent when the
-         // wire survives, so the two together discriminate.
-         expect(closes(calls)).toEqual([]);
-         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
+         expect(isDuplicateClientIdError(rejection)).toBe(true);
+         await expect(panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' })).rejects.toBeInstanceOf(ResponseError);
       } finally {
          dispose();
       }
@@ -302,90 +333,12 @@ describe('DataConnection sessions', () => {
       const { connection, dispose } = harness();
       try {
          // A session under one of these would match the framework's OWN
-         // broadcasts as its own echoes and drop them, so the document silently
-         // stops following — indistinguishable from a dead connection. Every
-         // reserved id is checked rather than a representative one, since the
-         // guard is a list membership and a single case passes for a hardcoded
-         // comparison against that one value.
+         // broadcasts as its own echoes and drop them. Every reserved id is
+         // checked, since the guard is a list membership and a single case
+         // passes for a hardcoded comparison against that one value.
          for (const reserved of FRAMEWORK_CLIENT_IDS) {
-            expect(() => connection.createSession(reserved)).toThrow(reserved);
+            expect(() => connection.createSession('panel', reserved)).toThrow(reserved);
          }
-         expect(() => connection.createSession('panel')).not.toThrow();
-      } finally {
-         dispose();
-      }
-   });
-
-   it('closes a hold whose open resolved after its session was disposed', async () => {
-      let openTheGate!: () => void;
-      const watchGate = new Promise<void>(resolve => {
-         openTheGate = resolve;
-      });
-      const { connection, calls, dispose } = harness({ watchGate });
-      try {
-         const panel = connection.createSession('panel');
-         // Deliberately NOT awaited: a host firing its open from a synchronous
-         // init is what makes this window reachable at all.
-         const opening = panel.openDocument({ uri: URI_A });
-         await waitFor(() => opens(calls).length === 1);
-
-         panel.dispose();
-         // The hold exists on the server and in no set the session can read, so
-         // dispose has nothing to close. This assertion is the defect: without
-         // the check in openDocument it stays true forever.
-         expect(closes(calls)).toEqual([]);
-
-         openTheGate();
-         await opening;
-         await waitFor(() => closes(calls).length === 1, { message: 'the raced-open hold was never closed' });
-
-         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('sends no close when that same window ends in detach rather than dispose', async () => {
-      let openTheGate!: () => void;
-      const watchGate = new Promise<void>(resolve => {
-         openTheGate = resolve;
-      });
-      const { connection, calls, dispose } = harness({ watchGate });
-      try {
-         const panel = connection.createSession('panel');
-         const opening = panel.openDocument({ uri: URI_A });
-         await waitFor(() => opens(calls).length === 1);
-
-         // detach() is public and means "send nothing" — the server drains every
-         // hold on a connection it sees close. Honouring that must not depend on
-         // the connection already being dead, which is why this is a separate
-         // flag rather than a close that happens to fail.
-         panel.detach();
-
-         openTheGate();
-         await opening;
-         await tick();
-
-         expect(closes(calls)).toEqual([]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('keeps a failed close tracked, so dispose retries it', async () => {
-      const { connection, calls, dispose } = harness({ failClose: true });
-      try {
-         const panel = connection.createSession('panel');
-         await panel.openDocument({ uri: URI_A });
-
-         await expect(panel.closeDocument({ uri: URI_A })).rejects.toThrow('close refused');
-         expect(closes(calls)).toHaveLength(1);
-
-         // Untracking before the await would have dropped the URI on the way
-         // out, leaving the hold alive on the server with nothing left to
-         // release it.
-         panel.dispose();
-         await waitFor(() => closes(calls).length === 2, { message: 'dispose did not retry the failed close' });
       } finally {
          dispose();
       }
@@ -394,31 +347,370 @@ describe('DataConnection sessions', () => {
    it('refuses a clientId a live participant already holds, and frees it again on dispose', () => {
       const { connection, dispose } = harness();
       try {
-         const first = connection.createSession('form-editor');
+         const first = connection.createSession('form', 'form-editor');
 
-         // Per-document membership is a SET of client ids, so a second
-         // participant under this id would take no second hold: the first close
-         // releases the only one and the survivor stops receiving updates for a
-         // document it is still showing. The id is asserted in the message
-         // because that is the whole diagnostic value — the caller minted it and
-         // has to recognise which one collided.
-         expect(() => connection.createSession('form-editor')).toThrow('form-editor');
+         expect(() => connection.createSession('form', 'form-editor')).toThrow('form-editor');
+         expect(() => connection.createSession('tree', 'tree')).not.toThrow();
 
-         // A neighbouring id is unaffected, which is what separates "rejects a
-         // duplicate" from "rejects a second session".
-         expect(() => connection.createSession('tree')).not.toThrow();
-
-         // The identity belongs to a LIVE participant, not to the connection
-         // forever: a widget closing and reopening under a recycled id must not
-         // be refused. This also pins that dispose releases the session from the
-         // connection, without which the guard would leak ids.
          first.dispose();
-         expect(() => connection.createSession('form-editor')).not.toThrow();
+         expect(() => connection.createSession('form', 'form-editor')).not.toThrow();
+      } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataConnection sessions', () => {
+   it('stamps each session its own clientId on the wire', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+
+         await panel.openDocument({ uri: URI_A });
+         await tree.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+
+         expect(of(calls, 'open', 'update').map(call => call.clientId)).toEqual(['panel', 'tree']);
       } finally {
          dispose();
       }
    });
 
+   it('recognises only its own echo', () => {
+      const { connection, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+
+         expect(panel.isOwnEcho('panel')).toBe(true);
+         expect(panel.isOwnEcho('tree')).toBe(false);
+         expect(tree.isOwnEcho('tree')).toBe(true);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('ends only the disposing session on the server, and leaves the connection usable', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+         await panel.openDocument({ uri: URI_A });
+         await tree.openDocument({ uri: URI_B });
+
+         panel.dispose();
+         await waitFor(() => of(calls, 'closeSession').length > 0);
+         await tree.openDocument({ uri: URI_C });
+
+         // One session close, and no per-document close: ending the session is
+         // what closes its documents on the server.
+         expect(of(calls, 'closeSession', 'close')).toEqual([{ method: 'closeSession', clientId: 'panel' }]);
+         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
+      } finally {
+         dispose();
+      }
+   });
+
+   it('detaches its sessions on dispose rather than closing over a dying wire', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+
+         connection.dispose();
+         await tick(5);
+
+         expect(of(calls, 'closeSession', 'close')).toEqual([]);
+         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
+      } finally {
+         dispose();
+      }
+   });
+
+   it('closes a document only once the session’s update of it has answered', async () => {
+      const update = gate();
+      const { connection, calls, dispose } = harness({ updateGate: update.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const writing = panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         const closing = panel.closeDocument({ uri: URI_A });
+         await waitFor(() => of(calls, 'update').length === 1);
+         await tick(5);
+
+         expect(of(calls, 'close')).toEqual([]);
+         update.release();
+         await Promise.all([writing, closing]);
+
+         expect(of(calls, 'update', 'close').map(call => call.method)).toEqual(['update', 'close']);
+      } finally {
+         update.release();
+         dispose();
+      }
+   });
+
+   it('ends the session only once its save has answered', async () => {
+      const save = gate();
+      const { connection, calls, dispose } = harness({ saveGate: save.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const saving = panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         await waitFor(() => of(calls, 'save').length === 1);
+
+         panel.dispose();
+         await tick(5);
+
+         expect(of(calls, 'closeSession')).toEqual([]);
+         save.release();
+         await saving;
+         await waitFor(() => of(calls, 'closeSession').length === 1, { message: 'the session was never ended' });
+      } finally {
+         save.release();
+         dispose();
+      }
+   });
+
+   it('ends the session after the bound when a save never answers, through a session the factory built', async () => {
+      const save = gate();
+      const { connection, calls, dispose } = harness({ saveGate: save.promise }, 30);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         expect(panel).toBeInstanceOf(BoundedSession);
+         await panel.openDocument({ uri: URI_A });
+         void panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' }).catch(() => undefined);
+         await waitFor(() => of(calls, 'save').length === 1);
+
+         panel.dispose();
+
+         await waitFor(() => of(calls, 'closeSession').length === 1, { message: 'the bound never released the close' });
+      } finally {
+         save.release();
+         dispose();
+      }
+   });
+
+   it('never registers a session disposed before its registration was sent', async () => {
+      const ready = gate();
+      const { connection, calls, dispose } = harness({ readyGate: ready.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         panel.dispose();
+         ready.release();
+         await connection.connected();
+         await tick(5);
+
+         expect(of(calls, 'createSession', 'closeSession')).toEqual([]);
+      } finally {
+         ready.release();
+         dispose();
+      }
+   });
+
+   it('withOpenDocument leaves open a document an open of the session is still making', async () => {
+      const opening = gate();
+      const behaviour: ServerBehaviour = { openGate: opening.promise };
+      const { connection, calls, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         const plain = panel.openDocument({ uri: URI_A });
+         await waitFor(() => of(calls, 'open').length === 1);
+
+         const withOpen = panel.withOpenDocument({ uri: URI_A }, () => undefined);
+         opening.release();
+         await Promise.all([plain, withOpen]);
+
+         expect(of(calls, 'close')).toEqual([]);
+      } finally {
+         opening.release();
+         dispose();
+      }
+   });
+
+   it('closes again a document whose watch failed, and rejects', async () => {
+      const { connection, calls, dispose } = harness({ failWatch: true });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow('watch refused');
+
+         expect(of(calls, 'open', 'watch', 'close').map(call => call.method)).toEqual(['open', 'watch', 'close']);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('creates a document and watches it; writes a set in one call', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.createDocument({ uri: URI_A, text: '' });
+         await panel.openDocument({ uri: URI_B });
+         const written = await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: MODEL, basedOn: 'anything' },
+               { uri: URI_B, model: MODEL, basedOn: 'anything' }
+            ]
+         });
+
+         expect(written.map(written => written.uri)).toEqual([URI_A, URI_B]);
+         expect(of(calls, 'create', 'watch', 'updates').map(call => `${call.method}:${call.uri ?? ''}`)).toEqual([
+            `create:${URI_A}`,
+            `watch:${URI_A}`,
+            `watch:${URI_B}`,
+            'updates:'
+         ]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument closes only an open it made', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+
+         const version = await panel.withOpenDocument({ uri: URI_B }, opened => opened.version);
+         await panel.withOpenDocument({ uri: URI_A }, () => undefined);
+         await expect(panel.withOpenDocument({ uri: URI_C }, () => Promise.reject(new Error('callback failed')))).rejects.toThrow(
+            'callback failed'
+         );
+
+         expect(version).toBe(2);
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_B, URI_C]);
+      } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataSession after a dropped connection', () => {
+   it('restores a session with documents open at once, without a call of its own', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const idle = connection.createSession('idle', 'idle');
+         await panel.openDocument({ uri: URI_A });
+         await idle.connected();
+         const before = calls.length;
+
+         dropTransport();
+
+         await waitFor(() => of(calls.slice(before), 'watch').length === 1, { message: 'the open session never restored' });
+         expect(calls.slice(before).map(call => `${call.method}:${call.clientId}`)).toEqual([
+            'createSession:panel',
+            'open:panel',
+            'watch:panel'
+         ]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports once the documents whose unsaved write the re-opened version no longer holds, and sends nothing', async () => {
+      const { connection, calls, port, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         await panel.openDocument({ uri: URI_C });
+         await panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         await panel.updateDocument({ uri: URI_B, model: MODEL, basedOn: 'anything' });
+         const before = calls.length;
+
+         dropTransport();
+         await panel.saveDocument({ uri: URI_C, model: MODEL, basedOn: 'anything' });
+
+         // The re-opens answer v4 to v6 where the writes were answered v1: the
+         // text changed while the session was gone, and nothing is sent to
+         // put it back.
+         expect(calls.slice(before).map(call => `${call.method}:${call.uri ?? ''}`)).toEqual([
+            'createSession:',
+            `open:${URI_A}`,
+            `watch:${URI_A}`,
+            `open:${URI_B}`,
+            `watch:${URI_B}`,
+            `open:${URI_C}`,
+            `watch:${URI_C}`,
+            `save:${URI_C}`
+         ]);
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         expect(port.reported[0].message.params).toEqual({ uris: `${URI_A}, ${URI_B}` });
+
+         // Reported once: the record is dropped, and the documents stay open.
+         const again = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(port.reported).toHaveLength(1);
+         expect(of(calls.slice(again), 'open').map(call => call.uri)).toEqual([URI_A, URI_B, URI_C]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a write the re-opened document still holds', async () => {
+      const { connection, calls, port, dropTransport, dispose } = harness({ versions: new Map([[URI_A, 5]]) });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         const before = calls.length;
+
+         dropTransport();
+         await panel.connected();
+
+         expect(calls.slice(before).map(call => call.method)).toEqual(['createSession', 'open', 'watch']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a write a save or a close has settled', async () => {
+      const { connection, port, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         await panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         await panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         await panel.updateDocument({ uri: URI_B, model: MODEL, basedOn: 'anything' });
+         await panel.closeDocument({ uri: URI_B });
+
+         dropTransport();
+         await panel.connected();
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends no session close over the dropped connection when disposed before it restored', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+
+         dropTransport();
+         panel.dispose();
+         await tick(5);
+
+         // The server ended the session when the connection dropped, and a fresh
+         // connection just to end it again would register nothing to end.
+         expect(of(calls, 'closeSession')).toEqual([]);
+         expect(of(calls, 'createSession')).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataConnection.reportError', () => {
    it('surfaces a failure through the port, for every participant', () => {
       const { connection, port, dispose } = harness();
       try {
@@ -437,258 +729,10 @@ describe('DataConnection sessions', () => {
    });
 });
 
-/**
- * An open that fails halfway.
- *
- * `openDocument` takes a server-side hold and then starts the watch, so a watch
- * that rejects leaves the hold standing with nothing tracking it: the URI is
- * registered only once BOTH calls return, so `dispose` cannot release what it
- * cannot see. The connection's own close-time cleanup eventually collects it,
- * which is no help to a panel disposed while its peers keep the connection
- * open — the hold then outlives the participant for as long as the connection
- * lives.
- *
- * The rollback is therefore part of the open, not of disposal, and the
- * assertions are about what the SERVER received: a hold it never releases is
- * the failure, and only the wire shows that.
- */
-describe('DataSession.openDocument when the watch fails', () => {
-   it('closes the hold the failed open took, and rejects', async () => {
-      const { connection, calls, dispose } = harness({ failWatch: true });
-      try {
-         const panel = connection.createSession('panel');
-
-         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
-         await waitFor(() => closes(calls).length > 0);
-
-         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('leaves a second session on the same connection holding its own document', async () => {
-      const { connection, calls, dispose } = harness({ failWatch: true });
-      try {
-         const tree = connection.createSession('tree');
-         const panel = connection.createSession('panel');
-
-         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
-         await waitFor(() => closes(calls).length > 0);
-
-         // The rollback is scoped to the failing session's own (uri, clientId).
-         expect(closes(calls).every(call => call.clientId === 'panel')).toBe(true);
-         expect(closes(calls).some(call => call.clientId === 'tree')).toBe(false);
-         // And the connection is still usable by the session that did not fail.
-         expect(tree.isOwnEcho('tree')).toBe(true);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('keeps the URI tracked for dispose to retry when the rollback close also fails', async () => {
-      const { connection, calls, dispose } = harness({ failWatch: true, failClose: true });
-      try {
-         const panel = connection.createSession('panel');
-         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
-         await waitFor(() => closes(calls).length > 0);
-         const afterRollback = closes(calls).length;
-
-         // A rollback whose close was refused must not drop the URI: the hold is
-         // still there, and disposal is the only thing left that would release it.
-         panel.dispose();
-         await waitFor(() => closes(calls).length > afterRollback);
-
-         expect(closes(calls).length).toBeGreaterThan(afterRollback);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('does not strand the URI in a set nothing reads when the session is already disposed', async () => {
-      // The rollback close can land after a `dispose` that has already drained
-      // `openUris`. Tracking the URI then reads as handled and is not: nothing
-      // will look at that set again, so the entry is a leak wearing the shape of
-      // a retry. The honest outcome is that the server's connection-close
-      // cleanup owns it, and the session says so by not tracking it.
-      const { connection, calls, dispose } = harness({ failWatch: true, failClose: true });
-      try {
-         const panel = connection.createSession('panel');
-         const opening = panel.openDocument({ uri: URI_A });
-         panel.dispose();
-         await expect(opening).rejects.toThrow(/watch refused/);
-         await tick(5);
-
-         // The hold is the thing that matters, so the release must have been
-         // ATTEMPTED on the wire — a session that only tidied its own bookkeeping
-         // would have an empty `openUris` while leaving the server holding it.
-         expect(closes(calls)).toContainEqual({ method: 'close', uri: URI_A, clientId: 'panel' });
-         const tracked = panel as unknown as { openUris: Set<string> };
-         expect([...tracked.openUris]).toEqual([]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('hands a hold it could not release to the connection, which retries it', async () => {
-      // A disposed session has drained and will not look again, so a rollback
-      // close that is REFUSED has nobody left to answer for the hold. Leaving it
-      // to the server's connection-close cleanup means it survives for as long as
-      // the connection does, which on a shared connection is the whole session of
-      // every other participant. The connection outlives the session and owns the
-      // wire, so it is what can still release it.
-      const behaviour: ServerBehaviour = { failWatch: true, failClose: true };
-      const { connection, calls, dispose } = harness(behaviour);
-      try {
-         const panel = connection.createSession('panel');
-         const opening = panel.openDocument({ uri: URI_A });
-         panel.dispose();
-         await expect(opening).rejects.toThrow(/watch refused/);
-         await waitFor(() => closes(calls).length > 0);
-         const attempts = closes(calls).filter(call => call.uri === URI_A).length;
-
-         // Whatever refused the close has passed. Any later activity on the
-         // shared connection is an opportunity to retry.
-         behaviour.failClose = false;
-         behaviour.failWatch = false;
-         const tree = connection.createSession('tree');
-         await tree.openDocument({ uri: URI_B });
-         await waitFor(() => closes(calls).filter(call => call.uri === URI_A).length > attempts);
-
-         expect(closes(calls).filter(call => call.uri === URI_A && call.clientId === 'panel').length).toBeGreaterThan(attempts);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('refuses to mint a session under an id that still owes an orphaned hold', async () => {
-      // The pending retry closes `(uri, clientId)`, and the server keys one hold
-      // per that pair. Handing the same id to a new participant lets that close
-      // land on ITS hold instead — the document goes out from under a session
-      // that opened it successfully, and the close that did it was issued on
-      // behalf of a participant already gone.
-      const behaviour: ServerBehaviour = { failWatch: true, failClose: true };
-      const { connection, calls, dispose } = harness(behaviour);
-      try {
-         const panel = connection.createSession('panel');
-         const opening = panel.openDocument({ uri: URI_A });
-         panel.dispose();
-         await expect(opening).rejects.toThrow(/watch refused/);
-         await waitFor(() => closes(calls).length > 0);
-
-         expect(() => connection.createSession('panel')).toThrow(/unreleased hold/);
-
-         // The reservation lasts exactly as long as the debt: once the release
-         // lands, nothing is left that could close on the id's behalf.
-         behaviour.failClose = false;
-         behaviour.failWatch = false;
-         const tree = connection.createSession('tree');
-         await tree.openDocument({ uri: URI_B });
-         await waitFor(() => {
-            try {
-               connection.createSession('panel').dispose();
-               return true;
-            } catch {
-               return false;
-            }
-         });
-      } finally {
-         dispose();
-      }
-   });
-
-   it('releases the hold when a concurrent open of the same URI fails before taking one', async () => {
-      // The deferring rollback assumes the peer it defers to will either keep the
-      // hold or release it. An open that FAILS does neither: it never took a hold
-      // of its own, so it has nothing to roll back, and the hold the first open
-      // took is left with nobody who believes they own it.
-      let releaseSecondOpen = (): void => undefined;
-      const openGate = new Promise<void>(resolve => {
-         releaseSecondOpen = resolve;
-      });
-      const behaviour: ServerBehaviour = { failNextWatches: 1, failOpenFromCall: 2, openGate };
-      const pair = makeDuplexConnectionPair();
-      const calls = recordingServer(pair.left, behaviour);
-      const port = makeFakeDataPort({ connect: () => pair.right });
-      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
-      try {
-         const panel = connection.createSession('panel');
-         const first = panel.openDocument({ uri: URI_A });
-         const second = panel.openDocument({ uri: URI_A });
-
-         // The first open's watch fails while the second is STILL in flight, so
-         // the first sees a peer it could defer to. Only then does that peer fail.
-         await expect(first).rejects.toThrow(/watch refused/);
-         releaseSecondOpen();
-         await expect(second).rejects.toThrow(/open refused/);
-         await tick(5);
-
-         expect(closes(calls)).toEqual([{ method: 'close', uri: URI_A, clientId: 'panel' }]);
-      } finally {
-         connection.dispose();
-         pair.dispose();
-      }
-   });
-
-   it('does not close a hold a concurrent open of the same URI is establishing', async () => {
-      // Two opens of one URI overlap, and both read "not held yet" on the way
-      // in. The server keys a hold per `(uri, clientId)`, so a rollback issued
-      // by the failing one releases the hold the succeeding one is relying on —
-      // and the document goes out from under a caller whose open returned fine.
-      const behaviour: ServerBehaviour = {};
-      const pair = makeDuplexConnectionPair();
-      const calls = recordingServer(pair.left, behaviour);
-      const port = makeFakeDataPort({ connect: () => pair.right });
-      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
-      try {
-         const panel = connection.createSession('panel');
-         // Both launched before either is awaited, so both read "not held yet".
-         // Only the first watch to arrive rejects, which is the failing open's.
-         behaviour.failNextWatches = 1;
-         const failing = panel.openDocument({ uri: URI_A });
-         const succeeding = panel.openDocument({ uri: URI_A });
-
-         await expect(failing).rejects.toThrow(/watch refused/);
-         await succeeding;
-         await tick(5);
-
-         expect(closes(calls)).toEqual([]);
-      } finally {
-         connection.dispose();
-         pair.dispose();
-      }
-   });
-
-   it('does not close a hold the session already had when a repeat open fails', async () => {
-      const behaviour: ServerBehaviour = {};
-      const pair = makeDuplexConnectionPair();
-      const calls = recordingServer(pair.left, behaviour);
-      const port = makeFakeDataPort({ connect: () => pair.right });
-      const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>());
-      try {
-         const panel = connection.createSession('panel');
-         // First open succeeds, so the session holds the URI for real.
-         await panel.openDocument({ uri: URI_A });
-
-         // A second open of the SAME URI fails at the watch. Rolling that back
-         // with a close would release the hold the first open established, which
-         // the server keys per (uri, clientId) and cannot tell apart.
-         behaviour.failWatch = true;
-         await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow(/watch refused/);
-         await tick(5);
-
-         expect(closes(calls)).toEqual([]);
-      } finally {
-         connection.dispose();
-         pair.dispose();
-      }
-   });
-});
-
 describe('DataConnectionWithEvents', () => {
    function eventsHarness(): { connection: DataConnectionWithEvents<ProbeElement>; notify: (uri: string) => void; dispose(): void } {
       const pair = makeDuplexConnectionPair();
-      recordingServer(pair.left);
+      recordingServer(pair.left, [], {});
       const fakePort = makeFakeDataPort({ connect: () => pair.right });
       const connection = new DataConnectionWithEvents<ProbeElement>(fakePort);
       return {

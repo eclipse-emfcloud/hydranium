@@ -53,6 +53,12 @@ export interface OpenModelArgs extends TransferClientArgs {
     * `didOpen` attach may separately refresh the build.
     */
    text?: string;
+   /**
+    * Kept on the server for this client's open until it closes, for the
+    * server's own open path to read. Only a client session's open keeps them,
+    * and a repeat open keeps the first open's.
+    */
+   options?: object;
 }
 
 /** Close a previously-opened document for the client. */

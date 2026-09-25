@@ -66,7 +66,7 @@
  */
 
 import type { LanguageFixture } from '@hydranium/conformance';
-import { runDataConformance } from '@hydranium/conformance/vitest';
+import { type DataConformanceDriver, runDataConformance } from '@hydranium/conformance/vitest';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { REFERENCE_SERVER_PROTOCOL_METHODS, type ReferenceServerProtocol } from '@hydranium/protocol/data';
 import { DataServer } from '@hydranium/data-server';
@@ -74,7 +74,7 @@ import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import type { DomainModel, LayoutModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { makeScratchWorkspaceHarness } from './order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
 
 /** The wire root type: one server, three grammars, so the root is a union. */
 type OrderFlowTransfer = DomainModel | LayoutModel | ProcessModel;
@@ -222,29 +222,53 @@ const layoutFixture: LanguageFixture = {
    }
 };
 
+/**
+ * A driver over a fresh data-server connection to `services`.
+ *
+ * `dispose` also disposes the server, because disposing the in-process pair
+ * does not reach the server's `connection.onClose`: without it the server
+ * would never see this connection end, and the kit's connection-end check
+ * would find its sessions still live.
+ */
+function driveConnection(services: OrderFlowHarness): DataConformanceDriver<OrderFlowTransfer> {
+   const harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
+      // `additionalMethods` is how the OPT-IN reference fragment reaches the
+      // wire: it is deliberately not in `DATA_SERVER_PROTOCOL_METHODS`, so a
+      // head that wants a create-element dialog registers it alongside. The
+      // example does it here rather than in `main.ts` because this is the
+      // suite that proves the surface answers.
+      server: channel =>
+         new DataServer<OrderFlowTransfer>(channel, services.shared, { additionalMethods: REFERENCE_SERVER_PROTOCOL_METHODS })
+   });
+   return {
+      ...harness,
+      // The proxy forwards any called name over the connection, so the
+      // reference methods are reachable through it once the server registers
+      // them — the cast states that, and keeps the kit exercising the WIRE
+      // rather than calling the server object in-process.
+      references: harness.proxy as unknown as ReferenceServerProtocol<OrderFlowTransfer>,
+      dispose: () => {
+         harness.server.dispose();
+         harness.dispose();
+      }
+   };
+}
+
+/** The services tree each driver `connect` built runs on, for its sibling connection. */
+const servicesOf = new WeakMap<DataConformanceDriver<OrderFlowTransfer>, OrderFlowHarness>();
+
 runDataConformance<OrderFlowTransfer>({
    connect: async () => {
       workspace?.dispose();
       const { harness: services, workspace: fresh } = await makeScratchWorkspaceHarness();
       workspace = fresh;
-      const harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
-         // `additionalMethods` is how the OPT-IN reference fragment reaches the
-         // wire: it is deliberately not in `DATA_SERVER_PROTOCOL_METHODS`, so a
-         // head that wants a create-element dialog registers it alongside. The
-         // example does it here rather than in `main.ts` because this is the
-         // suite that proves the surface answers.
-         server: channel =>
-            new DataServer<OrderFlowTransfer>(channel, services.shared, { additionalMethods: REFERENCE_SERVER_PROTOCOL_METHODS })
-      });
-      return {
-         ...harness,
-         // The proxy forwards any called name over the connection, so the
-         // reference methods are reachable through it once the server registers
-         // them — the cast states that, and keeps the kit exercising the WIRE
-         // rather than calling the server object in-process.
-         references: harness.proxy as unknown as ReferenceServerProtocol<OrderFlowTransfer>
-      };
+      const driver = driveConnection(services);
+      servicesOf.set(driver, services);
+      return driver;
    },
+   // A second connection to the same services tree, which is what "the same
+   // server" is in process.
+   connectSibling: driver => driveConnection(servicesOf.get(driver)!),
    languages: [domainFixture, processFixture, layoutFixture],
    // `OrderFlowProjectManager` turns every `.domain` project header in the
    // workspace into a `Project`, so this head genuinely has a project tier and

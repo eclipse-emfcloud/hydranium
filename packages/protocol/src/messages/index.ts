@@ -27,6 +27,7 @@ export * from './primitives';
 
 export { STALE_BASED_UPDATE } from '../errors';
 export { DATA_SERVER_CONNECT_FAILED, DATA_SERVER_NOT_READY } from '../client/rpc-connection';
+export { DATA_SESSION_RESTORE_FAILED, DATA_SESSION_UNSAVED_LOST } from '../client/data-session';
 export {
    RELAY_REPLAY_FAILED,
    RELAY_TRANSPORT_OPEN_FAILED,

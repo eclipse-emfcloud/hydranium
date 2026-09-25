@@ -31,7 +31,9 @@
 
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { resolveServerLogPath } from '@hydranium/core/testing/playwright';
 import type { TheiaApp } from '@theia/playwright';
 import { loadOrderFlowApp, openPropertiesPanel, PROPERTIES_PANEL as PANEL, runCommand, selectFile, test } from './order-flow-app.mjs';
 
@@ -193,6 +195,31 @@ test.describe.serial('Order-flow data connection across a language-server restar
             timeout: 60_000
          })
          .toBeGreaterThan(0);
+   });
+
+   test('the panel is restored on the replacement server before it does anything', async () => {
+      // A session with a document open is restored as soon as its connection is
+      // replaced — registered, re-opened and re-watched on the new server — so
+      // it follows its document again without a call of its own. Waiting for
+      // its next call instead, the panel would not be registered at all until
+      // the next test touches it.
+      //
+      // Read off the server's log rather than off the panel: a dependency's
+      // rebuild is reported as authored by whoever wrote the dependent's current
+      // version, and on the new server that is the panel's own re-open, so the
+      // panel takes every such report for its own echo and shows nothing.
+      test.setTimeout(120_000);
+      const log = resolveServerLogPath(app.workspace.path);
+      expect(log, 'no server log to read').toBeDefined();
+      const sinceTheKill = (): string => {
+         const text = readFileSync(log!, 'utf-8');
+         return text.slice(text.lastIndexOf('===== START: the language server is killed'));
+      };
+      await expect
+         .poll(sinceTheKill, { message: 'the panel never registered again on the new server', timeout: 90_000 })
+         .toMatch(
+            /Session started: order-flow-theia-properties#[\s\S]*fulfillment\.process\] Open document: .* by order-flow-theia-properties#/
+         );
    });
 
    test('the panel recovers on the replacement connection', async () => {

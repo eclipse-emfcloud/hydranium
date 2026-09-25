@@ -23,6 +23,11 @@ import { withDataServer } from '../spawn-data-server.js';
  *
  * `clientId` defaults to `'hydranium-cli'` — adopters wanting a richer
  * identity (per-user, per-script) override.
+ *
+ * The document is opened first and closed after the save, so the command
+ * writes only what it has open and leaves nothing open behind it. The open
+ * carries the content as its seed, which a file that does not exist yet is
+ * created from.
  */
 export interface SaveCommandOptions {
    readonly serverCommand: string;
@@ -46,8 +51,7 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
    const model = await resolveContent(options.content, options.__readFileForTest);
 
    if (options.__proxyForTest) {
-      const doc = await options.__proxyForTest.saveModelDocument({ uri: options.uri, clientId, model, basedOn: 'anything' });
-      write(`${JSON.stringify(doc)}\n`);
+      write(`${JSON.stringify(await saveOpened(options.__proxyForTest, options.uri, clientId, model))}\n`);
       return;
    }
 
@@ -59,10 +63,32 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
          env: options.logLevel ? logLevelEnv(options.logLevel) : undefined
       },
       async server => {
-         const doc = await server.saveModelDocument({ uri: options.uri, clientId, model, basedOn: 'anything' });
-         write(`${JSON.stringify(doc)}\n`);
+         write(`${JSON.stringify(await saveOpened(server, options.uri, clientId, model))}\n`);
       }
    );
+}
+
+/**
+ * Open `uri`, save `model` to it, and close it again whether the save succeeded
+ * or not. A close that fails after a failed save is swallowed: the save's error
+ * is the one the user needs.
+ */
+async function saveOpened(
+   server: Pick<DataServerProtocol<TransferElement>, 'openModelDocument' | 'saveModelDocument' | 'closeModelDocument'>,
+   uri: string,
+   clientId: string,
+   model: string
+): Promise<unknown> {
+   await server.openModelDocument({ uri, clientId, text: model });
+   let saved: unknown;
+   try {
+      saved = await server.saveModelDocument({ uri, clientId, model, basedOn: 'anything' });
+   } catch (error: unknown) {
+      await server.closeModelDocument({ uri, clientId }).catch(() => undefined);
+      throw error;
+   }
+   await server.closeModelDocument({ uri, clientId });
+   return saved;
 }
 
 /**

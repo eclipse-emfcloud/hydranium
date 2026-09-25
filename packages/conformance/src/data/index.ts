@@ -17,7 +17,10 @@
 
 import assert from 'node:assert/strict';
 import {
+   asSnapshotVersion,
    isConflictError,
+   isDocumentNotOpenError,
+   isDuplicateClientIdError,
    ReferenceSource,
    SyntheticStep,
    TransferDocument,
@@ -90,6 +93,15 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
     * from "never implemented" without the adopter saying which it is.
     */
    readonly expectsProjects?: boolean;
+   /**
+    * Open another connection to the same server as `driver`, for the check
+    * that a connection's sessions end with it while the server lives on. That
+    * check disposes `driver` and needs its `dispose` to close the connection as
+    * the server sees it. Absent, the check reports skipped.
+    */
+   readonly connectSibling?: (
+      driver: DataConformanceDriver<TTransfer, TDiagnostic>
+   ) => DataConformanceDriver<TTransfer, TDiagnostic> | Promise<DataConformanceDriver<TTransfer, TDiagnostic>>;
    /** Suite title override. Default `'conformance: data-server'`. */
    readonly suiteTitle?: string;
 }
@@ -108,6 +120,45 @@ const SUBSCRIBER = 'conformance-subscriber';
 const SEEDER = 'conformance-seeder';
 
 /**
+ * A fresh session id per check. A fixed one would be refused as a duplicate
+ * by a head whose `connect` reuses one server across checks, whenever an
+ * earlier check failed before ending its session.
+ */
+function sessionId(): string {
+   return `conformance-session#${globalThis.crypto.randomUUID()}`;
+}
+
+/**
+ * Register `clientId` on `driver`, retrying while the server still refuses it
+ * as a duplicate, for up to `boundMs`; the last refusal is thrown.
+ */
+async function registerWithin<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   clientId: string,
+   boundMs: number
+): Promise<void> {
+   const deadline = Date.now() + boundMs;
+   for (;;) {
+      const refusal = await rejectionOf(driver.proxy.createSession({ clientId }));
+      if (refusal === undefined) {
+         return;
+      }
+      if (!isDuplicateClientIdError(refusal) || Date.now() >= deadline) {
+         throw refusal;
+      }
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
+   }
+}
+
+/** Settle `promise` into its rejection, or `undefined` when it resolved. */
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+   return promise.then(
+      () => undefined,
+      (error: unknown) => error
+   );
+}
+
+/**
  * Build the data-server check battery: server-level checks once, then the
  * grammar-bearing checks per language. Each check connects a fresh driver
  * and disposes it, so checks never interfere. Exported for the kit's own
@@ -120,7 +171,7 @@ const SEEDER = 'conformance-seeder';
 export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic = TransferDiagnostic>(
    options: DataConformanceOptions<TTransfer, TDiagnostic>
 ): ConformanceCheck[] {
-   const { connect, expectsProjects } = options;
+   const { connect, connectSibling, expectsProjects } = options;
    const checks: ConformanceCheck[] = [];
 
    // Split from `waitForReady` so a failure names which of the two broke.
@@ -183,6 +234,26 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
               }
            }
          : undefined
+   });
+
+   checks.push({
+      title: 'createSession refuses an id already live, and frees it once the session ends',
+      body: async () => {
+         const driver = await connect();
+         try {
+            const clientId = sessionId();
+            await driver.proxy.createSession({ clientId, label: 'conformance' });
+            const duplicate = await rejectionOf(driver.proxy.createSession({ clientId }));
+            assert.ok(isDuplicateClientIdError(duplicate), `a second createSession under a live id was not refused: ${String(duplicate)}`);
+            await driver.proxy.closeSession({ clientId });
+            // The other half: a head that refused every id would pass the
+            // assertion above on its own.
+            await driver.proxy.createSession({ clientId });
+            await driver.proxy.closeSession({ clientId });
+         } finally {
+            driver.dispose();
+         }
+      }
    });
 
    checks.push({
@@ -285,6 +356,150 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                   [],
                   'diagnostics carry a framework message code with no params, so a translating surface cannot render them'
                );
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a session writes only a document it has open ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               const clientId = sessionId();
+               await driver.proxy.createSession({ clientId });
+               const write = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
+
+               const unopened = await rejectionOf(driver.proxy.updateModelDocument(write));
+               assert.ok(isDocumentNotOpenError(unopened), `a session wrote a document it never opened: ${String(unopened)}`);
+               await driver.proxy.openModelDocument({ uri: model.uri, clientId });
+               await driver.proxy.updateModelDocument(write);
+               await driver.proxy.closeModelDocument({ uri: model.uri, clientId });
+               const closed = await rejectionOf(driver.proxy.updateModelDocument(write));
+               assert.ok(isDocumentNotOpenError(closed), `a session wrote a document after closing it: ${String(closed)}`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a session saves only a document it has open ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               const clientId = sessionId();
+               await driver.proxy.createSession({ clientId });
+               const save = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
+
+               const unopened = await rejectionOf(driver.proxy.saveModelDocument(save));
+               assert.ok(isDocumentNotOpenError(unopened), `a session saved a document it never opened: ${String(unopened)}`);
+               // The other half: a head refusing every session save would pass
+               // the assertion above on its own.
+               await driver.proxy.openModelDocument({ uri: model.uri, clientId });
+               await driver.proxy.saveModelDocument(save);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `ending a connection ends its sessions ${tag}`,
+         skipReason: connectSibling
+            ? undefined
+            : 'options supply no `connectSibling` (a second connection to the same server outlives the ended one)',
+         body: connectSibling
+            ? async () => {
+                 const driver = await connect();
+                 let driverOpen = true;
+                 try {
+                    const model = resolveModel(valid);
+                    await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+                    const clientId = sessionId();
+                    await driver.proxy.createSession({ clientId });
+                    await driver.proxy.openModelDocument({ uri: model.uri, clientId });
+                    const sibling = await connectSibling(driver);
+                    try {
+                       driverOpen = false;
+                       driver.dispose();
+                       // Refused as a duplicate while the ended connection's
+                       // session lives on, which over a socket it does until the
+                       // server has seen the close; so retried, within a bound.
+                       await registerWithin(sibling, clientId, 2_000);
+                       const write = await rejectionOf(
+                          sibling.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+                       );
+                       assert.ok(isDocumentNotOpenError(write), `a document stayed open after its connection ended: ${String(write)}`);
+                       await sibling.proxy.closeSession({ clientId });
+                    } finally {
+                       sibling.dispose();
+                    }
+                 } finally {
+                    if (driverOpen) {
+                       driver.dispose();
+                    }
+                 }
+              }
+            : undefined
+      });
+
+      checks.push({
+         title: `closeSession closes every document the session had open ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               const clientId = sessionId();
+               await driver.proxy.createSession({ clientId });
+               await driver.proxy.openModelDocument({ uri: model.uri, clientId });
+
+               await driver.proxy.closeSession({ clientId });
+
+               // Observed through a new session under the same id: one that
+               // inherited the ended session's open would write without opening.
+               await driver.proxy.createSession({ clientId });
+               const write = await rejectionOf(
+                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+               );
+               assert.ok(isDocumentNotOpenError(write), `a document stayed open after its session ended: ${String(write)}`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `createModelDocument creates a document open for the session, and refuses one that exists ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId: AUTHOR, model: model.text, basedOn: 'anything' });
+               const clientId = sessionId();
+               await driver.proxy.createSession({ clientId });
+               // A sibling of the valid model, so the new document's language
+               // and project are the ones the fixture already exercises.
+               const slash = model.uri.lastIndexOf('/') + 1;
+               const createdUri = `${model.uri.slice(0, slash)}conformance-created-${model.uri.slice(slash)}`;
+
+               const created = await driver.proxy.createModelDocument({ uri: createdUri, clientId, text: model.text });
+               TransferDocument.assertLoaded(created);
+               // Written without an open: only the create can have opened it.
+               await driver.proxy.updateModelDocument({ uri: createdUri, clientId, model: model.text, basedOn: created.version });
+
+               const existing = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
+               assert.ok(existing !== undefined, `createModelDocument accepted ${model.uri}, which already exists`);
+               await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
             }
@@ -440,6 +655,61 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       // document that references the first to be provoked.
       const cascadeSkipReason =
          'fixture supplies no `dependent` (a document referencing `valid`), so no cascade can be provoked over the protocol';
+
+      checks.push({
+         title: `updateModelDocuments writes a set all or none ${tag}`,
+         skipReason:
+            edit && dependent
+               ? undefined
+               : dependent
+                 ? editSkipReason
+                 : 'fixture supplies no `dependent`, the second document a set needs besides `valid`',
+         body:
+            edit && dependent
+               ? async () => {
+                    const driver = await connect();
+                    try {
+                       const model = resolveModel(valid);
+                       const other = resolveModel(dependent);
+                       await driver.proxy.updateModelDocument({ uri: model.uri, clientId: SEEDER, model: model.text, basedOn: 'anything' });
+                       await driver.proxy.updateModelDocument({ uri: other.uri, clientId: SEEDER, model: other.text, basedOn: 'anything' });
+                       const clientId = sessionId();
+                       await driver.proxy.createSession({ clientId });
+                       const first = await driver.proxy.openModelDocument({ uri: model.uri, clientId });
+                       const second = await driver.proxy.openModelDocument({ uri: other.uri, clientId });
+                       const edited = resolveDeferred(edit.to);
+
+                       // The stale member comes LAST, so a head that checks and
+                       // applies one document at a time has applied the first.
+                       const stale = await rejectionOf(
+                          driver.proxy.updateModelDocuments({
+                             clientId,
+                             updates: [
+                                { uri: model.uri, model: edited, basedOn: first.version },
+                                { uri: other.uri, model: other.text, basedOn: asSnapshotVersion(second.version + 1) }
+                             ]
+                          })
+                       );
+                       assert.ok(isConflictError(stale), `a set with a stale member was not refused: ${String(stale)}`);
+                       const untouched = await driver.proxy.getModelDocument({ uri: model.uri });
+                       assert.strictEqual(untouched.version, first.version, 'a refused set applied its first document');
+
+                       await driver.proxy.updateModelDocuments({
+                          clientId,
+                          updates: [
+                             { uri: model.uri, model: edited, basedOn: first.version },
+                             { uri: other.uri, model: other.text, basedOn: second.version }
+                          ]
+                       });
+                       const applied = await driver.proxy.getModelDocument({ uri: model.uri });
+                       assert.ok(edit.expect(applied.root), 'edit.expect(root) was false — a current set was not applied');
+                       await driver.proxy.closeSession({ clientId });
+                    } finally {
+                       driver.dispose();
+                    }
+                 }
+               : undefined
+      });
 
       checks.push({
          title: `editing a document reports its unwatched dependent as built ${tag}`,

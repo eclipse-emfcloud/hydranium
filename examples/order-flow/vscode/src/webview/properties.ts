@@ -48,20 +48,12 @@ import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-o
 import { DataConnectionWithEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
- * This webview's identity on the data head.
- *
- * Stable for its lifetime because it is the echo key — a client that cannot
- * recognise its own `sourceClientId` treats its own write as a concurrent
- * third-party one. Distinct from the framework's sentinels and from the Theia
- * panel's id, both of which can reach the same server.
- *
- * **A constant suffices because each webview builds its OWN connection** below,
- * so this id names one participant on it however many panels the host opens.
- * Several participants on one connection cannot share an id — `createSession`
- * throws on the second — and neither can two that a constant would give the
- * same name on one server.
+ * The label of this webview's session on the data head. `createSession` mints
+ * the id from it, the label plus a random UUID, so every panel the host opens is
+ * its own participant: the server refuses an id that is live anywhere in its
+ * process, and the id is the echo key a panel recognises its own writes by.
  */
-const PROPERTIES_WEBVIEW_CLIENT_ID = 'order-flow-properties-webview';
+const PROPERTIES_WEBVIEW_SESSION_LABEL = 'order-flow-properties-webview';
 import { HOST_EXTENSION, type MessageParticipant } from 'vscode-messenger-common';
 import { Messenger, type VsCodeApi } from 'vscode-messenger-webview';
 
@@ -120,7 +112,7 @@ function main(): void {
 
    const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), reportError);
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
-   const session = connection.createSession(PROPERTIES_WEBVIEW_CLIENT_ID);
+   const session = connection.createSession(PROPERTIES_WEBVIEW_SESSION_LABEL);
    const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);
 
    const form = new PropertiesForm(root, {
