@@ -9,7 +9,7 @@
 
 /**
  * The CONFLICT half of the GLSP write path, over TWO real documents and a real
- * version gate: a foreign write lands between the diagram's baseline and its
+ * version gate: a foreign write lands between the diagram's base and its
  * save, and `reconcileSourceModelWrite` decides what happens to the user's edit.
  *
  * **Why this is not the framework's own unit test over again.** Those drive the
@@ -39,7 +39,7 @@
  *
  * Two of the four branches are NOT reachable from here, and that is structural
  * rather than an omission:
- * - `no-op` needs an empty baseline→attempted patch, but
+ * - `no-op` needs an empty base→ours patch, but
  *   `ReconcilingMultiDocumentGlspState.persist` skips the gated primary write
  *   entirely when the primary projection is unchanged, so no conflict can be
  *   raised for an edit that changed nothing.
@@ -166,7 +166,7 @@ function readFieldOf(diagram: OpenDiagram, taskName: string): string | undefined
    return task?.effects.filter(isRead)[0]?.field.$refText;
 }
 
-describe('order-flow .process glsp state — a foreign write between baseline and save', () => {
+describe('order-flow .process glsp state — a foreign write between base and save', () => {
    afterEach(() => {
       open?.harness.dispose();
       open = undefined;
@@ -184,7 +184,7 @@ describe('order-flow .process glsp state — a foreign write between baseline an
       const capturedVersion = diagram.harness.state.version;
 
       // The other writer retargets the very effect the delete is about to
-      // remove, so the user's `remove` op carries a `test` whose baseline value
+      // remove, so the user's `remove` op carries a `test` whose base value
       // no longer matches — a same-field collision rather than a benign drift.
       await diagram.foreignWrite(diagram.text().replace('task Pick reads Order.id', 'task Pick reads Order.status'));
 

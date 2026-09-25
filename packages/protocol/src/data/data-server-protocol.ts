@@ -57,10 +57,9 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * A request carrying a registered id acts as that session: it writes only
     * what the session has open, failing with a `DocumentNotOpenError` code
     * otherwise, and opens nothing implicitly; its open reads the file and takes
-    * no `languageId`, `version` or `text` seed. A request carrying an id that is
-    * not registered keeps the per-client behaviour described on each method.
-    * The session ends with {@link closeSession} or when the connection closes,
-    * and either closes every document it has open.
+    * no `languageId`, `version` or `text` seed. The session ends with
+    * {@link closeSession} or when the connection closes, and either closes
+    * every document it has open.
     *
     * A registration carrying the `resumeToken` an earlier registration of the
     * same id carried ends that session first, from any connection, so a client

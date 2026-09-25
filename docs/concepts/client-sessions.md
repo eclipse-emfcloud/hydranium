@@ -74,8 +74,11 @@ through.
 | `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
 | `dispose(cause?)` | End the session: close everything it has open and free its id |
 
-`update` and `save` take `TransferUpdateArgs` and `TransferSaveArgs` without
-`clientId`: the session supplies its own.
+`update` and `save` take `ClientSessionWriteArgs` (`uri`, `model`,
+`basedOn`), and `updateAll` takes a `ClientSessionUpdateAllArgs` whose
+`updates` lists them: the session supplies its own client id. The data
+protocol's requests carry `clientId`; the data server maps each to a session
+call.
 
 ## Open and close
 

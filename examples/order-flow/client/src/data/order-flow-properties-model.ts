@@ -90,7 +90,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    /** Fires whenever {@link fields} or {@link diagnostics} may have changed. */
    readonly onDidChange: Event<void> = this.changeEmitter.event;
 
-   /** The current server snapshot — the baseline every write is authored against. */
+   /** The current server snapshot — the base every write is authored against. */
    protected snapshot?: TransferDocument<TTransfer>;
    protected readonly subscriptions: { dispose(): void }[];
    protected disposed = false;
@@ -194,7 +194,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    /**
     * Write `value` to the field called `name`.
     *
-    * The whole root goes back, because `TransferUpdateArgs.model` IS the
+    * The whole root goes back, because `TransferUpdateDocumentArgs.model` IS the
     * document root — there is no path- or op-scoped variant, since the encoder
     * is AST→transfer only and the parser is the decoder. So a field edit is
     * read-modify-write, and `basedOn` plus patch replay is what keeps it
@@ -216,24 +216,24 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       }
       // An open snapshot is not enough: `root` is absent when the server has no
       // such document, and there is nothing to edit against then.
-      const baseline = TransferDocument.assertLoaded(open);
+      const base = TransferDocument.assertLoaded(open);
       const current = this.fields.find(field => field.name === name);
       if (!current) {
-         throw new Error(`'${name}' is not an editable field of ${baseline.root.$type}`);
+         throw new Error(`'${name}' is not an editable field of ${base.root.$type}`);
       }
       if (current.value === value) {
          return { status: 'unchanged' };
       }
 
-      const attempted = withField(baseline.root, name, value);
+      const ours = withField(base.root, name, value);
       try {
          this.adopt(
             await this.session.updateDocument({
-               uri: baseline.uri,
-               model: attempted,
+               uri: base.uri,
+               model: ours,
                // The version the READ returned, not one re-read here: that is
                // what makes the gate able to fire at all.
-               basedOn: baseline.version
+               basedOn: base.version
             })
          );
          return { status: 'applied' };
@@ -244,7 +244,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          if (!isConflictError(error)) {
             throw error;
          }
-         return this.reconcile(baseline, attempted);
+         return this.reconcile(base, ours);
       }
    }
 
@@ -278,25 +278,25 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     * merged onto — retrying based on anything would silently reopen the hole the
     * gate exists to close.
     */
-   protected async reconcile(baseline: LoadedTransferDocument<TTransfer>, attempted: TTransfer): Promise<SetFieldOutcome> {
+   protected async reconcile(base: LoadedTransferDocument<TTransfer>, ours: TTransfer): Promise<SetFieldOutcome> {
       const server = await this.session.connected();
-      let fresh: TransferDocument<TTransfer> | undefined;
-      const outcome = await reconcileByPatchReplay(baseline.root, attempted, async () => {
-         fresh = await server.getModelDocument({ uri: baseline.uri });
+      let theirs: TransferDocument<TTransfer> | undefined;
+      const outcome = await reconcileByPatchReplay(base.root, ours, async () => {
+         theirs = await server.getModelDocument({ uri: base.uri });
          // Deleted while the conflict was being resolved. Replaying onto an
          // invented empty root would write the file back.
-         return TransferDocument.assertLoaded(fresh).root;
+         return TransferDocument.assertLoaded(theirs).root;
       });
 
       switch (outcome.status) {
          case 'merged':
             this.adopt(
                await this.session.updateDocument({
-                  uri: baseline.uri,
+                  uri: base.uri,
                   model: outcome.merged,
-                  // A merge implies the refetch ran, so `fresh` is set here; the
+                  // A merge implies the refetch ran, so `theirs` is set here; the
                   // fallback is the type's, not a case this branch reaches.
-                  basedOn: fresh?.version ?? 'anything'
+                  basedOn: theirs?.version ?? 'anything'
                })
             );
             return { status: 'merged' };
@@ -304,8 +304,8 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
             // The user's edit is dropped on a same-field collision rather than
             // clobbering the other writer. Showing the server's value is what
             // makes that visible instead of leaving a stale field on screen.
-            if (fresh) {
-               this.adopt(fresh);
+            if (theirs) {
+               this.adopt(theirs);
             }
             return { status: 'conflict' };
          case 'no-op':
@@ -317,7 +317,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
 
    /**
     * Drop the snapshot when the open document's file is removed. Nothing is
-    * adopted in its place: a later write would be authored against a baseline
+    * adopted in its place: a later write would be authored against a base
     * the server no longer has, and the host renders the empty state instead.
     */
    protected handleDocumentDeleted(event: { uri: string }): void {
@@ -346,7 +346,7 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       this.adopt(event.document);
    }
 
-   /** Take `document` as the new baseline and tell listeners. */
+   /** Take `document` as the new base and tell listeners. */
    protected adopt(document: TransferDocument<TTransfer>): void {
       this.snapshot = document;
       this.changeEmitter.fire(undefined);

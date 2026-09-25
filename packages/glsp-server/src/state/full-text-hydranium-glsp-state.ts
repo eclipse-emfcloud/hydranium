@@ -36,7 +36,7 @@ export interface FullTextSourceModel {
  *   session (`update` accepts a raw text payload) and captures the re-parsed
  *   root, gated on the caller's `basedOn`; it throws without a session.
  *
- * No `baseline` / conflict reconcile: a whole-document model has exactly one
+ * No `base` / conflict reconcile: a whole-document model has exactly one
  * field, so every concurrent edit is a same-field collision and undo / redo
  * degrade to drop-on-divergence. Adopters that need field-level undo use
  * `ReconcilingTransferHydraniumGlspState` instead.

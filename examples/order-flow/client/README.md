@@ -55,7 +55,7 @@ look Theia-only.
   plain DOM over the model's `fields`, mounted unchanged by the Theia widget
   and the VS Code webview alike. It is the only file here that touches the DOM.
   A write goes out on `change` — Enter or leaving the field — rather than per
-  keystroke, because `TransferUpdateArgs.model` is the whole document root and
+  keystroke, because `TransferUpdateDocumentArgs.model` is the whole document root and
   there is no path-scoped variant, so a keystroke-level write would reparse and
   reserialize the file on every letter. Until it goes, the field carries
   `data-pending` and reveals its `.field-hint`; each host styles those two, and
@@ -187,7 +187,7 @@ is a string, minus `$`- and `_`-prefixed ones. So no grammar and no property
 name appears in the source. The cost is that a cross-reference is presented like
 any other string, because its transfer form *is* its reference text.
 
-`setField` sends the **whole root**, because `TransferUpdateArgs.model` is the
+`setField` sends the **whole root**, because `TransferUpdateDocumentArgs.model` is the
 document root and there is no path-scoped variant — the encoder is AST→transfer
 only and the parser is the decoder. So a field edit is read-modify-write, and
 what keeps it from clobbering a concurrent writer is `basedOn` plus

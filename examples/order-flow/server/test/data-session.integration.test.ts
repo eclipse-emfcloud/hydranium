@@ -24,12 +24,22 @@ import {
    isSessionClosedError,
    type ResolvedMessage,
    type RpcProxy,
+   type TransferElement,
    TransferDocument
 } from '@hydranium/protocol';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
-import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import type { DataServerProtocol } from '@hydranium/protocol/data';
+import {
+   type AstDocument,
+   type ClientSessionUpdateAllArgs,
+   type ClientSessionWriteArgs,
+   DefaultClientSession,
+   initializeWorkspaceProgrammatically,
+   type ServerSharedServices
+} from '@hydranium/core';
+import type { AstNode } from '@hydranium/langium';
+import type { DataServerProtocol, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
+import type { CancellationToken } from 'vscode-languageserver';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
@@ -281,6 +291,59 @@ describe('data head sessions', () => {
 
       await proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: EDITED, basedOn: created.version });
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(EDITED);
+   });
+
+   it('hands a session only the fields of a write, whatever else the wire request carries', async () => {
+      const writes: object[] = [];
+      class RecordingSession extends DefaultClientSession<AstNode> {
+         protected override updateDocument(
+            args: ClientSessionWriteArgs<TransferElement>,
+            cancelToken?: CancellationToken
+         ): Promise<AstDocument<AstNode>> {
+            writes.push({ ...args });
+            return super.updateDocument(args, cancelToken);
+         }
+
+         protected override updateDocuments(
+            args: ClientSessionUpdateAllArgs<TransferElement>,
+            cancelToken?: CancellationToken
+         ): Promise<AstDocument<AstNode>[]> {
+            writes.push(...args.updates.map(update => ({ ...update })));
+            return super.updateDocuments(args, cancelToken);
+         }
+      }
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (shared: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new RecordingSession(shared, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const shared = scratch.harness.shared;
+      const uri = scratch.workspace.uri(FILE);
+      const head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
+         server: channel => new DataServer<DomainModel>(channel, shared)
+      });
+      heads.push(head);
+      await head.proxy.createSession({ clientId: SESSION });
+      await head.proxy.openModelDocument({ uri, clientId: SESSION });
+      const wire = (model: string): TransferUpdateDocumentArgs<DomainModel> =>
+         ({ uri, clientId: SESSION, model, basedOn: 'anything', note: 'wire only' }) as TransferUpdateDocumentArgs<DomainModel>;
+
+      await head.proxy.updateModelDocument(wire(EDITED));
+      await head.proxy.saveModelDocument(wire(CLEAN));
+      await head.proxy.updateModelDocuments({ clientId: SESSION, updates: [wire(EDITED)] });
+
+      const written = { uri, basedOn: 'anything' };
+      expect(writes).toEqual([
+         { ...written, model: EDITED },
+         { ...written, model: CLEAN },
+         { ...written, model: EDITED }
+      ]);
    });
 
    it('createModelDocument refuses an existing file, and an id that is not a session of the connection', async () => {

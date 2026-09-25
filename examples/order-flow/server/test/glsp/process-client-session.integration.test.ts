@@ -317,7 +317,7 @@ describe('order-flow .process diagram as a client session', () => {
       const layoutPath = URI.parse(diagram.layoutUri).fsPath;
       // Every conflict drops the edit.
       Object.defineProperty(diagram.harness.state, 'conflictResolver', {
-         value: { resolve: async () => ({ status: 'conflict', fresh: undefined }) }
+         value: { resolve: async () => ({ status: 'conflict', theirs: undefined }) }
       });
       await diagram.foreignWrite(diagram.processUri, diagram.text(diagram.processUri)!.replace('task Receive', 'task Receive2'));
 

@@ -349,7 +349,7 @@ export class PropertiesForm {
             hint.hidden = true;
             input.setAttribute('aria-describedby', hint.id);
             // `change`, not `input`: a field edit is a read-modify-write of the
-            // WHOLE transfer root (`TransferUpdateArgs.model` IS the root — there
+            // WHOLE transfer root (`TransferUpdateDocumentArgs.model` IS the root — there
             // is no path-scoped variant), so writing per keystroke would send one
             // full-document update per character and reparse the file each time.
             // `change` fires on blur and on Enter, which is the granularity the

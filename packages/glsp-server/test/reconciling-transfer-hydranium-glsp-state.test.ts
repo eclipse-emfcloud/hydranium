@@ -67,17 +67,17 @@ interface Harness {
    /** Text the store holds for every URI; the stub parser turns it into a root labelled with it. */
    storeText: string;
    resolve: (
-      baseline: TestSourceModel,
-      attempted: TestSourceModel,
+      base: TestSourceModel,
+      ours: TestSourceModel,
       refetch: () => Promise<TestSourceModel | undefined>
    ) => Promise<ReconcileOutcome<TestSourceModel>>;
 }
 
 @injectable()
 class TestReconcilingState extends ReconcilingTransferHydraniumGlspState<TestRoot, TestSourceModel> {
-   /** Expose the protected baseline for assertions. */
-   get exposedBaseline(): TestSourceModel | undefined {
-      return this.baseline;
+   /** Expose the protected base for assertions. */
+   get exposedBase(): TestSourceModel | undefined {
+      return this.base;
    }
 }
 
@@ -91,7 +91,7 @@ function makeHarness(): Harness {
       nextUpdatedRoot: makeRoot('updated'),
       validatedRoot: makeRoot('validated'),
       storeText: 'stored',
-      resolve: async (_baseline, attempted) => ({ status: 'merged', merged: attempted })
+      resolve: async (_base, ours) => ({ status: 'merged', merged: ours })
    };
 }
 
@@ -148,10 +148,10 @@ function createState(harness: Harness): TestReconcilingState {
       }
    };
    const conflictResolver: ConflictResolver = {
-      resolve: (baseline, attempted, refetch) =>
+      resolve: (base, ours, refetch) =>
          harness.resolve(
-            baseline as TestSourceModel,
-            attempted as TestSourceModel,
+            base as TestSourceModel,
+            ours as TestSourceModel,
             refetch as () => Promise<TestSourceModel | undefined>
          ) as Promise<ReconcileOutcome<never>>
    };
@@ -184,18 +184,18 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
       });
    });
 
-   describe('baseline', () => {
+   describe('base', () => {
       it('captures the source-model projection on setSourceRoot', () => {
          const state = createState(makeHarness());
          state.setSourceRoot('file:///a.a', makeRoot('Alpha'));
-         expect(state.exposedBaseline).toEqual({ $type: 'TestRoot', label: 'Alpha' });
+         expect(state.exposedBase).toEqual({ $type: 'TestRoot', label: 'Alpha' });
       });
 
-      it('recaptures the baseline when setSourceRoot runs again', () => {
+      it('recaptures the base when setSourceRoot runs again', () => {
          const state = createState(makeHarness());
          state.setSourceRoot('file:///a.a', makeRoot('First'));
          state.setSourceRoot('file:///a.a', makeRoot('Second'));
-         expect(state.exposedBaseline).toEqual({ $type: 'TestRoot', label: 'Second' });
+         expect(state.exposedBase).toEqual({ $type: 'TestRoot', label: 'Second' });
       });
    });
 
@@ -287,7 +287,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
       it('on a conflict outcome, refreshes the source root from the document and warns', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
-         harness.resolve = async () => ({ status: 'conflict', fresh: { $type: 'TestRoot', label: 'server' } });
+         harness.resolve = async () => ({ status: 'conflict', theirs: { $type: 'TestRoot', label: 'server' } });
          const refreshed = makeRoot('refreshed');
          harness.documents.set('file:///a.a', {
             uri: { toString: () => 'file:///a.a' },
@@ -336,25 +336,25 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' })).rejects.toThrow('boom');
       });
 
-      it('resolves the conflict against the captured baseline and a refetch parsed from the stored text', async () => {
+      it('resolves the conflict against the captured base and a refetch parsed from the stored text', async () => {
          // Not the built root: operation handlers edit that one in place.
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.validatedRoot = makeRoot('built');
          harness.storeText = 'server-current';
-         let seenBaseline: TestSourceModel | undefined;
+         let seenBase: TestSourceModel | undefined;
          let seenRefetch: TestSourceModel | undefined;
-         harness.resolve = async (baseline, _attempted, refetch) => {
-            seenBaseline = baseline;
+         harness.resolve = async (base, _ours, refetch) => {
+            seenBase = base;
             seenRefetch = await refetch();
             return { status: 'no-op' };
          };
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('baseline-label'));
+         state.setSourceRoot('file:///a.a', makeRoot('base-label'));
 
          await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
 
-         expect(seenBaseline).toEqual({ $type: 'TestRoot', label: 'baseline-label' });
+         expect(seenBase).toEqual({ $type: 'TestRoot', label: 'base-label' });
          expect(seenRefetch).toEqual({ $type: 'TestRoot', label: 'server-current' });
       });
    });
