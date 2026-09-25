@@ -188,12 +188,12 @@ fixtures through them. Watching needs no session.
 ## `DataSession`
 
 On the client, `DataConnection.createSession(label?, clientId?)` returns a
-`DataSession`, the client side of such a session. It is synchronous: the id
-defaults to the label, a `#` and a random UUID, the registration is sent at
-once, and every call of the session waits for it. When the server refuses the
-registration, every call of the session rejects with its error. A fixed id is
-taken as given; the framework's reserved ids and an id another live session on
-the connection holds are refused at once.
+`DataSession`, the client side of such a session. Pass a label here too. It is
+synchronous: the id defaults to the label, a `#` and a random UUID, the
+registration is sent at once, and every call of the session waits for it. When
+the server refuses the registration, every call of the session rejects with its
+error. A fixed id is taken as given; the framework's reserved ids and an id
+another live session on the connection holds are refused at once.
 
 <!-- snippet-preamble
 import type { TransferElement } from '@hydranium/protocol';
@@ -218,6 +218,8 @@ await form.withOpenDocument({ uri }, opened => form.saveDocument({ uri, model, b
 | `withOpenDocument(args, fn)` | Open, run `fn` with the snapshot, and close again, unless the session already had the document open |
 | `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
 | `dispose()` | End the session on the server, which closes everything it has open |
+| `onDidDispose` | Fires once when the session ends, by its `dispose()` or its connection's `dispose()`; a listener subscribed after that is never called, so check `isDisposed` first |
+| `hasSavesInFlight` / `whenSavesSettled()` | Whether a save has not answered yet, and a promise for when the saves in flight now have, up to ten seconds |
 | `reconnect()` | After the connection dropped, register again and restore now rather than on the next call; the connection calls it for every session with documents open |
 
 `closeDocument` and `dispose` first wait for the session's calls still in
@@ -225,6 +227,17 @@ flight on the document, or on any document for `dispose`, up to ten seconds, so
 a save sent just before a close reaches the server first. A client that
 registers a session without `DataSession` and sends a close without awaiting
 its save gets the `DocumentNotOpenError` code for the save.
+
+After `dispose()` every call of the session rejects with `SessionClosedError`,
+the error the server answers a call on an ended session with, so a caller
+handles both alike. Its sentence names no client id, and it carries the
+message identity `SESSION_CLOSED`. `onDidDispose` fires as soon as the session
+rejects calls, before its end reaches the server; by then the connection has
+let go of the session, so a listener may start one under the same id on that
+connection. The server still holds the id until the old session's close
+arrives, and refuses the new session's registration before then. When the
+connection itself is disposed, it detaches its sessions instead, which sends
+nothing: the server ends every session of a connection it sees close.
 
 When the connection drops, the connection registers every session with
 documents open again at once, under the same id and with the resume token the
@@ -252,6 +265,24 @@ told so.
 
 To hand out a subclass of `DataSession`, pass `sessionFactory` in the
 connection's options.
+
+### In Theia
+
+A Theia frontend binds `DataSessionStopContribution` from
+`@hydranium/data-client-theia/browser` as a `FrontendApplicationContribution`
+and calls its `track(connection)` once for each data connection, which takes in
+the sessions the connection has and every one it starts. When the page stops, it
+disposes every tracked session, so the server ends them as closed, and each
+document one of them was the last to hold reverts at once; otherwise the server
+sees the page go only when its connection does, which Theia may hold open for
+its reconnect timeout, and then ends them as lost. A session with a call still
+in flight at the stop sends its close only after that call, too late for a page
+going away, so it too ends as lost. While a tracked session has a save in
+flight, it vetoes the stop: Electron waits for the saves, and a browser shows
+its leave-page prompt. The Theia backend's forwarders send what the frontend
+wrote before its channel closed, so a close sent as the page goes normally
+arrives. The close is best effort all the same: under load the page's last
+frames can be lost on the way, and the server then ends the sessions as lost.
 
 ## Over the GLSP head
 

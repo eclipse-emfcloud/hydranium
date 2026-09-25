@@ -31,9 +31,10 @@
  * **Complete sentences with the detail interpolated**, matching what the
  * framework's own messages carry. A bare fragment has to be nested in a sentence
  * its owner did not write, so no translator controls the whole and the
- * composition cannot be made to read correctly in every language. `describeError`
- * is what fills `{detail}`: a technical error string is not itself translatable
- * text, so it travels as a parameter rather than needing a code of its own.
+ * composition cannot be made to read correctly in every language.
+ * `describeFailure` is what fills `{detail}`: a technical error string is
+ * not itself translatable text, so it travels as a parameter rather than needing
+ * a code of its own, and an error that has a code is rendered by it.
  *
  * **The panel's own LABELS carry codes as well as its failures, and the two
  * differ in who renders them.** A failure is resolved at the raise site and

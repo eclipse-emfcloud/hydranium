@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { Emitter, type Event } from 'vscode-jsonrpc';
 import { FRAMEWORK_CLIENT_IDS } from '../client-ids';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
@@ -90,6 +91,13 @@ export class DataConnection<
 > extends RpcConnection<TServer, TClient> {
    protected readonly sessions = new Set<DataSession<TTransfer, TServer>>();
    protected readonly sessionFactory: DataSessionFactory<TTransfer, TServer>;
+   protected readonly createSessionEmitter = new Emitter<DataSession<TTransfer, TServer>>();
+   /**
+    * Fires with each session {@link createSession} starts, before it returns,
+    * so a listener sees every session a caller can. A session started before
+    * the listener subscribed is in {@link liveSessions}.
+    */
+   readonly onDidCreateSession: Event<DataSession<TTransfer, TServer>> = this.createSessionEmitter.event;
 
    constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient, TServer>) {
       const [options = {}] = rest as [
@@ -108,11 +116,21 @@ export class DataConnection<
    }
 
    /**
+    * The sessions of this connection that have not ended, in the order they
+    * started. A session is listed until its `onDidDispose` fires, or until
+    * {@link dispose} clears the list.
+    */
+   get liveSessions(): readonly DataSession<TTransfer, TServer>[] {
+      return [...this.sessions];
+   }
+
+   /**
     * Start a participant on this connection, registered with the server under a
     * fresh id, `label` plus `#` plus a random UUID, or under `clientId` when
-    * given. Synchronous: the registration is sent at once, and the session's
-    * calls wait for it. The server refuses an id live anywhere in its process,
-    * and every call of that session then rejects with a
+    * given. Pass a `label` naming the participant; without one it is
+    * `session`. Synchronous: the registration is sent at once, and the
+    * session's calls wait for it. The server refuses an id live anywhere in
+    * its process, and every call of that session then rejects with a
     * `DuplicateClientIdError` code.
     *
     * Throws for an id in {@link FRAMEWORK_CLIENT_IDS} — those are authors the
@@ -133,15 +151,18 @@ export class DataConnection<
          id,
          {
             connected: () => this.connected(),
-            releaseSession: released => this.sessions.delete(released),
             reportError: (error, reported) => this.reportError(error, reported)
          },
          label
       );
       this.sessions.add(session);
+      // Subscribed before the session is handed out, so the id is free again
+      // on this connection by the time any caller's listener runs.
+      session.onDidDispose(() => this.sessions.delete(session));
       // A failure reaches the session's own calls, which wait for the same
       // registration; caught here only so it is not also reported unhandled.
       session.connected().catch(() => undefined);
+      this.createSessionEmitter.fire(session);
       return session;
    }
 
@@ -173,7 +194,9 @@ export class DataConnection<
       for (const session of [...this.sessions]) {
          session.detach();
       }
+      // For a factory's session whose `detach` does not fire.
       this.sessions.clear();
+      this.createSessionEmitter.dispose();
       super.dispose();
    }
 }

@@ -25,6 +25,7 @@ import {
    renderFrameworkMessage,
    resolve,
    type ResolvedMessage,
+   resolvedFromResponseError,
    type TransferDiagnostic
 } from '@hydranium/protocol';
 import {
@@ -37,6 +38,21 @@ import {
    PROPERTIES_WRITE_MERGED,
    PROPERTIES_WRITE_UNAVAILABLE
 } from './properties-messages';
+import type { ResponseError } from 'vscode-jsonrpc';
+
+/**
+ * What fills a failure's `{detail}`: the sentence of an error that carries a
+ * message identity, rendered through `renderMessage`, and otherwise the error's
+ * technical text.
+ *
+ * `describeError` alone drops the identity, so an error whose sentence the host
+ * can translate — a call on a session that has ended — reaches a German reader
+ * as English inside a German sentence.
+ */
+export function describeFailure(error: unknown, renderMessage: (message: ResolvedMessage) => string): string {
+   const identity = error instanceof Error ? resolvedFromResponseError(error as ResponseError<unknown>) : undefined;
+   return identity ? renderMessage(identity) : describeError(error);
+}
 
 /** What the form needs from whoever owns the model. */
 export interface PropertiesFormHandlers {
@@ -288,7 +304,7 @@ export class PropertiesForm {
     * Say something in the status line. `kind` colours it.
     *
     * A declaration is rendered here and a plain string is shown as it stands,
-    * which is what lets a caller report `describeError`'s output: a technical
+    * which is what lets a caller report `describeFailure`'s output: a technical
     * error string is not translatable text and has no code to render it by.
     */
    report(message: string | MessageDefinition<string>, kind?: string): void {
@@ -386,8 +402,9 @@ export class PropertiesForm {
             this.markPending(name);
          }
       } catch (error: unknown) {
-         this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, detail: describeError(error) }));
-         this.report(describeError(error), 'error');
+         const detail = describeFailure(error, this.renderMessage);
+         this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, detail }));
+         this.report(detail, 'error');
       }
    }
 }

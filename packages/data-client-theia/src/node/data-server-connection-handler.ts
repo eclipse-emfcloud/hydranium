@@ -9,10 +9,8 @@
 
 import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/lib/node';
 import { DATA_SERVER_PATH, DATA_SERVER_PORT_COMMAND } from '@hydranium/protocol';
-import { type Channel, type Disposable } from '@theia/core';
 import { injectable, unmanaged } from '@theia/core/shared/inversify';
 import type * as net from 'node:net';
-import { SocketChannelForwarder } from './socket-channel-forwarder';
 
 /** Options for {@link DataServerConnectionHandler}. `servicePath` is the Theia
  *  service path the browser frontend opens a channel to; `portCommand` is the
@@ -57,13 +55,10 @@ export interface DataServerConnectionHandlerOptions {
  * Bridges a Theia browser-frontend channel to a data-server's TCP socket — the
  * backend half of the data-server head's transport.
  *
- * The port-discovery + buffer-and-replay race fix + connect orchestration live
- * on the cross-head {@link AbstractSocketForwardingConnectionHandler} base; this
- * subclass supplies only the data-server defaults (service path / port command /
- * log labels) and plugs in {@link SocketChannelForwarder} as the byte relay —
- * its own forwarder, so the data head carries no GLSP dependency. Sibling of
- * `@hydranium/glsp-client-theia`'s `GlspServerConnectionHandler`, which
- * subclasses the same base with `@eclipse-glsp`'s `SocketConnectionForwarder`.
+ * The port discovery, the buffer-and-replay race fix, the connect orchestration
+ * and the byte forwarder live on the cross-head
+ * {@link AbstractSocketForwardingConnectionHandler} base; this subclass supplies
+ * only the data-server defaults (service path / port command / log labels).
  */
 @injectable()
 export class DataServerConnectionHandler extends AbstractSocketForwardingConnectionHandler {
@@ -78,9 +73,5 @@ export class DataServerConnectionHandler extends AbstractSocketForwardingConnect
          connectTimeoutMs: options.connectTimeoutMs,
          onSocketCreated: options.onSocketCreated
       });
-   }
-
-   protected forwardToSocketConnection(clientChannel: Channel, socket: net.Socket): Disposable {
-      return new SocketChannelForwarder(clientChannel, socket);
    }
 }

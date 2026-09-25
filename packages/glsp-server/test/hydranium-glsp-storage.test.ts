@@ -904,6 +904,8 @@ describe('HydraniumGlspStorage', () => {
 
          expect(state.modelSession).toBeUndefined();
          expect(() => storage.callRequireModelSession()).toThrow(SessionClosedError);
+         // The sentence can reach an end user, so the id travels in `data` only.
+         expect(() => storage.callRequireModelSession()).not.toThrow('client-1');
          expect(calls.filter(call => call.startsWith('createSession'))).toHaveLength(1);
       });
 

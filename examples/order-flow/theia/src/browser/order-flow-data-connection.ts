@@ -7,13 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { DataSessionStopContribution } from '@hydranium/data-client-theia/lib/browser';
 import {
    DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
    type TransferElement
 } from '@hydranium/protocol';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { inject, injectable, type interfaces } from '@theia/core/shared/inversify';
 import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 
 /** The transfer root, left at the framework's bound: nothing here reads a typed property. */
@@ -50,4 +52,29 @@ export class OrderFlowDataConnection extends DataConnectionWithEvents<OrderFlowT
    constructor(@inject(OrderFlowTheiaDataPort) port: OrderFlowTheiaDataPort) {
       super(port);
    }
+}
+
+/**
+ * Bind the connection and its port, unless an entry loaded earlier did: the
+ * properties panel and the diagnostics commands share them, and either entry
+ * may be loaded alone or beside the other.
+ *
+ * The stop contribution is bound with the connection and tracks it as it is
+ * built, so every session the connection starts ends with the page. Bound
+ * once, here, because a second binding per entry makes its lookup ambiguous.
+ */
+export function bindOrderFlowDataConnection(bind: interfaces.Bind, isBound: interfaces.IsBound): void {
+   if (isBound(OrderFlowTheiaDataPort)) {
+      return;
+   }
+   bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
+   bind(OrderFlowDataConnection)
+      .toSelf()
+      .inSingletonScope()
+      .onActivation((context, connection) => {
+         context.container.get(DataSessionStopContribution).track(connection);
+         return connection;
+      });
+   bind(DataSessionStopContribution).toSelf().inSingletonScope();
+   bind(FrontendApplicationContribution).toService(DataSessionStopContribution);
 }

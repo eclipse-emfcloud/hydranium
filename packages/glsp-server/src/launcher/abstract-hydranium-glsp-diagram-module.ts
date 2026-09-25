@@ -7,11 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DiagramModule } from '@eclipse-glsp/server';
+import { type ActionHandlerConstructor, DiagramModule, type InstanceMultiBinding } from '@eclipse-glsp/server';
 import { injectable, type interfaces } from 'inversify';
 import type { LanguageMetaData } from '@hydranium/langium';
 import { type ServerLanguageServices, type ServerSharedServices, typedMetadata } from '@hydranium/core';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
+import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
 
 /**
  * Bind {@link HydraniumTypes}.DiagramLanguage on a GLSP **session** container
@@ -20,8 +21,9 @@ import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
  * Exported separately from {@link AbstractHydraniumGlspDiagramModule} for adopters
  * whose diagram module already extends an intermediate base of their own and
  * cannot take the framework base class; call it from `configure` after
- * `super.configure(...)`. The base class is the preferred entry point because
- * it makes the declaration non-optional.
+ * `super.configure(...)`, and add {@link HydraniumGlspRequestSaveModelActionHandler}
+ * in `configureActionHandlers`, which the base also does. The base class is the
+ * preferred entry point because it makes the declaration non-optional.
  *
  * **Why the session tier.** GLSP builds its app container once per process,
  * before any document exists, so a per-language service bound there can only
@@ -113,5 +115,14 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
    ): void {
       super.configure(bind, unbind, isBound, rebind);
       bindDiagramLanguage(bind, this.declareLanguage());
+   }
+
+   /**
+    * Adds {@link HydraniumGlspRequestSaveModelActionHandler}, the save the
+    * Theia client sends, beside GLSP's own save handler.
+    */
+   protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
+      super.configureActionHandlers(binding);
+      binding.add(HydraniumGlspRequestSaveModelActionHandler);
    }
 }

@@ -355,6 +355,9 @@ describe('data head sessions', () => {
       const plain = await rejectionOf(proxy.createModelDocument({ uri: newUri, clientId: 'plain-client', text: CLEAN }));
       expect(isSessionClosedError(plain)).toBe(true);
       expect(String(plain)).toContain('never registered');
+      // The sentence can reach an end user, so the id travels in `data` only.
+      expect(String(plain)).not.toContain('plain-client');
+      expect((plain as { data?: { clientId?: string } }).data?.clientId).toBe('plain-client');
    });
 });
 
@@ -368,7 +371,6 @@ function sessionOver(current: () => Harness, reported: ResolvedMessage[]): DataS
       'form#restore',
       {
          connected: async () => current().proxy as RpcProxy<DataServerProtocol<DomainModel>>,
-         releaseSession: () => undefined,
          reportError: (_error, message) => reported.push(message)
       },
       'form'

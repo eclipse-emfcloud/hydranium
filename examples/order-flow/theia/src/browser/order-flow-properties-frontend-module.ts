@@ -11,8 +11,7 @@ import { ContainerModule } from '@theia/core/shared/inversify';
 import { PropertyViewWidgetProvider } from '@theia/property-view/lib/browser/property-view-widget-provider';
 import { OrderFlowPropertiesViewProvider } from './order-flow-properties-view-provider';
 import { OrderFlowPropertiesWidget } from './order-flow-properties-widget';
-import { OrderFlowDataConnection } from './order-flow-data-connection';
-import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
+import { bindOrderFlowDataConnection } from './order-flow-data-connection';
 import '../../style/order-flow-properties.css';
 
 /**
@@ -28,12 +27,7 @@ import '../../style/order-flow-properties.css';
  * {@link OrderFlowPropertiesViewProvider}).
  */
 export default new ContainerModule((bind, _unbind, isBound) => {
-   // Guarded because the diagnostics entry binds the same two, and either
-   // module may be loaded alone or beside the other.
-   if (!isBound(OrderFlowTheiaDataPort)) {
-      bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
-      bind(OrderFlowDataConnection).toSelf().inSingletonScope();
-   }
+   bindOrderFlowDataConnection(bind, isBound);
    bind(OrderFlowPropertiesWidget).toSelf().inSingletonScope();
    bind(OrderFlowPropertiesViewProvider).toSelf().inSingletonScope();
    bind(PropertyViewWidgetProvider).toService(OrderFlowPropertiesViewProvider);

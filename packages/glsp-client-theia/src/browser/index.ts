@@ -17,6 +17,7 @@ export * from './diagram-widget';
 export * from './glsp-client-theia-module';
 export * from './glsp-diagram-manager';
 export * from './glsp-message-service';
+export * from './glsp-saveable';
 export * from './glsp-theia-frontend-module';
 export * from './hidden-bounds-updater';
 export * from './hydranium-glsp-diagram-configuration';

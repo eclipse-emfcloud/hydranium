@@ -110,7 +110,7 @@ export interface MessageRelay extends Disposable {
  * imports the entrypoint that frames its own transport (`vscode-jsonrpc/node`
  * for a socket) and the RAL that comes with it; this tier stays neutral and is
  * gated so by `npm run check:neutral`. Contrast
- * `@hydranium/data-client-theia`'s `SocketChannelForwarder`, which does build a
+ * `@hydranium/client-theia`'s `SocketChannelForwarder`, which does build a
  * connection only to borrow its `onClose`, and pays a Theia dependency for the
  * byte coding this shape does not need.
  *

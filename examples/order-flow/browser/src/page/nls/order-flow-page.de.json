@@ -1,5 +1,5 @@
 {
-  "_comment": "German catalogue for everything THIS PAGE renders: the chrome written in index.html under `order-flow/page/*`, and the properties panel's own message codes under `order-flow/properties/*`. See src/page/page-nls.ts. Flat keys, and English is deliberately absent: the English IS index.html for the chrome and the declaration's own default for a code, so this file is a partial overlay and any key missing here falls back. Disjoint from the server package's catalogue, which holds the codes the language server renders and reaches this page as diagnostic text rather than as chrome. The status-bar category labels and every report VALUE the page computes are deliberately not keys here — see page-nls.ts. Terminology follows VS Code's German UI where it has a word for the same thing (Arbeitsbereich, Probleme, Dunkel), and keeps the established English term where German developers do (Language Server, Layout) rather than inventing a calque.",
+  "_comment": "German catalogue for everything THIS PAGE renders: the chrome written in index.html under `order-flow/page/*`, and the properties panel's own message codes under `order-flow/properties/*`. See src/page/page-nls.ts. Flat keys, and English is deliberately absent: the English IS index.html for the chrome and the declaration's own default for a code, so this file is a partial overlay and any key missing here falls back. Disjoint from the server package's catalogue, which holds the codes the language server renders and reaches this page as diagnostic text rather than as chrome, except hydranium/protocol/session-closed, which the client tier raises for a session it has ended as well, so both catalogues hold it with one sentence. The status-bar category labels and every report VALUE the page computes are deliberately not keys here — see page-nls.ts. Terminology follows VS Code's German UI where it has a word for the same thing (Arbeitsbereich, Probleme, Dunkel), and keeps the established English term where German developers do (Language Server, Layout) rather than inventing a calque.",
   "order-flow/page/tagline": "Text, Diagramm und Formulare",
   "order-flow/page/language": "Sprache",
   "order-flow/page/save-workspace": "Arbeitsbereich speichern",
@@ -52,5 +52,6 @@
   "order-flow/properties/write-unavailable": "Nicht gespeichert — das Dokument konnte nicht erneut gelesen werden, um den Konflikt aufzulösen.",
   "order-flow/properties/open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}",
   "order-flow/properties/close-failed": "Order-Flow-Eigenschaften: Das vorherige Dokument konnte nicht geschlossen werden. {detail}",
-  "order-flow/properties/write-failed": "Order-Flow-Eigenschaften: '{field}' konnte nicht gespeichert werden. {detail}"
+  "order-flow/properties/write-failed": "Order-Flow-Eigenschaften: '{field}' konnte nicht gespeichert werden. {detail}",
+  "hydranium/protocol/session-closed": "Die Bearbeitungssitzung ist beendet."
 }

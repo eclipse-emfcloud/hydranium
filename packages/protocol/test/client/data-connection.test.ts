@@ -21,14 +21,14 @@
  * establish.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
 import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
 import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
 import { DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '../../src/client/data-session';
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol } from '../../src/data';
-import { DuplicateClientIdError, isDuplicateClientIdError } from '../../src/errors';
+import { DuplicateClientIdError, isDuplicateClientIdError, isSessionClosedError } from '../../src/errors';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
@@ -360,6 +360,46 @@ describe('DataConnection.createSession', () => {
    });
 });
 
+describe('DataConnection.onDidCreateSession', () => {
+   it('announces each session before createSession returns it, once the connection can let it go', () => {
+      const { connection, dispose } = harness();
+      try {
+         const announced: DataSession<ProbeElement>[] = [];
+         connection.onDidCreateSession(session => {
+            announced.push(session);
+            // Ended by the first listener to see it: the connection's own
+            // removal must already be subscribed, or the id stays taken.
+            if (session.label === 'brief') {
+               session.dispose();
+            }
+         });
+
+         const panel = connection.createSession('panel', 'panel');
+         const brief = connection.createSession('brief', 'brief');
+
+         expect(announced).toEqual([panel, brief]);
+         expect([panel.isDisposed, brief.isDisposed]).toEqual([false, true]);
+         expect(connection.liveSessions).toEqual([panel]);
+         expect(() => connection.createSession('brief', 'brief')).not.toThrow();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('lists the sessions started before a listener subscribed', () => {
+      const { connection, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+         tree.dispose();
+
+         expect(connection.liveSessions).toEqual([panel]);
+      } finally {
+         dispose();
+      }
+   });
+});
+
 describe('DataConnection sessions', () => {
    it('stamps each session its own clientId on the wire', async () => {
       const { connection, calls, dispose } = harness();
@@ -405,7 +445,7 @@ describe('DataConnection sessions', () => {
          // One session close, and no per-document close: ending the session is
          // what closes its documents on the server.
          expect(of(calls, 'closeSession', 'close')).toEqual([{ method: 'closeSession', clientId: 'panel' }]);
-         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
+         await expect(panel.openDocument({ uri: URI_C })).rejects.toSatisfy(isSessionClosedError);
       } finally {
          dispose();
       }
@@ -421,7 +461,7 @@ describe('DataConnection sessions', () => {
          await tick(5);
 
          expect(of(calls, 'closeSession', 'close')).toEqual([]);
-         await expect(panel.openDocument({ uri: URI_C })).rejects.toThrow('DataSession is disposed');
+         await expect(panel.openDocument({ uri: URI_C })).rejects.toSatisfy(isSessionClosedError);
       } finally {
          dispose();
       }
@@ -792,6 +832,160 @@ describe('DataConnectionWithEvents', () => {
 
          expect(seen).toEqual([]);
       } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataSession disposal', () => {
+   // `closes`: whether the session's end reaches the server, awaited so the
+   // teardown does not cut off the server's answer. A detach sends nothing.
+   it.each([
+      ['dispose', ['dispose'], 1],
+      ['detach', ['detach'], 0],
+      ['dispose, then detach', ['dispose', 'detach'], 0],
+      ['detach, then dispose', ['detach', 'dispose'], 0],
+      ['dispose twice', ['dispose', 'dispose'], 1],
+      ['detach twice', ['detach', 'detach'], 0]
+   ] as const)('fires onDidDispose once for %s', async (_name, steps, closes) => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         let fired = 0;
+         panel.onDidDispose(() => fired++);
+
+         for (const step of steps) {
+            panel[step]();
+         }
+
+         expect(fired).toBe(1);
+         // The close crosses the wire, so a loaded event loop can take longer
+         // than any fixed yield to deliver it; the yield after serves the
+         // negative, a second close or one a detach should have cancelled.
+         await waitFor(() => of(calls, 'closeSession').length >= closes);
+         await tick(5);
+         expect(of(calls, 'closeSession')).toHaveLength(closes);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('fires onDidDispose for every session when the connection is disposed', async () => {
+      const { connection, dispose } = harness();
+      const panel = connection.createSession('panel', 'panel');
+      const tree = connection.createSession('tree', 'tree');
+      await Promise.all([panel.connected(), tree.connected()]);
+      const fired: string[] = [];
+      panel.onDidDispose(() => fired.push('panel'));
+      tree.onDidDispose(() => fired.push('tree'));
+
+      dispose();
+
+      expect(fired).toEqual(['panel', 'tree']);
+   });
+
+   it('frees the id on the connection before any other listener runs, so a listener can start a session under it there', async () => {
+      // The connection's claim only: a real server still holds the id until the
+      // old session's close arrives, and this harness's server refuses nothing.
+      const { connection, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         const successors: DataSession<ProbeElement>[] = [];
+         panel.onDidDispose(() => successors.push(connection.createSession('panel', 'panel')));
+
+         panel.dispose();
+
+         expect(successors.map(successor => successor.clientId)).toEqual(['panel']);
+         expect(connection.liveSessions).toEqual(successors);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('frees the id even when a listener throws', async () => {
+      const { connection, calls, dispose } = harness();
+      // vscode-jsonrpc's emitter reports a throwing listener on the console and
+      // carries on; silenced so the run stays readable, and asserted so the
+      // isolation this relies on is pinned rather than assumed.
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         panel.onDidDispose(() => {
+            throw new Error('listener failed');
+         });
+
+         expect(() => panel.dispose()).not.toThrow();
+
+         expect(consoleError).toHaveBeenCalled();
+         await connection.createSession('panel', 'panel').connected();
+         await waitFor(() => of(calls, 'closeSession').length === 1);
+      } finally {
+         consoleError.mockRestore();
+         dispose();
+      }
+   });
+
+   it('reports a save in flight until it answers', async () => {
+      const save = gate();
+      const { connection, dispose } = harness({ saveGate: save.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         expect(panel.hasSavesInFlight).toBe(false);
+
+         const saving = panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+         expect(panel.hasSavesInFlight).toBe(true);
+         let settled = false;
+         const waiting = panel.whenSavesSettled().then(() => (settled = true));
+         await tick(5);
+         expect(settled).toBe(false);
+
+         save.release();
+         await Promise.all([saving, waiting]);
+         expect(panel.hasSavesInFlight).toBe(false);
+      } finally {
+         save.release();
+         dispose();
+      }
+   });
+
+   it('counts an update in flight as no save', async () => {
+      const update = gate();
+      const { connection, dispose } = harness({ updateGate: update.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+
+         const writing = panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
+
+         expect(panel.hasSavesInFlight).toBe(false);
+         update.release();
+         await writing;
+      } finally {
+         update.release();
+         dispose();
+      }
+   });
+
+   it('stops waiting for a save that never answers after the bound', async () => {
+      const save = gate();
+      const { connection, dispose } = harness({ saveGate: save.promise }, 30);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         void panel.saveDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' }).catch(() => undefined);
+
+         await panel.whenSavesSettled();
+
+         expect(panel.hasSavesInFlight).toBe(true);
+         // Answered before the pair goes, so the server's reply has a stream to land on.
+         save.release();
+         await waitFor(() => !panel.hasSavesInFlight);
+      } finally {
+         save.release();
          dispose();
       }
    });

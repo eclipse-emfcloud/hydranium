@@ -9,5 +9,6 @@
 
 export * from './channel-connection';
 export * from './channel-data-port';
+export * from './data-session-stop-contribution';
 export * from './host-diagnostics-frontend';
 export * from './workspace-gate';

@@ -18,11 +18,11 @@ import {
    type SocketForwardingConnectionHandlerOptions
 } from '../src/node/abstract-socket-forwarding-connection-handler';
 
-/** Concrete subclass — the base is abstract via `forwardToSocketConnection`.
- *  The `@inject`ed MessageService / CommandService fields stay unset; the
- *  option-storage behaviour under test doesn't touch them. */
+/** Concrete subclass whose forwarder relays nothing, so a case observes the
+ *  handler alone. The `@inject`ed MessageService / CommandService fields stay
+ *  unset; the option-storage behaviour under test doesn't touch them. */
 class TestHandler extends AbstractSocketForwardingConnectionHandler {
-   protected forwardToSocketConnection(_clientChannel: Channel, _socket: net.Socket): Disposable {
+   protected override forwardToSocketConnection(_clientChannel: Channel, _socket: net.Socket): Disposable {
       return Disposable.create(() => {});
    }
    /** Reach the protected race fix under test. */

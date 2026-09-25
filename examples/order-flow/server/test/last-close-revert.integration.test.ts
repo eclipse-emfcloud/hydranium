@@ -203,7 +203,6 @@ describe('revert grace over the data head', () => {
          'form#grace',
          {
             connected: async () => current().proxy as RpcProxy<DataServerProtocol<DomainModel>>,
-            releaseSession: () => undefined,
             reportError: (_error, message) => reported.push(message)
          },
          'form'

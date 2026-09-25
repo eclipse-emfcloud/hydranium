@@ -32,7 +32,7 @@ import {
    ORDER_FLOW_PANEL_REPORT_ERROR,
    ORDER_FLOW_PANEL_SET_DOCUMENT
 } from '../properties-panel-protocol';
-import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
+import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import { WebviewDataPort } from './properties-data-port';
 import type {
    DomainModel,
@@ -45,7 +45,7 @@ import {
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { DataConnectionWithEvents, describeError, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { DataConnectionWithEvents, renderFrameworkMessage, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
  * The label of this webview's session on the data head. `createSession` mints
@@ -154,8 +154,10 @@ function main(): void {
          })
          .catch((error: unknown) => {
             form.setLoading(false);
-            reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail: describeError(error) }));
-            form.report(describeError(error), 'error');
+            // No catalogue in the webview, so an error's own sentence is its English.
+            const detail = describeFailure(error, message => renderFrameworkMessage(message));
+            reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail }));
+            form.report(detail, 'error');
          });
    });
 

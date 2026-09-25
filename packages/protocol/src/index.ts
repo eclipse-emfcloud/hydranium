@@ -21,6 +21,7 @@ export * from './clock';
 export * from './data';
 export * from './browser-runtime';
 export * from './debouncer';
+export * from './glsp-save-model-actions';
 export * from './errors';
 export * from './host-diagnostics';
 export * from './logger';

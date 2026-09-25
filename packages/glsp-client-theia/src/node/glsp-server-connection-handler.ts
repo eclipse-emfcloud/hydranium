@@ -8,9 +8,7 @@
  ********************************************************************************/
 
 import { GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
-import { SocketConnectionForwarder } from '@eclipse-glsp/theia-integration/lib/node';
 import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/lib/node';
-import { type Channel, type Disposable } from '@theia/core';
 import { injectable, unmanaged } from '@theia/core/shared/inversify';
 import type * as net from 'net';
 
@@ -48,15 +46,13 @@ export interface GlspServerConnectionHandlerOptions {
 /**
  * Bridges a Theia browser-frontend channel to a GLSP server's TCP socket.
  *
- * The port-discovery + buffer-and-replay race fix + connect orchestration live
- * on the cross-head {@link AbstractSocketForwardingConnectionHandler} base; this
- * subclass supplies only the GLSP specifics — the per-language servicePath
+ * The port discovery, the buffer-and-replay race fix, the connect orchestration
+ * and the byte forwarder live on the cross-head
+ * {@link AbstractSocketForwardingConnectionHandler} base; this subclass supplies
+ * only the GLSP specifics — the per-language servicePath
  * (`GLSPContribution.servicePath + '/' + languageContributionId`), the port
- * command, the log labels — and plugs in `@eclipse-glsp/theia-integration`'s
- * `SocketConnectionForwarder` as the byte relay. Adopters with different
- * language ids or command names subclass with a one-line `super({...})` call.
- * Sibling of `@hydranium/data-client-theia`'s `DataServerConnectionHandler`,
- * which subclasses the same base with its own GLSP-free forwarder.
+ * command, the log labels. Adopters with different language ids or command
+ * names subclass with a one-line `super({...})` call.
  */
 @injectable()
 export class GlspServerConnectionHandler extends AbstractSocketForwardingConnectionHandler {
@@ -71,9 +67,5 @@ export class GlspServerConnectionHandler extends AbstractSocketForwardingConnect
          connectTimeoutMs: options.connectTimeoutMs,
          onSocketCreated: options.onSocketCreated
       });
-   }
-
-   protected forwardToSocketConnection(clientChannel: Channel, socket: net.Socket): Disposable {
-      return new SocketConnectionForwarder(clientChannel, socket);
    }
 }

@@ -13,7 +13,9 @@ import { Container } from 'inversify';
 import type { ServerLanguageServices, ServerSharedServices } from '@hydranium/core';
 import type { LanguageMetaData } from '@hydranium/langium';
 import { makeNoopSharedServices, makeStubServiceRegistry, type StubServiceRegistry } from '@hydranium/core/testing';
-import { bindDiagramLanguage } from '../src/launcher/abstract-hydranium-glsp-diagram-module.js';
+import { ActionHandlerConstructor, InstanceMultiBinding, SaveModelActionHandler } from '@eclipse-glsp/server';
+import { AbstractHydraniumGlspDiagramModule, bindDiagramLanguage } from '../src/launcher/abstract-hydranium-glsp-diagram-module.js';
+import { HydraniumGlspRequestSaveModelActionHandler } from '../src/storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 
 /** Shaped like a generated `<Grammar>LanguageMetaData` constant. */
@@ -107,5 +109,41 @@ describe('bindDiagramLanguage', () => {
       // injections from its own map, so a per-injection factory would return
       // the same object too. Only the factory's invocation count can see it.
       expect(resolutions).toHaveBeenCalledTimes(1);
+   });
+});
+
+/** Exposes the action handlers the base registers; the bindings it never reaches throw. */
+class ActionHandlerProbeModule extends AbstractHydraniumGlspDiagramModule {
+   readonly diagramType = 'probe';
+
+   protected declareLanguage(): LanguageMetaData {
+      return LANG_A;
+   }
+   protected bindSourceModelStorage(): never {
+      throw new Error('not reached');
+   }
+   protected bindModelState(): never {
+      throw new Error('not reached');
+   }
+   protected bindDiagramConfiguration(): never {
+      throw new Error('not reached');
+   }
+   protected bindGModelFactory(): never {
+      throw new Error('not reached');
+   }
+
+   registeredActionHandlers(): ActionHandlerConstructor[] {
+      const binding = new InstanceMultiBinding<ActionHandlerConstructor>(ActionHandlerConstructor);
+      this.configureActionHandlers(binding);
+      return binding.getAll();
+   }
+}
+
+describe('AbstractHydraniumGlspDiagramModule action handlers', () => {
+   it('answers the Theia client’s save request and keeps GLSP’s save for other clients', () => {
+      const handlers = new ActionHandlerProbeModule().registeredActionHandlers();
+
+      expect(handlers).toContain(HydraniumGlspRequestSaveModelActionHandler);
+      expect(handlers).toContain(SaveModelActionHandler);
    });
 });

@@ -125,17 +125,32 @@ export const DOCUMENT_NOT_OPEN_ERROR_CODE = 1005;
 export const DUPLICATE_CLIENT_ID_ERROR_CODE = 1006;
 
 /**
- * Thrown by every call on a client session after it ended, and by an open that
- * was still in flight when its session ended.
- *
- * The message names the client id, so it is addressed to whoever composes the
- * system rather than to an end user, and carries no message identity. A client
- * recognises it after an RPC with {@link isSessionClosedError}.
+ * The catalogue declaration behind {@link SessionClosedError}'s default
+ * sentence. It names no client id: the sentence can reach an end user, and the
+ * id stays in {@link SessionClosedErrorData.clientId} for whoever needs it.
  */
-export class SessionClosedError extends ResponseError<{ readonly clientId: string }> {
-   /** `message` replaces the default sentence, for a caller that knows more than that the session is gone. */
-   constructor(clientId: string, message = `Client session ${clientId} is closed`) {
-      super(SESSION_CLOSED_ERROR_CODE, message, { clientId });
+export const SESSION_CLOSED = defineMessage('hydranium/protocol/session-closed', 'The editing session has ended.');
+
+/** Structured payload carried in {@link SessionClosedError.data}. */
+export interface SessionClosedErrorData extends HydraniumMessageData {
+   readonly clientId: string;
+}
+
+/**
+ * Thrown by every call on a client session after it ended, and by an open that
+ * was still in flight when its session ended: by the server for its sessions,
+ * and by a client-side `DataSession` once disposed, so a caller handles both
+ * the same way. A caller recognises it with {@link isSessionClosedError}, never
+ * by its sentence.
+ */
+export class SessionClosedError extends ResponseError<SessionClosedErrorData> {
+   /**
+    * `message` replaces the default English, for a caller that knows more than
+    * that the session is gone. The identity stays {@link SESSION_CLOSED}'s, so a
+    * translating renderer renders the catalogue sentence in its place.
+    */
+   constructor(clientId: string, message = SESSION_CLOSED.format()) {
+      super(SESSION_CLOSED_ERROR_CODE, message, { clientId, ...messageData(SESSION_CLOSED) });
       this.name = 'SessionClosedError';
       // `ResponseError` resets the prototype to its own; see `ConflictError`.
       Object.setPrototypeOf(this, SessionClosedError.prototype);

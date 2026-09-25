@@ -20,6 +20,7 @@ import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import * as net from 'node:net';
+import { SocketChannelForwarder } from './socket-channel-forwarder';
 
 /** Resolved configuration for a {@link AbstractSocketForwardingConnectionHandler}.
  *  A head-specific subclass derives these from its own (adopter-facing) options
@@ -61,12 +62,10 @@ export interface SocketForwardingConnectionHandlerOptions {
  * the same wire protocol the server speaks, so the backend performs no semantic
  * re-proxy — it relays bytes only and stays oblivious to the server's method set.
  *
- * The single per-head variation — *which* byte forwarder bridges the channel and
- * the socket — is the abstract {@link forwardToSocketConnection} hook: the GLSP
- * head plugs in `@eclipse-glsp/theia-integration`'s `SocketConnectionForwarder`,
- * the data-server head its own `SocketChannelForwarder`. Keeping the forwarder
- * behind the hook is what lets the data head stay GLSP-free while sharing the
- * port-discovery + buffer-and-replay race fix + connect orchestration here.
+ * The byte forwarder that bridges the channel and the socket is
+ * {@link forwardToSocketConnection}; both heads use {@link SocketChannelForwarder},
+ * and the port discovery, buffer-and-replay race fix and connect orchestration
+ * here are shared.
  */
 @injectable()
 export abstract class AbstractSocketForwardingConnectionHandler implements ConnectionHandler {
@@ -190,7 +189,9 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
     * relay both ways. Called once, after the socket is created and the
     * pre-forward buffer is about to be replayed.
     */
-   protected abstract forwardToSocketConnection(clientChannel: Channel, socket: net.Socket): Disposable;
+   protected forwardToSocketConnection(clientChannel: Channel, socket: net.Socket): Disposable {
+      return new SocketChannelForwarder(clientChannel, socket);
+   }
 
    /**
     * Re-fire pre-forward buffered `MessageProvider`s on the channel's internal

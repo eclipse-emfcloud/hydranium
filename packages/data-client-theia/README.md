@@ -41,8 +41,13 @@ text edits.
 - **`whenWorkspaceOpen`** — resolves once Theia reports a workspace root. The data
   server only starts once the LSP launches for a workspace, so connecting earlier
   would hang in port discovery; pass this as `whenReady`.
-- **Backend (`./node`)** — `DataServerConnectionHandler` (the socket bridge, with
-  its own GLSP-free `SocketChannelForwarder`),
+- **`DataSessionStopContribution`** — ends a frontend's data sessions with its
+  page, so the server ends them as closed rather than waiting for the connection
+  to go, and holds the page while one of them is saving. Bind it as a
+  `FrontendApplicationContribution` and call its `track(connection)` once, where
+  the connection is bound.
+- **Backend (`./node`)** — `DataServerConnectionHandler` (the socket bridge,
+  over `@hydranium/client-theia`'s `SocketChannelForwarder`),
   `createDataServerConnectionContainerModule(...handlers)` for the
   frontend-scoped module boilerplate, and `HostDiagnosticsServer` with
   `createHostDiagnosticsBackendModule()` — which, paired with the browser-side
@@ -102,8 +107,8 @@ its loading state indefinitely with nothing in the server log to say why.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `.`         | Nothing — the surface is split by environment, so the root barrel stays empty.                                                                                                                        | browser-neutral (gated)          |
 | `./common`  | `EmitterDataClient` — a module lands here only when values, types and relative imports are all neutral or Theia COMMON tier. No error-reconstruction bridge, and that is a property of the transport: the direct `vscode-jsonrpc` connection carries a typed error across the relay natively. | browser-neutral (gated)          |
-| `./browser` | `openChannelConnection`, `createChannelConnection`, the three `Abstract*DataServiceFrontend` bases, `bindHostDiagnostics`, `whenWorkspaceOpen`                                                         | browser / Theia frontend (gated) |
-| `./node`    | `DataServerConnectionHandler`, `createDataServerConnectionContainerModule`, `SocketChannelForwarder`, `HostDiagnosticsServer`, `createHostDiagnosticsBackendModule`                                    | Node / Theia backend             |
+| `./browser` | `openChannelConnection`, `createChannelConnection`, the three `Abstract*DataServiceFrontend` bases, `bindHostDiagnostics`, `whenWorkspaceOpen`, `DataSessionStopContribution` | browser / Theia frontend (gated) |
+| `./node`    | `DataServerConnectionHandler`, `createDataServerConnectionContainerModule`, `HostDiagnosticsServer`, `createHostDiagnosticsBackendModule`                                    | Node / Theia backend             |
 
 Every subpath also has a `./lib/<name>` twin for consumers on
 `moduleResolution: "Node"`. "Gated" means the repository's neutral-bundle check
