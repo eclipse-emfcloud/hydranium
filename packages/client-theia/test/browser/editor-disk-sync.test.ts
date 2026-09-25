@@ -13,12 +13,18 @@
 vi.mock('@theia/editor/lib/browser/editor-manager', () => ({ EditorManager: class EditorManager {} }));
 vi.mock('@theia/filesystem/lib/browser/file-service', () => ({ FileService: class FileService {} }));
 
-import { Deferred } from '@hydranium/protocol';
-import { tick, waitFor } from '@hydranium/protocol/lib/testing';
+import 'reflect-metadata';
+import { Deferred, SystemClock } from '@hydranium/protocol';
+import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/lib/testing';
 import { Emitter } from '@theia/core';
+import { ILogger } from '@theia/core/lib/common/logger';
 import URI from '@theia/core/lib/common/uri';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Container, injectable } from '@theia/core/shared/inversify';
+import { EditorManager } from '@theia/editor/lib/browser/editor-manager';
+import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { describe, expect, it, vi } from 'vitest';
 import { EditorDiskSync, isResyncableEditorDocument } from '../../src/browser/editor-disk-sync';
+import { Clock } from '../../src/common/clock';
 
 const FILE = 'file:///workspace/a.domain';
 
@@ -74,6 +80,8 @@ function fakeDocument(text: string, dirty = true): FakeDocument {
 
 interface Rig {
    readonly sync: EditorDiskSync;
+   /** The clock the sync bounds its reads on. */
+   readonly clock: FakeClock;
    readonly reads: string[];
    readonly warnings: string[];
    readonly errors: string[];
@@ -111,10 +119,12 @@ function makeRig(documents: FakeDocument[], sync = new EditorDiskSync()): Rig {
       warn: (message: string) => void warnings.push(message),
       error: (message: string) => void errors.push(message)
    };
-   Object.assign(sync, { fileService, editorManager, logger });
+   const clock = makeFakeClock();
+   Object.assign(sync, { fileService, editorManager, logger, clock });
    sync.onStart();
    return {
       sync,
+      clock,
       reads,
       warnings,
       errors,
@@ -133,10 +143,6 @@ const OLD_VERSION = { etag: 'old', mtime: 1, encoding: 'utf8' };
 const NEW_VERSION = { etag: 'new', mtime: 2, encoding: 'utf8' };
 
 describe('EditorDiskSync', () => {
-   afterEach(() => {
-      vi.useRealTimers();
-   });
-
    it('marks a dirty editor clean on the version it read when the file now holds its text', async () => {
       const document = fakeDocument('buffer');
       const rig = makeRig([document]);
@@ -243,33 +249,35 @@ describe('EditorDiskSync', () => {
    });
 
    it('lets a save go on once the file has not been read within the bound, and ignores the late answer', async () => {
-      vi.useFakeTimers();
       const document = fakeDocument('buffer');
       const rig = makeRig([document]);
       let saved = false;
 
       const saving = document.willSave().then(() => (saved = true));
-      await vi.advanceTimersByTimeAsync(999);
+      rig.clock.advance(999);
+      await tick();
       expect(saved).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
+      rig.clock.advance(1);
+      await tick();
+      expect(saved).toBe(true);
       await saving;
       rig.answerRead('buffer');
-      await vi.advanceTimersByTimeAsync(10);
+      await tick();
 
       expect(document.contentChanges).toHaveLength(1);
       expect(document.resourceVersion).toEqual(OLD_VERSION);
    });
 
    it('clears its bound once the file is read', async () => {
-      vi.useFakeTimers();
       const document = fakeDocument('buffer');
       const rig = makeRig([document]);
 
       const saving = document.willSave();
+      expect(rig.clock.pendingTimers()).toBe(1);
       rig.answerRead('buffer');
       await saving;
 
-      expect(vi.getTimerCount()).toBe(0);
+      expect(rig.clock.pendingTimers()).toBe(0);
    });
 
    it('logs a check that throws rather than failing the save or the sync', async () => {
@@ -338,5 +346,36 @@ describe('EditorDiskSync', () => {
       const document = fakeDocument('buffer');
       expect(isResyncableEditorDocument(document as never)).toBe(true);
       expect(isResyncableEditorDocument({ ...document, contentChanges: undefined } as never)).toBe(false);
+   });
+});
+
+/** Shows which clock the container gave the sync. */
+@injectable()
+class ClockReadingSync extends EditorDiskSync {
+   get boundClock(): Clock {
+      return this.clock;
+   }
+}
+
+describe('EditorDiskSync in a container', () => {
+   function resolve(clock?: Clock): ClockReadingSync {
+      const container = new Container();
+      container.bind<object>(FileService).toConstantValue({});
+      container.bind<object>(EditorManager).toConstantValue({});
+      container.bind(ILogger).toConstantValue({});
+      if (clock) {
+         container.bind(Clock).toConstantValue(clock);
+      }
+      container.bind(ClockReadingSync).toSelf();
+      return container.get(ClockReadingSync);
+   }
+
+   it('bounds its reads on a SystemClock where the container binds no Clock', () => {
+      expect(resolve().boundClock).toBeInstanceOf(SystemClock);
+   });
+
+   it('bounds its reads on the Clock the container binds', () => {
+      const clock = makeFakeClock();
+      expect(resolve(clock).boundClock).toBe(clock);
    });
 });

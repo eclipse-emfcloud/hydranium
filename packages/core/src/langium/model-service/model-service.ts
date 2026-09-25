@@ -13,6 +13,7 @@ import {
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
+   TIMED_OUT,
    type TransferElement,
    type Tracer
 } from '@hydranium/protocol';
@@ -48,17 +49,8 @@ import { type ClientSession } from './client-session.js';
  */
 export const MODEL_UPDATE_EDIT = defineMessage('hydranium/core/model-update-edit', 'Update Model');
 
-/** Max time {@link ModelService.settleSave} waits for the build to settle and the sync chain to drain. */
+/** Max time {@link DefaultModelService.settleSave} waits for the build to settle and the sync chain to drain. */
 const SAVE_SETTLE_TIMEOUT_MS = 10_000;
-
-/**
- * Marks the {@link SAVE_SETTLE_TIMEOUT_MS} branch of
- * {@link ModelService.settleSave}'s race so it stays distinguishable from a
- * genuine rejection (a cancelled token, an `applyEdit` reverse-RPC error, a
- * build throw). With a plain `Error` the only log line an adopter has blames
- * the timeout for every one of them, which points debugging at the wrong layer.
- */
-class SaveSettleTimeoutError extends Error {}
 
 /**
  * Constructor options for {@link ModelService}. All fields are optional,
@@ -672,8 +664,8 @@ export class DefaultModelService<
     * so every language client reflects the latest content before a save returns.
     * No-op tail for headless adopters — `syncChains` is empty without an LSP
     * client. Bounded by {@link SAVE_SETTLE_TIMEOUT_MS} so a hung build, or an
-    * applyEdit reverse-RPC deadlock, can't freeze the caller; on timeout it logs
-    * a warning and returns rather than throwing.
+    * applyEdit reverse-RPC deadlock, can't freeze the caller; on timeout or a
+    * failed wait it logs a warning and returns rather than throwing.
     *
     * Adopters with a save flow that must converge editor + disk before returning
     * (e.g. a dual form/code editor that would otherwise show a content-conflict
@@ -682,22 +674,21 @@ export class DefaultModelService<
    protected async settleSave(uri: string, cancelToken?: CancellationToken): Promise<void> {
       const canonical = this.uriPolicy.canonicalUri(uri);
       const key = UriUtils.toUri(canonical).toString();
-      const timeout = new Promise<void>((_, reject) =>
-         setTimeout(() => reject(new SaveSettleTimeoutError('settle timeout')), SAVE_SETTLE_TIMEOUT_MS)
-      );
+      // One race over both waits, so the bound is one deadline for the pair;
+      // a race per wait would let the save take twice the bound.
+      const settled = (async (): Promise<void> => {
+         await this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken);
+         await this.syncChains.get(key);
+      })();
       try {
-         await Promise.race([this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken), timeout]);
-         const pending = this.syncChains.get(key);
-         if (pending) {
-            await Promise.race([pending, timeout]);
+         if ((await this.services.Clock.raceTimer(settled, SAVE_SETTLE_TIMEOUT_MS)) === TIMED_OUT) {
+            this.tracer.withUri(key).warn(`Save settle exceeded ${SAVE_SETTLE_TIMEOUT_MS}ms — returning anyway`);
          }
       } catch (err: unknown) {
-         if (err instanceof SaveSettleTimeoutError) {
-            this.tracer.withUri(key).warn(`Save settle exceeded ${SAVE_SETTLE_TIMEOUT_MS}ms — returning anyway`);
-         } else {
-            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-            this.tracer.withUri(key).warn(`Save settle failed before the timeout — returning anyway. ${detail}`);
-         }
+         // A failed wait, such as a cancelled token or a document the builder
+         // does not hold, gets its own line so it is not blamed on the bound.
+         const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+         this.tracer.withUri(key).warn(`Save settle failed before the timeout — returning anyway. ${detail}`);
       }
    }
 

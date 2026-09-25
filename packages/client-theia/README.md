@@ -62,6 +62,10 @@ hydranium server; a non-Theia host does not need it.
   into that hook. When the frontend channel closes, it finishes the writes it
   still has queued before it ends the socket, so a message sent just before a
   page goes away still reaches the server.
+- **`Clock`** (either side) — the protocol's `Clock` as an injection token.
+  The frontend and backend classes above that time or bound something inject
+  it as optional and use a `SystemClock` when the container binds none, so a
+  container can supply another clock.
 - **`./testing`** — `makeStubOutputChannelManager` and `makeStubInversifyContext`,
   the doubles that let the pieces above be unit-tested without a Theia
   application.
@@ -112,6 +116,7 @@ from here:
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `.`         | Nothing. Deliberately empty, so an environment-specific import cannot reach the wrong bundle through a barrel.                                                                              | browser-neutral (gated)          |
 | `./browser` | `ChannelLogger`, `ChannelTracer`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, `EditorDiskSync`, `HydraniumFileService`, the `bind*` helpers, `captureBrowserRuntime` | browser / Theia frontend (gated) |
+| `./common`  | `Clock`, the framed socket write buffer and the connection-resilience options                                                                                                               | browser-neutral (gated)          |
 | `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                  | Node / Theia backend             |
 | `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                  | browser-neutral (gated)          |
 

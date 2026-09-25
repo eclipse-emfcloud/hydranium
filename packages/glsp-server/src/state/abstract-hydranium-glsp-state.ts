@@ -24,11 +24,11 @@ import {
    type BasedOn,
    type SnapshotVersion,
    type ConflictResolver,
-   type Disposable,
    type Logger,
    type Tracer,
    asSnapshotVersion,
-   NO_MATCHING_VERSION
+   NO_MATCHING_VERSION,
+   TIMED_OUT
 } from '@hydranium/protocol';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -514,31 +514,21 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    protected async readyWithTimeout(state: DocumentState): Promise<void> {
       const uri = this._sourceUri;
       const stopwatch = this.sharedServices.Clock.stopwatch();
-      let timer: Disposable | undefined;
-
-      const timeout = new Promise<void>((resolve, reject) => {
-         timer = this.sharedServices.Clock.setTimer(() => {
-            const elapsed = Math.round(stopwatch.elapsedMs);
-            // Through the model service's canonicalizing gateway, so a symlinked
-            // `_sourceUri` is not reported as a hard timeout.
-            const doc = this.sharedServices.model.ModelService.getDocument(uri);
-            if (doc && doc.state >= state) {
-               this.logger.warn(
-                  `Missed '${DocumentState[state]}' notification after ${elapsed}ms; document is already at state ` +
-                     `'${DocumentState[doc.state]}'. Likely a Langium build-phase event race.`
-               );
-               resolve();
-            } else {
-               reject(this.buildReadyTimeoutError(state, elapsed));
-            }
-         }, this.readyTimeoutMs);
-      });
-
-      try {
-         await Promise.race([this.sharedServices.model.ModelService.waitForDocumentState(uri, state), timeout]);
-      } finally {
-         timer?.dispose();
+      const reached = this.sharedServices.model.ModelService.waitForDocumentState(uri, state);
+      if ((await this.sharedServices.Clock.raceTimer(reached, this.readyTimeoutMs)) !== TIMED_OUT) {
+         return;
       }
+      const elapsed = Math.round(stopwatch.elapsedMs);
+      // Through the model service's canonicalizing gateway, so a symlinked
+      // `_sourceUri` is not reported as a hard timeout.
+      const doc = this.sharedServices.model.ModelService.getDocument(uri);
+      if (!doc || doc.state < state) {
+         throw this.buildReadyTimeoutError(state, elapsed);
+      }
+      this.logger.warn(
+         `Missed '${DocumentState[state]}' notification after ${elapsed}ms; document is already at state ` +
+            `'${DocumentState[doc.state]}'. Likely a Langium build-phase event race.`
+      );
    }
 
    /**

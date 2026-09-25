@@ -20,8 +20,9 @@ import {
    isRoutable
 } from '@eclipse-glsp/client';
 import { ChannelLogger } from '@hydranium/client-theia/lib/browser';
-import { type Clock, SystemClock } from '@hydranium/protocol';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { Clock } from '@hydranium/client-theia/lib/common';
+import { SystemClock } from '@hydranium/protocol';
+import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import { type VNode } from 'snabbdom';
 
 /** How many scoped element ids the log line names before summarising the rest.
@@ -71,10 +72,8 @@ const SCOPE_ID_CAP = 3;
 export class HydraniumHiddenBoundsUpdater extends GLSPHiddenBoundsUpdater {
    @inject(ChannelLogger) protected readonly channel!: ChannelLogger;
 
-   /** Not injected: the browser container binds no {@link Clock}, and this only
-    *  measures — no logic is gated on time, so there is nothing to fake in
-    *  production. Overridden in tests for a deterministic elapsed value. */
-   protected readonly clock: Clock = new SystemClock();
+   /** The diagram container's {@link Clock}, or a `SystemClock`; it only measures. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    /**
     * Scope description for the in-flight request, read from the `cause` in

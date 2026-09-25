@@ -19,7 +19,7 @@ import {
    type TransferElement
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
-import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
+import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hydranium/langium';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
@@ -794,6 +794,103 @@ describe('ModelService rebuild and save', () => {
       // ...then save persisted through the file system and recorded the save.
       expect(bundle.fileSystem.writes.map(write => write.uri)).toContain(URI_A);
       expect(bundle.textDocuments.saves).toContainEqual({ uri: URI_A, clientId: 'editor-1' });
+   });
+});
+
+/** Exposes the protected `settleSave` and the sync chain it drains. */
+class SettlingModelService extends DefaultModelService<FakeRoot> {
+   settle(uri: string): Promise<void> {
+      return this.settleSave(uri);
+   }
+
+   holdSyncChain(uri: string, chain: Promise<void>): void {
+      this.syncChains.set(uri, chain);
+   }
+}
+
+function buildSettling(clock?: FakeClock): {
+   bundle: ReturnType<typeof makeTestServices<FakeRoot>>;
+   service: SettlingModelService;
+   lines: AttributedLine[];
+} {
+   const { logger, lines } = makeAttributingLogger();
+   const bundle = makeTestServices<FakeRoot>({
+      clock,
+      logger,
+      seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
+      modelService: services => new SettlingModelService(services)
+   });
+   return { bundle, service: bundle.modelService as SettlingModelService, lines };
+}
+
+const SETTLE_BOUND_MS = 10_000;
+
+describe('ModelService settleSave', () => {
+   afterEach(() => {
+      vi.useRealTimers();
+   });
+
+   it('clears its bound once the save has settled', async () => {
+      // On the system clock, so the platform's own timer count sees a bound
+      // that is left scheduled after the race is won.
+      vi.useFakeTimers();
+      const { service } = buildSettling();
+      const before = vi.getTimerCount();
+
+      await service.settle(URI_A);
+
+      expect(vi.getTimerCount()).toBe(before);
+   });
+
+   it('warns and returns once the bound passes on the service clock while the build hangs', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service, lines } = buildSettling(clock);
+      const gate = bundle.documentBuilder.gateNextWaitUntil();
+      let settled = false;
+      const settling = service.settle(URI_A).then(() => (settled = true));
+      await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+
+      clock.advance(SETTLE_BOUND_MS - 1);
+      await tick(5);
+      expect(settled).toBe(false);
+      clock.advance(1);
+      await settling;
+
+      expect(lines.some(line => line.level === 'warn' && line.message.includes(`exceeded ${SETTLE_BOUND_MS}ms`))).toBe(true);
+      gate.resolve();
+   });
+
+   it('bounds the build and the sync chain by one deadline, not one each', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service, lines } = buildSettling(clock);
+      const gate = bundle.documentBuilder.gateNextWaitUntil();
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), new Promise<void>(() => undefined));
+      let settled = false;
+      const settling = service.settle(URI_A).then(() => (settled = true));
+      await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+
+      clock.advance(SETTLE_BOUND_MS / 2);
+      gate.resolve();
+      await tick(5);
+      expect(settled).toBe(false);
+      clock.advance(SETTLE_BOUND_MS / 2);
+      await settling;
+
+      expect(lines.some(line => line.level === 'warn' && line.message.includes(`exceeded ${SETTLE_BOUND_MS}ms`))).toBe(true);
+   });
+
+   it('logs a wait that fails inside the bound apart from the timeout, and returns', async () => {
+      const { service, lines } = buildSettling(makeFakeClock());
+      const chain = Promise.reject(new Error('chain failed'));
+      // Observed here, so the rejection is not reported before the settle reaches the chain.
+      chain.catch(() => undefined);
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), chain);
+
+      await service.settle(URI_A);
+
+      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+      expect(warnings.some(message => message.includes('failed before the timeout') && message.includes('chain failed'))).toBe(true);
+      expect(warnings.some(message => message.includes('exceeded'))).toBe(false);
    });
 });
 

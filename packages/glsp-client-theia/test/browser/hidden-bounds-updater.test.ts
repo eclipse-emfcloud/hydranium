@@ -44,7 +44,7 @@ import { HydraniumHiddenBoundsUpdater } from '../../src/browser/hidden-bounds-up
  */
 function measuringClock(elapsedMs: () => number): Clock {
    const measure = (callback: () => unknown): unknown => ({ result: callback(), elapsedMs: elapsedMs() });
-   return { ...makeFakeClock(), measure: measure as Clock['measure'] };
+   return Object.assign(makeFakeClock(), { measure: measure as Clock['measure'] });
 }
 
 /**

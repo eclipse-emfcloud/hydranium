@@ -17,10 +17,18 @@ vi.mock('@theia/output/lib/browser/output-channel', () => ({
    OutputChannel: class OutputChannel {}
 }));
 
-import { Logger } from '@hydranium/protocol';
+import { DefaultTracer, Logger, type Tracer } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/lib/testing';
 import { type OutputChannelManager } from '@theia/output/lib/browser/output-channel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChannelLogger, ChannelLoggerOptions, bindChannelLogger, getRequestParentName } from '../../src/browser/channel-logger';
+import {
+   ChannelLogger,
+   ChannelLoggerOptions,
+   ChannelTracer,
+   bindChannelLogger,
+   getRequestParentName
+} from '../../src/browser/channel-logger';
+import { Clock } from '../../src/common/clock';
 import { type StubOutputChannelManager, makeStubInversifyContext, makeStubOutputChannelManager } from '../../src/testing/index';
 
 /** Build a `ChannelLogger` directly (bypassing Inversify) over a stub channel manager. */
@@ -138,22 +146,22 @@ describe('bindChannelLogger', () => {
       const { bind, calls } = recordBindings();
       bindChannelLogger(bind as never, { channelName: 'Ch' });
 
-      expect(calls.find(c => c.token === ChannelLoggerOptions)).toMatchObject({
+      expect(calls.find(call => call.token === ChannelLoggerOptions)).toMatchObject({
          method: 'toConstantValue',
          arg: { channelName: 'Ch' }
       });
       // The base singleton binds the concrete class under a private token.
-      expect(calls.find(c => c.method === 'to' && c.arg === ChannelLogger)).toBeDefined();
-      expect(calls.some(c => c.method === 'inSingletonScope')).toBe(true);
+      expect(calls.find(call => call.method === 'to' && call.arg === ChannelLogger)).toBeDefined();
+      expect(calls.some(call => call.method === 'inSingletonScope')).toBe(true);
       // The public ChannelLogger token resolves to a per-request dynamic value.
-      const dynamic = calls.find(c => c.token === ChannelLogger && c.method === 'toDynamicValue');
+      const dynamic = calls.find(call => call.token === ChannelLogger && call.method === 'toDynamicValue');
       expect(dynamic?.factory).toBeDefined();
    });
 
    it('the dynamic value derives the base logger by parent class name', () => {
       const { bind, calls } = recordBindings();
       bindChannelLogger(bind as never, { channelName: 'Ch' });
-      const factory = calls.find(c => c.token === ChannelLogger && c.method === 'toDynamicValue')!.factory!;
+      const factory = calls.find(call => call.token === ChannelLogger && call.method === 'toDynamicValue')!.factory!;
 
       const baseLogger = makeLogger(channels, { channelName: 'Ch' });
       const resolved = factory({
@@ -164,10 +172,47 @@ describe('bindChannelLogger', () => {
       expect(channels.channels.get('Ch')?.lines[0]).toContain('[ParentClass] hi');
    });
 
+   it("times the tracer on the container's Clock when it binds one", () => {
+      const { bind, calls } = recordBindings();
+      bindChannelLogger(bind as never, { channelName: 'Ch' });
+      expect(calls.find(call => call.token === Clock)).toBeUndefined();
+
+      const factory = calls.find(call => call.token === ChannelTracer && call.method === 'toDynamicValue')!.factory!;
+      const clock = makeFakeClock();
+      const baseLogger = makeLogger(channels, { channelName: 'Ch' });
+      const container = {
+         isBound: (token: unknown) => token === Clock,
+         get: (token: unknown): unknown => (token === Clock ? clock : baseLogger)
+      };
+      const tracer = factory({ container }) as Tracer;
+      tracer.time('work', () => clock.advance(250), 'info', { logAfterMs: 0 });
+
+      expect(channels.channels.get('Ch')?.lines.at(-1)).toContain('work [#');
+      expect(channels.channels.get('Ch')?.lines.at(-1)).toContain('done, 250');
+   });
+
+   it('builds the tracer on a SystemClock where the container binds no Clock', () => {
+      const { bind, calls } = recordBindings();
+      bindChannelLogger(bind as never, { channelName: 'Ch' });
+      const factory = calls.find(call => call.token === ChannelTracer && call.method === 'toDynamicValue')!.factory!;
+      const baseLogger = makeLogger(channels, { channelName: 'Ch' });
+      const container = {
+         isBound: () => false,
+         get: (token: unknown): unknown => {
+            if (token === Clock) {
+               throw new Error('No matching bindings found for Clock');
+            }
+            return baseLogger;
+         }
+      };
+
+      expect(factory({ container })).toBeInstanceOf(DefaultTracer);
+   });
+
    it('the dynamic value falls back to the base logger without a parent class name', () => {
       const { bind, calls } = recordBindings();
       bindChannelLogger(bind as never, { channelName: 'Ch' });
-      const factory = calls.find(c => c.token === ChannelLogger && c.method === 'toDynamicValue')!.factory!;
+      const factory = calls.find(call => call.token === ChannelLogger && call.method === 'toDynamicValue')!.factory!;
 
       const baseLogger = makeLogger(channels, { channelName: 'Ch' });
       const resolved = factory({

@@ -9,6 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { makeFakeClock } from '../../src/testing/fake-clock';
+import { Deferred } from '../../src/util';
 
 describe('makeFakeClock', () => {
    describe('now', () => {
@@ -77,6 +78,34 @@ describe('makeFakeClock', () => {
 
          clock.advance(300);
          expect(order).toEqual(['early', 'late']);
+      });
+
+      it('counts as pending only the timers neither fired nor disposed', () => {
+         const clock = makeFakeClock();
+         clock.setTimer(() => undefined, 50);
+         const disposed = clock.setTimer(() => undefined, 100);
+         clock.setTimer(() => undefined, 200);
+         expect(clock.pendingTimers()).toBe(3);
+
+         disposed.dispose();
+         clock.advance(50);
+         expect(clock.pendingTimers()).toBe(1);
+      });
+   });
+
+   describe('raceTimer', () => {
+      it('races over a setTimer assigned onto the clock', () => {
+         const clock = makeFakeClock();
+         const inherited = clock.setTimer.bind(clock);
+         const delays: number[] = [];
+         Object.assign(clock, {
+            setTimer: (callback: () => void, ms: number) => {
+               delays.push(ms);
+               return inherited(callback, ms);
+            }
+         });
+         void clock.raceTimer(new Deferred<void>().promise, 100);
+         expect(delays).toEqual([100]);
       });
    });
 

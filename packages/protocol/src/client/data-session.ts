@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
+import { type Clock, SystemClock } from '../clock';
 import type { DataServerProtocol, DiagnosticOf, TransferDocumentDirtyChangedEvent } from '../data';
 import { SessionClosedError } from '../errors';
 import type { SnapshotVersion } from '../model-service/based-on';
@@ -178,6 +179,12 @@ export class DataSession<
     * fails that save.
     */
    protected readonly settleBeforeCloseMs: number = 10_000;
+   /**
+    * The clock {@link settleBeforeCloseMs} runs on. {@link DataSessionHost}
+    * carries no {@link Clock}, so a subclass replaces this field as it
+    * replaces the bound.
+    */
+   protected readonly clock: Clock = new SystemClock();
    /** URIs this session has open, re-opened after a reconnect. */
    protected readonly openUris = new Set<string>();
    /**
@@ -614,15 +621,7 @@ export class DataSession<
       if (pending.length === 0) {
          return;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const bound = new Promise<void>(resolveBound => {
-         timer = setTimeout(resolveBound, this.settleBeforeCloseMs);
-      });
-      try {
-         await Promise.race([Promise.allSettled(pending), bound]);
-      } finally {
-         clearTimeout(timer);
-      }
+      await this.clock.raceTimer(Promise.allSettled(pending), this.settleBeforeCloseMs);
    }
 
    protected assertLive(): void {

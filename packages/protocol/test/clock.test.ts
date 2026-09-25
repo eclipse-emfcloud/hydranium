@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SystemClock } from '../src/clock';
+import { type Clock, SystemClock, TIMED_OUT } from '../src/clock';
+import { makeFakeClock } from '../src/testing/fake-clock';
+import { Deferred, type Disposable } from '../src/util';
 
 /**
  * Feed the stopwatch a scripted monotonic source, one reading per
@@ -124,3 +126,125 @@ describe('SystemClock', () => {
       });
    });
 });
+
+/**
+ * The fake inherits the system clock's race, and each is driven by its own time: the
+ * system clock by vitest's fake timers (which replace the `setTimeout` it calls),
+ * the fake by `advance`. "Nothing left scheduled" is read off each one's own
+ * count, so a race that won without disposing its timer fails under both.
+ */
+describe.each<[string, () => RaceHarness]>([
+   [
+      'SystemClock',
+      () => {
+         vi.useFakeTimers();
+         return { clock: new SystemClock(), advance: ms => vi.advanceTimersByTime(ms), pendingTimers: () => vi.getTimerCount() };
+      }
+   ],
+   [
+      'makeFakeClock',
+      () => {
+         const clock = makeFakeClock();
+         return { clock, advance: ms => clock.advance(ms), pendingTimers: () => clock.pendingTimers() };
+      }
+   ]
+])('%s.raceTimer', (_name, setUp) => {
+   afterEach(() => {
+      vi.useRealTimers();
+   });
+
+   it('settles with the value when the promise wins, and leaves no timer behind', async () => {
+      const { clock, pendingTimers } = setUp();
+      const gate = new Deferred<string>();
+      const race = clock.raceTimer(gate.promise, 100);
+      expect(pendingTimers()).toBe(1);
+      gate.resolve('value');
+      await expect(race).resolves.toBe('value');
+      expect(pendingTimers()).toBe(0);
+   });
+
+   it('tells a promise resolving to undefined from a timeout', async () => {
+      const { clock } = setUp();
+      await expect(clock.raceTimer(Promise.resolve(undefined), 100)).resolves.toBeUndefined();
+   });
+
+   it('settles with TIMED_OUT when the timer wins', async () => {
+      const { clock, advance, pendingTimers } = setUp();
+      const race = clock.raceTimer(new Deferred<string>().promise, 100);
+      advance(99);
+      advance(1);
+      await expect(race).resolves.toBe(TIMED_OUT);
+      expect(pendingTimers()).toBe(0);
+   });
+
+   it('settles with the value when the promise resolves in the turn the timer fires', async () => {
+      // A real timer fires only after the resolution is delivered, so a timer
+      // that settles at once would give the test clocks an outcome production
+      // never sees.
+      const { clock, advance } = setUp();
+      const gate = new Deferred<string>();
+      const race = clock.raceTimer(gate.promise, 100);
+      gate.resolve('value');
+      advance(100);
+      await expect(race).resolves.toBe('value');
+   });
+
+   it('does not time out before its bound', async () => {
+      const { clock, advance } = setUp();
+      const gate = new Deferred<string>();
+      const race = clock.raceTimer(gate.promise, 100);
+      advance(99);
+      gate.resolve('late but in time');
+      await expect(race).resolves.toBe('late but in time');
+   });
+
+   it('rejects with the reason of a promise that rejects first, and leaves no timer behind', async () => {
+      const { clock, pendingTimers } = setUp();
+      const failure = new Error('failed');
+      await expect(clock.raceTimer(Promise.reject(failure), 100)).rejects.toBe(failure);
+      expect(pendingTimers()).toBe(0);
+   });
+
+   it('stays TIMED_OUT when the promise rejects after the timer won', async () => {
+      const { clock, advance } = setUp();
+      const gate = new Deferred<string>();
+      const race = clock.raceTimer(gate.promise, 100);
+      advance(100);
+      gate.reject(new Error('too late'));
+      await expect(race).resolves.toBe(TIMED_OUT);
+   });
+});
+
+describe('a clock extending SystemClock', () => {
+   it('rejects the race when its setTimer throws, and still handles a later rejection of the promise', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+         unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+         const failure = new Error('no timer');
+         class NoTimerClock extends SystemClock {
+            override setTimer(): Disposable {
+               throw failure;
+            }
+         }
+         const gate = new Deferred<string>();
+         const race = new NoTimerClock().raceTimer(gate.promise, 100);
+         await expect(race).rejects.toBe(failure);
+
+         gate.reject(new Error('rejected after the race'));
+         await new Promise(resolve => setTimeout(resolve, 0));
+
+         expect(unhandled).toEqual([]);
+      } finally {
+         process.off('unhandledRejection', onUnhandled);
+      }
+   });
+});
+
+interface RaceHarness {
+   readonly clock: Clock;
+   advance(ms: number): void;
+   pendingTimers(): number;
+}

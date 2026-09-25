@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Debouncer, Deferred, type Logger, ObservableValue, type MaybeObservableValue } from '@hydranium/protocol';
+import { Debouncer, Deferred, type Logger, ObservableValue, type MaybeObservableValue, TIMED_OUT } from '@hydranium/protocol';
 import { URI, UriUtils } from '@hydranium/langium';
 import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
@@ -282,14 +282,12 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             void this.services.workspace.FileSystemTaskQueue.enqueue(uri, async () => {
                cap.dispose();
                resolve([]);
-               const bound = clock.setTimer(() => {
+               if ((await clock.raceTimer(hold.promise, this.willSaveGateMs)) === TIMED_OUT) {
                   this.logger.debug(
                      `No didSave for ${uri} within ${this.willSaveGateMs} ms; server writes of it no longer wait for the editor's save.`
                   );
                   release();
-               }, this.willSaveGateMs);
-               await hold.promise;
-               bound.dispose();
+               }
             });
          } catch (err) {
             cap.dispose();
