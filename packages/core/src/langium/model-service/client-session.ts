@@ -18,12 +18,13 @@ import {
    type Tracer,
    type TransferElement
 } from '@hydranium/protocol';
-import { type AstNode, UriUtils } from '@hydranium/langium';
+import { type AstNode, type DocumentBuilder, DocumentState, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type AstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
+import { IntegrityService } from '../integrity/integrity-service.js';
 import { type ServerSharedServices } from '../module.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type ModelService } from './model-service.js';
@@ -90,11 +91,19 @@ export interface ClientSession<
     * URI at most one succeeds.
     */
    create(uri: string, text: string): Promise<void>;
+   /**
+    * Write `args.model` into a document this session has open. Resolves to the
+    * rebuilt document once it is validated, in whichever build carried the
+    * write, so the answer holds every diagnostic its update event does: that
+    * event names this session, and a client dropping its own echo would
+    * otherwise never see them.
+    */
    update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    /**
     * Write several documents this session has open, all or none: a
     * `ConflictError` or `DocumentNotOpenError` for any of them is thrown before
-    * any text applies. Resolves to the rebuilt documents, in the order given.
+    * any text applies. Resolves to the rebuilt documents, in the order given,
+    * each validated as {@link update}'s is.
     */
    updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
    /** Write `args.model` as {@link update} does, then persist the document. */
@@ -118,6 +127,21 @@ export interface ClientSession<
     * reason reverts such a document at once.
     */
    dispose(cause?: SessionEndCause): void;
+}
+
+/**
+ * The phase a session write waits for before it answers: `Validated`, or
+ * {@link IntegrityService.SettledState} when rebuilds do not validate, since
+ * no build then reaches `Validated` and the wait would never end. Read from
+ * `updateBuildOptions`, which every rebuild takes; a document a
+ * `shouldValidate` override skips is the builder's to resolve.
+ *
+ * Waiting for the write's own build is not enough: a later write cancels it,
+ * and the build that takes over validates the document after the answer was
+ * taken.
+ */
+function answerState(builder: DocumentBuilder): DocumentState {
+   return builder.updateBuildOptions.validation ? DocumentState.Validated : IntegrityService.SettledState;
 }
 
 /**
@@ -308,7 +332,7 @@ export class DefaultClientSession<
       // An override that awaits before calling the base can outlast the build
       // this write already has, and then builds it twice; see
       // `ModelService.rebuild`.
-      const doc = await run('rebuild', () => service.rebuild(uri, undefined, cancelToken));
+      const doc = await run('rebuild', () => service.rebuild(uri, answerState(this.services.workspace.DocumentBuilder), cancelToken));
       const finalVersion = textDocuments.version(uri);
       if (finalVersion > appliedVersion) {
          this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (changed again before it settled)`);
@@ -363,7 +387,8 @@ export class DefaultClientSession<
       check();
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], this.clientId));
       await Promise.all(applied);
-      return Promise.all(uris.map(uri => service.rebuild(uri, undefined, cancelToken)));
+      const state = answerState(this.services.workspace.DocumentBuilder);
+      return Promise.all(uris.map(uri => service.rebuild(uri, state, cancelToken)));
    }
 
    /**

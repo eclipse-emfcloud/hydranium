@@ -47,7 +47,8 @@ export interface StubWaitUntilGate {
 /**
  * Stub for Langium's {@link DocumentBuilder}. Implements the slice production
  * code reads from on the framework's test paths (`update` / `waitUntil` /
- * `onDocumentPhase` / `onUpdate`) plus test-only helpers:
+ * `updateBuildOptions` / `onDocumentPhase` / `onUpdate`) plus test-only
+ * helpers:
  *
  * - {@link firePhase} — synchronously dispatch the registered phase
  *   listener(s) for a document, simulating a build completing.
@@ -73,7 +74,7 @@ export interface StubWaitUntilGate {
  */
 export interface StubDocumentBuilder extends Pick<
    DocumentBuilder,
-   'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState'
+   'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'
 > {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
@@ -150,6 +151,9 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
       throw new Error(`StubDocumentBuilder.${method} is not implemented; wire a real DocumentBuilder if your test needs it.`);
    };
    const stub: StubDocumentBuilder = {
+      // Langium's own default, so a session write waits for `Validated` here
+      // as it does against the real builder.
+      updateBuildOptions: { validation: { categories: ['built-in', 'fast'] } },
       get updateCalls() {
          return updateCalls;
       },

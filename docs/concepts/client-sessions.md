@@ -115,6 +115,16 @@ open document is a new version authored by `integrity`: a write based on the
 version before the repair fails, and `isOwnEcho` is false for the update that
 carries the repair.
 
+A write answers with the document once it is validated, in whichever build
+carried the write. When another write cancels the write's own build, the answer
+waits for the build that takes over, which costs the validation of the
+documents that build carries. That build's update event names the writer, so a
+client that drops its own echo gets the diagnostics from the answer. With
+`updateBuildOptions.validation` off, no build reaches `Validated`, and a write
+answers at `IntegrityService.SettledState`. A document that a `shouldValidate`
+override skips answers once the build has indexed its references, without
+diagnostics.
+
 A save persists the document's current text, which includes unsaved edits other
 participants have made to it: there is one shared text per document. The save
 checks the open once more when it takes that text, after the rebuild: a session

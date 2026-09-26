@@ -136,15 +136,15 @@ export interface ModelServiceOptions extends LogNameOptions {
  * **Read-latest supersession**
  *
  * A session's default `update` and `save` use Langium's per-URI
- * `DocumentBuilder.waitUntil` to wait for the integrity-settled landmark
- * ({@link IntegrityService.SettledState}), then read the post-build state. Concurrent
- * in-process callers on the same URI all see the latest post-build
- * snapshot — none deadlock waiting for a specific version's settled
- * event. Adopters wanting strict version-matched semantics (resolve
- * with vN's snapshot specifically, log "vN superseded by vM at vN+1")
- * override `DefaultClientSession.updateDocument` to attach a phase-listener
- * with explicit version checks; the framework default doesn't need it for
- * safety.
+ * `DocumentBuilder.waitUntil` to wait for `Validated` (the integrity-settled
+ * landmark {@link IntegrityService.SettledState} when rebuilds do not
+ * validate), then read the post-build state. Concurrent in-process callers
+ * on the same URI all see the latest post-build snapshot — none deadlock
+ * waiting for a specific version's settled event. Adopters wanting strict
+ * version-matched semantics (resolve with vN's snapshot specifically, log
+ * "vN superseded by vM at vN+1") override
+ * `DefaultClientSession.updateDocument` to attach a phase-listener with
+ * explicit version checks; the framework default doesn't need it for safety.
  *
  * **Returns AST snapshots, not wire envelopes**
  *

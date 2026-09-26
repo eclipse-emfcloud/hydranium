@@ -231,12 +231,13 @@ export interface DataServerOptions extends LogNameOptions {
     * (`DataClientProtocol.onDocumentUpdated`).
     *
     * **Subscription dispatch only** — distinct from the synchronous RPC
-    * response phase. The lifecycle reads/writes (`getModelDocument` /
-    * `updateModelDocument` / `saveModelDocument`) settle at the
-    * integrity-settled landmark (`IntegrityService.SettledState`); a
-    * read additionally upgrades to `Validated` per call when
-    * {@link GetModelDocumentArgs.includeDiagnostics} is set. This option
-    * controls only the async notification phase.
+    * response phase. A read (`getModelDocument`) settles at the
+    * integrity-settled landmark (`IntegrityService.SettledState`), or at
+    * `Validated` when {@link GetModelDocumentArgs.includeDiagnostics} is set.
+    * A write (`updateModelDocument` / `updateModelDocuments` /
+    * `saveModelDocument`) answers once its document is validated, as a
+    * session's write does. This option controls only the async notification
+    * phase.
     *
     * Default: `DocumentState.Validated` — validation is the last builder
     * phase and produces the full diagnostic set, so subscription events fired

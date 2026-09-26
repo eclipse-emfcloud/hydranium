@@ -415,4 +415,28 @@ describe('order-flow data head', () => {
       // trivially satisfy the assertion above.
       expect(head.harness.events[head.harness.events.length - 1].document.uri).toBe(uri);
    });
+
+   it('answers updateModelDocuments with every written document validated, the first one included', async () => {
+      // The second document's rebuild cancels the first one's, so the first
+      // document is validated in a later build. The echo carrying its
+      // diagnostics names this client, which drops it, so the answer is the
+      // only place they can arrive.
+      const head = await driveDataHead();
+      const audit = head.uri(WORKSPACE_FILES.auditLeak);
+      const returns = head.uri(WORKSPACE_FILES.returnsProcess);
+      await head.harness.proxy.openModelDocument({ uri: audit, clientId: CLIENT_ID });
+      await head.harness.proxy.openModelDocument({ uri: returns, clientId: CLIENT_ID });
+      await head.harness.proxy.getModelDocument({ uri: audit, includeDiagnostics: true });
+      await head.harness.proxy.getModelDocument({ uri: returns, includeDiagnostics: true });
+
+      const [written] = await head.harness.proxy.updateModelDocuments({
+         clientId: CLIENT_ID,
+         updates: [
+            { uri: audit, model: 'entity ShipmentAudit {\n   stamp: NoSuchStamp\n}', basedOn: 'anything' },
+            { uri: returns, model: 'process Returns for Order {\n   task Refund\n}', basedOn: 'anything' }
+         ]
+      });
+
+      expect(written.diagnostics.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchStamp')]);
+   });
 });
