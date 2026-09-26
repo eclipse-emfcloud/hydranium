@@ -46,7 +46,8 @@ import {
    isSyntheticSource,
    ReservedClientIdError,
    SessionClosedError,
-   TransferDocument
+   TransferDocument,
+   UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import type {
    CloseModelArgs,
@@ -90,6 +91,8 @@ export function isCanaryRoot(value: unknown): value is CanaryRoot {
 export const VALID_TEXT = 'element One';
 export const INVALID_TEXT = 'element';
 export const EDITED_TEXT = 'element Two';
+/** The fixture's `breakingEdit`, the one text of `valid` the canary lets change its dependent. */
+export const BREAKING_TEXT = 'element Renamed';
 
 /**
  * The canary's whole "grammar": a model is invalid when it is exactly
@@ -152,6 +155,8 @@ export interface CanaryDefects {
    readonly silentSubscriptions?: boolean;
    /** Updates are fanned out regardless of the subscription table. */
    readonly notifiesBeforeSubscribe?: boolean;
+   /** A write's own update event is reported as rebuilt rather than changed. */
+   readonly ownWriteRebuilt?: boolean;
    /**
     * A document rebuilt as a cascade is never reported, which is the state a
     * head is in when it gates its build notification on the subscription map:
@@ -161,6 +166,11 @@ export interface CanaryDefects {
    readonly silentCascade?: boolean;
    /** The cascade report names the WATCHED document too, which the update channel already carried. */
    readonly cascadeNamesWatched?: boolean;
+   /**
+    * A dependent's update event names the client that has it open, which then
+    * drops the event as its own echo.
+    */
+   readonly dependentCreditedToOpener?: boolean;
    /**
     * Every write lands, whatever version it claims to be based on — the head
     * that accepts `basedOn` on the wire and never compares it, so a form editor
@@ -426,7 +436,7 @@ export class CanaryDataServer {
       }
       const document = this.envelope(args.uri);
       if (this.watched.has(args.uri) || this.defects.notifiesBeforeSubscribe) {
-         this.events.push({ document, sourceClientId: args.clientId, reason: 'changed' });
+         this.events.push({ document, sourceClientId: args.clientId, reason: this.defects.ownWriteRebuilt ? 'rebuilt' : 'changed' });
       }
       // The fake's stand-in for a dependency graph: editing `valid` "rebuilds"
       // the fixture's dependent. A Map holds no references, so the relation is
@@ -435,6 +445,17 @@ export class CanaryDataServer {
       if (isEdit && args.uri === CANARY_VALID_URI && !this.defects.silentCascade) {
          const uris = this.defects.cascadeNamesWatched ? [CANARY_DEPENDENT_URI, args.uri] : [CANARY_DEPENDENT_URI];
          this.builds.push({ uris });
+      }
+      // Only the breaking text changes what the dependent shows, so only it
+      // reaches the dependent's watcher; the framework's head suppresses the
+      // rest.
+      if (text === BREAKING_TEXT && args.uri === CANARY_VALID_URI && this.watched.has(CANARY_DEPENDENT_URI)) {
+         const opener = [...this.sessions].find(([, opens]) => opens.has(CANARY_DEPENDENT_URI))?.[0];
+         this.events.push({
+            document: this.envelope(CANARY_DEPENDENT_URI),
+            sourceClientId: this.defects.dependentCreditedToOpener && opener !== undefined ? opener : UNKNOWN_CLIENT_ID,
+            reason: 'rebuilt'
+         });
       }
       return document;
    }
@@ -512,6 +533,7 @@ export const CANARY_FIXTURE: LanguageFixture = {
    valid: { uri: CANARY_VALID_URI, languageId: 'x', text: VALID_TEXT },
    invalid: { uri: 'file:///two.x', languageId: 'x', text: INVALID_TEXT },
    dependent: { uri: CANARY_DEPENDENT_URI, languageId: 'x', text: VALID_TEXT },
+   breakingEdit: BREAKING_TEXT,
    edit: { to: EDITED_TEXT, expect: root => isCanaryRoot(root) && root.text === EDITED_TEXT },
    // An explicit folder rather than the derived default: this fixture's `valid`
    // sits at the URI root, so deriving a parent from it yields the degenerate

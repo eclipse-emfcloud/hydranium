@@ -14,11 +14,12 @@ import { type AstNode, DocumentState } from '@hydranium/langium';
 import { URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
-import { UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
+import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { type FileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { CancellationToken } from 'vscode-languageserver';
 import { makeFakeAstNode, makeFakeDocument, makeTestServices } from '../../src/testing/index.js';
 
 interface FakeRoot extends AstNode {
@@ -74,25 +75,28 @@ function open(textDocuments: HydraniumTextDocuments, uri: string, version: numbe
 }
 
 describe('AstDocumentManager onUpdate', () => {
-   it('fires once with the rebuilt root, the version author, and reason "rebuilt"', () => {
+   it('fires once with the rebuilt root and the attribution', () => {
       const { manager, textDocuments, builder } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
 
-      const events: Array<{ name: string; sourceClientId: string; reason: string }> = [];
+      const events: Array<{ name: string; sourceClientId: string; reason: string; causedBy?: string }> = [];
       manager.onUpdate(URI_A, event =>
-         events.push({ name: event.document.root.name, sourceClientId: event.sourceClientId, reason: event.reason })
+         events.push({
+            name: event.document.root.name,
+            sourceClientId: event.sourceClientId,
+            reason: event.reason,
+            causedBy: event.causedBy
+         })
       );
 
       const doc = makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'rebuilt' }), { version: 1 });
       builder.firePhase(DocumentState.Validated, doc);
 
-      // No fireOnUpdate beforehand → URI is in neither changed nor deleted → 'rebuilt'.
-      expect(events).toEqual([{ name: 'rebuilt', sourceClientId: 'author-1', reason: 'rebuilt' }]);
+      expect(events).toEqual([{ name: 'rebuilt', sourceClientId: 'author-1', reason: 'changed', causedBy: 'author-1' }]);
    });
 
-   it('reports reason "changed" when the URI is in the most recent changed set', () => {
-      const { manager, textDocuments, builder } = makeManagerHarness();
-      open(textDocuments, URI_A, 1, 'author-1');
+   it('reports reason "changed" for a document no client opened when the URI is in the most recent changed set', () => {
+      const { manager, builder } = makeManagerHarness();
 
       const reasons: string[] = [];
       manager.onUpdate(URI_A, event => reasons.push(event.reason));
@@ -125,11 +129,12 @@ describe('AstDocumentManager onUpdate', () => {
       expect(reasons).toEqual([]);
    });
 
-   it('falls back to UNKNOWN_CLIENT_ID when no author history exists for the version', () => {
+   it('falls back to UNKNOWN_CLIENT_ID for a change when no author history exists for the version', () => {
       const { manager, builder } = makeManagerHarness();
 
       const sources: string[] = [];
-      manager.onUpdate(URI_A, event => sources.push(event.sourceClientId));
+      manager.onUpdate(URI_A, event => sources.push(`${event.reason} ${event.sourceClientId}`));
+      builder.fireOnUpdate([URI.parse(URI_A)], []);
 
       // URI_A was never opened in the real text store → no version-author history.
       builder.firePhase(
@@ -137,7 +142,109 @@ describe('AstDocumentManager onUpdate', () => {
          makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), { version: 1 })
       );
 
-      expect(sources).toEqual([UNKNOWN_CLIENT_ID]);
+      expect(sources).toEqual([`changed ${UNKNOWN_CLIENT_ID}`]);
+   });
+});
+
+describe('AstDocumentManager attributeUpdate', () => {
+   const documentAt = (uri: string, version: number) =>
+      makeFakeDocument<FakeRoot>(uri, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x' }), { version });
+
+   it('credits the first delivery of a version to its author, and a later one to nobody', () => {
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, 'author-1');
+      const document = documentAt(URI_A, 1);
+
+      const first = manager.attributeUpdate(document);
+      builder.firePhase(DocumentState.Validated, document);
+
+      expect(first).toEqual({ reason: 'changed', sourceClientId: 'author-1', causedBy: 'author-1' });
+      expect(manager.attributeUpdate(document)).toEqual({
+         reason: 'rebuilt',
+         sourceClientId: UNKNOWN_CLIENT_ID,
+         causedBy: UNKNOWN_CLIENT_ID
+      });
+      expect(manager.attributeUpdate(documentAt(URI_A, 2)).reason).toBe('changed');
+   });
+
+   it('does not count a delivery whose listeners a cancel skipped', () => {
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, 'author-1');
+      const document = documentAt(URI_A, 1);
+
+      builder.firePhase(DocumentState.Validated, document, CancellationToken.Cancelled);
+
+      expect(manager.attributeUpdate(document).reason).toBe('changed');
+   });
+
+   it('names the single writer the build carries as the cause of a rebuild, and nobody when there are two', () => {
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, 'reader');
+      open(textDocuments, URI_B, 1, 'writer-1');
+      builder.firePhase(DocumentState.Validated, documentAt(URI_A, 1));
+      builder.firePhase(DocumentState.Validated, documentAt(URI_B, 1));
+      textDocuments.applyContentChange(URI_B, 'b2', 'writer-1');
+
+      builder.fireOnUpdate([URI.parse(URI_B)], []);
+      const single = manager.attributeUpdate(documentAt(URI_A, 1));
+      textDocuments.applyContentChange(URI_A, 'a2', 'writer-2');
+      builder.fireOnUpdate([URI.parse(URI_A)], []);
+      const two = manager.attributeUpdate(documentAt(URI_B, 1));
+
+      expect(single).toEqual({ reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'writer-1' });
+      expect(two.causedBy).toBe(UNKNOWN_CLIENT_ID);
+   });
+
+   it('counts a rebuild no write explains as caused by nobody', () => {
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, 'reader');
+      open(textDocuments, URI_B, 1, 'writer-1');
+      builder.firePhase(DocumentState.Validated, documentAt(URI_A, 1));
+      builder.firePhase(DocumentState.Validated, documentAt(URI_B, 1));
+
+      builder.fireOnUpdate([URI.parse(URI_B)], []);
+
+      expect(manager.attributeUpdate(documentAt(URI_A, 1)).causedBy).toBe(UNKNOWN_CLIENT_ID);
+   });
+
+   it('reports a document the store does not track as changed only when the last update named it', () => {
+      const { manager, builder } = makeManagerHarness();
+      const document = documentAt(URI_A, 0);
+
+      builder.fireOnUpdate([URI.parse(URI_A)], []);
+      builder.firePhase(DocumentState.Validated, document);
+      const named = manager.attributeUpdate(document);
+      builder.fireOnUpdate([URI.parse(URI_B)], []);
+
+      expect(named.reason).toBe('changed');
+      expect(manager.attributeUpdate(document).reason).toBe('rebuilt');
+   });
+
+   it('forgets a deleted document’s delivered version, so its return is a change', () => {
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, 'author-1');
+      const document = documentAt(URI_A, 1);
+      builder.firePhase(DocumentState.Validated, document);
+
+      builder.fireOnUpdate([], [URI.parse(URI_A)]);
+      open(textDocuments, URI_A, 1, 'author-2');
+
+      expect(manager.attributeUpdate(document)).toEqual({ reason: 'changed', sourceClientId: 'author-2', causedBy: 'author-2' });
+   });
+
+   it('keeps the version rule for a deleted file the editor keeps open', () => {
+      // The store closes every client of a deleted file but the editor, which
+      // keeps the buffer and goes on building it.
+      const { manager, textDocuments, builder } = makeManagerHarness();
+      open(textDocuments, URI_A, 1, LANGUAGE_CLIENT_ID);
+      builder.fireOnUpdate([], [URI.parse(URI_A)]);
+      const document = documentAt(URI_A, 1);
+
+      builder.firePhase(DocumentState.Validated, document);
+
+      expect(manager.attributeUpdate(document).reason).toBe('rebuilt');
+      // The last update named no change, so only the version rule says this.
+      expect(manager.attributeUpdate(documentAt(URI_A, 2)).reason).toBe('changed');
    });
 });
 
@@ -260,7 +367,7 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
          makeFakeDocument<FakeRoot>(REAL_URI, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), { version: 1 })
       );
 
-      expect(reasons).toEqual(['rebuilt']);
+      expect(reasons).toEqual(['changed']);
    });
 
    it('onUpdate emits the document (canonical) URI, never the URI the subscriber armed with', () => {

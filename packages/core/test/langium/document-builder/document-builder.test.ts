@@ -19,7 +19,7 @@ import {
    OperationCancelled
 } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { CancellationToken, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
+import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
@@ -1102,6 +1102,57 @@ describe('HydraniumDocumentBuilder', () => {
          expect(() => builder().callRender(empty)).not.toThrow();
          const none = withDiagnostics([]);
          expect(() => builder().callRender(none)).not.toThrow();
+      });
+   });
+
+   describe('onDocumentPhaseDelivered', () => {
+      // What a document's phase listeners delivered is known only once the last
+      // of them ran: a cancel between two skips the rest, and nothing runs them
+      // later.
+      const makeDocument = (): LangiumDocument =>
+         ({ uri: URI.parse('file:///workspace/a.a'), textDocument: { version: 1 } }) as LangiumDocument;
+
+      it('tells its listener after every phase listener ran, with the version they ran at', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const order: string[] = [];
+         builder.onDocumentPhaseDelivered(DocumentState.Validated, (_document, version) => void order.push(`delivered v${version}`));
+         builder.onDocumentPhase(DocumentState.Validated, () => void order.push('first'));
+         // A write landing during the listeners moves the live version on.
+         builder.onDocumentPhase(DocumentState.Validated, delivered => {
+            order.push('second');
+            (delivered.textDocument as { version: number }).version = 2;
+         });
+
+         await builder.notifyDocumentPhase(makeDocument(), DocumentState.Validated, CancellationToken.None);
+
+         expect(order).toEqual(['first', 'second', 'delivered v1']);
+      });
+
+      it('does not tell its listener when a cancel skipped a phase listener', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const cancel = new CancellationTokenSource();
+         const order: string[] = [];
+         builder.onDocumentPhaseDelivered(DocumentState.Validated, () => void order.push('delivered'));
+         builder.onDocumentPhase(DocumentState.Validated, () => {
+            order.push('first');
+            cancel.cancel();
+         });
+         builder.onDocumentPhase(DocumentState.Validated, () => void order.push('second'));
+
+         await builder.notifyDocumentPhase(makeDocument(), DocumentState.Validated, cancel.token);
+
+         expect(order).toEqual(['first']);
+      });
+
+      it('tells its listener for a document with no phase listener at all', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const deliveries: LangiumDocument[] = [];
+         builder.onDocumentPhaseDelivered(DocumentState.Validated, delivered => void deliveries.push(delivered));
+
+         const document = makeDocument();
+         await builder.notifyDocumentPhase(document, DocumentState.Validated, CancellationToken.None);
+
+         expect(deliveries).toEqual([document]);
       });
    });
 });

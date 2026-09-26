@@ -16,20 +16,22 @@ import type { TransferDocument } from '../transfer-document';
  * Why an update event fired. Subscribers filter on reason for behaviour
  * decisions (e.g. dirty-flag handling, undo-history grouping, telemetry):
  *
- * - `'changed'` — the URI appeared in `DocumentBuilder.onUpdate`'s
- *   `changed` list. The framework's underlying primitive is "this URI was
- *   passed to `documentBuilder.update(changed, deleted)`", which spans
- *   `didChange` text-document events, `notifyDidChangeTextDocument` calls,
- *   and any programmatic `documentBuilder.update([uri], [])` invocation.
- *   The name matches Langium's own `changed` parameter — it's vague-on-
- *   purpose because the underlying primitive is.
- * - `'rebuilt'` — the URI was rebuilt as a cascade from another URI's
- *   build (dependency graph re-derivation), without itself being passed to
- *   `documentBuilder.update`. The complement of `'changed'`.
+ * - `'changed'` — the server's first update event for the document's current
+ *   version: its content changed since the last one. A write whose build a
+ *   later write cancelled is still `'changed'` in the build that takes over.
+ * - `'rebuilt'` — a later event for a version the server already delivered,
+ *   whether or not any client watched it then: something the document depends
+ *   on changed, or the document was built again with the same content. The
+ *   complement of `'changed'`.
  * - `'saved'` — emitted by adopters that synthesise a unified update stream
  *   from both `onDocumentUpdated` and `onDocumentSaved`. The framework's own
  *   `dispatchPhaseEvent` does NOT emit `'saved'` — saves take the dedicated
  *   `DataClientProtocol.onDocumentSaved` channel.
+ *
+ * The version rule needs a version the server keeps and builds that validate.
+ * For a document no client has opened, or when rebuilds do not validate,
+ * `'changed'` means the URI was passed to `DocumentBuilder.update` for this
+ * build. A document that a validating build skips is `'changed'` every time.
  *
  * Deletion is deliberately NOT a member. An update event carries a built
  * document, which a deleted one has none of, and the phase-driven path that
@@ -51,7 +53,13 @@ export interface TransferDocumentUpdatedEvent<
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > {
    document: TransferDocument<TTransfer, TDiagnostic>;
-   /** Stable identifier of the client that triggered the update. */
+   /**
+    * The client whose write this event echoes: the author of the version on a
+    * `'changed'`, and the unknown-client id on a `'rebuilt'`, which echoes no
+    * write. A recipient compares it against its own id to recognise its echo.
+    * The rebuild that reverts a document to disk after its last close names
+    * the revert-on-close id instead.
+    */
    sourceClientId: string;
    reason: TransferDocumentUpdateReason;
 }

@@ -597,34 +597,22 @@ describe('DataServer', () => {
          }
       });
 
-      it('discriminates reason: changed/rebuilt based on the last documentBuilder.onUpdate snapshot', async () => {
+      it('sends the attribution the AstDocumentManager gives the document', async () => {
+         // The manager attributes for every head; this head only forwards it.
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { proxy, events, pair } = makeHarness(bundle.services);
          try {
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            bundle.astDocumentManager.attributeUpdate = () => ({ reason: 'rebuilt', sourceClientId: 'the-manager', causedBy: 'a-writer' });
 
-            // Each phase event needs distinct document content; otherwise the emission
-            // fingerprint dedup in `dispatchPhaseEvent` suppresses redundant emissions.
-
-            // `changed` list contains URI_A → reason should be 'changed'.
-            const docChanged = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v2' });
-            bundle.documentBuilder.fireOnUpdate([URI.parse(URI_A)], []);
-            fireRebuild(bundle, docChanged);
+            // Distinct content, or the emission fingerprint suppresses the event.
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v2' }));
             await waitFor(() => events.length >= 1);
-            expect(events[events.length - 1].reason).toBe('changed');
 
-            // A `deleted` case belongs in neither this test nor this layer: the
-            // real builder drops a deleted document before deriving the rebuild
-            // set, so driving these two stubs into that state asserts a sequence
-            // that cannot occur. It is pinned against a real builder instead.
-
-            // URI not in either list (cascade rebuild from a dependent) → 'rebuilt' fallback.
-            const docRebuilt = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v3' });
-            bundle.documentBuilder.fireOnUpdate([URI.parse(URI_B)], []);
-            fireRebuild(bundle, docRebuilt);
-            await waitFor(() => events.length >= 2);
-            expect(events[events.length - 1].reason).toBe('rebuilt');
+            expect(events.map(event => [event.reason, event.sourceClientId])).toEqual([['rebuilt', 'the-manager']]);
+            // In-process only: the wire event carries no cause.
+            expect('causedBy' in events[0]).toBe(false);
          } finally {
             pair.dispose();
          }

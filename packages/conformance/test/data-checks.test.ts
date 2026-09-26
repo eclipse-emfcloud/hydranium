@@ -17,6 +17,7 @@ const fixture: LanguageFixture = {
    invalid: { uri: 'file:///b.x', languageId: 'x', text: 'invalid' },
    edit: { to: 'edited', expect: () => true },
    dependent: { uri: 'file:///c.x', languageId: 'x', text: 'depends on a' },
+   breakingEdit: 'breaks c',
    referenceQuery: { type: 'Source', property: 'target', folderUri: 'file:///folder', expectCandidate: 'Target' }
 };
 
@@ -36,9 +37,9 @@ describe('buildDataChecks', () => {
       expect(skipped[0].skipReason).toContain('`attach`');
    });
 
-   it('plans five server-level checks plus fifteen grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(20);
-      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(35);
+   it('plans five server-level checks plus sixteen grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(21);
+      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(37);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -53,7 +54,7 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(20);
+      expect(checks).toHaveLength(21);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
@@ -72,12 +73,22 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(20);
+      expect(checks).toHaveLength(21);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
       ]);
       expect(skipped[0].skipReason).toContain('`referenceQuery`');
+   });
+
+   it('plans the dependent’s credit but skips it, with a named reason, without a breakingEdit', () => {
+      const { breakingEdit: _breakingEdit, ...withoutBreakingEdit } = fixture;
+      const checks = buildDataChecks({ connect, attach, languages: [withoutBreakingEdit], expectsProjects: true });
+
+      expect(checks).toHaveLength(21);
+      const skipped = checks.filter(check => check.body === undefined);
+      expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('credits the dependent')]);
+      expect(skipped[0].skipReason).toContain('`breakingEdit`');
    });
 
    it('skips the project-emptiness check, with a named reason, when the options do not expect projects', () => {
@@ -99,11 +110,12 @@ describe('buildDataChecks', () => {
       // getProjects shape, getProjects non-empty, the two createSession
       // checks and waitForReady separately, plus valid-envelope,
       // invalid-diagnostics, the diagnostic-params check, the session write,
-      // save, unregistered-id, connection-end, close and create checks and the
-      // folder-URI reference query — none of which needs an edit. The cascade
-      // and set checks need one, so they are not among them even though this
+      // save, unregistered-id, connection-end, close and create checks, the
+      // folder-URI reference query and the dependent's credit, which writes
+      // `breakingEdit` instead — none of which needs an edit. The cascade and
+      // set checks need one, so they are not among them even though this
       // fixture supplies a `dependent`.
-      expect(runnable).toHaveLength(15);
+      expect(runnable).toHaveLength(16);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

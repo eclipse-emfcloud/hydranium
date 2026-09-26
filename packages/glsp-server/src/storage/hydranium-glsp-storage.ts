@@ -543,10 +543,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * React to a rebuild of a SECONDARY document by resubmitting the diagram, so
     * an external edit to (say) a layout file reaches the canvas.
     *
-    * Reuses {@link handleModelUpdated}'s authorship guard, and that is the load-
-    * bearing half rather than the resubmit: a diagram interaction that writes a
+    * Applies {@link handleModelUpdated}'s guard, and that is the load-bearing
+    * half rather than the resubmit: a diagram interaction that writes a
     * secondary — a drag persisting bounds to a layout file — comes back through
-    * this listener as the client's own `changed` edit, and resubmitting on it
+    * this listener caused by the client's own write, and resubmitting on it
     * fights the optimistic client-side move the user is still holding.
     *
     * Schedules the PRIMARY's current document, never the secondary's.
@@ -568,14 +568,16 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.disposeIfStale(uri)) {
          return;
       }
-      if (this.state.clientId === event.sourceClientId && event.reason === 'changed') {
+      if (event.causedBy === this.state.clientId) {
          return;
       }
       const primary = this.currentPrimaryDocument();
       if (primary === undefined) {
          return;
       }
-      this.logger.debug(`Secondary ${uri} rebuilt by ${event.sourceClientId} (${event.reason}) — scheduling resubmit`);
+      this.logger.debug(
+         `Secondary ${uri} rebuilt, caused by ${event.causedBy ?? 'an unknown client'} (${event.reason}) — scheduling resubmit`
+      );
       this.scheduleUpdateAndSubmit(primary);
    }
 
@@ -598,16 +600,23 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    /**
     * React to an external rebuild reaching `Validated`. Self-cleans if the
     * session has vanished but this listener leaked (neither `sessionDisposed`
-    * nor `onClientClosed` fired on tab close). Resubmits for any change not
-    * authored by this client's own optimistic `changed` edit, then refreshes
-    * diagnostic markers for every update — including own edits, which skip
-    * the resubmit but can still change diagnostics.
+    * nor `onClientClosed` fired on tab close). Resubmits for any update this
+    * client's own write did not cause alone, then refreshes diagnostic markers
+    * for every update — including own writes, which skip the resubmit but can
+    * still change diagnostics. An event without `causedBy` is resubmitted.
+    *
+    * Own writes include a primary that the build of a write to a secondary
+    * swept in, which arrives `rebuilt`. Skipping it loses nothing the canvas
+    * shows: the operation behind the write submits once the write has
+    * answered, and a build steps its whole batch through each phase, so that
+    * submit already renders the relinked primary. What the later `Validated`
+    * adds are diagnostics, which the marker refresh carries.
     */
    protected async handleModelUpdated(rootUri: string, event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
       if (this.disposeIfStale(rootUri)) {
          return;
       }
-      if (this.state.clientId !== event.sourceClientId || event.reason !== 'changed') {
+      if (event.causedBy !== this.state.clientId) {
          this.scheduleUpdateAndSubmit(event.document);
       }
       await this.refreshDiagnosticMarkers();

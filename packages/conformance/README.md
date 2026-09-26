@@ -79,9 +79,11 @@ Each takes `connect` plus `languages`:
   off the `LanguageFixture` type, which says per field which slice reads it and what supplying it
   claims — the two that carry the most are `edit` (a replacement text plus an `expect(root)`
   predicate, because only you know what "the edit landed" means for your grammar) and `dependent`
-  (a document that references `valid`, which is what lets the data slice provoke a cascade). A
-  fixture's `uri` and `text` may be thunks, resolved after `connect`, which is how each check gets
-  pristine input in a workspace `connect` just created.
+  (a document that references `valid`, which is what lets the data slice provoke a cascade; add
+  `breakingEdit`, a text for `valid` that breaks that reference, and the slice also checks who a
+  dependent's update event is credited to). A fixture's `uri` and `text` may be thunks, resolved
+  after `connect`, which is how each check gets pristine input in a workspace `connect` just
+  created.
 
 The GLSP slice is generic over your action type and takes `GlspFixture` per diagram type — the
 fixture builds the native actions and the kit matches responses by `kind`, so no `@eclipse-glsp/*`

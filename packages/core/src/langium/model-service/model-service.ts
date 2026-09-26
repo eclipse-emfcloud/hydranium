@@ -978,9 +978,8 @@ export class DefaultModelService<
     * `HydraniumTextDocuments` — single listener registration shared with
     * any direct `HydraniumTextDocuments.onUpdate` subscriber, so the same
     * underlying `DocumentBuilder.onDocumentPhase` listener serves both
-    * call paths. `sourceClientId` is resolved from the multi-client
-    * author history; reason discrimination follows the manager's own
-    * `lastUpdate` snapshot (see `AstDocumentManager.onUpdate`).
+    * call paths. The event's reason, source and cause are
+    * {@link AstDocumentManager.attributeUpdate}'s.
     */
    onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable {
       return this.services.workspace.AstDocumentManager.onUpdate(uri, listener as never);

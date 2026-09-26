@@ -15,6 +15,7 @@ import {
    type DocumentPhaseListener,
    DocumentState,
    type LangiumDocument,
+   MultiMap,
    OperationCancelled,
    type URI,
    UriUtils,
@@ -203,6 +204,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * that carries it is already gone by the time its successor is opened.
     */
    protected lastCancelledTraceId?: number;
+   /** Registered through {@link onDocumentPhaseDelivered}, by phase. */
+   protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, (document: LangiumDocument, version: number) => void>();
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -241,6 +244,24 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    markNextReason(reason: string | undefined): void {
       this.pendingUpdateReason = reason;
+   }
+
+   /**
+    * Call `listener` with a document once every {@link onDocumentPhase}
+    * listener of `state` ran for it and none was skipped by cancellation, and
+    * with the text version the phase listeners were called at. A write during
+    * them moves the document's own version on, past what they saw.
+    *
+    * Only here is it known what the phase listeners delivered. Langium sets the
+    * document's state before it notifies, and a cancel between two listeners
+    * skips the rest, leaving the document at the phase with those listeners
+    * never run and nothing to run them later. A build-phase listener comes too
+    * late: a cancel after this document but before the batch ends skips it,
+    * although every listener of this document ran.
+    */
+   onDocumentPhaseDelivered(state: DocumentState, listener: (document: LangiumDocument, version: number) => void): Disposable {
+      this.documentPhaseDeliveredListeners.add(state, listener);
+      return Disposable.create(() => this.documentPhaseDeliveredListeners.delete(state, listener));
    }
 
    /**
@@ -972,7 +993,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    }
 
    // ============================================================
-   // Logging — slow-listener breakdown on notifyDocumentPhase
+   // notifyDocumentPhase — the delivery hook and the slow-listener breakdown
    // ============================================================
 
    override async notifyDocumentPhase(document: LangiumDocument, state: DocumentState, cancelToken: CancellationToken): Promise<void> {
@@ -990,13 +1011,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          this.dedupeDiagnostics(document);
          this.renderDiagnostics(document);
       }
-      if (this.logLevel === 'off') {
-         return super.notifyDocumentPhase(document, state, cancelToken);
-      }
       const listeners = this.documentPhaseListeners.get(state).slice();
-      if (listeners.length === 0) {
-         return;
-      }
+      const version = document.textDocument.version;
       const perListenerMs: number[] = [];
       let cancelledListeners = 0;
       const { elapsedMs: totalMs } = await this.clock.measure(async () => {
@@ -1015,6 +1031,14 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
             perListenerMs.push(elapsedMs);
          }
       });
+      if (cancelledListeners === 0) {
+         for (const delivered of this.documentPhaseDeliveredListeners.get(state).slice()) {
+            delivered(document, version);
+         }
+      }
+      if (this.logLevel === 'off' || listeners.length === 0) {
+         return;
+      }
       if (cancelledListeners > 0) {
          this.tracer
             .withUri(document.uri.toString())
