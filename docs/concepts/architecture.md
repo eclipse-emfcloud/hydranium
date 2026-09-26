@@ -142,11 +142,12 @@ lifecycle to a multi-client scenario:
   ([`LanguageClientTextShadow`](../../packages/core/src/documents/language-client-text-shadow.ts)).
 - After the last client closes the document, the shared text and editor shadow
   are released, while the server's content-version sequence is retained. The
-  text store then rebuilds file URIs from disk for every head, the LSP head and
-  a headless server alike; non-file URIs remain indexed for adopter-controlled
-  lifecycle handling. After a lost connection the release waits out a grace,
-  ten seconds by default, within which a reconnecting client finds its unsaved
-  text (see [Last close](client-sessions.md#last-close)).
+  text store then rebuilds the document from the file system provider for
+  every head, the LSP head and a headless server alike, or removes it from the
+  workspace when the provider cannot serve it, whatever the URI's scheme. After
+  a lost connection the release waits out a grace, ten seconds by default,
+  within which a reconnecting client finds its unsaved text (see
+  [Last close](client-sessions.md#last-close)).
 
 A data-server client's `DataSession` is a client session registered over its
 connection (see [Client sessions](client-sessions.md)). It pairs an

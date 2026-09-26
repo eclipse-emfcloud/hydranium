@@ -20,7 +20,7 @@
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
-import { URI, UriUtils } from '@hydranium/langium';
+import { type URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
    type ApplyWorkspaceEditResult,
@@ -834,30 +834,27 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
-    * Rebuild a released document from disk, so the build stops carrying the
-    * unsaved text of its last client.
+    * Rebuild a released document from the file system provider, so the build
+    * stops carrying the unsaved text of its last client.
     *
-    * Only a `file:` document reverts. A document of another scheme may have
-    * been loaded by the adopter into the workspace index, and a rebuild would
-    * drop it and break every reference to it.
+    * The provider decides, for every scheme, by `exists`: a document it can
+    * serve is rebuilt from its text, and any other — an editor's `untitled:`
+    * buffer, a file never saved, or one deleted meanwhile — is removed
+    * from the workspace. A `virtual:` document survives, since the framework's
+    * providers serve it from the index; an edited one therefore keeps its last
+    * client's text, and keeping it read-only is the client's job.
     *
-    * The file's existence is read in its disk queue, so the rebuild follows
-    * any save still queued rather than reverting past it. A document with no
-    * file behind it — created and never saved, or deleted meanwhile — is
-    * removed from the workspace instead: there is no disk text to revert to,
-    * and one whose file goes after that read is removed when its rebuild
-    * finds none.
+    * The answer is read in the document's disk queue, so the rebuild follows
+    * any save still queued rather than reverting past it; a file that goes
+    * after that read is removed when its rebuild finds none.
     *
     * Whether to revert at all is decided inside the write lock, as its holder:
     * decided before waiting for the lock, a client that opens or re-creates the
-    * document meanwhile has its text rebuilt over from disk, or removed. A
-    * document some client has open again, or that waits out a new grace, is
-    * left to that client.
+    * document meanwhile would have its text rebuilt over, or the document
+    * removed. A document some client has open again, or that waits out a new
+    * grace, is left to that client.
     */
    protected async revertToDisk(uri: CanonicalUri): Promise<void> {
-      if (URI.parse(uri).scheme !== 'file') {
-         return;
-      }
       const workspace = this.services.workspace;
       const target = UriUtils.toUri(uri);
       const reopened = (): boolean => this.isOpenInAnyClient(uri) || this.__syncedDocuments.has(uri);

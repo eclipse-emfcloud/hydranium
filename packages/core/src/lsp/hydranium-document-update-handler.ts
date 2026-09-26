@@ -96,8 +96,8 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  * the text store runs it for every head, the LSP head included, so a
  * `didCloseDocument` added in a subclass would build the document twice. A
  * change still debounced for the document is dropped when the store releases
- * it: a `file:` document's revert rebuilds it, and a document of another
- * scheme, which does not revert, keeps its last build.
+ * it: the store's revert rebuilds the document from the file system provider
+ * or removes it.
  *
  * Adopters with their own handler subclass should extend this class
  * (not Langium's `DefaultDocumentUpdateHandler`) so all of them are
@@ -172,10 +172,9 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       this.willSaveGateMs = options.willSaveGateMs ?? 1000;
       this.textDocuments.onDidSaveInLanguageClient(event => this.editorSaves.get(event.uri)?.());
       // A change still debounced for a document the store has released would
-      // build it once more after the store's own revert: from disk again, or,
-      // for a file that never existed, by reading a file that is not there. A
-      // document of another scheme does not revert, so dropping its change
-      // leaves it at its last build.
+      // build it once more after the store's own revert: from the provider
+      // again, or, for a document the revert removed, by reading a file that
+      // is not there.
       this.textDocuments.onDidCloseLastOpen(event => {
          this.pendingChanged.delete(URI.parse(event.uri).toString());
          if (this.pendingChanged.size === 0 && this.pendingDeleted.size === 0) {

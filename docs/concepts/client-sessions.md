@@ -478,16 +478,27 @@ read.
 ## Last close
 
 When the last client with a document open closes it, the text store releases the
-document and rebuilds it from disk, for every head and for a server with no
-language server at all. The unsaved edits of its last client are discarded with
-it. The revert is decided under the workspace write lock, after the file's disk
-queue has drained, so a save issued before the close is not reverted past; a
-client that opens or re-creates the file meanwhile keeps its text, and no revert
-follows. A document with no file behind it, created and never saved, is removed
-from the workspace instead. Only `file:` documents revert; a document of another
-scheme the adopter loaded stays in the workspace as it is. A change the LSP head
-still has debounced for the document is dropped: a `file:` document's revert
-rebuilds it, and a document of another scheme keeps its last build.
+document and rebuilds it from the file system provider, or removes it, for every
+head and for a server with no language server at all. The unsaved edits of its
+last client are discarded with it. The revert is decided under the workspace
+write lock, after the file's disk queue has drained, so a save issued before the
+close is not reverted past; a client that opens or re-creates the file meanwhile
+keeps its text, and no revert follows.
+
+The bound `FileSystemProvider` decides by `exists`, for a URI of any scheme: a
+document it can serve survives its last close, rebuilt from the provider's text,
+as a model file of a workspace on the in-memory or persistent provider is,
+whatever its scheme. Any other is removed from the workspace, such as an
+editor's `untitled:` buffer or a `file:` document created and never saved. A
+`virtual:` document, built under `virtualUri`, survives, since the framework's
+providers serve it from the index; an edited one therefore keeps its edit after
+the close, and keeping it read-only is the client's job. An adopter's own
+provider has to answer `exists` and the reads for every scheme whose documents
+should survive, `virtual:` included, for instance by extending a framework
+provider or by consulting `serveVirtualDocument` in each of them. A change the
+LSP head still has debounced for the document is dropped: the revert rebuilds or
+removes the document, and the text a `virtual:` document is rebuilt from already
+holds that change.
 
 `TextDocuments.onDidCloseLastOpen` fires when a document is released, just
 before its revert.
