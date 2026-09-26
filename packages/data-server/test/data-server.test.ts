@@ -55,6 +55,7 @@ import { ProfileCapture } from '@hydranium/core/node';
 import { DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
 import {
    DataServer,
+   type DataServerUriWatchRecord,
    NO_ACTIVE_PROFILE,
    NO_ACTIVE_PROFILE_CODE,
    REFERENCE_SETTLE_TIMEOUT,
@@ -557,12 +558,12 @@ describe('DataServer', () => {
          try {
             await openAs(proxy, bundle, 'sub-1');
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
-            const internal = server as unknown as { subscriptions: Map<string, unknown> };
-            expect(internal.subscriptions.size).toBe(1);
+            const internal = server as unknown as { uriWatchRecords: Map<string, unknown> };
+            expect(internal.uriWatchRecords.size).toBe(1);
 
             // Closing the session also drops the watch — no explicit unwatch needed.
             await proxy.closeModelDocument({ uri: URI_A, clientId: 'sub-1' });
-            expect(internal.subscriptions.size).toBe(0);
+            expect(internal.uriWatchRecords.size).toBe(0);
 
             const changed = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-changed' });
             bundle.documentBuilder.firePhase(DocumentState.Validated, changed);
@@ -989,6 +990,33 @@ describe('DataServer', () => {
             pair.dispose();
          }
       });
+
+      it('baselines the next watch on the document it finds, not on the state a revert broadcast sent', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'session-edited' });
+         bundle.textDocuments.seedOpen(URI_A, 'name:session-edited', 'editor-1');
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            bundle.textDocuments.fireClose(URI_A, 'editor-1');
+            await proxy.unwatchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            const reverted = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'disk' });
+            fireRebuild(bundle, reverted);
+            await waitFor(() => events.length === 1);
+
+            // The document moves on while nobody watches, then gains a watcher
+            // that fetches it; a rebuild with no change since is not news.
+            const changed = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'changed' });
+            fireRebuild(bundle, changed);
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            fireRebuild(bundle, changed);
+            await proxy.getProjects();
+
+            expect(events).toHaveLength(1);
+         } finally {
+            pair.dispose();
+         }
+      });
    });
 
    describe('getProjects', () => {
@@ -1075,7 +1103,7 @@ describe('DataServer', () => {
    });
 
    describe('dispose', () => {
-      it('clears the subscription map and fingerprint cache, drops listeners, and is idempotent', async () => {
+      it('clears the per-URI state, drops listeners, and is idempotent', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const { server, proxy, events, pair } = makeHarness(bundle.services);
@@ -1084,22 +1112,19 @@ describe('DataServer', () => {
             // Verify the server holds per-connection state we expect dispose to release.
             // Access protected fields via cast — this test asserts internal invariants.
             const internal = server as unknown as {
-               subscriptions: Map<string, unknown>;
-               lastEmittedFingerprint: Map<string, string>;
+               uriWatchRecords: Map<string, DataServerUriWatchRecord>;
                disposables: { disposed: boolean };
             };
-            expect(internal.subscriptions.size).toBe(1);
-            expect(internal.lastEmittedFingerprint.size).toBe(1);
+            expect([...internal.uriWatchRecords.values()].map(record => record.fingerprint)).toEqual([expect.any(String)]);
             expect(internal.disposables.disposed).toBe(false);
 
             server.dispose();
 
-            expect(internal.subscriptions.size).toBe(0);
-            expect(internal.lastEmittedFingerprint.size).toBe(0);
+            expect(internal.uriWatchRecords.size).toBe(0);
             expect(internal.disposables.disposed).toBe(true);
 
-            // Listeners are gone: a phase event for the previously-subscribed URI
-            // doesn't fan out (even disregarding the now-empty subscription map,
+            // Listeners are gone: a phase event for the previously-watched URI
+            // doesn't fan out (even disregarding the now-empty per-URI state,
             // the listener itself is unhooked).
             const docChanged = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-changed' });
             bundle.documentBuilder.firePhase(DocumentState.Validated, docChanged);
@@ -1137,8 +1162,11 @@ describe('DataServer', () => {
          const server = new TestDataServer(pair.left, bundle.services);
          try {
             await server.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
-            const internal = server as unknown as { subscriptions: Map<string, unknown>; disposables: { disposed: boolean } };
-            expect(internal.subscriptions.size).toBe(1);
+            const internal = server as unknown as {
+               uriWatchRecords: Map<string, unknown>;
+               disposables: { disposed: boolean };
+            };
+            expect(internal.uriWatchRecords.size).toBe(1);
             expect(onCloseSpy).toHaveBeenCalled();
             expect(capturedListeners.length).toBeGreaterThan(0);
 
@@ -1148,7 +1176,7 @@ describe('DataServer', () => {
                listener();
             }
 
-            expect(internal.subscriptions.size).toBe(0);
+            expect(internal.uriWatchRecords.size).toBe(0);
             expect(internal.disposables.disposed).toBe(true);
          } finally {
             onCloseSpy.mockRestore();

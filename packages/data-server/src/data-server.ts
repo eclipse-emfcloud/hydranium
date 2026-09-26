@@ -377,6 +377,33 @@ export interface ResolvedDataServerOptions {
 }
 
 /**
+ * What a {@link DataServer} keeps per canonical URI, in the `protected`
+ * {@link DataServer.uriWatchRecords}. A record lives while it has a watcher
+ * or a revert mark; {@link DataServer.pruneUriWatchRecord} enforces that on
+ * every path that removes either, so a record with no watcher has a revert
+ * pending. Test the size of {@link DataServerUriWatchRecord.watchers}, not the
+ * record's presence, for "watched".
+ */
+export interface DataServerUriWatchRecord {
+   /** The client ids watching the URI; save, dirty and phase events go out only while it is non-empty, a pending revert aside. */
+   readonly watchers: Set<string>;
+   /** Digest of the last emitted state, or of the state a first watch found; see {@link DataServer.dispatchPhaseEvent} for why it de-duplicates, {@link DataServer.computeDocumentFingerprint} for its inputs. */
+   fingerprint?: string;
+   /** Set by {@link DataServer.subscribeToTextDocumentCloses}; the next phase event broadcasts even without a watcher. */
+   revertPending?: boolean;
+   /**
+    * The version of an open document the last event sent was built at. The
+    * version sent again goes out as `'rebuilt'` from no client: the manager
+    * counts a version delivered only once its `Validated` listeners ran, so a
+    * build cancelled after the subscription phase would send it as a change
+    * twice. Only while the store has the document open: without it, a
+    * document can keep one version through changes of its file, so its events
+    * keep the manager's attribution.
+    */
+   sentVersion?: number;
+}
+
+/**
  * Typed-RPC protocol head for the hydranium framework. The data-server
  * is a PEER of `@hydranium/core/lsp` and `@hydranium/glsp-server` —
  * all three heads coordinate through shared services in
@@ -439,8 +466,8 @@ export class DataServer<
    };
 
    protected readonly options: ResolvedDataServerOptions;
-   /** Subscription bookkeeping: URI → set of clientIds that subscribed for that URI. */
-   protected readonly subscriptions = new Map<string, Set<string>>();
+   /** This connection's {@link DataServerUriWatchRecord} per canonical URI; see there for when a record lives. */
+   protected readonly uriWatchRecords = new Map<string, DataServerUriWatchRecord>();
    /**
     * The client sessions this connection registered, by client id. A document
     * request carrying one of these ids acts as that session; one carrying any
@@ -454,67 +481,6 @@ export class DataServer<
    /** Typed client proxy — sends `data-server/on*` notifications back over the same wire. */
    protected readonly clientProxy: DataClientProtocol<TTransfer, TDiagnostic, TProject>;
    protected readonly disposables = new DisposableCollection();
-   /**
-    * Per-URI hash of the last emitted (text + diagnostics) state,
-    * used by {@link dispatchPhaseEvent} to suppress duplicate
-    * `onDocumentUpdated` notifications for rebuilds that produce no
-    * observable change since the last emit.
-    *
-    * Two scenarios routinely produce such rebuilds:
-    * 1. **Refresh-triggered rebuilds.** When a second client attaches to a
-    *    document already open in another client,
-    *    `HydraniumTextDocuments.refreshContent` fires `onDidChangeContent`
-    *    purely to re-trigger the build pipeline — the text and diagnostics
-    *    are identical to the prior emit.
-    * 2. **Cascade rebuilds with no diagnostic delta.** Langium rebuilds a
-    *    document when a dependency changes; if the rebuild produces the
-    *    same diagnostics, there is nothing new to communicate to subscribers.
-    *
-    * Without this filter, both scenarios reach subscribers as wire-side
-    * `'changed'` events. A subscriber that interprets `'changed'` as
-    * "another client wrote new content" and resets its in-memory root to
-    * the server view then misreads the spurious event as a concurrent
-    * third-party write and loses the user's edits.
-    *
-    * Initialised on {@link watchModelDocument} to the current
-    * document fingerprint so the FIRST phase event after a fresh
-    * subscription is also de-duplicated against the state subscribers
-    * obtained via `getModelDocument` — they do not need a redundant phase
-    * notification for the state they just fetched.
-    *
-    * Cleared in {@link unwatchModelDocument} when the last
-    * subscriber for a URI leaves so memory does not accumulate.
-    *
-    * Stored as a cyrb53 hex digest (16 chars per URI) rather than the raw
-    * text + diagnostics serialisation so the memory cost is constant in
-    * document size. See {@link computeDocumentFingerprint} for the inputs.
-    */
-   protected readonly lastEmittedFingerprint = new Map<string, string>();
-   /**
-    * The version of an open document the last event sent for a URI was built
-    * at. The version sent again goes out as `'rebuilt'` from no client: the
-    * manager counts a version delivered only once its `Validated` listeners
-    * ran, so a build cancelled after the subscription phase would send it as a
-    * change twice. Only while the store has the document open: without it, a
-    * document can keep one version through changes of its file, so its events
-    * keep the manager's attribution. Dropped with
-    * {@link lastEmittedFingerprint}.
-    */
-   protected readonly sentVersions = new Map<string, number>();
-   /**
-    * URIs the text store just released after their last close. The store
-    * rebuilds such a document from its disk content (discarding unsaved
-    * in-session edits), but {@link dispatchPhaseEvent} gates on the
-    * subscription map — and the last close typically also removed the last
-    * watcher, so consumers that only ever fetch via `getModelDocument` would
-    * keep showing the discarded state forever. Marked on the release (see
-    * {@link subscribeToTextDocumentCloses}) and consumed by
-    * {@link dispatchPhaseEvent}, which broadcasts the following rebuild's
-    * phase event even without a subscription — de-duplicated against
-    * {@link lastEmittedFingerprint} where an entry survives, so a close
-    * whose disk state equals the last emitted state stays silent.
-    */
-   protected readonly pendingRevertBroadcasts = new Set<string>();
    protected readonly tracer: Tracer;
    /** The in-flight interactive profile capture, held between {@link startProfiling} and {@link stopProfiling}. */
    protected activeProfile?: DataServerProfileCapture;
@@ -586,10 +552,9 @@ export class DataServer<
 
    /**
     * Release everything the constructor wired up — the bound protocol
-    * handlers and every listener — and clear the subscription map and the
-    * per-URI emission-fingerprint cache, so a long-lived shared services
-    * bundle does not retain per-connection memory after the connection
-    * closes. Also ends every session this connection registered, which closes
+    * handlers and every listener — and clear {@link uriWatchRecords}, so a
+    * long-lived shared services bundle does not retain per-connection memory
+    * after the connection closes. Also ends every session this connection registered, which closes
     * every document it has open: the SHARED store's state rather than this
     * server's, which outlives the connection unless released here.
     *
@@ -618,10 +583,7 @@ export class DataServer<
       for (const [clientId, session] of this.clientSessions) {
          this.endSession(clientId, session, cause);
       }
-      this.subscriptions.clear();
-      this.lastEmittedFingerprint.clear();
-      this.sentVersions.clear();
-      this.pendingRevertBroadcasts.clear();
+      this.uriWatchRecords.clear();
    }
 
    // ============================================================
@@ -675,11 +637,9 @@ export class DataServer<
       session: ClientSession<AstNode, AstDiagnostic, TTransfer>,
       cause: SessionEndCause = 'closed'
    ): void {
-      for (const [uri, watchers] of this.subscriptions) {
-         if (watchers.delete(clientId) && watchers.size === 0) {
-            this.subscriptions.delete(uri);
-            this.lastEmittedFingerprint.delete(uri);
-            this.sentVersions.delete(uri);
+      for (const [uri, record] of this.uriWatchRecords) {
+         if (record.watchers.delete(clientId)) {
+            this.pruneUriWatchRecord(uri);
          }
       }
       session.dispose(cause);
@@ -820,28 +780,24 @@ export class DataServer<
     * fan out to the wired `clientProxy.onDocumentUpdated`. The
     * bidirectional pattern means the event channel is the client
     * notification surface, not a returned handle — this method only
-    * registers the URI in the dispatch table.
+    * registers the watcher in {@link uriWatchRecords}.
     *
-    * Also baselines the per-URI emission fingerprint (see
-    * {@link lastEmittedFingerprint}) to the document's current state when
-    * the first watcher for the URI registers. This guarantees that any
-    * phase event firing immediately after the watch with no observable
-    * change is suppressed — watchers obtain initial state via
-    * `getModelDocument` (or {@link openModelDocument}) and do not need a
-    * redundant phase notification for that same state.
+    * Also baselines the URI's emission fingerprint (see
+    * {@link dispatchPhaseEvent}) to the document's current state when the
+    * first watcher for the URI registers. This guarantees that any phase event firing immediately after
+    * the watch with no observable change is suppressed — watchers obtain
+    * initial state via `getModelDocument` (or {@link openModelDocument}) and
+    * do not need a redundant phase notification for that same state.
     */
    async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
       const uri = this.canonicalKey(args.uri);
-      let subscribers = this.subscriptions.get(uri);
-      if (!subscribers) {
-         subscribers = new Set();
-         this.subscriptions.set(uri, subscribers);
-      }
-      subscribers.add(args.clientId);
-      if (!this.lastEmittedFingerprint.has(uri)) {
+      const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
+      this.uriWatchRecords.set(uri, record);
+      record.watchers.add(args.clientId);
+      if (record.fingerprint === undefined) {
          const document = this.services.workspace.LangiumDocuments.getDocument(UriUtils.toUri(uri));
          if (document) {
-            this.lastEmittedFingerprint.set(uri, this.computeDocumentFingerprint(document));
+            record.fingerprint = this.computeDocumentFingerprint(document);
          }
       }
    }
@@ -849,30 +805,40 @@ export class DataServer<
    /**
     * Remove a watch for `(uri, clientId)` previously created by
     * {@link watchModelDocument}. Idempotent — unwatching twice is a no-op.
-    * Dispatch for `uri` stops once no watchers remain, at which point the
-    * per-URI emission fingerprint is also cleared so the next first-watch
-    * re-baselines against the then-current document state rather than a
-    * stale snapshot from the previous watch.
+    * Dispatch for `uri` stops once no watchers remain, and the emission
+    * fingerprint goes with the last watcher (see {@link pruneUriWatchRecord}).
     */
    async unwatchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
       const uri = this.canonicalKey(args.uri);
-      const subscribers = this.subscriptions.get(uri);
-      if (!subscribers) {
-         return;
-      }
-      subscribers.delete(args.clientId);
-      if (subscribers.size === 0) {
-         this.subscriptions.delete(uri);
-         this.lastEmittedFingerprint.delete(uri);
-         this.sentVersions.delete(uri);
+      if (this.uriWatchRecords.get(uri)?.watchers.delete(args.clientId)) {
+         this.pruneUriWatchRecord(uri);
       }
    }
 
    /**
-    * Canonicalise a URI string for use as a subscription / fingerprint
-    * map key, via the shared `DocumentUriPolicy`. Callers may send
-    * non-canonical URIs (drive-letter casing, percent-encoding differences,
-    * or a symlink path) over the wire; the dispatch side keys by
+    * Drop what `uri` no longer needs: the
+    * {@link DataServerUriWatchRecord.fingerprint} once no client watches it,
+    * and the whole record once it holds no
+    * {@link DataServerUriWatchRecord.revertPending} mark either. Every path
+    * that removes a watcher or consumes a mark ends here.
+    */
+   protected pruneUriWatchRecord(uri: string): void {
+      const record = this.uriWatchRecords.get(uri);
+      if (!record || record.watchers.size > 0) {
+         return;
+      }
+      if (record.revertPending) {
+         record.fingerprint = undefined;
+      } else {
+         this.uriWatchRecords.delete(uri);
+      }
+   }
+
+   /**
+    * Canonicalise a URI string for use as a {@link uriWatchRecords} key, via the
+    * shared `DocumentUriPolicy`. Callers may send non-canonical URIs
+    * (drive-letter casing, percent-encoding differences, or a symlink path)
+    * over the wire; the dispatch side keys by
     * `document.uri.toString()` from `LangiumDocuments`, so writer keys must
     * canonicalise to the same form or events silently fail to deliver.
     * Routing through the seam (rather than a bare `UriUtils.normalize`)
@@ -1247,7 +1213,7 @@ export class DataServer<
     *
     * Payload-free on purpose: URIs only, so a client re-reads what it displays
     * rather than being handed transfer documents it did not ask for. That is the
-    * property the subscription map protects, and it is preserved here by
+    * property the watcher gate protects, and it is preserved here by
     * carrying no document rather than by gating the message.
     *
     * Quiet in the common case. Editing a document that an editor has open leaves
@@ -1256,14 +1222,16 @@ export class DataServer<
     * nothing because it does not build to this phase. The ceiling is a
     * whole-workspace rebuild at the subscription phase: one message, URIs only.
     *
-    * The URI is canonicalised for the same reason the subscription map is keyed
+    * The URI is canonicalised for the same reason {@link uriWatchRecords} is keyed
     * that way, and is untested for the same reason as its twin in
     * {@link dispatchDeleteEvents}: the builder reports URIs out of its own
     * store, so a non-canonical one cannot be produced without a fixture
     * asserting a shape the real system never emits.
     */
    protected dispatchBuiltEvent(built: readonly LangiumDocument[]): void {
-      const uris = built.map(document => this.canonicalKey(document.uri.toString())).filter(uri => !this.subscriptions.has(uri));
+      const uris = built
+         .map(document => this.canonicalKey(document.uri.toString()))
+         .filter(uri => !this.uriWatchRecords.get(uri)?.watchers.size);
       if (uris.length === 0) {
          return;
       }
@@ -1295,29 +1263,41 @@ export class DataServer<
    }
 
    /**
-    * Send a dirty flip to the connection, gated by the subscription map as
+    * Send a dirty flip to the connection, gated on the URI's watchers as
     * {@link dispatchSaveEvent} is: the answer at any one moment travels on
     * every document sent, so a client that watches nothing reads it there.
     */
    protected dispatchDirtyEvent(event: DocumentDirtyChangedEvent): void {
       const uri = this.canonicalKey(event.uri);
-      if (this.subscriptions.has(uri)) {
+      if (this.uriWatchRecords.get(uri)?.watchers.size) {
          this.clientProxy.onDocumentDirtyChanged({ uri, dirty: event.dirty });
       }
    }
 
    /**
-    * Mark each document the store releases after its last close (see
-    * {@link pendingRevertBroadcasts}). A release, not the close itself: a
-    * document whose last client lost its connection is released only once
-    * the revert grace runs out, or when another client opens it meanwhile, and
-    * not at all when a client lost from it opens it again within its own
-    * grace.
+    * Mark each document the store releases after its last close, so
+    * {@link dispatchPhaseEvent} broadcasts the following rebuild even without
+    * a watcher. The store rebuilds such a document from its disk content,
+    * discarding unsaved in-session edits, and the last close typically also
+    * removed the last watcher: without the broadcast, a consumer that only
+    * ever fetches via `getModelDocument` keeps showing the discarded state.
+    * The broadcast is de-duplicated against the fingerprint while a watcher
+    * holds one, so a close whose disk state equals the last emitted state
+    * stays silent; with no watcher there is no fingerprint, and every revert
+    * is sent.
+    *
+    * A release, not the close itself: a document whose last client lost its
+    * connection is released only once the revert grace runs out, or when
+    * another client opens it meanwhile, and not at all when a client lost
+    * from it opens it again within its own grace.
     */
    protected subscribeToTextDocumentCloses(): void {
       this.disposables.push(
          this.services.workspace.TextDocuments.onDidCloseLastOpen(event => {
-            this.pendingRevertBroadcasts.add(this.canonicalKey(event.uri));
+            const uri = this.canonicalKey(event.uri);
+            const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
+            record.revertPending = true;
+            this.uriWatchRecords.set(uri, record);
          })
       );
    }
@@ -1328,7 +1308,7 @@ export class DataServer<
     *
     * **Deliberately ungated, where {@link dispatchPhaseEvent} and
     * {@link dispatchSaveEvent} are gated.** Those two carry a built document and
-    * fire on every build, so the subscription map is what keeps bandwidth
+    * fire on every build, so the watcher gate is what keeps bandwidth
     * proportional to what a client asked for. A deletion is neither: it is one
     * URI, it is rare, and it reports the workspace's STRUCTURE rather than a
     * document's content. Gating it forces any consumer that displays the
@@ -1338,7 +1318,7 @@ export class DataServer<
     * care filters on the URI, which costs it a comparison.
     *
     * The precedent is the last-close revert broadcast (see
-    * {@link pendingRevertBroadcasts}), where the same judgement was already made
+    * {@link subscribeToTextDocumentCloses}), where the same judgement was already made
     * in the other direction: a transition that matters enough is delivered
     * without a subscription.
     *
@@ -1352,36 +1332,38 @@ export class DataServer<
     * `deleteDocuments` resolves a directory URI to the documents beneath it — so
     * no caller has to handle a directory here.
     *
-    * Per-URI derived state is dropped for the same reason it is dropped
-    * anywhere: it describes a document that no longer exists.
-    * {@link lastEmittedFingerprint} in particular can outlive its subscriptions
-    * through the last-close revert path — left behind, it is adopted as the
-    * baseline by the next {@link watchModelDocument} and suppresses the first
-    * emit after the file returns with its previous content.
+    * The URI's fingerprint and revert mark are dropped: they describe a
+    * document that no longer exists. A kept fingerprint is adopted as the
+    * baseline and suppresses the first emit after the file returns with its
+    * previous content.
     *
-    * The subscription itself SURVIVES: a recreated file resumes delivering to
-    * the same watchers with no re-subscription, and a client that answers the
-    * deletion by closing releases the watch through `closeModelDocument` anyway.
+    * The watchers SURVIVE: a recreated file resumes delivering to them with no
+    * re-subscription, and a client that answers the deletion by closing
+    * releases the watch through `closeModelDocument` anyway.
     */
    protected dispatchDeleteEvents(deleted: readonly URI[]): void {
       for (const removed of deleted) {
          const uri = this.canonicalKey(removed.toString());
-         this.lastEmittedFingerprint.delete(uri);
-         this.sentVersions.delete(uri);
-         this.pendingRevertBroadcasts.delete(uri);
+         const record = this.uriWatchRecords.get(uri);
+         if (record) {
+            record.fingerprint = undefined;
+            record.revertPending = undefined;
+            record.sentVersion = undefined;
+            this.pruneUriWatchRecord(uri);
+         }
          this.clientProxy.onDocumentDeleted({ uri });
       }
    }
 
-   /** Fan out a save event for the document's URI, gated by the subscription map. */
+   /** Fan out a save event for the document's URI, gated on the URI's watchers. */
    protected dispatchSaveEvent(event: ClientTextDocumentChangeEvent<TextDocument>): void {
       // The save event arrives under the CLIENT URI the text store keys by (e.g. a
-      // symlink path S); the subscription map and `dispatchPhaseEvent` key by the
+      // symlink path S); `uriWatchRecords` and `dispatchPhaseEvent` key by the
       // CANONICAL identity R. Canonicalize before both the gate and the envelope so
       // a save of a symlinked file isn't silently dropped (and the envelope resolves
       // the R-keyed document rather than missing into an empty one).
       const uri = this.canonicalKey(event.document.uri);
-      if (!this.subscriptions.has(uri)) {
+      if (!this.uriWatchRecords.get(uri)?.watchers.size) {
          return;
       }
       const response = this.envelope(UriUtils.toUri(uri));
@@ -1401,13 +1383,25 @@ export class DataServer<
     * out to multiple local subscribers with an `Emitter<T>` — the
     * framework deliberately does NOT promise multi-listener semantics.
     *
-    * The dispatch is guarded by two filters:
-    *   1. **Subscription map**: events for URIs no subscriber registered for
-    *      are NOT sent over the wire (bandwidth scales with subscribed URIs,
-    *      not phase events).
-    *   2. **Emission fingerprint**: events for rebuilds that produce no
-    *      observable change since the last emit are suppressed. See
-    *      {@link lastEmittedFingerprint} for the rationale.
+    * An event for a URI no client watches is NOT sent over the wire, so
+    * bandwidth scales with watched URIs rather than with phase events; a
+    * pending revert mark is the exception (see
+    * {@link subscribeToTextDocumentCloses}).
+    *
+    * An event for a rebuild with no observable change since the last emit is
+    * suppressed against the URI's fingerprint. Such rebuilds are routine: a
+    * second client attaching to an open document makes
+    * `HydraniumTextDocuments.refreshContent` fire `onDidChangeContent` purely
+    * to re-trigger the build, and Langium rebuilds a document when a
+    * dependency changes even if its diagnostics come out the same. Sent at a
+    * version this head has not sent, they reach watchers as `'changed'`, and a
+    * watcher that reads `'changed'` as another client's write and resets its
+    * root to the server view loses the user's edits. The first {@link watchModelDocument} baselines the
+    * fingerprint, so the first event after a watch is de-duplicated against
+    * the state the watcher just fetched; it goes with the last watcher, so the
+    * next first watch re-baselines rather than adopting a stale digest. A
+    * cyrb53 digest keeps its memory constant in document size; see
+    * {@link computeDocumentFingerprint} for the inputs.
     */
    protected dispatchPhaseEvent(document: LangiumDocument, cancelToken: CancellationToken): void {
       if (cancelToken.isCancellationRequested) {
@@ -1419,16 +1413,23 @@ export class DataServer<
          return;
       }
       const uri = document.uri.toString();
-      // Consume the last-close mark even when subscriptions exist — the
-      // regular dispatch below serves those watchers, and the mark's
-      // attribution is more precise than the post-close unknown client the
-      // manager's attribution would yield.
-      const revertedOnClose = this.pendingRevertBroadcasts.delete(uri);
-      if (!this.subscriptions.has(uri) && !revertedOnClose) {
+      const record = this.uriWatchRecords.get(uri);
+      const revertedOnClose = record?.revertPending === true;
+      if (!record || (record.watchers.size === 0 && !revertedOnClose)) {
          return;
       }
+      if (revertedOnClose) {
+         // Consumed even when watchers exist — the regular dispatch below
+         // serves them, and the mark's attribution is more precise than the
+         // post-close unknown client the manager's attribution would yield.
+         // With no watcher the record goes now, so the fingerprint written
+         // below lands on a detached record and the next first watch
+         // re-baselines instead of adopting it.
+         record.revertPending = undefined;
+         this.pruneUriWatchRecord(uri);
+      }
       const fingerprint = this.computeDocumentFingerprint(document);
-      if (this.lastEmittedFingerprint.get(uri) === fingerprint) {
+      if (record.fingerprint === fingerprint) {
          // A rebuild that produced no observable change since the last emit —
          // suppressed so RPC subscribers don't see a no-op broadcast. Logged at
          // debug so a *needed* re-broadcast wrongly suppressed by this dedup
@@ -1436,20 +1437,16 @@ export class DataServer<
          this.tracer.withUri(uri).debug(`Suppress onDocumentUpdated v${document.textDocument.version}: fingerprint unchanged`);
          return;
       }
-      this.lastEmittedFingerprint.set(uri, fingerprint);
+      record.fingerprint = fingerprint;
       // The manager's attribution, so this head names the same client as the
       // in-process heads do for one build, except for a version this head
-      // already sent; see `sentVersions`.
+      // already sent; see `DataServerUriWatchRecord.sentVersion`.
       const version = this.services.workspace.AstDocumentManager.isOpen(uri) ? document.textDocument.version : undefined;
       const { reason, sourceClientId } =
-         version !== undefined && this.sentVersions.get(uri) === version
+         version !== undefined && record.sentVersion === version
             ? { reason: 'rebuilt' as const, sourceClientId: UNKNOWN_CLIENT_ID }
             : this.services.workspace.AstDocumentManager.attributeUpdate(document);
-      if (version === undefined) {
-         this.sentVersions.delete(uri);
-      } else {
-         this.sentVersions.set(uri, version);
-      }
+      record.sentVersion = version;
       const event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri),
          sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,

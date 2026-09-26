@@ -27,7 +27,7 @@ import {
    type TransferElement,
    TransferDocument
 } from '@hydranium/protocol';
-import { DataServer } from '@hydranium/data-server';
+import { DataServer, type DataServerUriWatchRecord } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import {
    type AstDocument,
@@ -179,8 +179,8 @@ describe('data head sessions', () => {
 
       expect(textDocuments.isOpenInClient(uri, SESSION)).toBe(false);
       expect(textDocuments.isOpenInClient(otherUri, SESSION)).toBe(false);
-      const internal = head.server as unknown as { subscriptions: Map<string, Set<string>> };
-      expect([...internal.subscriptions.values()].some(watchers => watchers.has(SESSION))).toBe(false);
+      const internal = head.server as unknown as { uriWatchRecords: Map<string, DataServerUriWatchRecord> };
+      expect([...internal.uriWatchRecords.values()].some(record => record.watchers.has(SESSION))).toBe(false);
       expect(services.shared.model.ModelService.getSession(SESSION)).toBeUndefined();
       await head.proxy.createSession({ clientId: SESSION });
    });
