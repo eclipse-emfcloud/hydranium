@@ -757,13 +757,23 @@ test.describe('order-flow in a web worker', () => {
 
       await page.locator('#selected-editor .view-line').last().click();
       await page.keyboard.press('Control+End');
-      await page.keyboard.type('\nentity ShipmentLog {\n}\n');
+      // The duplicate goes in as ONE edit, and nothing is typed until the repair
+      // has reached the buffer. Typed key by key, every keystroke is a build, so
+      // the repair's workspace/applyEdit lands at whichever keystroke first parses
+      // as a duplicate, Monaco's auto-closed brace included, and the keystrokes
+      // after it land in the repaired text, so the line count depends on where
+      // among them the repair lands.
+      await page.keyboard.insertText('\nentity ShipmentLog {\n}');
 
       // The store oracle is the transfer model's declaration signature, not a
       // substring match on the editor. A missing workspace/applyEdit handler
       // leaves the store repaired while the visible buffer stays duplicated.
       await expect(page.locator('[data-report="data-head"]')).toHaveAttribute('data-store-signature', REPAIRED_STORE_SIGNATURE);
       const visibleLines = page.locator('#selected-editor .view-line');
+      await expect(visibleLines.filter({ hasText: 'entity ShipmentLog__1 {}' })).toHaveCount(1);
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('\n');
+
       // Keep this as a rendered-line check rather than reading the whole Monaco
       // buffer: the latter is vulnerable to DOM ordering and virtualization.
       // The exact count also catches broad visible corruption; comment contents
