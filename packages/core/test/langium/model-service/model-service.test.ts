@@ -635,8 +635,8 @@ describe('ModelService write-lock reentrancy detection', () => {
    });
 
    it('allows a reentrant rebuild when build serialisation is off', async () => {
-      // With `serializeBuilds: false` nothing acquires the lock, so there is
-      // nothing to be reentrant about — which makes the existing opt-out the
+      // With `serializeBuilds: false` the build takes no lock, so there is
+      // nothing for the guard to refuse — which makes the existing opt-out the
       // guard's opt-out, and is why the check sits on that branch.
       setWriteLockScope(nodeWriteLockScope);
       const bundle = makeTestServices<FakeRoot>({ modelServiceOptions: { serializeBuilds: false } });

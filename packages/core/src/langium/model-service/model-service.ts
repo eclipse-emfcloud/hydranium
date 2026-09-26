@@ -87,9 +87,11 @@ export interface ModelServiceOptions extends LogNameOptions {
     * {@link ReentrantWriteLockError} rather than hanging, wherever a host
     * installs a write-lock scope tracker (`@hydranium/core/node` does at entry
     * load; see {@link isInsideWriteLock}). Setting `false` is the escape hatch
-    * for an adopter whose reentrant shape is unavoidable — nothing acquires the
-    * lock then, so there is nothing to be reentrant about; prefer it over
-    * unserialised builds only in that case.
+    * for an adopter whose reentrant shape is unavoidable: the facade's own
+    * build then takes no lock, so it cannot cancel the holder it runs inside.
+    * The wait after it can still hang there, because a document no build will
+    * carry is re-queued through the lock, and that re-queue waits for the
+    * holder to end. Prefer `false` over serialised builds only in that case.
     *
     * Accepts a {@link MaybeObservableValue} so it can be bound to a setting and
     * flipped without a restart.
@@ -546,8 +548,8 @@ export class DefaultModelService<
          // writing back through this facade — would cancel its own enclosing
          // build and then likely stall in the phase wait below. The check is
          // gated on `serializeBuilds` deliberately, because acquiring the lock IS
-         // the hazard: with serialisation off there is nothing to be reentrant
-         // about, which makes the existing opt-out the guard's opt-out too.
+         // the hazard: with serialisation off the build takes no lock, which
+         // makes the existing opt-out the guard's opt-out too.
          // Detection needs async-context propagation, so it is inert until a host
          // installs a tracker (`@hydranium/core/node` does) — see
          // `isInsideWriteLock`.
