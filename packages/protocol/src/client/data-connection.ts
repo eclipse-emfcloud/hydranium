@@ -18,6 +18,7 @@ import {
    type ProjectOf,
    type TransferDocumentDirtyChangedEvent
 } from '../data';
+import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
@@ -138,22 +139,27 @@ export class DataConnection<
     * given. Pass a `label` naming the participant; without one it is
     * `session`. Synchronous: the registration is sent at once, and the
     * session's calls wait for it. The server refuses an id live anywhere in
-    * its process, and every call of that session then rejects with a
-    * `DuplicateClientIdError` code.
+    * its process, and every call of that session then rejects with an error
+    * `isDuplicateClientIdError` recognises; an id the server reserves beyond
+    * {@link FRAMEWORK_CLIENT_IDS}, such as the integrity author, with one
+    * `isReservedClientIdError` recognises. Only the code crosses the wire, so
+    * test with those guards rather than `instanceof`.
     *
-    * Throws for an id in {@link FRAMEWORK_CLIENT_IDS} — those are authors the
-    * SERVER emits rather than participants, so a session holding one would read
-    * the framework's own broadcasts as its own echoes and drop them — and for
-    * an id a live session on this connection already holds.
+    * Throws a {@link ReservedClientIdError} for an id in
+    * {@link FRAMEWORK_CLIENT_IDS} — those are authors the SERVER emits rather
+    * than participants, so a session holding one would read the framework's
+    * own broadcasts as its own echoes and drop them — and a
+    * {@link DuplicateClientIdError} for an id a live session on this
+    * connection already holds.
     */
    createSession(label = 'session', clientId?: string): DataSession<TTransfer, TServer> {
       this.assertLive();
       const id = clientId ?? `${label}#${globalThis.crypto.randomUUID()}`;
       if (FRAMEWORK_CLIENT_IDS.includes(id)) {
-         throw new Error(`clientId '${id}' is reserved by the framework and cannot identify a participant`);
+         throw new ReservedClientIdError(id);
       }
       if ([...this.sessions].some(session => session.clientId === id)) {
-         throw new Error(`clientId '${id}' already identifies a live participant on this connection`);
+         throw new DuplicateClientIdError(id);
       }
       const session = this.sessionFactory(
          id,

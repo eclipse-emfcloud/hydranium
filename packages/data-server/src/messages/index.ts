@@ -16,4 +16,11 @@
  * code is the contract, and renaming one is a breaking change.
  */
 
-export { NO_ACTIVE_PROFILE, NO_ACTIVE_PROFILE_CODE, noActiveProfileError } from '../data-server.js';
+export {
+   NO_ACTIVE_PROFILE,
+   NO_ACTIVE_PROFILE_CODE,
+   noActiveProfileError,
+   REFERENCE_SETTLE_TIMEOUT,
+   REFERENCE_SETTLE_TIMEOUT_CODE,
+   referenceSettleTimeoutError
+} from '../data-server.js';

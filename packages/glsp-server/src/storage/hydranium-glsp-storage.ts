@@ -313,6 +313,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * the id over would end the other participant's session under it, and
     * working without a session would share that participant's opens and
     * echoes, so its close would take the diagram's documents with it.
+    *
+    * A client id the framework reserves throws `ReservedClientIdError`:
+    * whoever chose the GLSP client id has a bug, and no later registration can
+    * succeed.
     */
    protected registerModelSession(): ModelClientSession<AstNode> | undefined {
       try {

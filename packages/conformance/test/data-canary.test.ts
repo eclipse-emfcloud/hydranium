@@ -38,6 +38,7 @@ const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic sourc
 const CASCADE = 'editing a document reports its unwatched dependent as built';
 const CONFLICT_GATE = 'updateModelDocument arms the conflict gate on a based-on snapshot version';
 const SESSION_IDS = 'createSession refuses an id already live, and frees it once the session ends';
+const RESERVED_IDS = 'createSession refuses every id the framework reserves';
 const SESSION_WRITE = 'a session writes only a document it has open';
 const CLOSE_SESSION = 'closeSession closes every document the session had open';
 const CREATE = 'createModelDocument creates a document open for the session';
@@ -106,12 +107,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
    });
 
-   it('plans exactly the nineteen checks the must-fail cases below name', () => {
+   it('plans exactly the twenty checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(19);
+      expect(titles).toHaveLength(20);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -125,6 +126,7 @@ describe('the /data battery discriminates', () => {
          CASCADE,
          FOLDER_CANDIDATES,
          SESSION_IDS,
+         RESERVED_IDS,
          SESSION_WRITE,
          CLOSE_SESSION,
          CREATE,
@@ -133,7 +135,7 @@ describe('the /data battery discriminates', () => {
          CONNECTION_END,
          UNREGISTERED
       ];
-      expect(matching(titles, covered)).toHaveLength(19);
+      expect(matching(titles, covered)).toHaveLength(20);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -187,6 +189,7 @@ describe('the /data battery discriminates', () => {
          expected: [UNREGISTERED]
       },
       { label: 'a live session id accepted a second time', defects: { sessionIdsReused: true }, expected: [SESSION_IDS] },
+      { label: 'a reserved id accepted for a session', defects: { reservedIdsAccepted: true }, expected: [RESERVED_IDS] },
       {
          // Also the close check, which observes the end through a new session
          // under the same id.

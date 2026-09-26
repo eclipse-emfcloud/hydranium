@@ -15,8 +15,10 @@
 export {
    DocumentNotOpenError,
    DuplicateClientIdError,
+   ReservedClientIdError,
    SessionClosedError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
+   isReservedClientIdError,
    isSessionClosedError
 } from '@hydranium/protocol';

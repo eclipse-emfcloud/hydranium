@@ -29,7 +29,7 @@ import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-
 import { DataEvents } from '../../src/client/data-events';
 import { DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '../../src/client/data-session';
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol } from '../../src/data';
-import { DuplicateClientIdError, isDuplicateClientIdError, isSessionClosedError } from '../../src/errors';
+import { DuplicateClientIdError, isDuplicateClientIdError, isReservedClientIdError, isSessionClosedError } from '../../src/errors';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { makeFakeClock, tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
@@ -395,7 +395,9 @@ describe('DataConnection.createSession', () => {
          // checked, since the guard is a list membership and a single case
          // passes for a hardcoded comparison against that one value.
          for (const reserved of FRAMEWORK_CLIENT_IDS) {
-            expect(() => connection.createSession('panel', reserved)).toThrow(reserved);
+            const refusal = thrownBy(() => connection.createSession('panel', reserved));
+            expect(isReservedClientIdError(refusal)).toBe(true);
+            expect(refusal).toMatchObject({ clientId: reserved });
          }
       } finally {
          dispose();
@@ -407,7 +409,9 @@ describe('DataConnection.createSession', () => {
       try {
          const first = connection.createSession('form', 'form-editor');
 
-         expect(() => connection.createSession('form', 'form-editor')).toThrow('form-editor');
+         const refusal = thrownBy(() => connection.createSession('form', 'form-editor'));
+         expect(isDuplicateClientIdError(refusal)).toBe(true);
+         expect(refusal).toMatchObject({ clientId: 'form-editor' });
          expect(() => connection.createSession('tree', 'tree')).not.toThrow();
 
          first.dispose();
@@ -417,6 +421,15 @@ describe('DataConnection.createSession', () => {
       }
    });
 });
+
+function thrownBy(action: () => unknown): unknown {
+   try {
+      action();
+   } catch (error: unknown) {
+      return error;
+   }
+   throw new Error('expected the call to throw');
+}
 
 describe('DataConnection.onDidCreateSession', () => {
    it('announces each session before createSession returns it, once the connection can let it go', () => {

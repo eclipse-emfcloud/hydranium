@@ -15,11 +15,13 @@ import {
    isDocumentSource,
    isElementSource,
    isSyntheticSource,
+   messageData,
    messageError,
    ReferenceSource,
    SessionClosedError,
    TIMED_OUT,
    type CloseModelArgs,
+   type HydraniumMessageData,
    type HydraniumResponseError,
    type Disposable,
    type ElementSource,
@@ -95,14 +97,18 @@ export const noActiveProfileError = (): HydraniumResponseError => messageError(N
  */
 export const REFERENCE_SETTLE_TIMEOUT = defineMessage(
    'hydranium/data-server/reference-settle-timeout',
-   'Timed out after {elapsedMs}ms waiting for the build to settle before answering a reference query.'
+   'The model is still being processed; try again in a moment.'
 );
 
 /** See {@link NO_ACTIVE_PROFILE_CODE} for why this is separate from the catalogue code. */
 export const REFERENCE_SETTLE_TIMEOUT_CODE = HYDRANIUM_ERROR_CODES.referenceSettleTimeout;
 
-export const referenceSettleTimeoutError = (elapsedMs: number): HydraniumResponseError =>
-   messageError(REFERENCE_SETTLE_TIMEOUT_CODE, REFERENCE_SETTLE_TIMEOUT, { elapsedMs });
+/** The wait's length rides in `data` as `elapsedMs`, for the code that reacts rather than the reader. */
+export const referenceSettleTimeoutError = (elapsedMs: number): ResponseError<HydraniumMessageData & { readonly elapsedMs: number }> =>
+   new ResponseError(REFERENCE_SETTLE_TIMEOUT_CODE, REFERENCE_SETTLE_TIMEOUT.format(), {
+      elapsedMs,
+      ...messageData(REFERENCE_SETTLE_TIMEOUT)
+   });
 
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './diagnostics-provider.js';
 import type {
@@ -122,7 +128,7 @@ import type {
 } from '@hydranium/core';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
-import type { CancellationToken, MessageConnection } from 'vscode-jsonrpc';
+import { type CancellationToken, type MessageConnection, ResponseError } from 'vscode-jsonrpc';
 
 /**
  * Domain separator between text and diagnostics inputs of

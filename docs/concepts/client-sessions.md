@@ -29,9 +29,10 @@ taken as given: `createSession('form', 'form-1')`.
 
 An id is unique in the process while its session is live. `createSession` throws
 `DuplicateClientIdError` for an id that is live anywhere in the process: one
-another live session holds, one a client that is not a session has documents
-open under, and the ids in `RESERVED_CLIENT_IDS`, which the framework keeps for
-its own participants. Once a session has ended its id is free again.
+another live session holds, or one a client that is not a session has documents
+open under. Once a session has ended its id is free again. It throws
+`ReservedClientIdError` for an id in `RESERVED_CLIENT_IDS`, which the framework
+keeps for its own participants and which never frees up.
 
 `ModelService.getSession(id)` returns the live session started under `id`, and
 `undefined` once it has ended, so a request handler or a server subclass can act
@@ -136,21 +137,24 @@ lets another write land between two documents of the set.
 
 ## Errors on the wire
 
-`SessionClosedError`, `DocumentNotOpenError` and `DuplicateClientIdError` are
-defined in `@hydranium/protocol` and re-exported from `@hydranium/core`. Like
-`ConflictError`, each is a JSON-RPC `ResponseError` with its own code
-(`SESSION_CLOSED_ERROR_CODE`, `DOCUMENT_NOT_OPEN_ERROR_CODE`,
-`DUPLICATE_CLIENT_ID_ERROR_CODE`) and its fields in `data`, since the class
-does not survive the trip to a client and the code, message and data do. A
-client recognises them with
-`isSessionClosedError`, `isDocumentNotOpenError` and `isDuplicateClientIdError`,
-never with `instanceof`.
+`SessionClosedError`, `DocumentNotOpenError`, `DuplicateClientIdError` and
+`ReservedClientIdError` are defined in `@hydranium/protocol` and re-exported
+from `@hydranium/core`. Like `ConflictError`, each is a JSON-RPC `ResponseError`
+with its own code (`SESSION_CLOSED_ERROR_CODE`, `DOCUMENT_NOT_OPEN_ERROR_CODE`,
+`DUPLICATE_CLIENT_ID_ERROR_CODE`, `RESERVED_CLIENT_ID_ERROR_CODE`) and its
+fields in `data`, since the class does not survive the trip to a client and the
+code, message and data do. A client recognises them with
+`isSessionClosedError`, `isDocumentNotOpenError`, `isDuplicateClientIdError`
+and `isReservedClientIdError`, never with `instanceof`. All but
+`ReservedClientIdError` carry a message identity, so the data server renders
+their sentence in the reader's locale where the adopter supplied a catalogue.
 
 ## Over the data head
 
 A data-server connection registers sessions with `createSession({ clientId,
-label })`, which fails with the `DuplicateClientIdError` code for an id live
-anywhere in the server process. The one exception is `resumeToken`: a
+label })`, which fails with the `ReservedClientIdError` code for a reserved id
+and with the `DuplicateClientIdError` code for an id live anywhere in the
+server process. The one exception to the second is `resumeToken`: a
 registration carrying the token an earlier registration of the same id carried
 ends that session, as its connection closing would, and registers the id
 afresh. It lets a client whose connection dropped register again before the
@@ -192,8 +196,10 @@ On the client, `DataConnection.createSession(label?, clientId?)` returns a
 synchronous: the id defaults to the label, a `#` and a random UUID, the
 registration is sent at once, and every call of the session waits for it. When
 the server refuses the registration, every call of the session rejects with its
-error. A fixed id is taken as given; the framework's reserved ids and an id
-another live session on the connection holds are refused at once.
+error. A fixed id is taken as given; an id in `FRAMEWORK_CLIENT_IDS` is refused
+at once with a `ReservedClientIdError`, and an id another live session on the
+connection holds with a `DuplicateClientIdError`. `isReservedClientIdError` and
+`isDuplicateClientIdError` recognise these and the server's refusals alike.
 
 <!-- snippet-preamble
 import type { TransferElement } from '@hydranium/protocol';

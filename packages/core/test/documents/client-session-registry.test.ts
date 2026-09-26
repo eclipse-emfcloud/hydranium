@@ -9,7 +9,7 @@
 
 import { type CanonicalUri, LANGUAGE_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
-import { DuplicateClientIdError, SessionClosedError } from '../../src/documents/client-session-errors.js';
+import { DuplicateClientIdError, ReservedClientIdError, SessionClosedError } from '../../src/documents/client-session-errors.js';
 import { ClientSessionRegistry, type ClientSessionClosedEvent } from '../../src/documents/client-session-registry.js';
 import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.js';
 
@@ -38,7 +38,9 @@ describe('ClientSessionRegistry — the session table', () => {
       reserved => {
          const registry = new ClientSessionRegistry();
 
-         expect(() => registry.register(reserved)).toThrow(DuplicateClientIdError);
+         // Not a duplicate: a caller retries a live collision, and a reserved
+         // id never frees up.
+         expect(() => registry.register(reserved)).toThrow(ReservedClientIdError);
          expect(registry.isRegistered(reserved)).toBe(false);
       }
    );
