@@ -7,16 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type LangiumDocument, URI } from '@hydranium/langium';
+import { URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
-import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type FileSystemSeed } from '../../../src/langium/workspace/in-memory-file-system-provider.js';
 import {
    type FileSystemStore,
    PersistentFileSystemProvider,
    persistentFileSystem
 } from '../../../src/langium/workspace/persistent-file-system-provider.js';
-import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
 const ROOT = 'file:///workspace';
@@ -78,19 +76,6 @@ async function flush(): Promise<void> {
    await new Promise(resolve => setTimeout(resolve, 0));
 }
 
-function servicesWith(virtualDocuments: Record<string, string> = {}): ServerSharedServicesMinimal {
-   return makeNoopSharedServices({
-      workspace: {
-         LangiumDocuments: {
-            getDocument(uri: URI): LangiumDocument | undefined {
-               const text = virtualDocuments[uri.toString()];
-               return text === undefined ? undefined : ({ uri, textDocument: { getText: () => text } } as unknown as LangiumDocument);
-            }
-         }
-      }
-   });
-}
-
 /**
  * The provider a host would get from {@link persistentFileSystem}, built the same
  * way — through the factory, so the load-then-construct order under test is the
@@ -98,14 +83,14 @@ function servicesWith(virtualDocuments: Record<string, string> = {}): ServerShar
  */
 async function restored(
    store: FileSystemStore,
-   options: { seed?: FileSystemSeed; rootUri?: string; virtualDocuments?: Record<string, string> } = {}
+   options: { seed?: FileSystemSeed; rootUri?: string } = {}
 ): Promise<PersistentFileSystemProvider> {
    const { fileSystemProvider } = await persistentFileSystem({
       store,
       seed: options.seed ?? SEED,
       rootUri: 'rootUri' in options ? options.rootUri : ROOT
    });
-   const provider = fileSystemProvider(servicesWith(options.virtualDocuments));
+   const provider = fileSystemProvider(makeNoopSharedServices());
    if (!(provider instanceof PersistentFileSystemProvider)) {
       throw new Error('persistentFileSystem bound something else');
    }
@@ -164,19 +149,6 @@ describe('PersistentFileSystemProvider restore', () => {
       // first would leave it to their insertion order.
       const files = await restored(new RecordingStore({ 'a%20b.a': 'stored' }), { seed: { 'a b.a': 'seeded' } });
       expect(files.readFileSync(URI.parse(`${ROOT}/a b.a`))).toBe('stored');
-   });
-
-   it('serves a registered virtual document rather than the stored content for its URI', async () => {
-      // The stdlib is contributed in code and has no file behind it. If the store
-      // could shadow it, the first rebuild that re-read that URI would replace
-      // the stdlib with whatever a save had once persisted there.
-      const uri = virtualUri('builtin', 'types.a');
-      const files = await restored(new RecordingStore({ [uri.toString()]: 'stale stdlib' }), {
-         seed: {},
-         rootUri: undefined,
-         virtualDocuments: { [uri.toString()]: 'element Any' }
-      });
-      expect(files.readFileSync(uri)).toBe('element Any');
    });
 });
 
@@ -333,7 +305,7 @@ describe('persistentFileSystem', () => {
       // error — and a persistent filesystem that never writes is exactly that
       // failure with an extra store attached.
       const { fileSystemProvider } = await persistentFileSystem({ store: new RecordingStore(), seed: SEED, rootUri: ROOT });
-      const bound = fileSystemProvider(servicesWith());
+      const bound = fileSystemProvider(makeNoopSharedServices());
       expect(typeof bound.writeFile).toBe('function');
       expect(bound.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('seeded one');
    });
@@ -356,6 +328,6 @@ describe('persistentFileSystem', () => {
       expect(loaded).toBe(false);
       const { fileSystemProvider } = await binding;
       expect(loaded).toBe(true);
-      expect(fileSystemProvider(servicesWith()).readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('edited one');
+      expect(fileSystemProvider(makeNoopSharedServices()).readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('edited one');
    });
 });

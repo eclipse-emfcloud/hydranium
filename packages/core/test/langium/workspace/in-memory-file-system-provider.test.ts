@@ -7,35 +7,20 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type LangiumDocument, URI } from '@hydranium/langium';
+import { URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
 import { type WritableFileSystemProvider } from '../../../src/documents/ast-document-manager.js';
-import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import {
    InMemoryFileSystemProvider,
    inMemoryFileSystem,
    type InMemoryFileSystemOptions
 } from '../../../src/langium/workspace/in-memory-file-system-provider.js';
-import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
 const ROOT = 'file:///workspace';
 
-function servicesWith(virtualDocuments: Record<string, string> = {}): ServerSharedServicesMinimal {
-   return makeNoopSharedServices({
-      workspace: {
-         LangiumDocuments: {
-            getDocument(uri: URI): LangiumDocument | undefined {
-               const text = virtualDocuments[uri.toString()];
-               return text === undefined ? undefined : ({ uri, textDocument: { getText: () => text } } as unknown as LangiumDocument);
-            }
-         }
-      }
-   });
-}
-
-function provider(options: InMemoryFileSystemOptions = {}, virtualDocuments?: Record<string, string>): InMemoryFileSystemProvider {
-   return new InMemoryFileSystemProvider(servicesWith(virtualDocuments), options);
+function provider(options: InMemoryFileSystemOptions = {}): InMemoryFileSystemProvider {
+   return new InMemoryFileSystemProvider(makeNoopSharedServices(), options);
 }
 
 /** The two-project shape a workspace walk has to descend, at its shallowest. */
@@ -112,21 +97,6 @@ describe('InMemoryFileSystemProvider reads', () => {
          expect(failure).toMatchObject({ code: 'ENOENT', path: missing.fsPath });
       }
    );
-
-   it('serves a registered virtual document instead of consulting the map', () => {
-      // The framework re-reads a changed URI through this seam, and nothing in
-      // the map backs a virtual URI — so without this the stdlib disappears on
-      // the first rebuild that touches it.
-      const uri = virtualUri('builtin', 'types.a');
-      const files = provider({}, { [uri.toString()]: 'element Any' });
-      expect(files.readFileSync(uri)).toBe('element Any');
-   });
-
-   it('falls through to the map for a virtual URI with no registered document', () => {
-      const uri = virtualUri('builtin', 'types.a');
-      const files = provider({ seed: { [uri.toString()]: 'from the map' } });
-      expect(files.readFileSync(uri)).toBe('from the map');
-   });
 });
 
 describe('InMemoryFileSystemProvider directories', () => {
@@ -212,51 +182,14 @@ describe('inMemoryFileSystem', () => {
       // A provider without `writeFile` is silently replaced by the empty
       // default, so the slot's acceptance test is the presence of this method.
       const { fileSystemProvider } = inMemoryFileSystem({ rootUri: ROOT, seed: { 'alpha/one.a': 'content one' } });
-      const bound = fileSystemProvider(servicesWith());
+      const bound = fileSystemProvider(makeNoopSharedServices());
       expect(typeof bound.writeFile).toBe('function');
       expect(bound.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('content one');
    });
 
    it('passes its options through to the provider', () => {
       const { fileSystemProvider } = inMemoryFileSystem({ logName: 'TestFileSystem' });
-      expect(fileSystemProvider(servicesWith())).toBeInstanceOf(InMemoryFileSystemProvider);
-   });
-});
-
-/**
- * Every read agrees about a registered virtual document. Contract: a provider
- * that serves the document's text and then reports nothing there cannot be
- * probed before a read, so the registry is consulted by the whole surface and
- * not only by `readFileSync`.
- *
- * Asserted alongside a map that does NOT hold the URI, so a pass cannot come
- * from the map answering instead of the registry.
- */
-describe('InMemoryFileSystemProvider agreement across the read surface', () => {
-   const uri = virtualUri('builtin', 'types.a');
-   const files = (): InMemoryFileSystemProvider => provider({}, { [uri.toString()]: 'element Any' });
-
-   it('reports the document present', async () => {
-      // The map is empty, so `true` can only have come from the registry.
-      expect(provider().existsSync(uri)).toBe(false);
-      expect(files().existsSync(uri)).toBe(true);
-      expect(await files().exists(uri)).toBe(true);
-   });
-
-   it('stats the document as a file', async () => {
-      expect(files().statSync(uri)).toMatchObject({ isFile: true, isDirectory: false });
-      expect(await files().stat(uri)).toMatchObject({ isFile: true, isDirectory: false });
-   });
-
-   it('reads the document as text and as bytes', async () => {
-      expect(files().readFileSync(uri)).toBe('element Any');
-      expect(files().readBinarySync(uri)).toEqual(new TextEncoder().encode('element Any'));
-      expect(await files().readBinary(uri)).toEqual(new TextEncoder().encode('element Any'));
-   });
-
-   it('still reports an unregistered virtual URI absent', () => {
-      expect(provider().existsSync(virtualUri('builtin', 'absent.a'))).toBe(false);
-      expect(() => provider().statSync(virtualUri('builtin', 'absent.a'))).toThrow();
+      expect(fileSystemProvider(makeNoopSharedServices())).toBeInstanceOf(InMemoryFileSystemProvider);
    });
 });
 

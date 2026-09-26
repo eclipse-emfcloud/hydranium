@@ -184,7 +184,7 @@ lives behind a package's **`./node`** subpath and physically under
   `node:fs` log file-tee sink).
 - **The portable default opts the browser in for free.** Where a slot
   has a Node-backed impl, the `.`-entry DI default is the browser-safe
-  one (e.g. `FileSystemProvider` → `DefaultEmptyFileSystemProvider`);
+  one (e.g. the `FileSystemProvider` registry's host → `DefaultEmptyFileSystemProvider`);
   Node hosts opt into disk I/O via `./node`. (An adopter that overrides the
   slot is unaffected by this default either way.)
 - **Node specifics inside a portable module are injected, not imported.**

@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { type LangiumDocument, URI } from '@hydranium/langium';
-import { isVirtualUri, serveVirtualDocument, serveVirtualNode, virtualUri } from '../../../src/langium/workspace/virtual-document.js';
+import { isVirtualUri, VirtualFileSystemProvider, virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
@@ -58,42 +58,57 @@ describe('isVirtualUri', () => {
    });
 });
 
-describe('serveVirtualDocument', () => {
-   it('returns the registered document text for a virtual URI', () => {
-      const services = servicesWith({ 'virtual:builtin/Element': 'element Element' });
-      expect(serveVirtualDocument(services, virtualUri('builtin', 'Element'))).toBe('element Element');
-   });
+/**
+ * The framework's provider for `virtual:`. Contract:
+ * - a document `LangiumDocuments` holds is served by every read, as a file
+ *   carrying the URI asked about, an empty one included;
+ * - any other URI is absent: `exists` says so, and the other reads refuse
+ *   with a Node-shaped missing-file error;
+ * - it has no directories, and refuses every write.
+ */
+describe('VirtualFileSystemProvider', () => {
+   const element = virtualUri('builtin', 'Element');
+   const missing = virtualUri('builtin', 'Missing');
+   const provider = (docs: Record<string, string> = { [element.toString()]: 'element Element' }): VirtualFileSystemProvider =>
+      new VirtualFileSystemProvider(servicesWith(docs));
 
-   it('returns undefined for a non-virtual URI (delegate to the real backing)', () => {
-      const services = servicesWith({ 'file:///a.a': 'x' });
-      expect(serveVirtualDocument(services, URI.parse('file:///a.a'))).toBeUndefined();
-   });
-
-   it('returns undefined for a virtual URI with no registered document', () => {
-      const services = servicesWith({});
-      expect(serveVirtualDocument(services, virtualUri('builtin', 'Missing'))).toBeUndefined();
-   });
-});
-
-describe('serveVirtualNode', () => {
-   it('reports a registered virtual document as a file, never a directory', () => {
-      const services = servicesWith({ 'virtual:builtin/Element': 'element Element' });
-      expect(serveVirtualNode(services, virtualUri('builtin', 'Element'))).toMatchObject({ isFile: true, isDirectory: false });
-   });
-
-   it('carries the URI it was asked about', () => {
-      const services = servicesWith({ 'virtual:builtin/Element': 'element Element' });
-      const uri = virtualUri('builtin', 'Element');
-      expect(serveVirtualNode(services, uri)?.uri).toBe(uri);
+   it('serves a registered document by every read', async () => {
+      const files = provider();
+      expect(files.existsSync(element)).toBe(true);
+      expect(await files.exists(element)).toBe(true);
+      expect(files.readFileSync(element)).toBe('element Element');
+      expect(await files.readFile(element)).toBe('element Element');
+      expect(files.readBinarySync(element)).toEqual(new TextEncoder().encode('element Element'));
+      expect(await files.readBinary(element)).toEqual(new TextEncoder().encode('element Element'));
+      for (const node of [files.statSync(element), await files.stat(element)]) {
+         expect(node).toEqual({ isFile: true, isDirectory: false, uri: element });
+      }
    });
 
    it('serves an empty document, which is present rather than missing', () => {
-      const services = servicesWith({ 'virtual:builtin/Empty': '' });
-      expect(serveVirtualNode(services, virtualUri('builtin', 'Empty'))).toBeDefined();
+      const empty = virtualUri('builtin', 'Empty');
+      const files = provider({ [empty.toString()]: '' });
+      expect(files.existsSync(empty)).toBe(true);
+      expect(files.readFileSync(empty)).toBe('');
    });
 
-   it('returns undefined on the same terms as serveVirtualDocument', () => {
-      expect(serveVirtualNode(servicesWith({}), virtualUri('builtin', 'Missing'))).toBeUndefined();
-      expect(serveVirtualNode(servicesWith({ 'file:///a.a': 'x' }), URI.parse('file:///a.a'))).toBeUndefined();
+   it('reports an unregistered URI absent and refuses to read or stat it', async () => {
+      const files = provider();
+      expect(files.existsSync(missing)).toBe(false);
+      expect(await files.exists(missing)).toBe(false);
+      expect(() => files.readFileSync(missing)).toThrow(expect.objectContaining({ code: 'ENOENT', path: missing.fsPath }));
+      expect(() => files.statSync(missing)).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(() => files.readBinarySync(missing)).toThrow();
+      await expect(files.readFile(missing)).rejects.toThrow();
+      await expect(files.readBinary(missing)).rejects.toThrow();
+      await expect(files.stat(missing)).rejects.toThrow();
+   });
+
+   it('lists no children and refuses a write', async () => {
+      const files = provider();
+      expect(files.readDirectorySync(element)).toEqual([]);
+      expect(await files.readDirectory(element)).toEqual([]);
+      await expect(files.writeFile(element, 'element Other')).rejects.toThrow();
+      expect(files.readFileSync(element)).toBe('element Element');
    });
 });

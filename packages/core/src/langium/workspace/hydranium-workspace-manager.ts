@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { Deferred, type Logger, type Tracer } from '@hydranium/protocol';
-import { DefaultWorkspaceManager, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { DefaultWorkspaceManager, DocumentState, type LangiumDocument, type Stream, UriUtils, type URI } from '@hydranium/langium';
 import { type CancellationToken, type InitializeParams } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import { type LogNameOptions, resolveLogFilePlaceholder, toLogFileWorkspaceToken } from '../diagnostics/logger.js';
@@ -93,6 +93,18 @@ export function installOperationCancelledSuppression(logger: Logger): void {
    });
 }
 
+/** Options for {@link HydraniumWorkspaceManager}. */
+export interface HydraniumWorkspaceManagerOptions extends LogNameOptions {
+   /**
+    * Whether startup warns about seeded documents the bound
+    * `FileSystemProvider` cannot serve (see
+    * {@link HydraniumWorkspaceManager.warnIfDocumentsUnserved}). Defaults to
+    * `true`; turn it off for a host that drops such documents at their last
+    * close on purpose.
+    */
+   warnUnservedDocuments?: boolean;
+}
+
 /**
  * Framework {@link DefaultWorkspaceManager} subclass that integrates the
  * project tier with Langium's workspace startup.
@@ -163,8 +175,12 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    protected readonly additionalDocuments: Record<string, AdditionalDocumentContribution>;
    /** Registry consulted by {@link warnIfUnroutable} to check a seeded document routes. */
    protected readonly languageRegistry: ServerSharedServicesMinimal['ServiceRegistry'];
+   /** Whether startup runs {@link warnIfDocumentsUnserved}. */
+   protected readonly warnUnservedDocuments: boolean;
+   /** URIs of the documents the running startup's file traversal loaded; see {@link loadWorkspaceDocuments}. */
+   protected readonly traversedUris = new Set<string>();
 
-   constructor(services: ServerSharedServicesMinimal, options: LogNameOptions = {}) {
+   constructor(services: ServerSharedServicesMinimal, options: HydraniumWorkspaceManagerOptions = {}) {
       super(services);
       this.projectManager = services.workspace.ProjectManager;
       this.projectManager.onProjectsChanged(event => this.onProjectsChanged(event));
@@ -173,6 +189,7 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
       this.writableFileSystemProvider = services.workspace.FileSystemProvider;
       this.additionalDocuments = services.additionalDocuments;
       this.languageRegistry = services.ServiceRegistry;
+      this.warnUnservedDocuments = options.warnUnservedDocuments ?? true;
       this.tracer = services.Tracer.for(options.logName ?? 'WorkspaceManager').trace('instantiated');
       installOperationCancelledSuppression(this.tracer);
    }
@@ -201,16 +218,16 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
       // seeded. `tags` is read at the done-emit, so the document count pushed
       // inside the callback appears in the log line.
       const tags: string[] = [`${contributions.length} contributions`];
-      let documentCount = 0;
+      const seeded: LangiumDocument[] = [];
       await this.tracer.time(
          'Load additional documents',
          async () => {
             await collectAdditionalDocuments(this.additionalDocuments, folders, document => {
-               documentCount++;
+               seeded.push(document);
                this.warnIfUnroutable(document);
                collector(document);
             });
-            tags.push(`${documentCount} documents`);
+            tags.push(`${seeded.length} documents`);
          },
          'info',
          { logAfterMs: 0, tags }
@@ -272,9 +289,84 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
             discovered.push(document);
          }
       }
-      const documents = await super.performStartup(folders);
+      this.traversedUris.clear();
+      let documents: LangiumDocument[];
+      try {
+         documents = await super.performStartup(folders);
+         if (this.warnUnservedDocuments) {
+            await this.warnIfDocumentsUnserved(documents.filter(document => !this.traversedUris.has(document.uri.toString())));
+         }
+      } finally {
+         this.traversedUris.clear();
+      }
       this.probePathDivergence(folders);
       return this.withDiscoveredDescriptors(documents, discovered);
+   }
+
+   /**
+    * Record each document the file traversal loads, so startup can tell them
+    * from the documents `loadAdditionalDocuments` seeded, through the
+    * `additionalDocuments` group or an override of its own.
+    *
+    * The traversal found each of its documents through the provider, so asking
+    * it again whether they exist costs one call per workspace file and cannot
+    * come out false. Telling them apart by scheme does not work either: the
+    * registry's host answers every scheme no other provider claims, a seeded
+    * scheme nobody serves included. An override that loads documents without
+    * delegating here leaves them unrecorded, so startup asks the provider
+    * about each of them.
+    */
+   protected override async loadWorkspaceDocuments(uris: Stream<URI>, collector: (document: LangiumDocument) => void): Promise<void> {
+      await super.loadWorkspaceDocuments(uris, document => {
+         this.traversedUris.add(document.uri.toString());
+         collector(document);
+      });
+   }
+
+   /**
+    * Warn once when the bound `FileSystemProvider` cannot serve a seeded
+    * document, naming each such document's scheme.
+    *
+    * The last close keeps a document only if the provider says it `exists`, so
+    * each such document leaves the workspace the first time an editor closes
+    * it, and whatever resolved against it breaks. The framework's registry
+    * serves `virtual:` through the `fileSystemProviders` group and every other
+    * scheme through its host, which knows nothing of a scheme an adopter
+    * invented for its seeded documents, and nothing else reports the loss. A
+    * provider that throws counts as not serving the document, since a startup
+    * that failed on a diagnostic would be worse than the loss.
+    *
+    * Runs over every document startup collected outside the file traversal,
+    * which is what `loadAdditionalDocuments` seeded, through the
+    * `additionalDocuments` group or an override of that method, once startup
+    * has added them to the workspace, unless `warnUnservedDocuments` is
+    * `false`.
+    */
+   protected async warnIfDocumentsUnserved(documents: readonly LangiumDocument[]): Promise<void> {
+      const unserved: URI[] = [];
+      for (const document of documents) {
+         let served = false;
+         try {
+            served = await this.writableFileSystemProvider.exists(document.uri);
+         } catch {
+            // Counted as unserved, below.
+         }
+         if (!served) {
+            unserved.push(document.uri);
+         }
+      }
+      if (unserved.length === 0) {
+         return;
+      }
+      const schemes = [...new Set(unserved.map(uri => uri.scheme))];
+      const named = unserved.slice(0, 3).map(uri => uri.toString());
+      this.tracer.warn(
+         `${unserved.length} seeded document(s) under ${schemes.map(scheme => `${scheme}:`).join(', ')} cannot be served by the bound workspace.FileSystemProvider ` +
+            `(${named.join(', ')}${unserved.length > 3 ? ', …' : ''}), so each leaves the workspace at its ` +
+            `last close. Register a provider under the key ${schemes.map(scheme => `'${scheme}'`).join(', ')} in the shared ` +
+            'fileSystemProviders group, or serve the scheme from the host provider; set warnUnservedDocuments: false ' +
+            'to accept the loss.'
+      );
    }
 
    /**

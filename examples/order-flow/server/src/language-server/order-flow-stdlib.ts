@@ -66,7 +66,7 @@ valuetype Boolean {}
  *
  * Bound under the shared `additionalDocuments` group in `order-flow-module.ts`;
  * the framework's workspace manager drives it from `loadAdditionalDocuments`
- * at startup, and its virtual-aware `FileSystemProvider` keeps the document
+ * at startup, and its `virtual:` file system provider keeps the document
  * re-read-safe.
  */
 export class OrderFlowStdlibContribution implements AdditionalDocumentContribution {
