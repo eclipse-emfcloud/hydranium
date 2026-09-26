@@ -311,7 +311,7 @@ export class DefaultClientSession<
       const doc = await run('rebuild', () => service.rebuild(uri, undefined, cancelToken));
       const finalVersion = textDocuments.version(uri);
       if (finalVersion > appliedVersion) {
-         this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (superseded)`);
+         this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (changed again before it settled)`);
       } else {
          this.tracer.debug(`Update to v${appliedVersion} ready`);
       }

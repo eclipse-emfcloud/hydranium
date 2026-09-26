@@ -673,9 +673,10 @@ describe('ModelService write-lock reentrancy detection', () => {
  * `update`. After applying the text (returning `appliedVersion`) and
  * awaiting `rebuild`, `update` reads `finalVersion = TextDocuments.version(uri)`
  * and logs "ready" when `finalVersion <= appliedVersion`, or
- * "ready at vN (superseded)" when a concurrent write advanced the version
- * past `appliedVersion` before this update settled. Pure observability —
- * resolution is read-latest, so the promise still resolves either way.
+ * "ready at vN (changed again before it settled)" when a concurrent write or
+ * an integrity repair advanced the version past `appliedVersion` before this
+ * update settled. Pure observability — resolution is read-latest, so the
+ * promise still resolves either way.
  *
  * The lines are `debug`-level; `AbstractLogger.send` drops anything above
  * the process-global threshold (default `info`), so each test raises the
@@ -702,7 +703,7 @@ describe('ModelService update supersession', () => {
 
    const supersessionLines = (lines: CapturedLine[]): CapturedLine[] => lines.filter(line => /Update to v\d+ ready/.test(line.message));
 
-   it('logs "ready" without the superseded suffix when no newer version overtakes', async () => {
+   it('logs "ready" without a suffix when no newer version overtakes', async () => {
       const { session, lines } = buildSupersessionService();
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
@@ -711,13 +712,13 @@ describe('ModelService update supersession', () => {
          const ready = supersessionLines(lines);
          expect(ready).toHaveLength(1);
          expect(ready[0].message).toMatch(/Update to v\d+ ready$/);
-         expect(ready[0].message).not.toContain('superseded');
+         expect(ready[0].message).not.toContain('changed again');
       } finally {
          Logger.setLevel(previous);
       }
    });
 
-   it('logs "ready at vN (superseded)" yet still resolves when a newer version overtakes before settling', async () => {
+   it('logs "ready at vN (changed again before it settled)" yet still resolves when a newer version overtakes', async () => {
       const { session, lines, bundle } = buildSupersessionService();
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
@@ -748,7 +749,7 @@ describe('ModelService update supersession', () => {
          expect(doc).toBeDefined();
          const ready = supersessionLines(lines);
          expect(ready).toHaveLength(1);
-         expect(ready[0].message).toMatch(/Update to v2 ready at v3 \(superseded\)/);
+         expect(ready[0].message).toMatch(/Update to v2 ready at v3 \(changed again before it settled\)$/);
       } finally {
          Logger.setLevel(previous);
       }
