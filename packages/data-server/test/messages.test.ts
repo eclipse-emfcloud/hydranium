@@ -7,8 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { collectMessages } from '@hydranium/protocol';
+import { collectMessages, HYDRANIUM_ERROR_CODES } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
+import { REFERENCE_SETTLE_TIMEOUT_CODE } from '../src/data-server.js';
 import * as messages from '../src/messages/index.js';
 
 /**
@@ -42,5 +43,12 @@ describe('the data-server message barrel', () => {
 
    it('gives every declaration a non-empty English default', () => {
       expect(declarations.filter(declaration => declaration.text.trim() === '')).toEqual([]);
+   });
+});
+
+describe('the data-server error codes', () => {
+   it('come from the framework registry, which holds them distinct from every other package', () => {
+      const registered: number[] = Object.values(HYDRANIUM_ERROR_CODES);
+      expect([messages.NO_ACTIVE_PROFILE_CODE, REFERENCE_SETTLE_TIMEOUT_CODE].filter(code => !registered.includes(code))).toEqual([]);
    });
 });
