@@ -11,6 +11,7 @@ import {
    createRpcProxy,
    defineMessage,
    DisposableCollection,
+   HYDRANIUM_ERROR_CODES,
    isDocumentSource,
    isElementSource,
    isSyntheticSource,
@@ -80,7 +81,7 @@ export const NO_ACTIVE_PROFILE = defineMessage(
  * The JSON-RPC code, unrelated to the catalogue code above: this one is numeric,
  * survives reconstruction and is what a caller switches on.
  */
-export const NO_ACTIVE_PROFILE_CODE = 1002;
+export const NO_ACTIVE_PROFILE_CODE = HYDRANIUM_ERROR_CODES.noActiveProfile;
 
 export const noActiveProfileError = (): HydraniumResponseError => messageError(NO_ACTIVE_PROFILE_CODE, NO_ACTIVE_PROFILE);
 
@@ -98,7 +99,7 @@ export const REFERENCE_SETTLE_TIMEOUT = defineMessage(
 );
 
 /** See {@link NO_ACTIVE_PROFILE_CODE} for why this is separate from the catalogue code. */
-export const REFERENCE_SETTLE_TIMEOUT_CODE = 1003;
+export const REFERENCE_SETTLE_TIMEOUT_CODE = HYDRANIUM_ERROR_CODES.referenceSettleTimeout;
 
 export const referenceSettleTimeoutError = (elapsedMs: number): HydraniumResponseError =>
    messageError(REFERENCE_SETTLE_TIMEOUT_CODE, REFERENCE_SETTLE_TIMEOUT, { elapsedMs });

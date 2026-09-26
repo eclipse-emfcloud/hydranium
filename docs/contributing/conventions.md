@@ -1404,6 +1404,13 @@ three outcomes:
   `Error` subclass with no code and no guard, where the name tells a log reader
   what failed.
 
+**A typed error's code comes from `HYDRANIUM_ERROR_CODES`.** The framework
+reserves the block 42000 to 42999 for its codes, whichever package raises the
+error: a new code takes the next unused number in the block and is declared in
+that registry, where tests hold every code distinct and inside the block. An
+adopter keeps its own codes out of the block, because after an RPC a guard
+matches on the code alone.
+
 A message naming framework symbols, a DI slot or a wire method is addressed to
 whoever composes the system, so it is (b) or (c), never (a). **Rewrite** is an
 answer too: a sentence that fails only because it names an identifier can move

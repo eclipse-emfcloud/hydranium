@@ -36,15 +36,35 @@ export const STALE_BASED_UPDATE = defineMessage(
 );
 
 /**
- * Application-specific JSON-RPC error code for {@link ConflictError}.
- * Outside the reserved range (-32768 .. -32000) per JSON-RPC 2.0.
+ * Every JSON-RPC error code the framework raises, from any package, keyed by
+ * the error it identifies.
+ *
+ * The framework reserves the block 42000 to 42999 for these, and an adopter's
+ * own codes stay outside it: after an RPC a guard matches on the code alone, so
+ * an adopter's error carrying one of these reads as the framework's. A new code
+ * takes the next unused number in the block, whichever package raises it, and
+ * is declared here, where tests hold every code distinct and inside the block.
+ * The block sits clear of the range JSON-RPC 2.0 reserves for itself, -32768
+ * to -32000.
+ */
+export const HYDRANIUM_ERROR_CODES = {
+   conflict: 42001,
+   noActiveProfile: 42002,
+   referenceSettleTimeout: 42003,
+   sessionClosed: 42004,
+   documentNotOpen: 42005,
+   duplicateClientId: 42006
+} as const;
+
+/**
+ * JSON-RPC error code for {@link ConflictError}.
  *
  * The code is the load-bearing identifier across realm boundaries —
  * `code` is a first-class field on the JSON-RPC error envelope and
  * survives wire reconstruction; the custom `Error` subclass name does
  * not.
  */
-export const CONFLICT_ERROR_CODE = 1001;
+export const CONFLICT_ERROR_CODE = HYDRANIUM_ERROR_CODES.conflict;
 
 /**
  * Structured payload carried in {@link ConflictError.data}, and the only place
@@ -130,11 +150,11 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
  * JSON-RPC code for {@link SessionClosedError}, beside {@link CONFLICT_ERROR_CODE}
  * and for the same reason: the code survives reconstruction, the class does not.
  */
-export const SESSION_CLOSED_ERROR_CODE = 1004;
+export const SESSION_CLOSED_ERROR_CODE = HYDRANIUM_ERROR_CODES.sessionClosed;
 /** JSON-RPC code for {@link DocumentNotOpenError}. */
-export const DOCUMENT_NOT_OPEN_ERROR_CODE = 1005;
+export const DOCUMENT_NOT_OPEN_ERROR_CODE = HYDRANIUM_ERROR_CODES.documentNotOpen;
 /** JSON-RPC code for {@link DuplicateClientIdError}. */
-export const DUPLICATE_CLIENT_ID_ERROR_CODE = 1006;
+export const DUPLICATE_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.duplicateClientId;
 
 /**
  * The catalogue declaration behind {@link SessionClosedError}'s default

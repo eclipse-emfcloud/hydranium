@@ -16,6 +16,12 @@ namespace. On the client, use the same namespace and expose the complete
 reference](../../packages/protocol/src/rpc/README.md) explains the shared proxy
 convention.
 
+A method that fails with a `ResponseError` of its own takes a code outside 42000
+to 42999. The framework reserves that block for its errors
+(`HYDRANIUM_ERROR_CODES`), and once an error has crossed the wire its guards,
+such as `isSessionClosedError`, match on the code alone, so your error carrying
+one of those codes reads as the framework's.
+
 ## Steps
 
 1. Define the request and response shape, then implement it on a `DataServer`

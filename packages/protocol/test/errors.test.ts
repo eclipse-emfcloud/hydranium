@@ -16,6 +16,7 @@ import {
    DUPLICATE_CLIENT_ID_ERROR_CODE,
    DocumentNotOpenError,
    DuplicateClientIdError,
+   HYDRANIUM_ERROR_CODES,
    SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
    STALE_BASED_UPDATE,
@@ -83,6 +84,23 @@ describe('ConflictError', () => {
    });
 });
 
+describe('HYDRANIUM_ERROR_CODES', () => {
+   const codes = Object.values(HYDRANIUM_ERROR_CODES);
+
+   it('gives every framework error a distinct code', () => {
+      expect(new Set(codes).size).toBe(codes.length);
+   });
+
+   it('keeps every code inside the block the framework reserves', () => {
+      expect(codes.filter(code => code < 42000 || code > 42999)).toEqual([]);
+   });
+
+   it('holds the code of every error this package defines', () => {
+      const defined = [CONFLICT_ERROR_CODE, SESSION_CLOSED_ERROR_CODE, DOCUMENT_NOT_OPEN_ERROR_CODE, DUPLICATE_CLIENT_ID_ERROR_CODE];
+      expect(defined.filter(code => !codes.includes(code))).toEqual([]);
+   });
+});
+
 describe('client session errors', () => {
    const cases = [
       {
@@ -107,14 +125,6 @@ describe('client session errors', () => {
          data: { clientId: 'form#1' }
       }
    ] as const;
-
-   it('gives each a distinct code outside the JSON-RPC reserved range and apart from the conflict code', () => {
-      const codes = [CONFLICT_ERROR_CODE, ...cases.map(entry => entry.code)];
-      expect(new Set(codes).size).toBe(codes.length);
-      for (const code of codes) {
-         expect(code < -32768 || code > -32000).toBe(true);
-      }
-   });
 
    for (const entry of cases) {
       it(`${entry.name} carries its code, name and fields on the JSON-RPC envelope`, () => {
