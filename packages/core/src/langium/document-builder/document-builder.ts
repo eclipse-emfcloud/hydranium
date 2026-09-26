@@ -25,7 +25,7 @@ import {
 // `Diagnostic` as a VALUE: `renderDiagnostics` needs its `getMessageString`
 // namespace helper to read the `string | MarkupContent` union without
 // restating it.
-import { CancellationToken, Diagnostic } from 'vscode-languageserver-protocol';
+import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
@@ -298,6 +298,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * document the builder will never carry to `state` degrades to a pending wait
     * plus a warning rather than an endless build loop.
     *
+    * A wait for `Validated` on a document that a validating build skips
+    * resolves once that build has indexed its references, without diagnostics:
+    * see {@link skipsValidation}. Waiting on would never end, and re-queuing
+    * would skip it again.
+    *
     * A re-queued build takes the {@link WorkspaceLock} (see
     * {@link requeueOrphaned}), so a caller that awaits this wait while it holds
     * the lock, inside a read or write action, deadlocks on a document that needs
@@ -309,7 +314,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       if (!document) {
          return super.awaitDocumentState(state, uri, cancelToken);
       }
-      if (document.state >= state) {
+      if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
          return Promise.resolve(uri);
       }
       return new Promise<URI>((resolve, reject) => {
@@ -349,8 +354,22 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                }
             }, 'awaitDocumentState')
          );
+         // The phase after which a validating build either validates the
+         // document or has skipped it.
+         const skipDisposable =
+            state === DocumentState.Validated
+               ? this.onDocumentPhase(
+                    DocumentState.IndexedReferences,
+                    labelPhaseListener((doc: LangiumDocument): void => {
+                       if (UriUtils.equals(doc.uri, uri) && this.skipsValidation(doc)) {
+                          cleanup();
+                          resolve(doc.uri);
+                       }
+                    }, 'awaitDocumentState.skipsValidation')
+                 )
+               : Disposable.create(() => undefined);
          const buildDisposable = this.onBuildPhase(DocumentState.Validated, () => {
-            if (document.state >= state) {
+            if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
                cleanup();
                resolve(uri);
             } else {
@@ -364,6 +383,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          });
          const cleanup = (): void => {
             phaseDisposable.dispose();
+            skipDisposable.dispose();
             buildDisposable.dispose();
             cancelDisposable.dispose();
          };
@@ -375,6 +395,23 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
             requeue('quiescent builder');
          }
       });
+   }
+
+   /**
+    * Whether the build that carries or last carried `document` has indexed its
+    * references, asks for validation, and still skips it, which is an override
+    * of `shouldValidate` excluding it. A build that does not ask for
+    * validation, such as the workspace's initial one, is not a skip: the next
+    * validating build validates the document. Nor is a document below
+    * `IndexedReferences`: the build writes its options before the first phase,
+    * so the document would pass for skipped before it is even parsed.
+    */
+   protected skipsValidation(document: LangiumDocument): boolean {
+      return (
+         document.state >= DocumentState.IndexedReferences &&
+         Boolean(this.getBuildOptions(document).validation) &&
+         !this.shouldValidate(document)
+      );
    }
 
    /**

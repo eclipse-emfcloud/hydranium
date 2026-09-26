@@ -766,7 +766,8 @@ describe('HydraniumDocumentBuilder', () => {
       }
 
       const DOC_URI = URI.parse('file:///workspace/a.a');
-      const documentAt = (state: DocumentState): LangiumDocument => ({ uri: DOC_URI, state }) as LangiumDocument;
+      const documentAt = (state: DocumentState): LangiumDocument =>
+         ({ uri: DOC_URI, state, textDocument: { version: 0 } }) as LangiumDocument;
 
       it('re-queues a build when the workspace already passed the target state', async () => {
          const builder = new OrphanBuilder(documentAt(DocumentState.IndexedReferences), DocumentState.Validated);
@@ -888,6 +889,63 @@ describe('HydraniumDocumentBuilder', () => {
          await builder.drained();
 
          expect(builder.updateCalls).toEqual([]);
+      });
+
+      describe('a document a validating build skips', () => {
+         // An override of `shouldValidate` excluding the document: the build
+         // asks for validation and never validates it, so a wait for
+         // `Validated` would never end, and a re-queue would skip it again.
+         class SkippingBuilder extends OrphanBuilder {
+            /** Record the build options the document was last built with, as `prepareBuild` does. */
+            builtWith(validation: boolean, completed: boolean): this {
+               this.buildState.set(DOC_URI.toString(), { completed, options: { validation } });
+               return this;
+            }
+            protected override shouldValidate(): boolean {
+               return false;
+            }
+         }
+
+         it('resolves at once for a document the build completed without validating', async () => {
+            const builder = new SkippingBuilder(documentAt(DocumentState.IndexedReferences), DocumentState.Validated).builtWith(true, true);
+
+            await expect(builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI)).resolves.toBeDefined();
+            await builder.drained();
+            expect(builder.updateCalls).toEqual([]);
+         });
+
+         it('resolves once the build carrying the document has indexed its references', async () => {
+            const builder = new SkippingBuilder(documentAt(DocumentState.Linked), DocumentState.Linked).builtWith(true, false);
+            const pending = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+
+            await builder.firePhase(documentAt(DocumentState.IndexedReferences), DocumentState.IndexedReferences);
+
+            await expect(pending).resolves.toBeDefined();
+         });
+
+         it('waits for a document the build has not indexed yet', async () => {
+            // The build writes its options before its first phase, so a skipped
+            // document still being parsed would pass for skipped already.
+            const builder = new SkippingBuilder(documentAt(DocumentState.Parsed), DocumentState.Linked).builtWith(true, false);
+            let resolved = false;
+            void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI).then(() => (resolved = true));
+
+            await builder.firePhase(documentAt(DocumentState.Linked), DocumentState.Linked);
+
+            expect(resolved).toBe(false);
+         });
+
+         it('still re-queues after a build that did not ask for validation, such as the initial one', async () => {
+            const builder = new SkippingBuilder(documentAt(DocumentState.IndexedReferences), DocumentState.Validated).builtWith(
+               false,
+               true
+            );
+
+            void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+            await builder.drained();
+
+            expect(builder.updateCalls).toEqual([[DOC_URI.toString()]]);
+         });
       });
    });
 
