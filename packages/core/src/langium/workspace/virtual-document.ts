@@ -8,14 +8,19 @@
  ********************************************************************************/
 
 import { type FileSystemNode, URI } from '@hydranium/langium';
+import { type Tracer } from '@hydranium/protocol';
+import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
+import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from './in-memory-file-system-provider.js';
+import { notFound } from './file-not-found.js';
 
 /**
  * URI scheme for virtual documents — LangiumDocuments that have no backing
  * file on disk (a language's stdlib, library types, built-in definitions,
  * mirrors, generated views). Chosen so it cannot collide with on-disk `file:`
- * URIs, and so the framework's FileSystemProvider can recognise and serve them
- * on re-read (see {@link serveVirtualDocument}).
+ * URIs, and so the framework can serve them on re-read through its own
+ * provider for the scheme (see {@link VirtualFileSystemProvider}).
  */
 export const VIRTUAL_SCHEME = 'virtual';
 
@@ -72,41 +77,95 @@ export function isVirtualUri(uri: URI | string): boolean {
 }
 
 /**
- * Serve the text of a registered virtual document, or `undefined` when `uri`
- * is not virtual or no document is registered for it (so a FileSystemProvider
- * delegates to its real backing).
+ * The file system provider for the {@link VIRTUAL_SCHEME} scheme, registered by
+ * the framework in the shared `fileSystemProviders` group so every host serves
+ * `virtual:` whatever provider it binds for its own files.
  *
- * The framework's FileSystemProvider defaults consult this across their whole
- * read surface, so a virtual document survives a re-read:
- * `DocumentBuilder.update` / `LangiumDocumentFactory.update` re-read a changed
- * URI from the FileSystemProvider, and nothing on disk backs a virtual URI. The
- * text comes from the registered document — the original source for a
- * `fromString` document, or the serialized form retained by the framework's
- * `fromModel` (which fills in the text Langium leaves empty). No serializer is
- * consulted here; the text is already on the document.
+ * A virtual document has no backing outside the index, and a re-read still has
+ * to find it: `DocumentBuilder.update` and `LangiumDocumentFactory.update`
+ * re-read a changed URI from the provider, and the last close rebuilds a
+ * released document the provider says `exists`. So the text comes from the
+ * document `LangiumDocuments` holds — the original source for a `fromString`
+ * document, or the serialized form the framework's `fromModel` retains. An
+ * edited one answers with its edited text.
  *
- * **Every read method has to agree.** Serving only the text methods leaves one
+ * **Every read method agrees.** Serving only the text methods would leave one
  * provider answering "here is the content" and "nothing is there" about one
- * URI, which is a worse contract than answering neither: a caller cannot probe
- * before reading.
- */
-export function serveVirtualDocument(services: ServerSharedServicesMinimal, uri: URI): string | undefined {
-   if (!isVirtualUri(uri)) {
-      return undefined;
-   }
-   const document = services.workspace.LangiumDocuments.getDocument(uri);
-   return document ? document.textDocument.getText() : undefined;
-}
-
-/**
- * The filesystem node a registered virtual document presents as, or `undefined`
- * on the same terms as {@link serveVirtualDocument}.
+ * URI, so a caller could not probe before reading. A registered document is
+ * always a FILE with no children: a workspace walk handed a directory would try
+ * to enumerate children it has none of.
  *
- * Always a FILE: a virtual document is a leaf carrying text, and nothing is
- * addressable beneath it. Reporting it as a directory instead would put it in
- * front of a workspace walk that would then try to enumerate children it has
- * none of.
+ * Read-only: a write is refused, since nothing backs the scheme.
  */
-export function serveVirtualNode(services: ServerSharedServicesMinimal, uri: URI): FileSystemNode | undefined {
-   return serveVirtualDocument(services, uri) === undefined ? undefined : { isFile: true, isDirectory: false, uri };
+export class VirtualFileSystemProvider implements WritableFileSystemProvider {
+   protected readonly tracer: Tracer;
+
+   constructor(
+      protected readonly services: ServerSharedServicesMinimal,
+      options: LogNameOptions = {}
+   ) {
+      this.tracer = services.Tracer.for(options.logName ?? this.constructor.name).trace('instantiated');
+   }
+
+   async writeFile(uri: URI, _content: string): Promise<void> {
+      throw new Error(UNSUPPORTED_WRITE.format({ uri: uri.toString() }));
+   }
+
+   async readFile(uri: URI): Promise<string> {
+      return this.readFileSync(uri);
+   }
+
+   readFileSync(uri: URI): string {
+      const text = this.text(uri);
+      if (text === undefined) {
+         throw notFound(NO_SUCH_FILE.format({ uri: uri.toString() }), uri);
+      }
+      return text;
+   }
+
+   async readBinary(uri: URI): Promise<Uint8Array> {
+      return this.readBinarySync(uri);
+   }
+
+   readBinarySync(uri: URI): Uint8Array {
+      return new TextEncoder().encode(this.readFileSync(uri));
+   }
+
+   async stat(uri: URI): Promise<FileSystemNode> {
+      return this.statSync(uri);
+   }
+
+   statSync(uri: URI): FileSystemNode {
+      if (this.text(uri) === undefined) {
+         throw notFound(NO_SUCH_PATH.format({ uri: uri.toString() }), uri);
+      }
+      return { isFile: true, isDirectory: false, uri };
+   }
+
+   async exists(uri: URI): Promise<boolean> {
+      return this.existsSync(uri);
+   }
+
+   existsSync(uri: URI): boolean {
+      return this.text(uri) !== undefined;
+   }
+
+   async readDirectory(_uri: URI): Promise<FileSystemNode[]> {
+      return [];
+   }
+
+   readDirectorySync(_uri: URI): FileSystemNode[] {
+      return [];
+   }
+
+   /**
+    * Text of the document registered at `uri`, if there is one.
+    *
+    * `LangiumDocuments` is resolved per call, not in the constructor: it reaches
+    * this provider back through the document factory, so resolving it eagerly
+    * is a construction cycle.
+    */
+   protected text(uri: URI): string | undefined {
+      return this.services.workspace.LangiumDocuments.getDocument(uri)?.textDocument.getText();
+   }
 }

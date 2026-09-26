@@ -819,8 +819,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * serve is rebuilt from its text, and any other — an editor's `untitled:`
     * buffer, a file never saved, or one deleted meanwhile — is removed
     * from the workspace. A `virtual:` document survives, since the framework's
-    * providers serve it from the index; an edited one therefore keeps its last
-    * client's text, and keeping it read-only is the client's job.
+    * provider for that scheme serves it from the index, whatever provider the
+    * host passes as `context.fileSystemProvider`; an edited one therefore keeps
+    * its last client's text, and keeping it read-only is the client's job.
     *
     * The answer is read in the document's disk queue, so the rebuild follows
     * any save still queued rather than reverting past it; a file that goes

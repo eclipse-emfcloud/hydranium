@@ -9,7 +9,10 @@
 
 import { describe, expect, it } from 'vitest';
 import { NoopLogger } from '@hydranium/protocol';
-import { EmptyFileSystem, inject, type Module } from '@hydranium/langium';
+import { EmptyFileSystem, inject, type Module, URI } from '@hydranium/langium';
+import { DefaultEmptyFileSystemProvider, DefaultFileSystemProviderRegistry } from '../../src/langium/workspace/file-system-provider.js';
+import { InMemoryFileSystemProvider } from '../../src/langium/workspace/in-memory-file-system-provider.js';
+import { VirtualFileSystemProvider, virtualUri } from '../../src/langium/workspace/virtual-document.js';
 import { LspLogger } from '../../src/langium/diagnostics/lsp-logger.js';
 import {
    createDefaultSharedModule,
@@ -90,6 +93,23 @@ describe('createLspServerSharedModule', () => {
          lsp: { DocumentUpdateHandler: (services: ServerSharedServices) => new AdopterHandler(services) }
       } as unknown as SharedModule);
       expect(shared.lsp.DocumentUpdateHandler).toBeInstanceOf(AdopterHandler);
+   });
+
+   it('dispatches the FileSystemProvider slot by scheme, keeping virtual: beside a contributed scheme', () => {
+      // The adopter path the docs prescribe: a provider deep-merged into the
+      // group, next to the framework's own `virtual:` entry.
+      const shared = composeShared({
+         fileSystemProviders: {
+            library: (services: ServerSharedServices) =>
+               new InMemoryFileSystemProvider(services, { seed: { 'library:/types.a': 'library text' } })
+         }
+      } as unknown as SharedModule);
+      const files = shared.workspace.FileSystemProvider;
+      expect(files).toBeInstanceOf(DefaultFileSystemProviderRegistry);
+      expect(files.host).toBeInstanceOf(DefaultEmptyFileSystemProvider);
+      expect(files.readFileSync(URI.parse('library:/types.a'))).toBe('library text');
+      expect(files.providerFor(virtualUri('builtin', 'types.a'))).toBeInstanceOf(VirtualFileSystemProvider);
+      expect(files.providerFor(URI.parse('file:///a.a'))).toBeInstanceOf(DefaultEmptyFileSystemProvider);
    });
 
    it('replaces server-core NoopLogger with a real one on the Logger slot', () => {

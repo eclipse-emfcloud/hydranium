@@ -30,7 +30,7 @@
  * objects the store does and does not know about.
  */
 
-import { DefaultIntegrityService, HydraniumTextDocuments, INTEGRITY_CLIENT_ID } from '@hydranium/core';
+import { DefaultFileSystemProviderRegistry, DefaultIntegrityService, HydraniumTextDocuments, INTEGRITY_CLIENT_ID } from '@hydranium/core';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
@@ -154,7 +154,9 @@ async function bootCapturing(
             },
             workspace: {
                TextDocuments: services => new StageRecordingTextDocuments(services),
-               FileSystemProvider: services => new InterleavingFileSystemProvider(services)
+               // The registry's host, so `virtual:` keeps the framework's provider.
+               FileSystemProvider: services =>
+                  new DefaultFileSystemProviderRegistry(services, { host: new InterleavingFileSystemProvider(services) })
             }
          }
       ],

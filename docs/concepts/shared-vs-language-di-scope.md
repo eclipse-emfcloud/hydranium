@@ -120,11 +120,14 @@ between two defensible answers:
   reason: the head-neutral tier has nothing to write to, and
   `createLspServerSharedModule` supplies the real sink (see *Head-neutral vs
   head-specific* below).
-- **`workspace.FileSystemProvider` defaults to the EMPTY provider on the `.`
-  entry**, which reads as a stub and is not one: it is what keeps `node:fs` out
-  of the core barrel, so the `.` entry stays browser-neutral. A Node host binds
-  `@hydranium/core/node`'s `DefaultFileSystemProvider`, wired to
-  `SelfSaveRegistry`.
+- **`workspace.FileSystemProvider` holds a `FileSystemProviderRegistry` whose
+  `host` is the EMPTY provider on the `.` entry**, which reads as a stub and is
+  not one: it is what keeps `node:fs` out of the core barrel, so the `.` entry
+  stays browser-neutral. A Node host passes `@hydranium/core/node`'s
+  `DefaultFileSystemProvider`, wired to `SelfSaveRegistry`, through
+  `context.fileSystemProvider`, and it becomes the `host`. The registry
+  dispatches by scheme, to the `fileSystemProviders` group first (the framework
+  registers `virtual:` there) and to its `host` for every other scheme.
 - **Some of these slots must be constructed BEFORE the first build**, though DI
   is otherwise lazy: their constructors attach `documentBuilder` listeners or
   register a build-phase pass, and a listener attached on first *read* attaches

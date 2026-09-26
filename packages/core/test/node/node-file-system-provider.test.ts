@@ -25,9 +25,8 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
+import { URI, UriUtils } from '@hydranium/langium';
 import { DefaultFileSystemProvider } from '../../src/node/node-file-system-provider.js';
-import { virtualUri } from '../../src/langium/workspace/virtual-document.js';
 import { makeNoopSharedServices } from '../../src/testing/index.js';
 import { makeStubSelfSaveRegistry } from '../../src/testing/stub-self-save-registry.js';
 
@@ -423,13 +422,10 @@ describe('DefaultFileSystemProvider.writeFile preserves the target it replaces',
 
 /**
  * The read surface against URIs that name no disk location. Contract:
- * - a registered virtual document is served by EVERY read, not only the text
- *   ones, so a caller can probe before reading rather than getting "here is the
- *   content" and "nothing is there" from one provider about one URI;
  * - a URI this provider cannot reach on disk is answered "nothing here" and is
  *   never turned into a path — `URI.fsPath` yields one for any scheme, so
  *   delegating to Node would silently answer about an unrelated real file;
- * - a `file:` URI is untouched by either rule.
+ * - a `file:` URI is untouched by that rule.
  *
  * The masquerading URIs below are built with `.with({ scheme })` off a real
  * `file:` URI rather than parsed from a string, so `fsPath` is byte-identical
@@ -442,9 +438,6 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
    let occupiedPath: string;
    let provider: DefaultFileSystemProvider;
 
-   const VIRTUAL_TEXT = 'element Registered';
-   const registered = virtualUri('stdlib', 'types.fake');
-
    /** The occupied on-disk path, re-addressed under a scheme that is not `file:`. */
    const masquerading = (scheme: string): URI => URI.file(occupiedPath).with({ scheme });
 
@@ -453,45 +446,11 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
       occupiedPath = join(root, 'occupied.fake');
       writeFileSync(occupiedPath, 'unrelated on-disk content');
 
-      provider = new DefaultFileSystemProvider(
-         makeNoopSharedServices({
-            workspace: {
-               SelfSaveRegistry: makeStubSelfSaveRegistry(),
-               LangiumDocuments: {
-                  getDocument: (uri: URI): LangiumDocument | undefined =>
-                     uri.toString() === registered.toString()
-                        ? ({ uri, textDocument: { getText: () => VIRTUAL_TEXT } } as unknown as LangiumDocument)
-                        : undefined
-               }
-            }
-         })
-      );
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
    });
 
    afterAll(() => {
       rmSync(root, { recursive: true, force: true });
-   });
-
-   describe('a registered virtual document', () => {
-      it('is reported present by exists and existsSync', async () => {
-         expect(provider.existsSync(registered)).toBe(true);
-         expect(await provider.exists(registered)).toBe(true);
-      });
-
-      it('stats as a file, never a directory', async () => {
-         for (const node of [provider.statSync(registered), await provider.stat(registered)]) {
-            expect(node.isFile).toBe(true);
-            expect(node.isDirectory).toBe(false);
-         }
-      });
-
-      it('reads back as its text and as the bytes of that text', async () => {
-         expect(provider.readFileSync(registered)).toBe(VIRTUAL_TEXT);
-         expect(await provider.readFile(registered)).toBe(VIRTUAL_TEXT);
-         const expected = new TextEncoder().encode(VIRTUAL_TEXT);
-         expect(provider.readBinarySync(registered)).toEqual(expected);
-         expect(await provider.readBinary(registered)).toEqual(expected);
-      });
    });
 
    describe('an unreachable URI whose fsPath collides with a real file', () => {

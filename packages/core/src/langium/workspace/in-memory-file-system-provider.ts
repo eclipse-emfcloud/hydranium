@@ -12,7 +12,7 @@ import { defineMessage, type Tracer } from '@hydranium/protocol';
 import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../shared-services.js';
-import { serveVirtualDocument, serveVirtualNode } from './virtual-document.js';
+import { notFound } from './file-not-found.js';
 
 /**
  * A provider's spelling of "the document is not there", raised wherever a read
@@ -42,15 +42,6 @@ export const UNSUPPORTED_WRITE = defineMessage(
    'hydranium/core/unsupported-write',
    'Cannot write {uri}: the scheme names no location on disk'
 );
-
-/**
- * A missing-file error shaped as a Node file system raises it, with code
- * `ENOENT` and the path: callers tell a missing file from any other failure by
- * those two fields, whichever provider is bound.
- */
-function notFound(message: string, uri: URI): Error {
-   return Object.assign(new Error(message), { code: 'ENOENT', path: uri.fsPath });
-}
 
 /**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
@@ -165,10 +156,6 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    }
 
    readFileSync(uri: URI): string {
-      const served = serveVirtualDocument(this.services, uri);
-      if (served !== undefined) {
-         return served;
-      }
       const content = this.files.get(normalize(uri));
       if (content === undefined) {
          throw notFound(NO_SUCH_FILE.format({ uri: uri.toString() }), uri);
@@ -189,11 +176,6 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    }
 
    statSync(uri: URI): FileSystemNode {
-      // Virtual first, on the same terms as `readFileSync`.
-      const served = serveVirtualNode(this.services, uri);
-      if (served !== undefined) {
-         return served;
-      }
       const path = normalize(uri);
       if (this.files.has(path)) {
          return { isFile: true, isDirectory: false, uri };
@@ -209,9 +191,6 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    }
 
    existsSync(uri: URI): boolean {
-      if (serveVirtualDocument(this.services, uri) !== undefined) {
-         return true;
-      }
       const path = normalize(uri);
       return this.files.has(path) || this.hasChildren(path);
    }
@@ -281,8 +260,8 @@ function normalize(uri: URI | string): string {
  * services context exactly where a Node host spreads `NodeFileSystem`.
  *
  * A host that needs to reach the provider afterwards — to seed or mutate it
- * mid-test — reads it back off `shared.workspace.FileSystemProvider`, since the
- * slot owns construction.
+ * mid-test — narrows `shared.workspace.FileSystemProvider.host` to this
+ * class, since the slot owns construction.
  */
 export function inMemoryFileSystem(options: InMemoryFileSystemOptions = {}): {
    fileSystemProvider: (services: unknown) => WritableFileSystemProvider;

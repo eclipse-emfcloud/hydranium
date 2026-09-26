@@ -193,10 +193,13 @@ not an unfilled gap.
 
 ## Accommodation 3 — supply a filesystem
 
-The `.` entry binds `DefaultEmptyFileSystemProvider` by default: reads throw and
-writes are dropped. A browser host that means to open a workspace supplies its
-own through the `context.fileSystemProvider` channel, exactly where a Node host
-spreads `NodeFileSystem`.
+The `.` entry falls back to `DefaultEmptyFileSystemProvider` by default: reads
+throw and writes are dropped. A browser host that means to open a workspace
+supplies its own through the `context.fileSystemProvider` channel, exactly where
+a Node host spreads `NodeFileSystem`. The slot holds a
+`FileSystemProviderRegistry` whose `host` is that provider and that sends it
+each scheme without a registered provider, so the host's provider answers for its workspace scheme
+whatever it is, and `virtual:` stays with the framework's own provider.
 
 Two things to get right:
 
@@ -229,8 +232,10 @@ const fileSystem = inMemoryFileSystem({
 
 Spread it where a Node host spreads `NodeFileSystem`. It is writable, so it
 satisfies the slot's acceptance test above; it takes mid-run mutation through
-`setFile` / `deleteFile`; and it serves a registered virtual document ahead of
-the map, so a stdlib survives the rebuild that re-reads it.
+`setFile` / `deleteFile`, reached by narrowing the slot's `host` to
+`InMemoryFileSystemProvider`. It holds no
+`virtual:` documents: the framework serves that scheme itself, so a stdlib
+survives the rebuild that re-reads it.
 
 What it deliberately does not answer is watch notifications, case-insensitivity,
 and eviction for a workspace larger than memory.

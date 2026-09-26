@@ -37,7 +37,12 @@ import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js
 import { DefaultAstDocumentManager, type AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
-import { DefaultEmptyFileSystemProvider } from './workspace/file-system-provider.js';
+import {
+   DefaultEmptyFileSystemProvider,
+   DefaultFileSystemProviderRegistry,
+   type FileSystemProviderRegistry
+} from './workspace/file-system-provider.js';
+import { VIRTUAL_SCHEME, VirtualFileSystemProvider } from './workspace/virtual-document.js';
 import { type ServerLanguageServices } from './language-module.js';
 import { ExtendedServiceRegistry } from './service-registry.js';
 
@@ -178,20 +183,36 @@ export interface ServerAddedSharedServices<
        */
       /* override */ WorkspaceLock: HydraniumWorkspaceLock;
       /**
-       * Tighten Langium's read-only `FileSystemProvider` slot to
-       * {@link WritableFileSystemProvider}. The framework's save path
-       * ({@link AstDocumentManager.save}, integrity corrections,
-       * a session's `save`) requires write semantics — a read-only slot
-       * type forces an `as WritableFileSystemProvider` cast at the binding
-       * line and defers the failure of a read-only implementation to the
-       * first save. The `.`-entry default is
-       * {@link DefaultEmptyFileSystemProvider}, which is what keeps the core
-       * barrel free of `node:fs` and therefore browser-bundleable; a Node host
-       * binds `@hydranium/core/node`'s Node-backed provider (wired to
-       * {@link SelfSaveRegistry}) instead, and adopters override with their own
+       * Tighten Langium's read-only `FileSystemProvider` slot to a
+       * {@link FileSystemProviderRegistry}, which is writable: the
+       * framework's save path ({@link AstDocumentManager.save}, integrity
+       * corrections, a session's `save`) requires write semantics, and a
+       * read-only slot type defers the failure of a read-only
+       * implementation to the first save.
+       *
+       * Bound to {@link DefaultFileSystemProviderRegistry}, which dispatches
+       * by scheme to the {@link ServerAddedSharedServices.fileSystemProviders}
+       * group and sends every other scheme to its `host`: the provider
+       * `context.fileSystemProvider` returns when it is writable, or else
+       * `DefaultEmptyFileSystemProvider`, which is what keeps the core
+       * barrel free of `node:fs` and therefore browser-bundleable. A Node
+       * host passes `@hydranium/core/node`'s Node-backed provider (wired to
+       * {@link SelfSaveRegistry}) instead, and adopters pass their own
        * writable implementation when neither fits.
+       *
+       * To reach the members of its own provider, an adopter declares this
+       * slot as `FileSystemProviderRegistry<MyProvider>` through
+       * {@link WithServiceOverrides}, binds a
+       * `DefaultFileSystemProviderRegistry` with that host from a factory
+       * whose return type names the narrowed slot (a module's `DeepPartial`
+       * checks no host member otherwise), and reads
+       * `FileSystemProvider.host`. A
+       * registry that serves a seeded document under none of its providers
+       * loses the document at its last close, which
+       * {@link HydraniumWorkspaceManager.warnIfDocumentsUnserved} reports
+       * once at startup.
        */
-      /* override */ FileSystemProvider: WritableFileSystemProvider;
+      /* override */ FileSystemProvider: FileSystemProviderRegistry;
       ProjectManager: ProjectManager<TProject>;
       SelfSaveRegistry: SelfSaveRegistry;
       /**
@@ -307,6 +328,15 @@ export interface ServerAddedSharedServices<
     * contribute none never touch it.
     */
    additionalDocuments: Record<string, AdditionalDocumentContribution>;
+   /**
+    * Shared contribution group of file system providers keyed by the URI
+    * scheme each answers for, which {@link FileSystemProviderRegistry}
+    * dispatches to. The framework registers {@link VirtualFileSystemProvider}
+    * under `virtual`; an adopter deep-merges a provider for a scheme of its
+    * own, and an entry under `virtual` replaces the framework's. A scheme with
+    * no entry goes to the registry's `host`.
+    */
+   fileSystemProviders: Record<string, WritableFileSystemProvider>;
 }
 
 /**
@@ -491,7 +521,7 @@ export function createServerSharedModule(
          ConfigurationProvider: services => new HydraniumConfigurationProvider(services),
          // Override Langium's factory so a `fromModel` (code-built) virtual
          // document retains serialized text via the per-language Serializer,
-         // making it re-read-safe through the virtual-aware FileSystemProvider.
+         // making it re-read-safe through `VirtualFileSystemProvider`.
          LangiumDocumentFactory: services => new HydraniumLangiumDocumentFactory(services),
          // Langium's default routes through no identity seam and treats every
          // failed load alike, so leaving this unbound opts a server out of both
@@ -504,27 +534,16 @@ export function createServerSharedModule(
          ProjectManager: services => new SingleProjectManager(services),
          SelfSaveRegistry: services => new DefaultSelfSaveRegistry(services),
          DocumentUriPolicy: () => new DefaultDocumentUriPolicy(),
-         // Writable filesystem with two paths:
-         // - Adopter passed `context.fileSystemProvider` and it returned a
-         //   writable implementation (has `writeFile`) — use it. Honours the
-         //   Langium-conventional context channel for passing a custom backing
-         //   (in-memory, browser, test stub like `DefaultEmptyFileSystemProvider`).
-         // - Otherwise — the portable default `DefaultEmptyFileSystemProvider`
-         //   (no-op writes, no disk access). Node hosts opt into real disk I/O
-         //   by binding `@hydranium/core/node`'s `DefaultFileSystemProvider`
-         //   (Node-backed, wired to `SelfSaveRegistry` so framework `writeFile`
-         //   calls register their mtime and adopters can suppress the
-         //   `didChangeWatchedFiles` echo) — typically via this same
-         //   `context.fileSystemProvider` channel or by rebinding
-         //   the slot. Keeping the `.`-entry default empty is what lets the
-         //   core barrel stay free of `node:fs` (browser-bundleable); see the
-         //   `@hydranium/core/node` carve.
+         // The host is the provider `context.fileSystemProvider` returns
+         // when it is writable (has `writeFile`); anything narrower gets the
+         // empty provider, which is what keeps the core barrel free of
+         // `node:fs`.
          FileSystemProvider: services => {
             const fromContext = context.fileSystemProvider?.(services);
-            if (fromContext && typeof (fromContext as Partial<WritableFileSystemProvider>).writeFile === 'function') {
-               return fromContext as WritableFileSystemProvider;
-            }
-            return new DefaultEmptyFileSystemProvider(services);
+            const writable = typeof (fromContext as Partial<WritableFileSystemProvider> | undefined)?.writeFile === 'function';
+            return new DefaultFileSystemProviderRegistry(services, {
+               host: writable ? (fromContext as WritableFileSystemProvider) : new DefaultEmptyFileSystemProvider(services)
+            });
          },
          AstDocumentManager: services => new DefaultAstDocumentManager(services),
          FileSystemTaskQueue: services => new DefaultFileSystemTaskQueue(services),
@@ -548,6 +567,9 @@ export function createServerSharedModule(
       // profiler passes self-register imperatively, not here.
       buildPhasePasses: {},
       // Empty default so `services.additionalDocuments` always resolves.
-      additionalDocuments: {}
+      additionalDocuments: {},
+      fileSystemProviders: {
+         [VIRTUAL_SCHEME]: services => new VirtualFileSystemProvider(services)
+      }
    };
 }

@@ -560,15 +560,77 @@ document it can serve survives its last close, rebuilt from the provider's text,
 as a model file of a workspace on the in-memory or persistent provider is,
 whatever its scheme. Any other is removed from the workspace, such as an
 editor's `untitled:` buffer or a `file:` document created and never saved. A
-`virtual:` document, built under `virtualUri`, survives, since the framework's
-providers serve it from the index; an edited one therefore keeps its edit after
-the close, and keeping it read-only is the client's job. An adopter's own
-provider has to answer `exists` and the reads for every scheme whose documents
-should survive, `virtual:` included, for instance by extending a framework
-provider or by consulting `serveVirtualDocument` in each of them. A change the
-LSP head still has debounced for the document is dropped: the revert rebuilds or
-removes the document, and the text a `virtual:` document is rebuilt from already
-holds that change.
+`virtual:` document, built under `virtualUri`, survives, since the framework
+serves that scheme from the index, whatever provider the host passes as
+`context.fileSystemProvider`; an edited one therefore keeps its edit after the
+close, and keeping it read-only is the client's job. A change the LSP head still
+has debounced for the document is dropped: the revert rebuilds or removes the
+document, and the text a `virtual:` document is rebuilt from already holds that
+change.
+
+The bound provider is a `FileSystemProviderRegistry` that dispatches by scheme:
+the framework registers a provider for `virtual:` in the shared
+`fileSystemProviders` group, and every scheme with no entry there goes to the
+registry's `host`, the provider from `context.fileSystemProvider`. So an
+adopter's own provider answers `exists` and the reads for its own schemes only.
+Another scheme gets a provider of its own in the group, and a document of it
+survives its last close when that provider answers `exists` for it:
+
+<!-- snippet-preamble
+import { InMemoryFileSystemProvider, type ServerSharedServices } from '@hydranium/core';
+-->
+
+```ts
+const sharedModule = {
+   fileSystemProviders: {
+      library: (shared: ServerSharedServices) =>
+         new InMemoryFileSystemProvider(shared, { seed: { 'library:/types.domain': 'valuetype Text {}' } })
+   }
+};
+```
+
+The workspace manager warns once at startup when the bound provider cannot
+serve a seeded document, from the `additionalDocuments` group or an override of
+`loadAdditionalDocuments`, whatever its scheme, naming each such scheme and up
+to three of the URIs: each leaves the workspace at its last close. Register a provider for the scheme in the group, under the
+scheme without its colon, or serve it from the host's provider. A host
+that drops such documents on purpose passes `warnUnservedDocuments: false` to
+`HydraniumWorkspaceManager`.
+
+The slot types its host as a plain `WritableFileSystemProvider`. To reach the
+members of its own provider, an adopter replaces the slot's declaration in its
+services type with `WithServiceOverrides`, binds the registry with that host,
+and reads the provider through `host`:
+
+<!-- snippet-preamble
+import {
+   DefaultFileSystemProviderRegistry,
+   type FileSystemProviderRegistry,
+   InMemoryFileSystemProvider,
+   type ServerSharedServices,
+   type WithServiceOverrides
+} from '@hydranium/core';
+import { type DeepPartial, type Module, URI } from '@hydranium/langium';
+declare const shared: MyServices;
+-->
+
+```ts
+type MyServices = WithServiceOverrides<
+   ServerSharedServices,
+   { workspace: { FileSystemProvider: FileSystemProviderRegistry<InMemoryFileSystemProvider> } }
+>;
+
+const sharedModule: Module<MyServices, DeepPartial<MyServices>> = {
+   workspace: {
+      // Annotated: a module's slots are DeepPartial, so only the return type
+      // checks the host.
+      FileSystemProvider: (services): FileSystemProviderRegistry<InMemoryFileSystemProvider> =>
+         new DefaultFileSystemProviderRegistry(services, { host: new InMemoryFileSystemProvider(services) })
+   }
+};
+
+shared.workspace.FileSystemProvider.host.setFile(URI.parse('memory:///ws/a.domain'), 'entity A {}');
+```
 
 `TextDocuments.onDidCloseLastOpen` fires when a document is released, just
 before its revert.

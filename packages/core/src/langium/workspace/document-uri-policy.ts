@@ -156,11 +156,13 @@ export class DefaultDocumentUriPolicy implements DocumentUriPolicy {
  * `loadUri` returns `undefined` for an absent path (honest about existence, so a
  * caller about to read the filesystem skips it).
  *
- * If the bound provider has no `realpath` (in-memory / browser / empty),
- * both methods degrade to {@link DefaultDocumentUriPolicy} automatically — the
- * `loadUri` ternary tests the *method's presence*, not its return, so the
- * existence signal is preserved: `loadUri` returns `undefined` only when
- * `realpath` is present and reports the path absent.
+ * If the provider for a URI's scheme has no `realpath` (in-memory / browser /
+ * empty), the framework's `FileSystemProviderRegistry` returns the URI
+ * unchanged and both methods answer as {@link DefaultDocumentUriPolicy} does. A
+ * slot bound to a provider without `realpath` degrades the same way: the
+ * `loadUri` ternary tests the *method's presence*, not its return, so
+ * `loadUri` returns `undefined` only when `realpath` is present and reports the
+ * path absent.
  */
 export class RealpathDocumentUriPolicy extends DefaultDocumentUriPolicy {
    protected readonly fs: RealpathCapableFileSystem;

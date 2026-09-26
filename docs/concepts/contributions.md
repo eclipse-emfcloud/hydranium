@@ -97,7 +97,7 @@ two ways to use it, and they are not interchangeable:
   into the workspace (`HydraniumWorkspaceManager.loadAdditionalDocuments`
   drives it once at startup). It is then built through the ordinary
   pipeline like any file, and survives a re-read through the framework's
-  virtual-aware `FileSystemProvider`. A virtual document that is never
+  `VirtualFileSystemProvider`. A virtual document that is never
   registered there contributes to no scope, with no error.
 
 End the URI with a **registered file extension** either way: the service

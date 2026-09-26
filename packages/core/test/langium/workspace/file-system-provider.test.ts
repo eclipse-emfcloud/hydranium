@@ -7,89 +7,191 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type LangiumDocument, URI } from '@hydranium/langium';
+import { type FileSystemNode, URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
+import { type WritableFileSystemProvider } from '../../../src/documents/ast-document-manager.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
-import { DefaultEmptyFileSystemProvider } from '../../../src/langium/workspace/file-system-provider.js';
-import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
+import { DefaultEmptyFileSystemProvider, DefaultFileSystemProviderRegistry } from '../../../src/langium/workspace/file-system-provider.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
-
-function servicesWith(virtualDocuments: Record<string, string> = {}): ServerSharedServicesMinimal {
-   return makeNoopSharedServices({
-      workspace: {
-         LangiumDocuments: {
-            getDocument(uri: URI): LangiumDocument | undefined {
-               const text = virtualDocuments[uri.toString()];
-               return text === undefined ? undefined : ({ uri, textDocument: { getText: () => text } } as unknown as LangiumDocument);
-            }
-         }
-      }
-   });
-}
 
 /**
  * The portable default, which has no disk at all. Contract:
- * - a registered virtual document is served by every read, because this is the
- *   provider a browser or CLI host boots on and a virtual stdlib is the one
- *   thing such a host does have;
- * - everything else keeps the empty base's answers, so "no filesystem" is still
+ * - every read keeps the empty base's answers, so "no filesystem" is still
  *   distinguishable from "an empty one";
  * - a refusal from an async read arrives as a REJECTION, not as a synchronous
  *   throw the promise chain cannot see.
- *
- * Its Node and in-memory siblings make the same agreement, and that uniformity
- * is the point: a head that swaps providers must not watch the same URI change
- * its answer.
  */
 describe('DefaultEmptyFileSystemProvider', () => {
-   const uri = virtualUri('builtin', 'types.a');
-   const provider = (virtualDocuments: Record<string, string> = {}): DefaultEmptyFileSystemProvider =>
-      new DefaultEmptyFileSystemProvider(servicesWith(virtualDocuments));
-   const serving = (): DefaultEmptyFileSystemProvider => provider({ [uri.toString()]: 'element Any' });
+   const uri = URI.parse('file:///a.a');
+   // Typed at the slot's interface: the base declares most reads param-less.
+   const provider = (): WritableFileSystemProvider => new DefaultEmptyFileSystemProvider(makeNoopSharedServices());
 
-   describe('a registered virtual document', () => {
-      it('is reported present', async () => {
-         expect(serving().existsSync(uri)).toBe(true);
-         expect(await serving().exists(uri)).toBe(true);
-      });
-
-      it('stats as a file', async () => {
-         expect(serving().statSync(uri)).toMatchObject({ isFile: true, isDirectory: false });
-         expect(await serving().stat(uri)).toMatchObject({ isFile: true, isDirectory: false });
-      });
-
-      it('reads as text and as bytes', async () => {
-         expect(serving().readFileSync(uri)).toBe('element Any');
-         expect(await serving().readFile(uri)).toBe('element Any');
-         expect(serving().readBinarySync(uri)).toEqual(new TextEncoder().encode('element Any'));
-         expect(await serving().readBinary(uri)).toEqual(new TextEncoder().encode('element Any'));
-      });
+   it('reports absent rather than throwing', async () => {
+      expect(provider().existsSync(uri)).toBe(false);
+      expect(await provider().exists(uri)).toBe(false);
    });
 
-   describe('anything else', () => {
-      it('reports absent rather than throwing', async () => {
-         // `exists` is the one read the empty base answers instead of refusing,
-         // and that stays true for an unregistered virtual URI as well as a file.
-         expect(provider().existsSync(uri)).toBe(false);
-         expect(provider().existsSync(URI.parse('file:///a.a'))).toBe(false);
-         expect(await provider().exists(URI.parse('file:///a.a'))).toBe(false);
-      });
+   it('refuses to read or stat', async () => {
+      const files = provider();
+      expect(() => files.readFileSync(uri)).toThrow();
+      expect(() => files.readBinarySync(uri)).toThrow();
+      expect(() => files.statSync(uri)).toThrow();
+      // `rejects` discriminates: a method that threw synchronously would
+      // never hand the matcher a promise, and the case errors instead.
+      await expect(files.readFile(uri)).rejects.toThrow();
+      await expect(files.readBinary(uri)).rejects.toThrow();
+      await expect(files.stat(uri)).rejects.toThrow();
+   });
 
-      it('refuses to read or stat', async () => {
-         const files = provider();
-         const uri = URI.parse('file:///a.a');
-         expect(() => files.readFileSync(uri)).toThrow();
-         expect(() => files.readBinarySync(uri)).toThrow();
-         expect(() => files.statSync(uri)).toThrow();
-         // `rejects` discriminates: a method that threw synchronously would
-         // never hand the matcher a promise, and the case errors instead.
-         await expect(files.readFile(uri)).rejects.toThrow();
-         await expect(files.readBinary(uri)).rejects.toThrow();
-         await expect(files.stat(uri)).rejects.toThrow();
-      });
+   it('drops writes without failing', async () => {
+      await expect(provider().writeFile(uri, 'content')).resolves.toBeUndefined();
+   });
+});
 
-      it('drops writes without failing', async () => {
-         await expect(provider().writeFile(URI.parse('file:///a.a'), 'content')).resolves.toBeUndefined();
+/**
+ * A provider that answers every read with its own label, so a test can see
+ * which provider a call reached. `realpath` and `mtimeMs` are left off, as a
+ * provider with no disk leaves them.
+ */
+class LabelledProvider implements WritableFileSystemProvider {
+   readonly written: string[] = [];
+
+   constructor(readonly label: string) {}
+
+   async writeFile(uri: URI, content: string): Promise<void> {
+      this.written.push(`${uri.toString()}=${content}`);
+   }
+   async stat(uri: URI): Promise<FileSystemNode> {
+      return this.statSync(uri);
+   }
+   statSync(uri: URI): FileSystemNode {
+      return { isFile: true, isDirectory: false, uri: uri.with({ fragment: this.label }) };
+   }
+   async exists(): Promise<boolean> {
+      return this.label === 'host';
+   }
+   existsSync(): boolean {
+      return this.label === 'host';
+   }
+   async readBinary(): Promise<Uint8Array> {
+      return this.readBinarySync();
+   }
+   readBinarySync(): Uint8Array {
+      return new TextEncoder().encode(this.label);
+   }
+   async readFile(): Promise<string> {
+      return this.label;
+   }
+   readFileSync(): string {
+      return this.label;
+   }
+   async readDirectory(uri: URI): Promise<FileSystemNode[]> {
+      return this.readDirectorySync(uri);
+   }
+   readDirectorySync(uri: URI): FileSystemNode[] {
+      return [this.statSync(uri)];
+   }
+}
+
+function registry(
+   providers: Record<string, WritableFileSystemProvider>,
+   host: WritableFileSystemProvider = new LabelledProvider('host')
+): DefaultFileSystemProviderRegistry {
+   return new DefaultFileSystemProviderRegistry(
+      makeNoopSharedServices<ServerSharedServicesMinimal & { fileSystemProviders: Record<string, WritableFileSystemProvider> }>({
+         fileSystemProviders: providers
+      }),
+      { host }
+   );
+}
+
+/**
+ * The registry bound on the slot. Contract:
+ * - every call goes to the provider registered for the URI's scheme, and to
+ *   the host for a scheme with none, whatever that scheme is, one named like
+ *   a prototype key included;
+ * - `realpath` and `mtimeMs` forward to the scheme's provider; where it lacks
+ *   one, `realpath` returns the URI and `mtimeMs` returns `undefined`;
+ * - a provider that throws synchronously from an async method still rejects.
+ */
+describe('DefaultFileSystemProviderRegistry', () => {
+   const registered = URI.parse('custom:/lib/a.a');
+   const unclaimed = URI.parse('memory:///ws/a.a');
+
+   it('sends every read of a registered scheme to its provider, and any other scheme to the host', async () => {
+      const custom = new LabelledProvider('custom');
+      const host = new LabelledProvider('host');
+      const files = registry({ custom }, host);
+      for (const [uri, label] of [
+         [registered, 'custom'],
+         [unclaimed, 'host'],
+         [URI.parse('file:///ws/a.a'), 'host']
+      ] as const) {
+         expect(files.readFileSync(uri)).toBe(label);
+         expect(await files.readFile(uri)).toBe(label);
+         expect(new TextDecoder().decode(files.readBinarySync(uri))).toBe(label);
+         expect(new TextDecoder().decode(await files.readBinary(uri))).toBe(label);
+         expect(files.statSync(uri).uri.fragment).toBe(label);
+         expect((await files.stat(uri)).uri.fragment).toBe(label);
+         expect(files.existsSync(uri)).toBe(label === 'host');
+         expect(await files.exists(uri)).toBe(label === 'host');
+         expect(files.providerFor(uri)).toBe(label === 'custom' ? custom : host);
+      }
+   });
+
+   it("lists a directory through the provider of the directory's scheme", async () => {
+      const files = registry({ custom: new LabelledProvider('custom') }, new LabelledProvider('host'));
+      expect(files.readDirectorySync(URI.parse('memory:///ws')).map(node => node.uri.fragment)).toEqual(['host']);
+      expect((await files.readDirectory(URI.parse('custom:/lib'))).map(node => node.uri.fragment)).toEqual(['custom']);
+   });
+
+   it('writes through the provider of the scheme', async () => {
+      const custom = new LabelledProvider('custom');
+      const host = new LabelledProvider('host');
+      const files = registry({ custom }, host);
+      await files.writeFile(registered, 'one');
+      await files.writeFile(unclaimed, 'two');
+      expect(custom.written).toEqual([`${registered.toString()}=one`]);
+      expect(host.written).toEqual([`${unclaimed.toString()}=two`]);
+   });
+
+   it('sends a scheme that names a prototype key to the host', () => {
+      // The DI container resolves any key found on the prototype chain, so a
+      // plain lookup would hand back a function for these.
+      const files = registry({}, new LabelledProvider('host'));
+      for (const scheme of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+         expect(files.readFileSync(URI.parse(`${scheme}:/a.a`))).toBe('host');
+      }
+   });
+
+   it('passes a URI through realpath, and reports no mtime, for a provider without them', async () => {
+      const files = registry({}, new LabelledProvider('host'));
+      expect(files.realpath(unclaimed)).toBe(unclaimed);
+      expect(await files.mtimeMs(unclaimed)).toBeUndefined();
+   });
+
+   it("answers realpath and mtimeMs from the scheme's provider when it has them", async () => {
+      const resolved = URI.parse('file:///real/a.a');
+      const disk = Object.assign(new LabelledProvider('disk'), {
+         realpath: (): URI | undefined => resolved,
+         mtimeMs: async (): Promise<number | undefined> => 42
       });
+      const files = registry({}, disk);
+      expect(files.realpath(URI.parse('file:///link/a.a'))).toBe(resolved);
+      expect(await files.mtimeMs(URI.parse('file:///link/a.a'))).toBe(42);
+   });
+
+   it("keeps the scheme's provider's absent answer from realpath", () => {
+      const absent = Object.assign(new LabelledProvider('disk'), { realpath: (): URI | undefined => undefined });
+      expect(registry({}, absent).realpath(URI.parse('file:///gone.a'))).toBeUndefined();
+   });
+
+   it('rejects rather than throws when a provider throws synchronously from an async read', async () => {
+      const throwing = Object.assign(new LabelledProvider('throwing'), {
+         readFile: (): Promise<string> => {
+            throw new Error('synchronous');
+         }
+      });
+      await expect(registry({ custom: throwing }).readFile(registered)).rejects.toThrow('synchronous');
    });
 });

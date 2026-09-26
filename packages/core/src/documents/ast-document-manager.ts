@@ -65,8 +65,9 @@ export interface WritableFileSystemProvider extends FileSystemProvider {
     * - A non-`file:` URI (or any URI the provider cannot stat) passes through
     *   **unchanged** — it is treated as present, never reported absent.
     * - A provider with no disk to check (in-memory / browser / empty) simply
-    *   omits this method; `RealpathDocumentUriPolicy` then degrades to the
-    *   syntactic `DefaultDocumentUriPolicy` behaviour automatically.
+    *   omits this method; the framework's `FileSystemProviderRegistry` then
+    *   returns the URI unchanged, and `RealpathDocumentUriPolicy` answers as
+    *   the syntactic `DefaultDocumentUriPolicy` does.
     *
     * Synchronous (a `realpath` is a kernel-cached syscall) and optional — the
     * only consumers are the document-identity policy's `canonicalUri`/`loadUri`.

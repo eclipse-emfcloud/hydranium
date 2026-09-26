@@ -125,13 +125,6 @@ export interface PersistentFileSystemOptions extends InMemoryFileSystemOptions {
  * restored as deleted, which is why the marker is NUL-wrapped and text a grammar
  * can parse is not.
  *
- * # A registered virtual document still wins
- *
- * `readFileSync` consults the virtual-document seam before the map, so a stdlib
- * contributed in code keeps answering for its URI whether or not the store holds
- * one. The store cannot shadow it, which is what keeps a rebuild that re-reads
- * that URI from losing the stdlib.
- *
  * # What it deliberately does not answer
  *
  * The store is scoped to the ORIGIN, not to the page: two pages on the same
