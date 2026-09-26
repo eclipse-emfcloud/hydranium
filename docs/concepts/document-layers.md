@@ -100,10 +100,11 @@ The transitions that change the owner are explicit:
 - **Save and last close** are separate transitions. `save` takes the current
   store text and writes it through the file's disk queue, in the order saves
   were called. The last close removes the shared entry and editor shadow and
-  retains the content-version sequence. A file URI then gets a disk-backed
-  rebuild from the text store, for every head, once its disk queue has
-  drained, and a reopen reads the file in that queue, after any save still
-  writing; non-file documents stay in the index for the adopter to manage.
+  retains the content-version sequence. The document is then rebuilt from the
+  file system provider by the text store, for every head, once its disk queue
+  has drained, and a reopen reads the file in that queue, after any save still
+  writing. A document the provider cannot serve, of any scheme, is removed
+  from the index instead (see [Last close](client-sessions.md#last-close)).
 
 The open-document repair tests in the order-flow example exercise the normal
 and separately constructed paths in both sync modes, for a URI an editor

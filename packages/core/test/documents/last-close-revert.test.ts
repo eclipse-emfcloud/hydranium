@@ -51,7 +51,7 @@ interface RevertRig {
    readonly clock: FakeClock;
    /** Every `DocumentBuilder.update` dispatched under the write lock, with the reason staged for it. */
    readonly builds: Array<{ changed: string[]; deleted?: string[]; reason: string | undefined }>;
-   /** The files that exist. */
+   /** The URIs, of any scheme, the file system provider can serve. */
    readonly onDisk: Set<string>;
    /** How many existence checks the revert has made. */
    readonly existenceChecks: () => number;
@@ -290,15 +290,48 @@ describe('HydraniumTextDocuments — revert on last close', () => {
       expect(errors).toEqual([]);
    });
 
-   it('leaves a document that is not a file alone', async () => {
-      const { docs, builds } = makeRig();
-      const builtin = 'builtin:///library.a';
-      open(docs, 'form', builtin);
+   it('rebuilds a document that is not a file from the file system provider when the provider serves it', async () => {
+      const { docs, builds, onDisk } = makeRig();
+      const library = URI.parse('virtual:builtin/library.a').toString();
+      onDisk.add(library);
+      open(docs, 'form', library);
+      docs.applyContentChange(library, EDITED, 'form');
 
-      close(docs, 'form', undefined, builtin);
+      close(docs, 'form', undefined, library);
       await settle();
 
+      expect(builds).toEqual([{ changed: [library], reason: 'didClose' }]);
+   });
+
+   it('removes a document that is not a file from the workspace when the file system provider cannot serve it', async () => {
+      const { docs, builds, existenceChecks } = makeRig();
+      const untitled = 'untitled:/Untitled-1.a';
+      open(docs, 'form', untitled);
+      docs.applyContentChange(untitled, EDITED, 'form');
+
+      close(docs, 'form', undefined, untitled);
+      await settle();
+
+      expect(builds).toEqual([{ changed: [], deleted: [untitled], reason: 'didClose' }]);
+      expect(existenceChecks()).toBe(1);
+   });
+
+   it('keeps a document that is not a file when a client opens it again while its removal waits for the write lock, and removes it at the next last close', async () => {
+      const { docs, builds, holdLock } = makeRig();
+      const untitled = 'untitled:/Untitled-1.a';
+      open(docs, 'form', untitled);
+      const lock = holdLock();
+
+      close(docs, 'form', undefined, untitled);
+      await settle();
+      open(docs, 'form', untitled);
+      lock.release();
+      await settle();
       expect(builds).toEqual([]);
+
+      close(docs, 'form', undefined, untitled);
+      await settle();
+      expect(builds).toEqual([{ changed: [], deleted: [untitled], reason: 'didClose' }]);
    });
 
    it('removes a document with no file behind it from the workspace rather than rebuilding it', async () => {
@@ -516,6 +549,22 @@ describe('HydraniumTextDocuments — revert grace', () => {
 
       expect(docs.get(FILE)?.getText()).toBe(DISK);
       expect(docs.isRevertPending(FILE)).toBe(false);
+   });
+
+   it('keeps a document that is not a file when another client opens it within the grace, and removes it at that client’s close', async () => {
+      const { docs, builds } = makeRig(1000);
+      const untitled = 'untitled:/Untitled-1.a';
+      open(docs, 'form', untitled);
+      close(docs, 'form', 'lost', untitled);
+      await settle();
+
+      open(docs, 'other', untitled);
+      await settle();
+      expect(builds).toEqual([]);
+
+      close(docs, 'other', undefined, untitled);
+      await settle();
+      expect(builds).toEqual([{ changed: [], deleted: [untitled], reason: 'didClose' }]);
    });
 
    it('reverts first for another client that opens the document within the grace, which gets the disk text', () => {
