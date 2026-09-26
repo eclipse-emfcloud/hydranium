@@ -234,7 +234,7 @@ export interface MakeTestServicesOptions<
     * Override the {@link TransferEncoder} factory. Default: framework
     * {@link TransferEncoder} with no overrides.
     */
-   transferEncoder?: (services: ServerSharedServices<TProject>) => TransferEncoder<TTransferDiagnostic>;
+   transferEncoder?: (services: ServerSharedServices<TProject, TTransferDiagnostic>) => TransferEncoder<TTransferDiagnostic>;
 }
 
 /**
@@ -257,7 +257,7 @@ export interface TestServicesBundle<
    TProject extends Project = Project,
    TTransferDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > extends Harness {
-   readonly services: ServerSharedServices<TProject>;
+   readonly services: ServerSharedServices<TProject, TTransferDiagnostic>;
    readonly documents: StubLangiumDocuments<TAst, TDiagnostic>;
    readonly textDocuments: StubHydraniumTextDocuments;
    readonly astDocumentManager: StubAstDocumentManager<TAst, TDiagnostic>;
@@ -373,7 +373,7 @@ export function makeTestServices<
       ServerLocale: {} as ServerLocale,
       MessageRenderer: {} as DefaultMessageRenderer
    };
-   const sharedServices = services as unknown as ServerSharedServices<TProject>;
+   const sharedServices = services as unknown as ServerSharedServices<TProject, TTransferDiagnostic>;
 
    // Patched in after the literal, like `model` below: both read the tree they
    // belong to, and the renderer reads the locale service.

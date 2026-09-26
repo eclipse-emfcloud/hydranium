@@ -517,24 +517,20 @@ export class DataServer<
    protected readonly encoder: TransferEncoder<TDiagnostic>;
    /**
     * In-process workspace facade — the lifecycle delegate `get` / `update` / `save` go through.
-    * The facade's AstDocument diagnostic shape is intentionally typed `unknown` here: adopters
-    * carry LSP-shape diagnostics in their AstDocument (e.g. an adopter's LSP-shape diagnostic type)
-    * while the wire shape stays `TDiagnostic extends TransferDiagnostic`. The encoder's
-    * `astDocumentToTransferDocument` accepts both shapes (wire-shape or LSP-shape) and projects
-    * to wire shape on the return — see `TransferEncoder.astDocumentToTransferDocument`.
+    * Its documents carry the AST-layer {@link AstDiagnostic}, never the wire `TDiagnostic`:
+    * {@link encoder} converts one into the other on the way out.
     */
    protected readonly modelService: ModelService<AstNode, AstDiagnostic, TTransfer>;
 
    constructor(
       protected readonly connection: MessageConnection,
-      protected readonly services: ServerSharedServices<TProject>,
+      protected readonly services: ServerSharedServices<TProject, TDiagnostic>,
       options: DataServerOptions = {}
    ) {
       this.options = this.resolveOptions(options);
       this.tracer = this.services.Tracer.for(options.logName ?? 'DataServer').trace('instantiated');
       // DI-bound: adopters rebind `services.model.TransferEncoder` /
-      // `services.model.ModelService` with their own subclasses. Slot types use the
-      // framework upper bounds; the casts below narrow to this instance's generics.
+      // `services.model.ModelService` with their own subclasses.
       const { TransferEncoder: encoder, ModelService: modelService } = this.services.model;
       if (!encoder || !modelService) {
          throw new Error(
@@ -542,8 +538,8 @@ export class DataServer<
                'Did you compose `createServerSharedModule(ctx)` into your shared module?'
          );
       }
-      this.encoder = encoder as TransferEncoder<TDiagnostic>;
-      this.modelService = modelService as ModelService<AstNode, AstDiagnostic, TTransfer>;
+      this.encoder = encoder;
+      this.modelService = modelService;
       const excluded = new Set<string>(this.options.excludedMethods);
       const registeredMethods = [
          ...DATA_SERVER_PROTOCOL_METHODS,
@@ -968,7 +964,7 @@ export class DataServer<
       if (!resolved) {
          return undefined;
       }
-      const element = this.encoder.toTransfer(resolved.node) as unknown as TTransfer;
+      const element = this.encoder.toTransfer(resolved.node) as TTransfer;
       return { ...resolved.candidate, element };
    }
 
@@ -994,7 +990,7 @@ export class DataServer<
       if (tier === 'local') {
          // Document-scoped uniqueness: the document root is the container.
          const document = await this.modelService.ensureDocumentState(args.uri);
-         return document.root ? nameProvider.findNextName(args.type, args.proposal, document.root as AstNode) : args.proposal;
+         return document.root ? nameProvider.findNextName(args.type, args.proposal, document.root) : args.proposal;
       }
       const project = this.services.workspace.ProjectManager.getProject(uri);
       if (!project) {
@@ -1073,7 +1069,7 @@ export class DataServer<
       }
       const all = registry.all;
       if (all.length === 1) {
-         return all[0] as HydraniumLanguageServices;
+         return all[0];
       }
       if (isElementSource(source)) {
          const documentUri = this.findElementDocumentUri(source);
@@ -1181,7 +1177,7 @@ export class DataServer<
          // override `envelope`.
          return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
-      return this.withDirtyState(this.encoder.toTransferDocument(document) as unknown as TransferDocument<TTransfer, TDiagnostic>);
+      return this.withDirtyState(this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>);
    }
 
    /**
@@ -1191,9 +1187,7 @@ export class DataServer<
     * without the stamp.
     */
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      return this.withDirtyState(
-         this.encoder.astDocumentToTransferDocument(astDocument as never) as unknown as TransferDocument<TTransfer, TDiagnostic>
-      );
+      return this.withDirtyState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
    }
 
    /**
@@ -1622,7 +1616,7 @@ export class DataServer<
    /** Resolve a partial options object into a fully-defaulted form. */
    protected resolveOptions(partial: DataServerOptions): ResolvedDataServerOptions {
       const additionalMethods = partial.additionalMethods ?? [];
-      const builtIn = [...DATA_SERVER_PROTOCOL_METHODS, ...DATA_SERVER_DIAGNOSTICS_METHODS] as readonly string[];
+      const builtIn: readonly string[] = [...DATA_SERVER_PROTOCOL_METHODS, ...DATA_SERVER_DIAGNOSTICS_METHODS];
       const overlap = additionalMethods.filter(name => builtIn.includes(name));
       if (overlap.length > 0) {
          throw new Error(

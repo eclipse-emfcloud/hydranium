@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock, type Logger, type Project, type Tracer, NoopLogger, SystemClock } from '@hydranium/protocol';
+import { type Clock, type Logger, type Project, type Tracer, type TransferDiagnostic, NoopLogger, SystemClock } from '@hydranium/protocol';
 import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.js';
 import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 import { ServerTracer } from './diagnostics/server-tracer.js';
@@ -49,7 +49,10 @@ import { ExtendedServiceRegistry } from './service-registry.js';
  * these shared services; per-head shared bindings, if any, are
  * contributed by additional modules layered after this one.
  */
-export interface ServerAddedSharedServices<TProject extends Project = Project> {
+export interface ServerAddedSharedServices<
+   TProject extends Project = Project,
+   TDiagnostic extends TransferDiagnostic = TransferDiagnostic
+> {
    /**
     * Injectable time source. Framework default is {@link SystemClock} (real
     * `Date.now` / `performance.now` / `setTimeout`); tests bind a fake to
@@ -268,7 +271,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     * adopter can therefore REPLACE this declaration (see
     * {@link WithServiceOverrides}) rather than intersect with it, which is what
     * keeps slot resolution independent of the order a services type is written
-    * in. `ModelService` is still a class and does not yet have that property.
+    * in. `ModelService` is an interface for the same reason.
     *
     * A class in a slot costs two things, both measured. Its `protected` members
     * join every assignability check and are compared NOMINALLY, so a subclass
@@ -279,7 +282,7 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
     * framework's. Neither survives on an interface.
     */
    model: {
-      TransferEncoder: TransferEncoder;
+      TransferEncoder: TransferEncoder<TDiagnostic>;
       ModelService: ModelService<AstNode>;
       /** Builds the handle of every session `ModelService.createSession` starts. */
       ClientSessionFactory: ClientSessionFactory;
@@ -320,10 +323,18 @@ export interface ServerAddedSharedServices<TProject extends Project = Project> {
  * `ClientTextDocumentChangeEvent` payload (with `clientId`);
  * `ServiceRegistry.getServices(uri)` keeps the
  * {@link ServerLanguageServices} return shape.
+ *
+ * `TDiagnostic` is the diagnostic the bound `model.TransferEncoder` emits. A
+ * head that sends a narrower diagnostic than `TransferDiagnostic` takes
+ * services typed with it, so none of its envelopes claims a shape the encoder
+ * does not produce.
  */
-export type ServerSharedServices<TProject extends Project = Project> = Omit<LangiumSharedServices, 'workspace' | 'ServiceRegistry'> & {
+export type ServerSharedServices<TProject extends Project = Project, TDiagnostic extends TransferDiagnostic = TransferDiagnostic> = Omit<
+   LangiumSharedServices,
+   'workspace' | 'ServiceRegistry'
+> & {
    workspace: Omit<LangiumSharedServices['workspace'], 'TextDocuments' | 'DocumentBuilder'>;
-} & ServerAddedSharedServices<TProject>;
+} & ServerAddedSharedServices<TProject, TDiagnostic>;
 
 /**
  * The service-tree namespaces — the keys whose value groups further slots
