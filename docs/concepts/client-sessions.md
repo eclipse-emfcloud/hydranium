@@ -601,6 +601,13 @@ connection to a shared-services tree, and the language-client state the text
 store keeps is keyed by URI alone, so a server process serves one LSP
 connection.
 
+The language client's close is not a lost one, so when a page disposes both
+its data connection and its worker's language client, their order decides what
+a document open in both keeps. If the data connection closes last, its sessions
+end as lost, and the document keeps its unsaved text for the revert grace; if
+the language client closes last, the document reverts at once. An editor's
+`didClose` that closes a document last reverts it at once too.
+
 ## Known limits
 
 - A browser tab that closes can await no save; `beforeunload` can only prompt.
