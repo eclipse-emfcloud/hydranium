@@ -38,6 +38,7 @@ import {
    type TransferDiagnostic,
    TransferDocument,
    type TransferElement,
+   UNKNOWN_CLIENT_ID,
    asSnapshotVersion
 } from '@hydranium/protocol';
 import {
@@ -63,7 +64,7 @@ import {
    type TransferUpdateDocumentArgs,
    type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
-import { REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/core';
+import { REVERT_ON_CLOSE_CLIENT_ID } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 
 /**
@@ -454,17 +455,6 @@ export class DataServer<
    protected readonly clientProxy: DataClientProtocol<TTransfer, TDiagnostic, TProject>;
    protected readonly disposables = new DisposableCollection();
    /**
-    * Snapshot of the most recent `DocumentBuilder.onUpdate` event. Drives
-    * `reason` discrimination on outbound `onDocumentUpdated` notifications:
-    * a URI in the `changed` list emits `'changed'`, otherwise `'rebuilt'`
-    * (cascade rebuild from a dependent URI's change). The same mechanism
-    * `AstDocumentManager.onUpdate` uses on the LSP side, so reason fidelity
-    * stays consistent between heads. The `deleted` half is read by
-    * {@link dispatchDeleteEvents} rather than by the reason discrimination,
-    * a deletion travelling on its own channel.
-    */
-   protected lastBuildUpdate?: { changed: readonly URI[]; deleted: readonly URI[] };
-   /**
     * Per-URI hash of the last emitted (text + diagnostics) state,
     * used by {@link dispatchPhaseEvent} to suppress duplicate
     * `onDocumentUpdated` notifications for rebuilds that produce no
@@ -500,6 +490,17 @@ export class DataServer<
     * document size. See {@link computeDocumentFingerprint} for the inputs.
     */
    protected readonly lastEmittedFingerprint = new Map<string, string>();
+   /**
+    * The version of an open document the last event sent for a URI was built
+    * at. The version sent again goes out as `'rebuilt'` from no client: the
+    * manager counts a version delivered only once its `Validated` listeners
+    * ran, so a build cancelled after the subscription phase would send it as a
+    * change twice. Only while the store has the document open: without it, a
+    * document can keep one version through changes of its file, so its events
+    * keep the manager's attribution. Dropped with
+    * {@link lastEmittedFingerprint}.
+    */
+   protected readonly sentVersions = new Map<string, number>();
    /**
     * URIs the text store just released after their last close. The store
     * rebuilds such a document from its disk content (discarding unsaved
@@ -569,12 +570,7 @@ export class DataServer<
          // framework's own rejections.
          renderErrorMessage: error => this.services.MessageRenderer.renderError(error)
       });
-      this.disposables.push(
-         this.services.workspace.DocumentBuilder.onUpdate((changed, deleted) => {
-            this.lastBuildUpdate = { changed, deleted };
-            this.dispatchDeleteEvents(deleted);
-         })
-      );
+      this.disposables.push(this.services.workspace.DocumentBuilder.onUpdate((_changed, deleted) => this.dispatchDeleteEvents(deleted)));
       this.subscribeToDocumentBuilder();
       this.subscribeToTextDocumentSaves();
       this.subscribeToDirtyChanges();
@@ -624,6 +620,7 @@ export class DataServer<
       }
       this.subscriptions.clear();
       this.lastEmittedFingerprint.clear();
+      this.sentVersions.clear();
       this.pendingRevertBroadcasts.clear();
    }
 
@@ -682,6 +679,7 @@ export class DataServer<
          if (watchers.delete(clientId) && watchers.size === 0) {
             this.subscriptions.delete(uri);
             this.lastEmittedFingerprint.delete(uri);
+            this.sentVersions.delete(uri);
          }
       }
       session.dispose(cause);
@@ -866,6 +864,7 @@ export class DataServer<
       if (subscribers.size === 0) {
          this.subscriptions.delete(uri);
          this.lastEmittedFingerprint.delete(uri);
+         this.sentVersions.delete(uri);
       }
    }
 
@@ -1368,6 +1367,7 @@ export class DataServer<
       for (const removed of deleted) {
          const uri = this.canonicalKey(removed.toString());
          this.lastEmittedFingerprint.delete(uri);
+         this.sentVersions.delete(uri);
          this.pendingRevertBroadcasts.delete(uri);
          this.clientProxy.onDocumentDeleted({ uri });
       }
@@ -1420,9 +1420,9 @@ export class DataServer<
       }
       const uri = document.uri.toString();
       // Consume the last-close mark even when subscriptions exist — the
-      // regular dispatch below serves those watchers, and the mark's author
-      // attribution is more precise than the post-close `UNKNOWN_CLIENT_ID`
-      // the author lookup would yield.
+      // regular dispatch below serves those watchers, and the mark's
+      // attribution is more precise than the post-close unknown client the
+      // manager's attribution would yield.
       const revertedOnClose = this.pendingRevertBroadcasts.delete(uri);
       if (!this.subscriptions.has(uri) && !revertedOnClose) {
          return;
@@ -1437,10 +1437,23 @@ export class DataServer<
          return;
       }
       this.lastEmittedFingerprint.set(uri, fingerprint);
+      // The manager's attribution, so this head names the same client as the
+      // in-process heads do for one build, except for a version this head
+      // already sent; see `sentVersions`.
+      const version = this.services.workspace.AstDocumentManager.isOpen(uri) ? document.textDocument.version : undefined;
+      const { reason, sourceClientId } =
+         version !== undefined && this.sentVersions.get(uri) === version
+            ? { reason: 'rebuilt' as const, sourceClientId: UNKNOWN_CLIENT_ID }
+            : this.services.workspace.AstDocumentManager.attributeUpdate(document);
+      if (version === undefined) {
+         this.sentVersions.delete(uri);
+      } else {
+         this.sentVersions.set(uri, version);
+      }
       const event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri),
-         sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : this.resolveSourceClientId(document),
-         reason: this.resolveUpdateReason(document.uri)
+         sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,
+         reason
       };
       this.tracer
          .withUri(uri)
@@ -1489,24 +1502,6 @@ export class DataServer<
    }
 
    /**
-    * Discriminate the reason for a phase-event-driven update notification.
-    * Uses the most recent `DocumentBuilder.onUpdate` snapshot:
-    * - URI in the `changed` list → `'changed'` (the URI was passed to
-    *   `documentBuilder.update(changed, deleted)`, which spans `didChange`
-    *   text-document events and programmatic `update([uri], [])` calls).
-    * - Otherwise → `'rebuilt'` (cascade re-derivation: this URI was rebuilt
-    *   because something it depends on changed; its own text wasn't flagged).
-    *
-    * `'saved'` is NOT emitted here — saves take the dedicated
-    * `DataClientProtocol.onDocumentSaved` channel, and adopters wanting a
-    * unified stream synthesise it in their bridge layer. A deletion is not a
-    * reason at all; see {@link dispatchDeleteEvents}.
-    */
-   protected resolveUpdateReason(uri: URI): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>['reason'] {
-      return this.lastBuildUpdate?.changed.some(changed => UriUtils.equals(changed, uri)) ? 'changed' : 'rebuilt';
-   }
-
-   /**
     * Subscribe to the project tier's change channel and re-fan registry
     * diffs into per-project wire notifications. The internal
     * `ProjectChangeEvent` carries arrays of added/updated ids plus a
@@ -1547,20 +1542,6 @@ export class DataServer<
       for (const entry of event.removed) {
          this.clientProxy.onProjectsChanged({ project: entry.snapshot, reason: 'removed' });
       }
-   }
-
-   /**
-    * Resolve the wire-level `sourceClientId` for `document`'s events — the client
-    * that authored its current version, from the version-author history on
-    * `HydraniumTextDocuments`. The protocol-level counterpart of the internal
-    * `AstDocumentManager.getAuthor`: a framework-internal rebuild has no author,
-    * so this surfaces the {@link UNKNOWN_CLIENT_ID} presentation default. Adopters
-    * that rebuild through non-text-document channels override to derive a
-    * source id of their own.
-    */
-   protected resolveSourceClientId(document: LangiumDocument): string {
-      const author = this.services.workspace.TextDocuments.getAuthor(document.textDocument.uri, document.textDocument.version);
-      return author ?? UNKNOWN_CLIENT_ID;
    }
 
    // --- Diagnostics (DataServerDiagnosticsProtocol) ---------------------------

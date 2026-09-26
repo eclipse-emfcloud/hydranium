@@ -63,6 +63,10 @@
  *   language, so a leak across languages would show as a second red.
  * - Point the `.layout` fixture's `edit.expect` at a flow-node name the edit does
  *   not introduce and exactly `updateModelDocument … [order-flow-layout]` fails.
+ * - Give the `.domain` fixture's `breakingEdit` the `edit` text, which adds
+ *   `Pallet` and keeps `Shipment`, and exactly the dependent-credit check
+ *   `… [order-flow-domain]` fails: the dependent then shows nothing new, so
+ *   its watcher is sent no event.
  */
 
 import type { LanguageFixture } from '@hydranium/conformance';
@@ -148,7 +152,9 @@ const domainFixture: LanguageFixture = {
       uri: uri('orders/conformance-dependent.process'),
       languageId: PROCESS_LANGUAGE_ID,
       text: 'process Packing for Shipment {\n   task Label reads Shipment.tracking\n}\n'
-   }
+   },
+   // Renames the entity the dependent names, so every reference it makes breaks.
+   breakingEdit: 'entity Parcel {\n   tracking: ID\n   carrier: String\n}\n'
 };
 
 /**

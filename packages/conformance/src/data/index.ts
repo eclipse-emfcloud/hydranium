@@ -28,7 +28,8 @@ import {
    SyntheticStep,
    TransferDocument,
    type TransferDiagnostic,
-   type TransferElement
+   type TransferElement,
+   UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import type {
    DataServerProtocol,
@@ -60,7 +61,7 @@ export interface DataConformanceDriver<
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > extends Harness {
    readonly proxy: DataServerProtocol<TTransfer, TDiagnostic>;
-   /** Captured `onDocumentUpdated` events, append order — the subscription check's observation target. */
+   /** Captured `onDocumentUpdated` events, in append order. */
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
    /** Captured `onDocumentsBuilt` events, append order — the cascade check's observation target. */
    readonly builds: ReadonlyArray<TransferDocumentsBuiltEvent>;
@@ -842,6 +843,70 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                : undefined
       });
 
+      const breakingEdit = language.breakingEdit;
+      checks.push({
+         title: `an edit that changes a watched dependent credits the dependent's event to no client ${tag}`,
+         skipReason: !dependent
+            ? cascadeSkipReason
+            : breakingEdit === undefined
+              ? 'fixture supplies no `breakingEdit` (a text for `valid` that changes what `dependent` shows)'
+              : undefined,
+         body:
+            dependent && breakingEdit !== undefined
+               ? async () => {
+                    const driver = await connect();
+                    try {
+                       const model = resolveModel(valid);
+                       const other = resolveModel(dependent);
+                       const eventsFor = (uri: string, from = 0): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[] =>
+                          driver.events.slice(from).filter(event => event.document.uri === uri);
+                       await seed(driver, model);
+                       // The dependent's seeder keeps it open: an open document is
+                       // the one a head could wrongly credit to its opener.
+                       await seed(driver, other);
+                       // Watched after the seeds: a seed that changes nothing, over
+                       // a fixture file that holds its text already, sends a watcher
+                       // nothing to wait for.
+                       await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+                       await driver.proxy.watchModelDocument({ uri: other.uri, clientId: SUBSCRIBER });
+                       const author = await openAs(driver, model.uri);
+                       const before = driver.events.length;
+
+                       const answer = await driver.proxy.updateModelDocument({
+                          uri: model.uri,
+                          clientId: author,
+                          model: resolveDeferred(breakingEdit),
+                          basedOn: 'anything'
+                       });
+
+                       const written = (): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> | undefined =>
+                          eventsFor(model.uri, before).find(event => event.document.version === answer.version);
+                       await waitFor(() => written() !== undefined && eventsFor(other.uri, before).length > 0, {
+                          message: `no onDocumentUpdated event for both ${model.uri} and its dependent ${other.uri} after the breaking edit`
+                       });
+                       assert.deepStrictEqual(
+                          { reason: written()?.reason, sourceClientId: written()?.sourceClientId },
+                          { reason: 'changed', sourceClientId: author },
+                          'the written document’s event is not the author’s change'
+                       );
+                       // A recipient drops an event naming its own id as its echo, so
+                       // a dependent's event credited to the author, or to the client
+                       // that has the dependent open, is lost to exactly the client
+                       // that would show it.
+                       for (const event of eventsFor(other.uri, before)) {
+                          assert.deepStrictEqual(
+                             { reason: event.reason, sourceClientId: event.sourceClientId },
+                             { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID },
+                             'the dependent’s event is not a rebuild that names no client'
+                          );
+                       }
+                    } finally {
+                       driver.dispose();
+                    }
+                 }
+               : undefined
+      });
+
       checks.push({
          title: `subscribe + update delivers an onDocumentUpdated event with the originating clientId ${tag}`,
          skipReason: edit ? undefined : editSkipReason,
@@ -871,6 +936,9 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     const last = driver.events[driver.events.length - 1];
                     assert.strictEqual(last.document.uri, model.uri);
                     assert.strictEqual(last.sourceClientId, author);
+                    // The first delivery of the author's version is a change;
+                    // reported as rebuilt, it says the event echoes no write.
+                    assert.strictEqual(last.reason, 'changed');
                     // Nothing from before the subscription. Waiting for the
                     // post-subscribe event first is what makes this provable: the
                     // two notifications share one ordered connection, so a seeding

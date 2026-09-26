@@ -125,6 +125,18 @@ answers at `IntegrityService.SettledState`. A document that a `shouldValidate`
 override skips answers once the build has indexed its references, without
 diagnostics.
 
+An update event's `sourceClientId` names the client whose write it echoes, so
+`isOwnEcho` is true only for this session's own writes. The first event the
+server raises for a version, whether or not a client watched it, is `changed`
+and names the version's author, whichever build carried it. A later event for
+the same version is `rebuilt` and names
+`UNKNOWN_CLIENT_ID`: a document rebuilt because something it references changed
+is news to every client, the one that opened or last wrote it included.
+`AstDocumentManager.attributeUpdate` decides this for every head; the data head
+names the revert-on-close id instead for the rebuild that reverts a document
+after its last close. The rule needs rebuilds that validate: see
+`TransferDocumentUpdateReason` for the cases that fall back.
+
 A save persists the document's current text, which includes unsaved edits other
 participants have made to it: there is one shared text per document. The save
 checks the open once more when it takes that text, after the rebuild: a session

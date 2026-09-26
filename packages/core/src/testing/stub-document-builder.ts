@@ -17,6 +17,7 @@ import {
    type URI
 } from '@hydranium/langium';
 import { type CancellationToken, Disposable } from 'vscode-languageserver';
+import { type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -46,9 +47,7 @@ export interface StubWaitUntilGate {
 
 /**
  * Stub for Langium's {@link DocumentBuilder}. Implements the slice production
- * code reads from on the framework's test paths (`update` / `waitUntil` /
- * `updateBuildOptions` / `onDocumentPhase` / `onUpdate`) plus test-only
- * helpers:
+ * code reads on the framework's test paths, plus test-only helpers:
  *
  * - {@link firePhase} — synchronously dispatch the registered phase
  *   listener(s) for a document, simulating a build completing.
@@ -72,10 +71,10 @@ export interface StubWaitUntilGate {
  * stub claims but doesn't meaningfully implement) fails with a clear
  * message instead of "undefined is not a function".
  */
-export interface StubDocumentBuilder extends Pick<
-   DocumentBuilder,
-   'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'
-> {
+export interface StubDocumentBuilder
+   extends
+      Pick<DocumentBuilder, 'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'>,
+      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered'> {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
     * two overloads (`(state, cancelToken?): Promise<void>` and
@@ -89,9 +88,10 @@ export interface StubDocumentBuilder extends Pick<
    readonly waitUntilCalls: ReadonlyArray<RecordedBuilderCall<[DocumentState, URI | undefined]>>;
    /**
     * Synchronously fire the phase listener(s) registered for `state` with
-    * `document`. `cancelToken` defaults to a non-cancelled token; pass a
-    * cancelled token to simulate a build preempted by a concurrent write
-    * lock.
+    * `document`, then, unless `cancelToken` is cancelled, the
+    * `onDocumentPhaseDelivered` listeners. `cancelToken` defaults to a
+    * non-cancelled token; pass a cancelled token to simulate a build preempted
+    * by a concurrent write lock.
     */
    firePhase(state: DocumentState, document: LangiumDocument, cancelToken?: CancellationToken): void;
    /** Synchronously fire every registered `onUpdate` listener. */
@@ -141,6 +141,7 @@ function reraise(result: unknown): void {
  */
 export function makeStubDocumentBuilder(): StubDocumentBuilder {
    const phaseListeners = new Map<DocumentState, DocumentPhaseListener[]>();
+   const deliveredListeners = new Map<DocumentState, Array<(document: LangiumDocument, version: number) => void>>();
    const buildPhaseListeners = new Map<DocumentState, DocumentBuildListener[]>();
    const onUpdateListeners: DocumentUpdateListener[] = [];
    const gates: Array<{ take(release: () => void): void }> = [];
@@ -199,9 +200,30 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
                onCancellationRequested: () => Disposable.create(() => undefined)
             } as CancellationToken);
          const listeners = phaseListeners.get(state) ?? [];
+         const delivered = deliveredListeners.get(state) ?? [];
+         // Taken before the listeners, as the real builder does: one of them
+         // may stand in for a write that moves the version on. Read only when
+         // someone is told, since many fakes carry no text document.
+         const version = delivered.length > 0 ? document.textDocument.version : 0;
          for (const listener of listeners) {
             reraise(listener(document, token));
          }
+         if (!token.isCancellationRequested) {
+            for (const listener of delivered) {
+               listener(document, version);
+            }
+         }
+      },
+      onDocumentPhaseDelivered(state: DocumentState, listener: (document: LangiumDocument, version: number) => void) {
+         const list = deliveredListeners.get(state) ?? [];
+         list.push(listener);
+         deliveredListeners.set(state, list);
+         return Disposable.create(() => {
+            const idx = list.indexOf(listener);
+            if (idx >= 0) {
+               list.splice(idx, 1);
+            }
+         });
       },
       fireOnUpdate(changed: URI[], deleted: URI[]) {
          for (const listener of onUpdateListeners.slice()) {
@@ -265,6 +287,7 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
       },
       reset() {
          phaseListeners.clear();
+         deliveredListeners.clear();
          onUpdateListeners.length = 0;
          gates.length = 0;
          updateCalls.length = 0;

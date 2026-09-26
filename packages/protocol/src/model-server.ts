@@ -73,9 +73,25 @@ export interface CloseModelArgs extends TransferClientArgs {}
 
 export interface TransferUpdatedEvent<TDocument> {
    document: TDocument;
+   /**
+    * The client whose write this event echoes: the author of the version on a
+    * `'changed'`, and the unknown-client id on a `'rebuilt'`, which echoes no
+    * write. A recipient compares it against its own id to recognise its echo.
+    */
    sourceClientId: string;
    /** See `TransferDocumentUpdateReason` in `./data/events` for the canonical reason set + semantics. */
    reason: 'changed' | 'rebuilt' | 'saved';
+   /**
+    * The client whose write caused the build that produced this event, or the
+    * unknown-client id when no single client's did. On a `'changed'` it is the
+    * version's author. A `'rebuilt'` names the writer of another document, so
+    * it is a cause, never an echo: its diagnostics and references are new to
+    * that writer too.
+    *
+    * In-process only: the data head does not send it, and an event built
+    * elsewhere may leave it out, which a reader takes as "not known".
+    */
+   causedBy?: string;
 }
 
 export interface TransferSavedEvent<TDocument> {

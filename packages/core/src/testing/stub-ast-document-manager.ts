@@ -14,8 +14,10 @@ import {
    AstDocument,
    type AstDocumentManager,
    type AstDocumentUpdatedEvent,
+   type UpdateAttribution,
    type WritableFileSystemProvider
 } from '../documents/ast-document-manager.js';
+import { UNKNOWN_CLIENT_ID } from '../documents/client-ids.js';
 import type { CloseModelArgs, OpenModelArgs } from '@hydranium/protocol';
 import type { StubHydraniumTextDocuments } from './stub-hydranium-text-documents.js';
 import type { StubLangiumDocuments } from './stub-langium-documents.js';
@@ -48,7 +50,17 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  */
 export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> extends Pick<
    AstDocumentManager<TAst, TDiagnostic>,
-   'open' | 'close' | 'isOpen' | 'update' | 'save' | 'onUpdate' | 'onSave' | 'onClientClosed' | 'getAuthor' | 'getDocument'
+   | 'open'
+   | 'close'
+   | 'isOpen'
+   | 'update'
+   | 'save'
+   | 'onUpdate'
+   | 'onSave'
+   | 'onClientClosed'
+   | 'getAuthor'
+   | 'getDocument'
+   | 'attributeUpdate'
 > {
    readonly openClients: Map<string, Set<string>>;
 
@@ -200,6 +212,14 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
       },
       getAuthor(): string {
          return notSupported('getAuthor');
+      },
+      // Reports every event as a change by the version's author: the stub
+      // tree runs no builds, so there is no delivery to tell a rebuild by. A
+      // test of the rebuilt branch replaces this method or uses the real
+      // manager.
+      attributeUpdate(document: LangiumDocument): UpdateAttribution {
+         const author = textDocuments.getAuthor(document.textDocument.uri, document.textDocument.version) ?? UNKNOWN_CLIENT_ID;
+         return { reason: 'changed', sourceClientId: author, causedBy: author };
       },
       // Canonicalizing document gateway. The stub has no canonicalizer, so it looks
       // the document up in the seeded `StubLangiumDocuments` by its given URI (tests

@@ -30,7 +30,13 @@ import {
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import type { ClientSession as ModelClientSession, ServerSharedServices } from '@hydranium/core';
+import {
+   AstDocument,
+   type AstDocumentUpdatedEvent,
+   type ClientSession as ModelClientSession,
+   type ServerSharedServices,
+   UNKNOWN_CLIENT_ID
+} from '@hydranium/core';
 import { makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
@@ -91,6 +97,40 @@ class TestStorage extends HydraniumGlspStorage<TestRoot> {
 
    public callAwaitModelSession(): Promise<ModelClientSession<AstNode>> {
       return this.awaitModelSession();
+   }
+}
+
+/**
+ * Records the resubmits and marker refreshes an update event causes instead of
+ * performing them, and never finds itself stale, so the update handlers run to
+ * their decision.
+ */
+class UpdateRecordingStorage extends TestStorage {
+   readonly resubmits: string[] = [];
+   markerRefreshes = 0;
+
+   callHandleModelUpdated(event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
+      return this.handleModelUpdated('file:///x.a', event);
+   }
+
+   callHandleSecondaryUpdated(event: AstDocumentUpdatedEvent<AstNode>): void {
+      this.handleSecondaryUpdated('file:///x.layout', event);
+   }
+
+   protected override scheduleUpdateAndSubmit(document: AstDocument<AstNode>): void {
+      this.resubmits.push(document.uri);
+   }
+
+   protected override currentPrimaryDocument(): AstDocument<AstNode> {
+      return AstDocument.create('file:///x.a', 1, { $type: 'TestRoot' });
+   }
+
+   protected override disposeIfStale(): boolean {
+      return false;
+   }
+
+   override async refreshDiagnosticMarkers(): Promise<void> {
+      this.markerRefreshes++;
    }
 }
 
@@ -156,7 +196,8 @@ function createStorage(
    sharedServices: ServerSharedServices = makeNoopSharedServices<ServerSharedServices>({
       model: { ModelService: makeSessionModelService() }
    }),
-   logger: GlspLogger = makeNoopGlspLogger()
+   logger: GlspLogger = makeNoopGlspLogger(),
+   storageClass: typeof TestStorage = TestStorage
 ): { storage: TestStorage; state: TestState; sessions: CapturedSessionManager } {
    const handles: ListenerHandle[] = [];
    const sessions = {
@@ -203,7 +244,7 @@ function createStorage(
    container.bind(GModelSerializer).toConstantValue({} as GModelSerializer);
    container.bind(ModelState).to(TestState).inSingletonScope();
    container.bind(TestState).toService(ModelState);
-   container.bind(TestStorage).toSelf().inSingletonScope();
+   container.bind(TestStorage).to(storageClass).inSingletonScope();
    return { storage: container.get(TestStorage), state: container.get(TestState), sessions };
 }
 
@@ -936,6 +977,80 @@ describe('HydraniumGlspStorage', () => {
          storage.dirtyChanged('file:///x.a', false);
 
          expect(dirtyStates).toEqual(['true external', 'true external']);
+      });
+   });
+
+   describe('answering an update', () => {
+      function updateRecordingStorage(): UpdateRecordingStorage {
+         const { storage } = createStorage('client-1', undefined, undefined, UpdateRecordingStorage);
+         if (!(storage instanceof UpdateRecordingStorage)) {
+            throw new Error('the container built the wrong storage');
+         }
+         return storage;
+      }
+
+      /** An update of `uri` with the given attribution. */
+      function updated(uri: string, attribution: Pick<AstDocumentUpdatedEvent<AstNode>, 'reason' | 'sourceClientId' | 'causedBy'>) {
+         return { document: AstDocument.create(uri, 1, { $type: 'TestRoot' }), ...attribution };
+      }
+
+      // A write to a secondary sweeps the primary into its build, and the
+      // primary arrives rebuilt. Its causedBy is what tells the diagram that
+      // its own write caused it; the resubmit would land on the move the user
+      // still holds.
+      it('does not resubmit for a primary rebuilt by a build its own write caused, and still refreshes markers', async () => {
+         const storage = updateRecordingStorage();
+
+         await storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-1' })
+         );
+
+         expect(storage.resubmits).toEqual([]);
+         expect(storage.markerRefreshes).toBe(1);
+      });
+
+      it('resubmits for a primary rebuilt by another client’s write, or by no single client', async () => {
+         const storage = updateRecordingStorage();
+
+         await storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-2' })
+         );
+         await storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: UNKNOWN_CLIENT_ID })
+         );
+         await storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID }));
+
+         expect(storage.resubmits).toEqual(['file:///x.a', 'file:///x.a', 'file:///x.a']);
+         expect(storage.markerRefreshes).toBe(3);
+      });
+
+      it('does not resubmit for its own change, and does for another client’s', async () => {
+         const storage = updateRecordingStorage();
+
+         await storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-1', causedBy: 'client-1' })
+         );
+         await storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-2', causedBy: 'client-2' })
+         );
+
+         expect(storage.resubmits).toEqual(['file:///x.a']);
+      });
+
+      it('answers a secondary’s update by the same rule, resubmitting the primary', () => {
+         const storage = updateRecordingStorage();
+
+         storage.callHandleSecondaryUpdated(
+            updated('file:///x.layout', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-1' })
+         );
+         storage.callHandleSecondaryUpdated(
+            updated('file:///x.layout', { reason: 'changed', sourceClientId: 'client-1', causedBy: 'client-1' })
+         );
+         storage.callHandleSecondaryUpdated(
+            updated('file:///x.layout', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-2' })
+         );
+
+         expect(storage.resubmits).toEqual(['file:///x.a']);
       });
    });
 

@@ -19,7 +19,6 @@ import {
 } from '@hydranium/protocol';
 import {
    type AstNode,
-   type DocumentBuilder,
    DocumentState,
    type FileSystemProvider,
    type LangiumDocument,
@@ -83,7 +82,7 @@ import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languagese
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
-import { labelPhaseListener } from '../langium/document-builder/index.js';
+import { type HydraniumDocumentBuilder, labelPhaseListener } from '../langium/document-builder/index.js';
 import { UNKNOWN_CLIENT_ID } from './client-ids.js';
 import { type HydraniumTextDocuments } from './hydranium-text-documents.js';
 import { type SelfSaveRegistry } from './self-save-registry.js';
@@ -177,6 +176,17 @@ export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic extends AstD
    AstDocument<TAst, TDiagnostic>
 >;
 
+/**
+ * Why an update event fired and whose write it echoes, as
+ * {@link AstDocumentManager.attributeUpdate} answers for a document. The
+ * fields mean what they mean on `TransferUpdatedEvent`.
+ */
+export interface UpdateAttribution {
+   reason: 'changed' | 'rebuilt';
+   sourceClientId: string;
+   causedBy: string;
+}
+
 /** Construction options for {@link AstDocumentManager}. */
 export interface AstDocumentManagerOptions extends LogNameOptions {
    /**
@@ -227,6 +237,17 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
 
    /** Client id that authored the document's current version, or `undefined` for a framework-internal build. */
    getAuthor(document: LangiumDocument): string | undefined;
+
+   /**
+    * The reason, source and cause of an update event for `document` emitted
+    * now, from a phase listener of the build that carries it. Every head takes
+    * its update events' attribution from here, so they name the same client
+    * for one build. For a document a client opened, while rebuilds validate,
+    * the answer changes once its `Validated` listeners have all run: a later
+    * event at that version is `'rebuilt'`. `TransferDocumentUpdateReason`
+    * names the cases that fall back to the last update.
+    */
+   attributeUpdate(document: LangiumDocument): UpdateAttribution;
 }
 
 /**
@@ -253,7 +274,40 @@ export class DefaultAstDocumentManager<
    TAst extends AstNode,
    TDiagnostic extends AstDiagnostic = AstDiagnostic
 > implements AstDocumentManager<TAst, TDiagnostic> {
+   /** The last `DocumentBuilder.update`'s URIs; the reason for a document the store does not track. */
    protected lastUpdate?: UpdateInfo;
+   /**
+    * Canonical URIs a client has opened since the file was last deleted,
+    * whose versions the store keeps. One no client has opened keeps Langium's
+    * version `0` through every change of its content, so its version says
+    * nothing. Kept past the last close, since the store continues the version
+    * sequence on the next open; a delivery can land after that close.
+    */
+   protected readonly trackedUris = new Set<CanonicalUri>();
+   /**
+    * Per tracked URI, the version whose `Validated` listeners last all ran,
+    * which is the version an update event was delivered for. Dropped on
+    * deletion, so a file created again with the same text is changed again.
+    */
+   protected readonly deliveredVersions = new Map<CanonicalUri, number>();
+   /**
+    * Whose writes the build under way carries, set when it starts: the author
+    * of every open document's undelivered version, and the unknown-client id
+    * for a change no write explains, such as a deletion, a document no client
+    * has open, or a write that changed nothing. An undelivered version is one
+    * whose build has not validated it yet, so a write whose build was
+    * cancelled stays a cause of the build that takes over.
+    *
+    * Errs toward more than one cause, and so toward the unknown client, which
+    * a reader treats as foreign: an answer it repeats, never one it misses.
+    * A change no write explains counts for its own build only, so a build
+    * that takes over from a cancelled one loses it. One field for every build:
+    * a build started outside the workspace lock, such as a re-queue of an
+    * orphaned document, reads the causes of whichever build started last.
+    * An open document no build delivers, one a `shouldValidate` override
+    * skips, stays undelivered, so it is a cause of every build while open.
+    */
+   protected readonly buildCauses = new Set<string>();
 
    /** Per canonical URI, the newest save queued for it, which {@link coalesceSaves} lets older queued saves defer to. */
    protected readonly newestSaves = new Map<CanonicalUri, Promise<void>>();
@@ -262,7 +316,7 @@ export class DefaultAstDocumentManager<
    protected readonly textDocuments: HydraniumTextDocuments<TextDocument>;
    protected readonly fileSystemProvider: WritableFileSystemProvider;
    protected readonly langiumDocs: LangiumDocuments;
-   protected readonly documentBuilder: DocumentBuilder;
+   protected readonly documentBuilder: HydraniumDocumentBuilder;
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly tracer: Tracer;
 
@@ -277,19 +331,40 @@ export class DefaultAstDocumentManager<
       this.uriPolicy = services.workspace.DocumentUriPolicy;
       this.tracer = services.Tracer.for(options.logName ?? 'AstDocumentManager').trace('instantiated');
       this.coalesceSaves = options.coalesceSaves ?? false;
-      this.textDocuments.onDidOpen(event =>
-         this.open({ clientId: event.clientId, uri: event.document.uri, languageId: event.document.languageId })
-      );
+      this.textDocuments.onDidOpen(event => {
+         this.trackedUris.add(this.uriPolicy.canonicalUri(event.document.uri));
+         return this.open({ clientId: event.clientId, uri: event.document.uri, languageId: event.document.languageId });
+      });
       this.textDocuments.onDidClose(event => this.close({ clientId: event.clientId, uri: event.document.uri }));
       this.documentBuilder.onUpdate((changed, deleted) => {
          this.lastUpdate = { changed, deleted };
+         this.buildCauses.clear();
+         for (const textDocument of this.textDocuments.all()) {
+            if (!this.isDelivered(textDocument.uri, textDocument.version)) {
+               this.buildCauses.add(this.textDocuments.getAuthor(textDocument.uri, textDocument.version) ?? UNKNOWN_CLIENT_ID);
+            }
+         }
+         const unexplained = changed.some(uri => {
+            const textDocument = this.textDocuments.get(uri.toString());
+            return textDocument === undefined || this.isDelivered(textDocument.uri, textDocument.version);
+         });
+         if (unexplained || deleted.length > 0) {
+            this.buildCauses.add(UNKNOWN_CLIENT_ID);
+         }
          // The only place a deletion is observable: `DocumentBuilder.update`
          // removes a deleted document before it builds anything, so no phase
          // listener ever sees it.
          for (const uri of deleted) {
+            const key = this.uriPolicy.canonicalUri(uri.toString());
+            this.trackedUris.delete(key);
+            this.deliveredVersions.delete(key);
             this.textDocuments.notifyDocumentDeleted(uri.toString());
          }
       });
+      // Once every listener ran, not in a listener of its own: listeners after
+      // it could still be skipped by a cancel, and the next build would then
+      // report as rebuilt a version they never delivered.
+      this.documentBuilder.onDocumentPhaseDelivered(DocumentState.Validated, (document, version) => this.markDelivered(document, version));
       // Content transitions for CLOSED documents bypass the text store: the
       // last-close revert and watched-file changes rebuild from disk into a
       // factory-fresh text document carrying the factory's own version. At the
@@ -381,21 +456,16 @@ export class DefaultAstDocumentManager<
          if (this.uriPolicy.canonicalUri(document.uri) !== target) {
             return;
          }
-         // Presentation boundary: the event field is a concrete `string`, so an
-         // unauthored (framework-rebuilt) document surfaces the readable default
-         // rather than `undefined` to subscribers and logs.
-         const sourceClientId = this.getAuthor(document) ?? UNKNOWN_CLIENT_ID;
+         // No `'deleted'` reason: `DocumentBuilder.update` drops a deleted
+         // document from `LangiumDocuments` before deriving the rebuild set
+         // from it, so a deleted URI is never built and never reaches this
+         // phase listener. A subscriber needing deletions has to be told on
+         // a channel that does not require a built document.
          const event: TransferUpdatedEvent<AstDocument<TAst, TDiagnostic>> = {
             document: this.toAstDocument(document),
-            sourceClientId,
-            // No `'deleted'` arm: `DocumentBuilder.update` drops a deleted
-            // document from `LangiumDocuments` before deriving the rebuild set
-            // from it, so a deleted URI is never built and never reaches this
-            // phase listener. A subscriber needing deletions has to be told on
-            // a channel that does not require a built document.
-            reason: this.lastUpdate?.changed.some(changed => UriUtils.equals(changed, document.uri)) ? 'changed' : 'rebuilt'
+            ...this.attributeUpdate(document)
          };
-         this.tracer.with(uri).trace(`emitUpdate start: source=${sourceClientId}, reason=${event.reason}`);
+         this.tracer.with(uri).trace(`emitUpdate start: source=${event.sourceClientId}, reason=${event.reason}, cause=${event.causedBy}`);
          listener(event);
          this.tracer.with(uri).trace('emitUpdate listener returned');
       };
@@ -404,16 +474,79 @@ export class DefaultAstDocumentManager<
 
    /**
     * The client that authored `document`'s current version, or `undefined` when
-    * no client wrote it — a framework-internal rebuild (workspace startup, a
-    * cascade relink, a `didClose`-reload) or a genuine author gap. Honest about
-    * absence so a routing consumer tests `undefined` directly rather than
-    * against a sentinel; the presentation
-    * default ({@link UNKNOWN_CLIENT_ID}) is applied at the boundary that needs a
-    * concrete value (the `onUpdate` event's `sourceClientId`, the data-server's
-    * `resolveSourceClientId`).
+    * no client wrote it: a document no client has open. A rebuild that keeps
+    * the version keeps its author, so this does not say who caused a build;
+    * {@link attributeUpdate} does.
+    * Honest about absence so a routing consumer tests `undefined` directly
+    * rather than against a sentinel; the presentation default
+    * ({@link UNKNOWN_CLIENT_ID}) is applied where an event needs a value.
     */
    getAuthor(document: LangiumDocument): string | undefined {
       return this.textDocuments.getAuthor(document.textDocument.uri, document.textDocument.version);
+   }
+
+   /**
+    * `'changed'` for the first delivery of the document's version, crediting
+    * its author; `'rebuilt'` for a later one, crediting nobody, since it echoes
+    * no write, and naming the build's single cause if it has one.
+    *
+    * A document the rule does not apply to (see {@link isTracked}) falls back
+    * to the last update: it is `'changed'` when its URI was passed to
+    * `DocumentBuilder.update`. An open document that a validating build skips,
+    * through a `shouldValidate` override, is never delivered, so each of its
+    * events is its author's change.
+    */
+   attributeUpdate(document: LangiumDocument): UpdateAttribution {
+      const key = this.uriPolicy.canonicalUri(document.uri.toString());
+      const changed = this.isTracked(key)
+         ? this.deliveredVersions.get(key) !== document.textDocument.version
+         : this.lastUpdate?.changed.some(uri => UriUtils.equals(uri, document.uri)) === true;
+      if (changed) {
+         // Presentation boundary: the event field is a concrete `string`, so an
+         // unauthored document surfaces the readable default rather than
+         // `undefined` to subscribers and logs.
+         const author = this.getAuthor(document) ?? UNKNOWN_CLIENT_ID;
+         return { reason: 'changed', sourceClientId: author, causedBy: author };
+      }
+      const [cause] = this.buildCauses;
+      return { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: this.buildCauses.size === 1 ? cause : UNKNOWN_CLIENT_ID };
+   }
+
+   /**
+    * Whether the version rule applies to `uri`: the store keeps its version,
+    * and rebuilds validate. With `updateBuildOptions.validation` off no version
+    * is ever delivered, and the rule would report every event of an open
+    * document as its author's change.
+    */
+   protected isTracked(uri: CanonicalUri): boolean {
+      return this.keepsVersion(uri) && Boolean(this.documentBuilder.updateBuildOptions.validation);
+   }
+
+   /**
+    * Whether the store keeps `uri`'s version: a client opened it since its
+    * file was last deleted, or has it open still, as an editor keeps a
+    * deleted file's buffer.
+    */
+   protected keepsVersion(uri: CanonicalUri): boolean {
+      return this.trackedUris.has(uri) || this.textDocuments.isOpen(uri);
+   }
+
+   /**
+    * Record that `version` of `document` was delivered, when the store tracks
+    * it. The version the listeners saw, not the document's current one: a
+    * write during them has moved that on, and marking it would report the
+    * write's own build as rebuilt.
+    */
+   protected markDelivered(document: LangiumDocument, version: number): void {
+      const key = this.uriPolicy.canonicalUri(document.uri.toString());
+      if (this.keepsVersion(key)) {
+         this.deliveredVersions.set(key, version);
+      }
+   }
+
+   /** Whether `version` of `uri` was delivered. */
+   protected isDelivered(uri: string, version: number): boolean {
+      return this.deliveredVersions.get(this.uriPolicy.canonicalUri(uri)) === version;
    }
 
    async open(args: OpenModelArgs): Promise<Disposable> {

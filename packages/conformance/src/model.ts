@@ -126,7 +126,7 @@ export interface ReferenceQuerySpec {
 
 /**
  * The per-language fixture. `valid` and `invalid` are defined once and reused
- * across heads; the two extras are per-head opt-ins.
+ * across heads; every other field is a per-head opt-in.
  *
  * Requiring BOTH a valid and an invalid model is the false-green guard — a
  * vacuous "invalid" model that actually parses clean fails the diagnostics
@@ -143,13 +143,15 @@ export interface ReferenceQuerySpec {
  * - `referenceQuery` — read by the **data slice only**, and only when the
  *   driver supplies `references` (the reference surface is opt-in on the head
  *   too, so both halves have to be present for the check to run).
+ * - `dependent` and `breakingEdit` — read by the **data slice only**.
+ * - `renderedDiagnostic` — read by the **LSP slice only**.
  *
- * Both extras are optional and their checks report *skipped* when absent,
- * rather than silently not running. Making either mandatory would defeat the
- * shared fixture: the head that ignores the field has to invent a value for it,
- * and the two heads' inventions drift apart until one fixture contradicts the
- * other. A required field that one head ignores does not produce a shared
- * fixture; it produces a misleading one.
+ * The opt-ins are optional and their checks report *skipped* when absent,
+ * rather than silently not running. Making any of them mandatory would defeat
+ * the shared fixture: the head that ignores the field has to invent a value
+ * for it, and the two heads' inventions drift apart until one fixture
+ * contradicts the other. A required field that one head ignores does not
+ * produce a shared fixture; it produces a misleading one.
  *
  * The GLSP fixture is separate (per-diagram-type, generic over the adopter
  * action type) — see `./glsp`.
@@ -183,6 +185,20 @@ export interface LanguageFixture {
     * watcher can.
     */
    readonly dependent?: ConformanceModel;
+   /**
+    * Optional: a replacement text for {@link valid} that changes what
+    * {@link dependent} shows, typically by breaking its reference into
+    * `valid`, so that the dependent reports a diagnostic. Read by the **data
+    * slice only**, and only with `dependent`.
+    *
+    * {@link edit} does not serve here: an edit that leaves the dependent as it
+    * was may send a watcher of the dependent nothing, as the framework's head
+    * suppresses an update that changes nothing observable. Supplying this is
+    * the claim that writing it makes a watched `dependent` receive an update
+    * event, which the check then holds to being a rebuild that names no
+    * client.
+    */
+   readonly breakingEdit?: Deferred<string>;
    /**
     * Optional: a locale plus the sentence the server must publish in it. Read
     * by the **LSP slice only**.

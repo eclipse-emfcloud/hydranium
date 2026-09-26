@@ -178,7 +178,8 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     * is still owed afterwards.
     *
     * So a write needs no `onDidUpdateDocument` to fill its own diagnostics in.
-    * This model follows the document for FOREIGN edits.
+    * This model follows the document for every update it did not write, a
+    * dependency's rebuild included.
     */
    get diagnostics(): readonly TransferDiagnostic[] {
       return this.snapshot?.diagnostics ?? [];

@@ -36,6 +36,7 @@ const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
+const DEPENDENT_CREDIT = "an edit that changes a watched dependent credits the dependent's event to no client";
 const CONFLICT_GATE = 'updateModelDocument arms the conflict gate on a based-on snapshot version';
 const SESSION_IDS = 'createSession refuses an id already live, and frees it once the session ends';
 const RESERVED_IDS = 'createSession refuses every id the framework reserves';
@@ -107,12 +108,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
    });
 
-   it('plans exactly the twenty checks the must-fail cases below name', () => {
+   it('plans exactly the twenty-one checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(20);
+      expect(titles).toHaveLength(21);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -124,6 +125,7 @@ describe('the /data battery discriminates', () => {
          CONFLICT_GATE,
          SUBSCRIPTION,
          CASCADE,
+         DEPENDENT_CREDIT,
          FOLDER_CANDIDATES,
          SESSION_IDS,
          RESERVED_IDS,
@@ -135,7 +137,7 @@ describe('the /data battery discriminates', () => {
          CONNECTION_END,
          UNREGISTERED
       ];
-      expect(matching(titles, covered)).toHaveLength(20);
+      expect(matching(titles, covered)).toHaveLength(21);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -174,10 +176,28 @@ describe('the /data battery discriminates', () => {
          defects: { ungatedWrites: true },
          expected: [CONFLICT_GATE, SET]
       },
-      { label: 'a subscription that registers nothing', defects: { silentSubscriptions: true }, expected: [SUBSCRIPTION] },
+      {
+         // Also the dependent's credit, which the check reads off the update
+         // channel.
+         label: 'a subscription that registers nothing',
+         defects: { silentSubscriptions: true },
+         expected: [SUBSCRIPTION, DEPENDENT_CREDIT]
+      },
       { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] },
+      {
+         // Also the dependent's credit, which holds the writer's own event to
+         // the same rule.
+         label: 'a write’s own update reported as rebuilt',
+         defects: { ownWriteRebuilt: true },
+         expected: [SUBSCRIPTION, DEPENDENT_CREDIT]
+      },
       { label: 'a cascade rebuild reported to nobody', defects: { silentCascade: true }, expected: [CASCADE] },
       { label: 'a cascade report naming the watched document too', defects: { cascadeNamesWatched: true }, expected: [CASCADE] },
+      {
+         label: 'a dependent’s update credited to the client that has it open',
+         defects: { dependentCreditedToOpener: true },
+         expected: [DEPENDENT_CREDIT]
+      },
       {
          label: 'a picker answering nothing for a source whose URI names no file',
          defects: { noCandidatesAtFolder: true },

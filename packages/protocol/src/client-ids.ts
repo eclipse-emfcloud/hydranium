@@ -26,7 +26,11 @@
 /** Identifier for an LSP-text client (Monaco, VS Code, …). */
 export const LANGUAGE_CLIENT_ID = 'language-client';
 
-/** Fallback identifier when a document's author is unknown (e.g. cold workspace-init load). */
+/**
+ * The id an event names when no single client is behind it: the source of a
+ * `'rebuilt'` event, a document no client authored, or a build with more than
+ * one cause.
+ */
 export const UNKNOWN_CLIENT_ID = 'unknown';
 
 /**
