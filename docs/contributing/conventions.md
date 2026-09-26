@@ -1392,11 +1392,73 @@ committed:
 
 **A mechanism cannot fix a message that should not be shown.** Give a
 developer-addressed string a code and you have built a *translated* leak. So the
-first question is not "which carrier" but "who is this addressed to", and the
-answers include **rewrite** and **leave it a plain `Error`** — neither of which
-is a localization outcome. A message naming framework symbols, a DI slot or a
-wire method is addressed to whoever composes the system, and stays a plain
-`Error`.
+first question is not "which carrier" but "who is this addressed to", and it has
+three outcomes:
+
+- **(a) User-facing** — a `defineMessage` code, rendered by the side that knows
+  the reader's locale.
+- **(b) Developer-addressed, and a caller must react** — a typed error: a class,
+  a JSON-RPC code and an `is*` guard, with an English message. The code is what
+  a caller branches on after an RPC, where the class does not survive.
+- **(c) Developer-addressed, and nothing reacts** — a plain `Error`, or a named
+  `Error` subclass with no code and no guard, where the name tells a log reader
+  what failed.
+
+A message naming framework symbols, a DI slot or a wire method is addressed to
+whoever composes the system, so it is (b) or (c), never (a). **Rewrite** is an
+answer too: a sentence that fails only because it names an identifier can move
+the identifier to `data` and become (a). A typed error without an identity,
+and (c), localize nothing: their English is for a developer.
+
+**(a) and (b) combine.** A typed error also carries a message identity wherever
+the framework can write an end-user sentence that needs no context. The type
+serves the code that reacts and the identity serves the person who reads, so
+neither replaces the other. A URI may stay in the translated sentence: it names
+the document the reader is working on. A client id, a raw version number and any
+other identifier a reader cannot act on stay out; the sentence says it in words
+("an older version of the document") or leaves it to the error's `data`, where
+the code that reacts reads it. A UI that knows more than the framework still
+branches on the type and writes its own sentence; a UI that does not shows the
+error's message, which the side that knows the locale rendered from the
+identity.
+
+**A procedure for the common cases.** It is incomplete and does not replace
+the author's judgement, which still decides the cases it leaves open and checks
+its answer on the rest.
+
+1. **Can the message reach a screen?** Trace the throw to its catches. If it
+   only reaches logs, it is not (a).
+2. **Does any code branch on it?** If so, it is (b); step 3 decides whether it
+   is (a) too. If not, it is (a) or (c).
+3. **Would the sentence help an end user as written?** If it names a symbol or
+   a wire method, or needs context only the UI has, it is not (a). If it names
+   an identifier other than a URI (a client id, a raw version), reword it
+   without one and put the identifier in `data`. Give a typed error an
+   identity only where a context-free end-user sentence exists.
+4. **When unsure, leave the identity out.** A translated developer string is
+   the worse outcome, and an identity can be added later without a break.
+
+Worked cases:
+
+- **`ConflictError` is (b) with an identity, and shows the combination, not
+  the wording.** A caller reconciles on `isConflictError`, and
+  `STALE_BASED_UPDATE` gives the error an identity. Its sentence is not a model
+  for wording: it carries both version numbers, which the rule above words or
+  leaves in `data`. Rewording it means rewording, in the same change, the
+  marker that `isConflictError`'s last tier matches on.
+- **`SessionClosedError` is (b) with an identity.** The session's end is
+  something a caller reacts to, and "The editing session has ended." needs no
+  context, so `SESSION_CLOSED` carries it while the client id stays in `data`.
+  A throw site that knows more passes its own English; the identity stays.
+- **A disposed `RpcConnection` is (c).** Calling one is a lifecycle bug in the
+  caller, nothing branches on it, and its sentence names a class.
+- **`ReentrantWriteLockError` is (c) with a name.** Nothing branches on it and
+  it never crosses the wire, so it has no code and no guard. The name marks it
+  in a log, and its message names the remedy.
+- **A technical detail rides as a parameter.** A user-facing frame such as
+  "Could not connect to the data server" is (a), and the error beneath it
+  enters as a `{detail}` parameter through `describeError` rather than as
+  translated text, for the reason "Fragments are not parameters" below gives.
 
 ### An override seam is not a localization carrier
 

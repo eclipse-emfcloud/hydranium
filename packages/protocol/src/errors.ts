@@ -10,6 +10,18 @@
 import { ResponseError } from 'vscode-jsonrpc';
 import { defineMessage, type HydraniumMessageData, messageData } from './messages/primitives';
 
+/*
+ * Every error here is a typed error: a caller reacts to it, so it has a class,
+ * a JSON-RPC code and an `is*` guard, and an English message. A typed error
+ * also carries a message identity where the framework can write an end-user
+ * sentence that needs no context. A URI may stay in that sentence; a client id
+ * or a raw version stays out of it, worded or left to `data`.
+ *
+ * An error nothing reacts to does not belong here: it stays a plain `Error`, or
+ * a named subclass without a code, at its throw site, since a code and a guard
+ * are public API that no caller would use.
+ */
+
 /**
  * The catalogue declaration behind {@link ConflictError}'s sentence.
  *
