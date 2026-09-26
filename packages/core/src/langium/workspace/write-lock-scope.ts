@@ -72,8 +72,9 @@ export function isInsideWriteLock(): boolean {
  * Named rather than a bare `Error` because the remedy is specific and worth
  * pointing at: either move the write out of the build (integrity rules that
  * persist repairs should write through `FileSystemProvider.writeFile`, which
- * takes no lock), or set `ModelServiceOptions.serializeBuilds: false` to accept
- * unserialised builds in exchange for the reentrancy.
+ * takes no lock), or set `ModelServiceOptions.serializeBuilds: false`, which
+ * keeps the facade's build from cancelling the holder but not its wait from
+ * stalling on a document that needs a re-queue.
  */
 export class ReentrantWriteLockError extends Error {
    constructor(readonly uri: string) {

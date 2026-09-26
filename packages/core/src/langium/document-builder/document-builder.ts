@@ -18,6 +18,7 @@ import {
    OperationCancelled,
    type URI,
    UriUtils,
+   type WorkspaceLock,
    interruptAndCheck,
    isOperationCancelled
 } from '@hydranium/langium';
@@ -127,7 +128,8 @@ export interface DocumentBuilderOptions extends LogNameOptions {
  * Extends Langium's {@link DefaultDocumentBuilder} with:
  *
  * - **Bug-fixes** (always on): an {@link awaitDocumentState} that waits where
- *   the default rejects, a {@link prepareBuild} that keeps a cancelled
+ *   the default rejects (re-queuing, under the workspace lock, a document no
+ *   build will carry), a {@link prepareBuild} that keeps a cancelled
  *   non-validating build from suppressing validation, and a
  *   {@link shouldRelink} that never judges a document unaffected on an index
  *   that does not describe it.
@@ -173,6 +175,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly clock: Clock;
    protected readonly messageRenderer: MessageRenderer;
+   /** The lock a re-queued build takes; see {@link requeueOrphaned}. */
+   protected readonly workspaceLock: WorkspaceLock;
    /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
    protected readonly languageRegistry: ExtendedServiceRegistry;
    protected languageFileExtensions: string[] = [];
@@ -206,6 +210,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.uriPolicy = services.workspace.DocumentUriPolicy;
       this.clock = services.Clock;
       this.messageRenderer = services.MessageRenderer;
+      this.workspaceLock = services.workspace.WorkspaceLock;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -292,6 +297,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * {@link MAX_STALLED_REQUEUES} builds that fail to advance the document, so a
     * document the builder will never carry to `state` degrades to a pending wait
     * plus a warning rather than an endless build loop.
+    *
+    * A re-queued build takes the {@link WorkspaceLock} (see
+    * {@link requeueOrphaned}), so a caller that awaits this wait while it holds
+    * the lock, inside a read or write action, deadlocks on a document that needs
+    * a re-queue: the build waits for that action to end. Await it outside the
+    * lock.
     */
    protected override awaitDocumentState(state: DocumentState, uri: URI, cancelToken: CancellationToken): Promise<URI> {
       const document = this.langiumDocuments.getDocument(uri);
@@ -395,14 +406,33 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * notification, so awaiting here would invert the dependency. A rejection is
     * logged rather than swallowed — it leaves the waiter pending until its own
     * cancellation token fires, which is worth a line in the log.
+    *
+    * The build is an ordinary {@link WorkspaceLock} write, entered from a read.
+    * The read waits until no write runs or is queued, so the build neither runs
+    * beside a locked one nor cancels the build a re-queue is fired from. Unlocked,
+    * it runs beside a locked build that cannot cancel it: both validate the same
+    * version and deliver it twice. Taking the write directly, without the read,
+    * cancels the running build and skips the rest of its build-phase listeners.
+    * The read must not await the write, which queues behind that read.
+    *
+    * A write that ran while the read waited may have carried the document to
+    * `state` already, and a second build would deliver that version again; the
+    * read skips the write then.
     */
    protected requeueOrphaned(document: LangiumDocument, state: DocumentState, reason: string): void {
       const tracer = this.tracer.withUri(document.uri.toString());
       tracer.info(`Re-queuing orphaned document (at '${DocumentState[document.state]}', needs '${DocumentState[state]}'): ${reason}`);
-      this.update([document.uri], []).catch((err: unknown) => {
-         if (!isOperationCancelled(err)) {
-            tracer.error(`Re-queue build failed: ${err instanceof Error ? err.message : String(err)}`);
+      void this.workspaceLock.read(() => {
+         if (document.state >= state) {
+            return;
          }
+         this.workspaceLock
+            .write(token => this.update([document.uri], [], token))
+            .catch((err: unknown) => {
+               if (!isOperationCancelled(err)) {
+                  tracer.error(`Re-queue build failed: ${err instanceof Error ? err.message : String(err)}`);
+               }
+            });
       });
    }
 
@@ -727,19 +757,20 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * readable by the time Langium's `update` consults `shouldRelink`.
     *
     * Teardown is preemption-correct, which is the reason this is framework code
-    * rather than a recipe. Langium's write mutex cancels an in-flight build when
-    * a later one arrives, so two sessions overlap: the successor installs itself
-    * as {@link activeSession} while the predecessor is still unwinding, and the
-    * predecessor's `finally` runs LAST. Clearing unconditionally there would
-    * discard the winner's state mid-build. Only the session that is still
-    * current clears — and the check is reference equality on the session object,
+    * rather than a recipe. A build outside the workspace lock overlaps another:
+    * the later one installs itself as {@link activeSession} while the earlier
+    * one is still running, and the earlier one's `finally` runs LAST. Clearing
+    * unconditionally there would discard the later build's state mid-build.
+    * Only the session that is still current clears — and the check is
+    * reference equality on the session object,
     * not on {@link BuildSession.traceId}, which is `undefined` for every build
     * whenever the timing level is suppressed and would compare equal to itself
     * across two different builds.
     *
-    * Re-entrancy is not hypothetical even without an adopter: {@link
-    * requeueOrphaned} calls `update` from inside a wait, while a build may be
-    * running.
+    * Builds outside the lock are not hypothetical even without an adopter: the
+    * model service with `serializeBuilds` off starts one. Two locked builds
+    * never overlap, since the lock starts a write only once the write it
+    * cancelled has unwound.
     */
    protected runInSession(context: BuildSessionContext, label: string, body: () => Promise<void>): Promise<void> {
       // Read before installing the new session: the id being superseded belongs

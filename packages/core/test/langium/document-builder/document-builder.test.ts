@@ -23,6 +23,7 @@ import { CancellationToken, Diagnostic, DiagnosticSeverity } from 'vscode-langua
 import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
+import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
 import {
    DEFAULT_LOGGED_PHASES,
@@ -716,13 +717,25 @@ describe('HydraniumDocumentBuilder', () => {
       // no future build was going to emit.
       class OrphanBuilder extends HydraniumDocumentBuilder {
          readonly updateCalls: string[][] = [];
+         lastUpdateToken?: CancellationToken;
+         readonly lock = this.workspaceLock;
          constructor(document: LangiumDocument | undefined, workspaceState: DocumentState) {
             super(makeServicesWithDocument(document), { logLevel: 'off' });
             this.currentState = workspaceState;
          }
-         override update(changed: URI[]): Promise<void> {
+         override update(changed: URI[], _deleted: URI[], cancelToken?: CancellationToken): Promise<void> {
             this.updateCalls.push(changed.map(uri => uri.toString()));
+            this.lastUpdateToken = cancelToken;
             return Promise.resolve();
+         }
+         /**
+          * Let every re-queue scheduled so far reach `update`. Two reads: a
+          * re-queue's read can share a batch with the first, and its write
+          * runs before the second.
+          */
+         async drained(): Promise<void> {
+            await this.lock.read(() => undefined);
+            await this.lock.read(() => undefined);
          }
          callAwaitDocumentState(state: DocumentState, uri: URI): Promise<URI> {
             return this.awaitDocumentState(state, uri, CancellationToken.None);
@@ -746,7 +759,8 @@ describe('HydraniumDocumentBuilder', () => {
          return makeNoopSharedServices({
             Logger: makeNoopLogger(),
             workspace: {
-               LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } }
+               LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
+               WorkspaceLock: new HydraniumWorkspaceLock()
             }
          });
       }
@@ -758,8 +772,9 @@ describe('HydraniumDocumentBuilder', () => {
          const builder = new OrphanBuilder(documentAt(DocumentState.IndexedReferences), DocumentState.Validated);
          const pending = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
 
-         // The build must be scheduled synchronously with arming the wait, not
-         // deferred to a later phase event — there is no later phase event.
+         // The build is scheduled on arming the wait, not deferred to a later
+         // phase event — there is no later phase event.
+         await builder.drained();
          expect(builder.updateCalls).toEqual([[DOC_URI.toString()]]);
 
          // And the wait is still armed, so the re-queued build's phase
@@ -774,6 +789,7 @@ describe('HydraniumDocumentBuilder', () => {
          // will emit the notification — re-queuing would be a wasted rebuild.
          const builder = new OrphanBuilder(documentAt(DocumentState.Linked), DocumentState.ComputedScopes);
          const pending = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await builder.drained();
          expect(builder.updateCalls).toEqual([]);
 
          builder.notifyDocumentPhase(documentAt(DocumentState.Validated), DocumentState.Validated, CancellationToken.None);
@@ -789,6 +805,7 @@ describe('HydraniumDocumentBuilder', () => {
          const stuck = documentAt(DocumentState.IndexedReferences);
          const builder = new OrphanBuilder(stuck, DocumentState.Validated);
          void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await builder.drained();
          expect(builder.updateCalls).toHaveLength(1);
 
          for (let i = 0; i < 10; i++) {
@@ -798,6 +815,7 @@ describe('HydraniumDocumentBuilder', () => {
          // Bounded, not one-shot: a re-queue legitimately fails to land while a
          // busy workspace keeps cancelling builds, so a few retries are allowed
          // before giving up.
+         await builder.drained();
          expect(builder.updateCalls.length).toBeLessThanOrEqual(5);
       });
 
@@ -815,12 +833,60 @@ describe('HydraniumDocumentBuilder', () => {
          }
 
          // One per observation, none suppressed — 1 at registration + 3 more.
+         await builder.drained();
          expect(builder.updateCalls).toHaveLength(4);
       });
 
       it('resolves immediately without re-queuing when the document already reached the target', async () => {
          const builder = new OrphanBuilder(documentAt(DocumentState.Validated), DocumentState.Validated);
          await expect(builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI)).resolves.toBeDefined();
+         await builder.drained();
+         expect(builder.updateCalls).toEqual([]);
+      });
+
+      /** Run a locked write until the returned release is called, with the token it holds. */
+      async function holdWrite(builder: OrphanBuilder): Promise<{ token: CancellationToken; release: () => void }> {
+         return new Promise(entered => {
+            void builder.lock.write(
+               token =>
+                  new Promise<void>(settle => {
+                     entered({ token, release: () => settle() });
+                  })
+            );
+         });
+      }
+
+      it('re-queues as a locked build of its own, once the locked build in flight is done', async () => {
+         // Unlocked, the re-queued build runs beside a locked one, and neither
+         // can cancel the other; see `requeueOrphaned` for the alternatives.
+         const builder = new OrphanBuilder(documentAt(DocumentState.IndexedReferences), DocumentState.Validated);
+         const inFlight = await holdWrite(builder);
+
+         void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await new Promise(resolve => setTimeout(resolve, 0));
+
+         expect(builder.updateCalls).toEqual([]);
+         expect(inFlight.token.isCancellationRequested).toBe(false);
+
+         inFlight.release();
+         await builder.drained();
+         expect(builder.updateCalls).toEqual([[DOC_URI.toString()]]);
+         // A write of its own: the next write cancels it.
+         const requeued = builder.lastUpdateToken;
+         void builder.lock.write(() => undefined);
+         expect(requeued?.isCancellationRequested).toBe(true);
+      });
+
+      it('does not build a re-queued document that the write it waited for carried', async () => {
+         const orphaned = documentAt(DocumentState.IndexedReferences);
+         const builder = new OrphanBuilder(orphaned, DocumentState.Validated);
+         const inFlight = await holdWrite(builder);
+         void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+
+         orphaned.state = DocumentState.Validated;
+         inFlight.release();
+         await builder.drained();
+
          expect(builder.updateCalls).toEqual([]);
       });
    });
