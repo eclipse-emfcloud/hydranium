@@ -1936,6 +1936,8 @@ describe('DataServer — reference resolution', () => {
          );
          expect((err as ResponseError<unknown>).code).toBe(REFERENCE_SETTLE_TIMEOUT_CODE);
          expect(resolvedFromResponseError(err as ResponseError<unknown>)?.code).toBe(REFERENCE_SETTLE_TIMEOUT.code);
+         expect((err as ResponseError<unknown>).message).toBe(REFERENCE_SETTLE_TIMEOUT.text);
+         expect((err as ResponseError<{ elapsedMs: number }>).data?.elapsedMs).toBe(DataServer.DEFAULT_OPTIONS.referenceSettleTimeoutMs);
          gate.resolve();
       } finally {
          pair.dispose();

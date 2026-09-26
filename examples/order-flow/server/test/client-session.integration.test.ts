@@ -24,6 +24,7 @@ import {
    DocumentNotOpenError,
    DuplicateClientIdError,
    LANGUAGE_CLIENT_ID,
+   ReservedClientIdError,
    type ServerSharedServices,
    SessionClosedError
 } from '@hydranium/core';
@@ -116,7 +117,7 @@ describe('ModelService.createSession', () => {
       expect(session.clientId).toBe('form-1');
       expect(models.getSession('form-1')).toBe(session);
       expect(() => models.createSession('form', 'form-1')).toThrow(DuplicateClientIdError);
-      expect(() => models.createSession('lsp', LANGUAGE_CLIENT_ID)).toThrow(DuplicateClientIdError);
+      expect(() => models.createSession('lsp', LANGUAGE_CLIENT_ID)).toThrow(ReservedClientIdError);
 
       session.dispose();
       expect(models.getSession('form-1')).toBeUndefined();

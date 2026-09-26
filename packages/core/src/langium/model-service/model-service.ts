@@ -245,9 +245,10 @@ export interface ModelService<
     * Start a client session, the only way to open and write documents through
     * this service. Pass a `label` naming the participant; without one it is
     * `session`. The id defaults to `label#` plus a random UUID; a fixed
-    * `clientId` is taken as given. Throws `DuplicateClientIdError` when the id
-    * is reserved by the framework, held by another live session, or has
-    * documents open under it as a client that is not a session.
+    * `clientId` is taken as given. Throws `ReservedClientIdError` when the id
+    * is reserved by the framework, and `DuplicateClientIdError` when it is
+    * held by another live session or has documents open under it as a client
+    * that is not a session.
     *
     * `TOpenOptions` types the options the session's `open` takes and its
     * `openOptions` returns. The narrowing is an unchecked cast, and it holds

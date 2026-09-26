@@ -1462,8 +1462,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
-    * Start a client session under `clientId`. Throws `DuplicateClientIdError`
-    * where {@link ClientSessionRegistry.register} refuses the id.
+    * Start a client session under `clientId`. Throws where
+    * {@link ClientSessionRegistry.register} refuses the id.
     */
    registerSession(clientId: string): void {
       this.__sessions.register(clientId);

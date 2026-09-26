@@ -12,11 +12,15 @@ import { ResponseError } from 'vscode-jsonrpc';
 import {
    CONFLICT_ERROR_CODE,
    ConflictError,
+   DOCUMENT_NOT_OPEN,
    DOCUMENT_NOT_OPEN_ERROR_CODE,
+   DUPLICATE_CLIENT_ID,
    DUPLICATE_CLIENT_ID_ERROR_CODE,
    DocumentNotOpenError,
    DuplicateClientIdError,
    HYDRANIUM_ERROR_CODES,
+   RESERVED_CLIENT_ID_ERROR_CODE,
+   ReservedClientIdError,
    SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
    STALE_BASED_UPDATE,
@@ -24,6 +28,7 @@ import {
    isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
+   isReservedClientIdError,
    isSessionClosedError
 } from '../src/errors';
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
@@ -58,7 +63,9 @@ describe('ConflictError', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
       expect(hasMessageIdentity(error.data)).toBe(true);
       expect(resolvedFromResponseError(error)?.code).toBe(STALE_BASED_UPDATE.code);
-      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///A.fake', expectedVersion: 3, actualVersion: 5 });
+      // The uri only: the versions stay in `data`, so no translation can put
+      // them back into the sentence.
+      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///A.fake' });
    });
 
    it('sets the application-specific JSON-RPC code', () => {
@@ -66,11 +73,10 @@ describe('ConflictError', () => {
       expect(error.code).toBe(CONFLICT_ERROR_CODE);
    });
 
-   it('builds a message that names the URI and both versions', () => {
+   it('builds a message that names the URI and words the versions', () => {
       const error = new ConflictError('file:///A.fake', 3, 5);
       expect(error.message).toContain('file:///A.fake');
-      expect(error.message).toContain('v3');
-      expect(error.message).toContain('v5');
+      expect(error.message).not.toMatch(/\d/);
    });
 
    it('has name "ConflictError" so direct-throw detection works without instanceof', () => {
@@ -96,7 +102,13 @@ describe('HYDRANIUM_ERROR_CODES', () => {
    });
 
    it('holds the code of every error this package defines', () => {
-      const defined = [CONFLICT_ERROR_CODE, SESSION_CLOSED_ERROR_CODE, DOCUMENT_NOT_OPEN_ERROR_CODE, DUPLICATE_CLIENT_ID_ERROR_CODE];
+      const defined = [
+         CONFLICT_ERROR_CODE,
+         SESSION_CLOSED_ERROR_CODE,
+         DOCUMENT_NOT_OPEN_ERROR_CODE,
+         DUPLICATE_CLIENT_ID_ERROR_CODE,
+         RESERVED_CLIENT_ID_ERROR_CODE
+      ];
       expect(defined.filter(code => !codes.includes(code))).toEqual([]);
    });
 });
@@ -123,6 +135,13 @@ describe('client session errors', () => {
          code: DUPLICATE_CLIENT_ID_ERROR_CODE,
          guard: isDuplicateClientIdError,
          data: { clientId: 'form#1' }
+      },
+      {
+         name: 'ReservedClientIdError',
+         make: () => new ReservedClientIdError('integrity'),
+         code: RESERVED_CLIENT_ID_ERROR_CODE,
+         guard: isReservedClientIdError,
+         data: { clientId: 'integrity' }
       }
    ] as const;
 
@@ -132,8 +151,8 @@ describe('client session errors', () => {
          expect(error).toBeInstanceOf(ResponseError);
          expect(error.code).toBe(entry.code);
          expect(error.name).toBe(entry.name);
-         // `toMatchObject`: `SessionClosedError` also carries a message identity,
-         // asserted on its own below.
+         // `toMatchObject`: an error with a message identity also carries it
+         // in `data`, asserted on its own below.
          expect(error.data).toMatchObject(entry.data);
          for (const [field, value] of Object.entries(entry.data)) {
             expect((error as unknown as Record<string, unknown>)[field]).toBe(value);
@@ -145,6 +164,9 @@ describe('client session errors', () => {
          // What a client holds after an RPC: a plain ResponseError with the code.
          expect(entry.guard(new ResponseError(entry.code, 'transport-wrapped', entry.data))).toBe(true);
          expect(entry.guard(new ConflictError('file:///a.x', 1, 2))).toBe(false);
+         for (const other of cases.filter(candidate => candidate !== entry)) {
+            expect(entry.guard(other.make())).toBe(false);
+         }
          expect(entry.guard(new Error('boom'))).toBe(false);
          expect(entry.guard(undefined)).toBe(false);
       });
@@ -164,6 +186,33 @@ describe('SessionClosedError', () => {
       const error = new SessionClosedError('form#1', 'The diagram has closed');
       expect(error.message).toBe('The diagram has closed');
       expect(resolvedFromResponseError(error)?.code).toBe(SESSION_CLOSED.code);
+   });
+});
+
+describe('DocumentNotOpenError', () => {
+   it('carries the message identity, and names the uri but not the client id', () => {
+      const error = new DocumentNotOpenError('file:///a.x', 'form#1');
+      expect(resolvedFromResponseError(error)?.code).toBe(DOCUMENT_NOT_OPEN.code);
+      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///a.x' });
+      expect(error.message).toBe(DOCUMENT_NOT_OPEN.format({ uri: 'file:///a.x' }));
+      expect(error.message).not.toContain('form#1');
+   });
+});
+
+describe('DuplicateClientIdError', () => {
+   it('carries the message identity, and keeps the client id out of the sentence', () => {
+      const error = new DuplicateClientIdError('form#1');
+      expect(resolvedFromResponseError(error)?.code).toBe(DUPLICATE_CLIENT_ID.code);
+      expect(error.message).toBe(DUPLICATE_CLIENT_ID.text);
+      expect(error.message).not.toContain('form#1');
+   });
+});
+
+describe('ReservedClientIdError', () => {
+   it('carries no message identity: no end-user sentence is true for a host that picked a reserved id', () => {
+      const error = new ReservedClientIdError('integrity');
+      expect(hasMessageIdentity(error.data)).toBe(false);
+      expect(error.message).toContain('integrity');
    });
 });
 
@@ -188,7 +237,7 @@ describe('isConflictError', () => {
    });
 
    it('returns true for a plain Error whose message contains the marker (message fallback)', () => {
-      const wrapped = new Error('Request ns/save failed: Stale-based update for file:///A: expected v1, server is at v2');
+      const wrapped = new Error(`Request ns/save failed: ${STALE_BASED_UPDATE.format({ uri: 'file:///A' })}`);
       expect(isConflictError(wrapped)).toBe(true);
    });
 

@@ -53,7 +53,8 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    /**
     * Register `args.clientId` as a client session owned by this connection.
     * Rejects with a `DuplicateClientIdError` code when the id is live anywhere
-    * in the server process or reserved by the framework.
+    * in the server process, and with a `ReservedClientIdError` code when the
+    * framework reserves it.
     *
     * A request carrying a registered id acts as that session: it writes only
     * what the session has open, failing with a `DocumentNotOpenError` code

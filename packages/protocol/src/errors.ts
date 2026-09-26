@@ -23,7 +23,9 @@ import { defineMessage, type HydraniumMessageData, messageData } from './message
  */
 
 /**
- * The catalogue declaration behind {@link ConflictError}'s sentence.
+ * The catalogue declaration behind {@link ConflictError}'s sentence. It words
+ * the version mismatch rather than stating it: the two numbers mean nothing to
+ * an end user, and they stay in {@link ConflictErrorData}.
  *
  * Its English must keep containing {@link CONFLICT_ERROR_MESSAGE_MARKER}: the
  * marker is tier 3 of {@link isConflictError}'s ladder, and it matches on text.
@@ -32,7 +34,7 @@ import { defineMessage, type HydraniumMessageData, messageData } from './message
  */
 export const STALE_BASED_UPDATE = defineMessage(
    'hydranium/protocol/stale-based-update',
-   'Stale-based update for {uri}: expected v{expectedVersion}, server is at v{actualVersion}'
+   'The edit to {uri} was not applied: it was made to an older version of the document.'
 );
 
 /**
@@ -53,7 +55,8 @@ export const HYDRANIUM_ERROR_CODES = {
    referenceSettleTimeout: 42003,
    sessionClosed: 42004,
    documentNotOpen: 42005,
-   duplicateClientId: 42006
+   duplicateClientId: 42006,
+   reservedClientId: 42007
 } as const;
 
 /**
@@ -109,11 +112,15 @@ export interface ConflictErrorData extends HydraniumMessageData {
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
    constructor(uri: string, expectedVersion: number, actualVersion: number) {
-      const params = { uri, expectedVersion, actualVersion };
       // The identity rides alongside the typed payload rather than replacing
       // it: `isConflictError`'s name check is surface an adopter may bind, so
       // adding the identity widens the payload rather than reshaping it.
-      super(CONFLICT_ERROR_CODE, STALE_BASED_UPDATE.format(params), { ...params, ...messageData(STALE_BASED_UPDATE, params) });
+      super(CONFLICT_ERROR_CODE, STALE_BASED_UPDATE.format({ uri }), {
+         uri,
+         expectedVersion,
+         actualVersion,
+         ...messageData(STALE_BASED_UPDATE, { uri })
+      });
       this.name = 'ConflictError';
       // ResponseError's constructor calls `Object.setPrototypeOf(this,
       // ResponseError.prototype)` to keep its own prototype chain intact across
@@ -155,6 +162,8 @@ export const SESSION_CLOSED_ERROR_CODE = HYDRANIUM_ERROR_CODES.sessionClosed;
 export const DOCUMENT_NOT_OPEN_ERROR_CODE = HYDRANIUM_ERROR_CODES.documentNotOpen;
 /** JSON-RPC code for {@link DuplicateClientIdError}. */
 export const DUPLICATE_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.duplicateClientId;
+/** JSON-RPC code for {@link ReservedClientIdError}. */
+export const RESERVED_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.reservedClientId;
 
 /**
  * The catalogue declaration behind {@link SessionClosedError}'s default
@@ -194,15 +203,34 @@ export class SessionClosedError extends ResponseError<SessionClosedErrorData> {
 }
 
 /**
+ * The catalogue declaration behind {@link DocumentNotOpenError}'s sentence. The
+ * client id stays in {@link DocumentNotOpenErrorData.clientId}.
+ */
+export const DOCUMENT_NOT_OPEN = defineMessage(
+   'hydranium/protocol/document-not-open',
+   'The document {uri} is not open in this editing session.'
+);
+
+/** Structured payload carried in {@link DocumentNotOpenError.data}. */
+export interface DocumentNotOpenErrorData extends HydraniumMessageData {
+   readonly uri: string;
+   readonly clientId: string;
+}
+
+/**
  * Thrown when a client session writes a document it does not have open.
  *
  * A session writes only what it has open, so this is the answer both to a write
  * that never opened and to one whose open was closed underneath it — by the
  * session itself, or by the document being deleted.
  */
-export class DocumentNotOpenError extends ResponseError<{ readonly uri: string; readonly clientId: string }> {
+export class DocumentNotOpenError extends ResponseError<DocumentNotOpenErrorData> {
    constructor(uri: string, clientId: string) {
-      super(DOCUMENT_NOT_OPEN_ERROR_CODE, `Document ${uri} is not open in client session ${clientId}`, { uri, clientId });
+      super(DOCUMENT_NOT_OPEN_ERROR_CODE, DOCUMENT_NOT_OPEN.format({ uri }), {
+         uri,
+         clientId,
+         ...messageData(DOCUMENT_NOT_OPEN, { uri })
+      });
       this.name = 'DocumentNotOpenError';
       Object.setPrototypeOf(this, DocumentNotOpenError.prototype);
    }
@@ -217,18 +245,53 @@ export class DocumentNotOpenError extends ResponseError<{ readonly uri: string; 
 }
 
 /**
+ * The catalogue declaration behind {@link DuplicateClientIdError}'s sentence.
+ * The client id stays in {@link DuplicateClientIdErrorData.clientId}.
+ */
+export const DUPLICATE_CLIENT_ID = defineMessage(
+   'hydranium/protocol/duplicate-client-id',
+   'Could not start an editing session: its identifier is still in use by another editor.'
+);
+
+/** Structured payload carried in {@link DuplicateClientIdError.data}. */
+export interface DuplicateClientIdErrorData extends HydraniumMessageData {
+   readonly clientId: string;
+}
+
+/**
  * Thrown when a client session is started under an id that is already live in
- * the process, or that the framework reserves for itself.
+ * the process. The id frees up once its holder ends or closes its last
+ * document, so a caller may retry.
  *
  * Ids are unique process-wide because the id is also the author label on every
  * version and the key a client recognises its own echoes by; two participants
  * sharing one would each take the other's writes for their own.
  */
-export class DuplicateClientIdError extends ResponseError<{ readonly clientId: string }> {
+export class DuplicateClientIdError extends ResponseError<DuplicateClientIdErrorData> {
    constructor(clientId: string) {
-      super(DUPLICATE_CLIENT_ID_ERROR_CODE, `Client id ${clientId} is already in use`, { clientId });
+      super(DUPLICATE_CLIENT_ID_ERROR_CODE, DUPLICATE_CLIENT_ID.format(), { clientId, ...messageData(DUPLICATE_CLIENT_ID) });
       this.name = 'DuplicateClientIdError';
       Object.setPrototypeOf(this, DuplicateClientIdError.prototype);
+   }
+
+   get clientId(): string {
+      return this.data!.clientId;
+   }
+}
+
+/**
+ * Thrown when a client session is started under an id the framework reserves
+ * for one of its own participants. A reserved id never frees up, so a caller
+ * that retries on {@link DuplicateClientIdError} stops on this one.
+ *
+ * It carries no message identity: a host that picks a reserved id has a bug,
+ * and no sentence addressed to an end user is true for it.
+ */
+export class ReservedClientIdError extends ResponseError<{ readonly clientId: string }> {
+   constructor(clientId: string) {
+      super(RESERVED_CLIENT_ID_ERROR_CODE, `Client id ${clientId} is reserved for a framework participant`, { clientId });
+      this.name = 'ReservedClientIdError';
+      Object.setPrototypeOf(this, ReservedClientIdError.prototype);
    }
 
    get clientId(): string {
@@ -254,6 +317,11 @@ export function isDuplicateClientIdError(error: unknown): error is DuplicateClie
    return hasErrorIdentity(error, 'DuplicateClientIdError', DUPLICATE_CLIENT_ID_ERROR_CODE);
 }
 
+/** Whether `error` is a {@link ReservedClientIdError}; see {@link isSessionClosedError}. */
+export function isReservedClientIdError(error: unknown): error is ReservedClientIdError {
+   return hasErrorIdentity(error, 'ReservedClientIdError', RESERVED_CLIENT_ID_ERROR_CODE);
+}
+
 function hasErrorIdentity(error: unknown, name: string, code: number): boolean {
    return error instanceof Error && (error.name === name || (error as Partial<ResponseError<unknown>>).code === code);
 }
@@ -261,7 +329,7 @@ function hasErrorIdentity(error: unknown, name: string, code: number): boolean {
 /** Marker substring present in every {@link ConflictError} message, used by
  *  {@link isConflictError} as a fallback when a transport re-wraps the error
  *  and drops the JSON-RPC code. */
-const CONFLICT_ERROR_MESSAGE_MARKER = 'Stale-based update for ';
+const CONFLICT_ERROR_MESSAGE_MARKER = ': it was made to an older version of the document';
 
 /**
  * Type guard for {@link ConflictError}. Detection ladder:
@@ -272,8 +340,9 @@ const CONFLICT_ERROR_MESSAGE_MARKER = 'Stale-based update for ';
  *     canonical wire-side check; the JSON-RPC `code` field is preserved
  *     across reconstruction, so any adopter catching after an RPC call
  *     hits this branch.
- *  3. `error.message.includes('Stale-based update for ')` — fallback
- *     for transports that re-wrap the message and drop the code (rare).
+ *  3. `error.message` contains the marker {@link STALE_BASED_UPDATE}'s
+ *     English carries — fallback for transports that re-wrap the message
+ *     and drop the code (rare).
  *
  * `instanceof ConflictError` alone would silently return `false` on the
  * reconstructed shape, so callers do not use it.

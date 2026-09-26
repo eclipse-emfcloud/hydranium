@@ -18,9 +18,11 @@
 import assert from 'node:assert/strict';
 import {
    asSnapshotVersion,
+   FRAMEWORK_CLIENT_IDS,
    isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
+   isReservedClientIdError,
    isSessionClosedError,
    ReferenceSource,
    SyntheticStep,
@@ -297,6 +299,27 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             // assertion above on its own.
             await driver.proxy.createSession({ clientId });
             await driver.proxy.closeSession({ clientId });
+         } finally {
+            driver.dispose();
+         }
+      }
+   });
+
+   checks.push({
+      title: 'createSession refuses every id the framework reserves, not as a duplicate',
+      body: async () => {
+         const driver = await connect();
+         try {
+            // Every id: a head that refuses only some passes a single case. A
+            // reserved id never frees up, so a caller retrying on a duplicate
+            // has to be able to tell this refusal apart.
+            for (const clientId of FRAMEWORK_CLIENT_IDS) {
+               const refusal = await rejectionOf(driver.proxy.createSession({ clientId }));
+               assert.ok(
+                  isReservedClientIdError(refusal),
+                  `createSession under the reserved id ${clientId} was not refused as reserved: ${String(refusal)}`
+               );
+            }
          } finally {
             driver.dispose();
          }

@@ -1447,16 +1447,22 @@ its answer on the rest.
 
 Worked cases:
 
-- **`ConflictError` is (b) with an identity, and shows the combination, not
-  the wording.** A caller reconciles on `isConflictError`, and
-  `STALE_BASED_UPDATE` gives the error an identity. Its sentence is not a model
-  for wording: it carries both version numbers, which the rule above words or
-  leaves in `data`. Rewording it means rewording, in the same change, the
-  marker that `isConflictError`'s last tier matches on.
+- **`ConflictError` is (b) with an identity.** A caller reconciles on
+  `isConflictError`, and `STALE_BASED_UPDATE` gives the error an identity. Its
+  sentence names the URI and says "an older version of the document" where the
+  two version numbers would be; the numbers stay in `data`. Rewording it means
+  rewording, in the same change, the marker that `isConflictError`'s last tier
+  matches on.
 - **`SessionClosedError` is (b) with an identity.** The session's end is
   something a caller reacts to, and "The editing session has ended." needs no
   context, so `SESSION_CLOSED` carries it while the client id stays in `data`.
   A throw site that knows more passes its own English; the identity stays.
+- **A client id taken is (b), with an identity only where it is live.**
+  `DuplicateClientIdError` answers an id another participant still holds, which
+  a caller may retry and a user can be told about. `ReservedClientIdError`
+  answers an id the framework keeps for itself: a caller stops rather than
+  retries, and no end-user sentence is true for a host that picked it, so it
+  has a code and no identity.
 - **A disposed `RpcConnection` is (c).** Calling one is a lifecycle bug in the
   caller, nothing branches on it, and its sentence names a class.
 - **`ReentrantWriteLockError` is (c) with a name.** Nothing branches on it and

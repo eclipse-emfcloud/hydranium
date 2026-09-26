@@ -10,7 +10,7 @@
 import { type CanonicalUri, FRAMEWORK_CLIENT_IDS } from '@hydranium/protocol';
 import { type Disposable, Emitter, type Event } from 'vscode-languageserver';
 import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
-import { DuplicateClientIdError, SessionClosedError } from './client-session-errors.js';
+import { DuplicateClientIdError, ReservedClientIdError, SessionClosedError } from './client-session-errors.js';
 
 /**
  * What a client session states about one of its opens, kept by the session
@@ -95,15 +95,18 @@ export class ClientSessionRegistry {
    /**
     * Enter `clientId` in the session table.
     *
-    * Throws {@link DuplicateClientIdError} when the id is live anywhere in the
-    * process: reserved, registered (including by a session that is still
-    * closing), or holding opens as a client that is not a session. The last
-    * matters because the id is the author label and the echo key, and a
-    * session sharing one with another client would take that client's writes
-    * for its own.
+    * Throws {@link ReservedClientIdError} for a reserved id, and
+    * {@link DuplicateClientIdError} when the id is live anywhere in the
+    * process: registered (including by a session that is still closing), or
+    * holding opens as a client that is not a session. The last matters because
+    * the id is the author label and the echo key, and a session sharing one
+    * with another client would take that client's writes for its own.
     */
    register(clientId: string): void {
-      if (this.reservedIds.has(clientId) || this.sessions.has(clientId) || this.opensByClient.has(clientId)) {
+      if (this.reservedIds.has(clientId)) {
+         throw new ReservedClientIdError(clientId);
+      }
+      if (this.sessions.has(clientId) || this.opensByClient.has(clientId)) {
          throw new DuplicateClientIdError(clientId);
       }
       this.sessions.set(clientId, 'live');

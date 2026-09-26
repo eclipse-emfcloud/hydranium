@@ -40,9 +40,11 @@ import {
    ConflictError,
    DocumentNotOpenError,
    DuplicateClientIdError,
+   FRAMEWORK_CLIENT_IDS,
    isDocumentSource,
    isSnapshotVersion,
    isSyntheticSource,
+   ReservedClientIdError,
    SessionClosedError,
    TransferDocument
 } from '@hydranium/protocol';
@@ -174,6 +176,8 @@ export interface CanaryDefects {
    readonly noCandidatesAtFolder?: boolean;
    /** `createSession` accepts an id a live session already holds. */
    readonly sessionIdsReused?: boolean;
+   /** `createSession` accepts an id the framework reserves. */
+   readonly reservedIdsAccepted?: boolean;
    /** `closeSession` leaves the id taken, so it can never identify a session again. */
    readonly sessionIdsKept?: boolean;
    /** An id no session was registered for opens and writes documents. */
@@ -321,6 +325,9 @@ export class CanaryDataServer {
    }
 
    async createSession(args: CreateSessionArgs): Promise<void> {
+      if (FRAMEWORK_CLIENT_IDS.includes(args.clientId) && !this.defects.reservedIdsAccepted) {
+         throw new ReservedClientIdError(args.clientId);
+      }
       if ((this.sessions.has(args.clientId) && !this.defects.sessionIdsReused) || this.keptIds.has(args.clientId)) {
          throw new DuplicateClientIdError(args.clientId);
       }
