@@ -208,6 +208,16 @@ export interface CanaryDefects {
    readonly saveOpensImplicitly?: boolean;
    /** Closing a connection leaves its sessions live. */
    readonly sessionsOutliveConnection?: boolean;
+   /** A write answers with no diagnostics, as a head answering before its document is validated does. */
+   readonly writeAnswersUnvalidated?: boolean;
+   /** Every document is reported clean, saved or not. */
+   readonly neverDirty?: boolean;
+   /** The last close keeps a saved document's unsaved text instead of going back to its file. */
+   readonly releaseKeepsText?: boolean;
+   /** The last close keeps a document that has no file. */
+   readonly releaseKeepsUnsaved?: boolean;
+   /** Any close goes back to the file, even while another session has the document open. */
+   readonly releaseOnAnyClose?: boolean;
    /**
     * Not a defect: closing a connection ends its sessions only a moment later,
     * as a server behind a socket does once it has read the close.
@@ -235,6 +245,8 @@ export class CanaryDataServer {
    readonly builds: TransferDocumentsBuiltEvent[] = [];
 
    private readonly documents = new Map<string, StoredDocument>();
+   /** What each save wrote, by URI: the file a last close goes back to. */
+   private readonly disk = new Map<string, string>();
    private readonly watched = new Set<string>();
    /** Live session ids, and the URIs each has open. */
    private readonly sessions = new Map<string, Set<string>>();
@@ -293,6 +305,7 @@ export class CanaryDataServer {
 
    dispose(): void {
       this.documents.clear();
+      this.disk.clear();
       this.watched.clear();
       if (this.defects.endsSessionsLate) {
          const sessions = [...this.sessions.keys()];
@@ -354,6 +367,20 @@ export class CanaryDataServer {
       }
       if (this.defects.sessionIdsKept) {
          this.keptIds.add(args.clientId);
+      }
+      opens?.forEach(uri => this.releaseIfClosed(uri));
+   }
+
+   /** Once no session has `uri` open, go back to what its last save wrote, or drop it when none did. */
+   private releaseIfClosed(uri: string): void {
+      if (!this.defects.releaseOnAnyClose && [...this.sessions.values()].some(opens => opens.has(uri))) {
+         return;
+      }
+      const saved = this.disk.get(uri);
+      if (saved !== undefined && !this.defects.releaseKeepsText) {
+         this.documents.set(uri, { text: saved, version: (this.documents.get(uri)?.version ?? 0) + 1 });
+      } else if (saved === undefined && !this.defects.releaseKeepsUnsaved) {
+         this.documents.delete(uri);
       }
    }
 
@@ -435,6 +462,7 @@ export class CanaryDataServer {
          this.documents.set(args.uri, { text, version: (existing?.version ?? 0) + 1 });
       }
       const document = this.envelope(args.uri);
+      const answer = this.defects.writeAnswersUnvalidated ? { ...document, diagnostics: [] } : document;
       if (this.watched.has(args.uri) || this.defects.notifiesBeforeSubscribe) {
          this.events.push({ document, sourceClientId: args.clientId, reason: this.defects.ownWriteRebuilt ? 'rebuilt' : 'changed' });
       }
@@ -457,7 +485,7 @@ export class CanaryDataServer {
             reason: 'rebuilt'
          });
       }
-      return document;
+      return answer;
    }
 
    async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
@@ -486,13 +514,16 @@ export class CanaryDataServer {
       if (!this.defects.closeKeepsOpen) {
          this.sessions.get(args.clientId)?.delete(args.uri);
       }
+      this.releaseIfClosed(args.uri);
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
       if (this.defects.saveOpensImplicitly) {
          this.sessions.get(args.clientId)?.add(args.uri);
       }
-      return this.updateModelDocument(args);
+      await this.updateModelDocument(args);
+      this.disk.set(args.uri, typeof args.model === 'string' ? args.model : args.model.text);
+      return this.envelope(args.uri);
    }
 
    private envelope(uri: string): TransferDocument<CanaryRoot, TransferDiagnostic> {
@@ -511,7 +542,8 @@ export class CanaryDataServer {
          uri,
          version: asSnapshotVersion(this.defects.fractionalVersion ? stored.version + 0.5 : stored.version),
          root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
-         diagnostics
+         diagnostics,
+         dirty: !this.defects.neverDirty && stored.text !== this.disk.get(uri)
       };
    }
 }

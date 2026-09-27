@@ -59,10 +59,12 @@
  *   really does resolve `Order` across the grammar boundary, which is what proves
  *   the URI placement earns project-tier visibility.
  * - Make an `invalid` fixture resolve cleanly and exactly its own
- *   `getModelDocument(invalid) …` check fails — there is one such check per
- *   language, so a leak across languages would show as a second red.
+ *   `getModelDocument(invalid) …` and `a write of the invalid model …` checks
+ *   fail — there is one of each per language, so a leak across languages
+ *   would show as a third red.
  * - Point the `.layout` fixture's `edit.expect` at a flow-node name the edit does
- *   not introduce and exactly `updateModelDocument … [order-flow-layout]` fails.
+ *   not introduce and exactly `updateModelDocument … [order-flow-layout]` and
+ *   `the last close drops … [order-flow-layout]` fail.
  * - Give the `.domain` fixture's `breakingEdit` the `edit` text, which adds
  *   `Pallet` and keeps `Shipment`, and exactly the dependent-credit check
  *   `… [order-flow-domain]` fails: the dependent then shows nothing new, so

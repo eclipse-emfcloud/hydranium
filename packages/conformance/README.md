@@ -36,6 +36,11 @@ author, and that keeps checking you as the framework moves.
   catalogue and selects no locale, so a server that renders nothing is correct; and it is a PAIR
   because "the message contains X" alone passes for a server whose English contains X. Omit
   `absentWithLocale` and the control reports skipped rather than being quietly dropped.
+- **Client sessions, on the data head.** The `/data` battery opens and writes every document as a
+  client session and holds the head to how sessions behave: a session writes and saves only what it
+  has open, ids are refused while live or reserved, a write answers with its document's
+  diagnostics, `dirty` follows the file, and the last close reverts a document to what its save
+  wrote, or drops it when it was never saved. See [client sessions](../../docs/concepts/client-sessions.md).
 
 ## Install
 
@@ -72,7 +77,8 @@ Each takes `connect` plus `languages`:
 - **`connect`** returns a freshly wired driver and is called **once per check**, so checks cannot
   interfere; the kit disposes the driver afterwards. The data slice wants a server already ready; the
   LSP slice drives the `initialize` handshake itself, so `connect` must **not** pre-initialise; the
-  GLSP slice drives `start()`.
+  GLSP slice drives `start()`. The data slice saves documents beside each fixture's `valid`, so its
+  `connect` should give each check a workspace the kit may write to and throw away.
 - **`languages`** is an array of `LanguageFixture`: `valid` and `invalid` are required and read by
   every slice; every other field is an opt-in whose checks report **skipped with a named reason**
   when it is absent, so an opt-out stays distinguishable from lost coverage. Read the current set
