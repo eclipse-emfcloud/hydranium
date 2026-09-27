@@ -744,14 +744,9 @@ describe('HydraniumDocumentBuilder', () => {
          firePhase(document: LangiumDocument, state: DocumentState): Promise<void> {
             return this.notifyDocumentPhase(document, state, CancellationToken.None);
          }
-         /**
-          * Stand in for a build finishing its `Validated` phase. The document
-          * list must be non-empty: Langium skips the notification entirely when
-          * no document reached the phase, so passing `[]` silently fires
-          * nothing and any assertion about the listener passes vacuously.
-          */
-         fireBuildPhase(state: DocumentState): Promise<void> {
-            return this.notifyBuildPhase([documentAt(state)], state, CancellationToken.None);
+         /** Run a build over no documents: every phase, and no `onBuildPhase` notification. */
+         completeBuild(): Promise<void> {
+            return this.buildDocuments([], {}, CancellationToken.None);
          }
       }
 
@@ -797,6 +792,19 @@ describe('HydraniumDocumentBuilder', () => {
          await expect(pending).resolves.toBeDefined();
       });
 
+      it('re-queues when the build in flight ends without validating the document', async () => {
+         // The initial workspace build validates nothing, and Langium sends no
+         // `onBuildPhase` for its empty `Validated` phase.
+         const builder = new OrphanBuilder(documentAt(DocumentState.Linked), DocumentState.ComputedScopes);
+         void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await builder.drained();
+         expect(builder.updateCalls).toEqual([]);
+
+         await builder.completeBuild();
+         await builder.drained();
+         expect(builder.updateCalls).toEqual([[DOC_URI.toString()]]);
+      });
+
       it('stops re-queuing once builds stop advancing the document', async () => {
          // The hazard the entry-time re-queue would otherwise open: each build's
          // own completion re-triggers the orphan branch, so a document the
@@ -812,7 +820,7 @@ describe('HydraniumDocumentBuilder', () => {
          // Drained per observation, since re-queues still queued together
          // share one build and would stay under the bound without it.
          for (let i = 0; i < 10; i++) {
-            await builder.fireBuildPhase(DocumentState.Validated);
+            await builder.completeBuild();
             await builder.drained();
          }
 
@@ -835,7 +843,7 @@ describe('HydraniumDocumentBuilder', () => {
 
          for (const state of [DocumentState.IndexedContent, DocumentState.ComputedScopes, DocumentState.Linked]) {
             crawling.state = state;
-            await builder.fireBuildPhase(DocumentState.Validated);
+            await builder.completeBuild();
             await builder.drained();
          }
 

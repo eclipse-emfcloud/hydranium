@@ -233,6 +233,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected lastCancelledTraceId?: number;
    /** Registered through {@link onDocumentPhaseDelivered}, by phase. */
    protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, (document: LangiumDocument, version: number) => void>();
+   /**
+    * Called by {@link buildDocuments} once a build has run every phase; see
+    * {@link awaitDocumentState}. A listener runs synchronously inside the
+    * build's write action, so a throw fails the finished build.
+    */
+   protected readonly buildCompletedListeners = new Set<() => void>();
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -338,10 +344,13 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     *
     * Replacing Langium's rejection with a wait makes the wait's liveness this
     * class's responsibility: a listener can only fire if some build is still
-    * going to reach `state`. Both re-queue sites below exist for that, and they
-    * differ only in when the orphaning is observed — {@link isOrphaned} at
-    * registration time, the `onBuildPhase` branch for a build cancelled after
-    * the wait was already armed. Re-queuing stops after
+    * going to reach `state`. So the wait re-queues the document whenever
+    * {@link isOrphaned} holds: once when it is armed, and again after every
+    * build that completes (see {@link buildDocuments}). The second check is
+    * the one a wait armed during a build needs, since only the build's end
+    * shows whether it left the document behind; Langium's `onBuildPhase` for
+    * `Validated` cannot serve, as it stays silent for a build that validates
+    * nothing, such as the workspace's initial one. Re-queuing stops after
     * {@link MAX_STALLED_REQUEUES} builds that fail to advance the document, so a
     * document the builder will never carry to `state` degrades to a pending wait
     * plus a warning rather than an endless build loop.
@@ -416,15 +425,19 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                     }, 'awaitDocumentState.skipsValidation')
                  )
                : Disposable.create(() => undefined);
-         const buildDisposable = this.onBuildPhase(DocumentState.Validated, () => {
+         const buildCompleted = (): void => {
             if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
                cleanup();
                resolve(uri);
-            } else {
-               // Orphaned by a cancelled build — re-queue so the next build catches it up.
-               requeue('cancelled build');
+            } else if (this.isOrphaned(document, state)) {
+               // The build ended without carrying the document to `state`. The
+               // check fails only while an unlocked build that started later
+               // still runs; that build carries the document or ends here too.
+               requeue('build ended short of the target');
             }
-         });
+         };
+         this.buildCompletedListeners.add(buildCompleted);
+         const buildDisposable = Disposable.create(() => this.buildCompletedListeners.delete(buildCompleted));
          const cancelDisposable = cancelToken.onCancellationRequested(() => {
             cleanup();
             reject(OperationCancelled);
@@ -436,9 +449,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
             cancelDisposable.dispose();
          };
          // Orphaned BEFORE the wait was armed: the build that would have
-         // advanced this document has already finished, so neither listener
-         // above can ever fire. Re-queue now — the listeners are registered, so
-         // the resulting build resolves this wait.
+         // advanced this document has already finished, so none of these
+         // listeners fires until some other build runs. Re-queue now — the listeners are
+         // registered, so the resulting build resolves this wait.
          if (this.isOrphaned(document, state)) {
             requeue('quiescent builder');
          }
@@ -479,7 +492,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * `currentState` still advances to `Validated` (the validation phase runs
     * over an empty document list). Any first read that wants diagnostics — a
     * one-shot data-head read, a CLI query, `ModelService.validated` — lands
-    * here.
+    * here. A read that arrives while that build still runs finds `currentState`
+    * below `state`, so this holds for it only once the build has ended, which
+    * is why {@link awaitDocumentState} asks again then.
     */
    protected isOrphaned(document: LangiumDocument, state: DocumentState): boolean {
       return document.state < state && this.currentState >= state;
@@ -648,6 +663,31 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          if (this.scheduledUpdate === request) {
             this.scheduledUpdate = undefined;
          }
+      }
+   }
+
+   /**
+    * Tell the {@link buildCompletedListeners} once every phase has run, which
+    * is the one point where a build that skipped a waited-on document can be
+    * seen to have ended. Langium's `onBuildPhase` for `Validated` is not: it
+    * stays silent when no document reached that phase, which is every build
+    * that validates nothing, the workspace's initial one among them.
+    *
+    * A build that throws, whether cancelled or failed, tells none of them:
+    * `currentState` is then below `Validated`, so {@link isOrphaned} could
+    * hold for no wait, and telling them from a `finally` would re-queue
+    * nothing. A wait armed during such a build resolves with the next build
+    * that completes. A cancelling lock write usually runs one, but a write
+    * that builds nothing leaves the wait to a later build.
+    */
+   protected override async buildDocuments(
+      documents: LangiumDocument[],
+      options: BuildOptions,
+      cancelToken: CancellationToken
+   ): Promise<void> {
+      await super.buildDocuments(documents, options, cancelToken);
+      for (const listener of [...this.buildCompletedListeners]) {
+         listener();
       }
    }
 
