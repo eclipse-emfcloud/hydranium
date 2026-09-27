@@ -42,10 +42,10 @@
  * URI, no race, and nothing to duplicate. **A headless adopter test cannot reach
  * this path at all.**
  *
- * With a real connection both builds run: Langium's text-change bridge (under
- * `workspaceLock.write`) and the facade's `rebuildCanonical`. With the lock off
- * they are concurrent, each computes its missing validation categories before
- * the other records its own, both run a full pass, and Langium's deliberate
+ * With a real connection two builds are requested: the update handler's and
+ * the facade's `rebuildCanonical`. With the lock on they share one build; with
+ * it off they run concurrently, each computes its missing validation
+ * categories before the other records its own, both run a full pass, and Langium's deliberate
  * append — meant for category-partitioned passes — duplicates the lot.
  *
  * # What is asserted

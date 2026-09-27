@@ -160,12 +160,11 @@ export interface ServerAddedSharedServices<
        * the `awaitDocumentState` bug-fix, framework-wired phase logs,
        * and the `markNextReason` observability primitive without
        * binding the slot explicitly. The
-       * `HydraniumDocumentUpdateHandler`'s `dispatch` calls this
-       * slot's `markNextReason` to stage the LSP event that triggered
-       * the build, for a subclass's build logging to tag its line with,
-       * so narrowing here is a load-bearing type contract — adopters who
-       * explicitly downgrade to Langium's default lose that call site's
-       * compile-time target.
+       * `HydraniumDocumentUpdateHandler`'s `dispatch` and
+       * `ModelService.rebuild` build through this slot's
+       * `scheduleUpdate`, so narrowing here is a load-bearing contract:
+       * a builder without it fails every LSP-driven build, and every
+       * session write while `serializeBuilds` is on, at run time.
        */
       /* override */ DocumentBuilder: HydraniumDocumentBuilder;
       /**

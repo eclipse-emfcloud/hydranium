@@ -134,7 +134,50 @@ describe('update attribution against the real builder', () => {
       expect(panel.isOwnEcho(events[0].sourceClientId)).toBe(true);
    });
 
-   it('credits every document of an updateAll to the writer, the one whose build was cancelled included', async () => {
+   it('credits a write whose build another client’s write cancelled to its writer', async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const panel = models.createSession('panel', 'panel');
+      const editor = models.createSession('editor', 'editor');
+      await panel.open(uri(LONE));
+      await editor.open(uri(CUSTOMER));
+      await models.validated(uri(LONE));
+      await models.validated(uri(CUSTOMER));
+      const events = record(harness, uri(LONE));
+
+      // The editor writes once the panel's build has parsed its document, from
+      // the test's own context: started in the listener it would be refused
+      // as reentrant. The build is held until that write cancels it.
+      const workspace = harness.shared.workspace;
+      const target = workspace.DocumentUriPolicy.canonicalUri(uri(LONE));
+      let cancelled = false;
+      let reach!: () => void;
+      const reached = new Promise<void>(resolve => (reach = resolve));
+      const listener = workspace.DocumentBuilder.onDocumentPhase(DocumentState.Parsed, async (document, cancelToken) => {
+         if (workspace.DocumentUriPolicy.canonicalUri(document.uri.toString()) === target) {
+            listener.dispose();
+            reach();
+            await new Promise<void>(resolve => {
+               const timer = setTimeout(resolve, 2000);
+               cancelToken.onCancellationRequested(() => {
+                  cancelled = true;
+                  clearTimeout(timer);
+                  resolve();
+               });
+            });
+         }
+      });
+      disposables.push(listener);
+      const written = panel.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      await reached;
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_EDITED, basedOn: 'anything' });
+      await written;
+
+      expect(cancelled).toBe(true);
+      expect(events.map(attribution)).toEqual([{ reason: 'changed', sourceClientId: 'panel', causedBy: 'panel' }]);
+   });
+
+   it('credits every document of an updateAll to the writer', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;
       const writer = models.createSession('writer', 'writer');

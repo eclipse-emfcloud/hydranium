@@ -33,6 +33,7 @@ import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residen
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
+import { HydraniumWorkspaceLock } from '../workspace/hydranium-workspace-lock.js';
 import { BuildSession, type BuildSessionContext } from './build-session.js';
 import { type LabeledPhaseListener, labelPhaseListener } from './labeled-phase-listener.js';
 
@@ -126,6 +127,28 @@ export interface DocumentBuilderOptions extends LogNameOptions {
 }
 
 /**
+ * One locked build {@link HydraniumDocumentBuilder.scheduleUpdate} queued,
+ * which later requests merge into while it waits and join while it runs.
+ */
+export interface ScheduledUpdate {
+   /** URIs to build, by URI string. Merged requests change it while the write is queued; fixed once it runs. */
+   readonly changed: Map<string, URI>;
+   /** URIs to delete, by URI string, under the same rule as {@link changed}. */
+   readonly deleted: Map<string, URI>;
+   /** The latest build reason any merged request gave; staged through {@link HydraniumDocumentBuilder.markNextReason} when the write runs. */
+   reason?: string;
+   /** The lock's {@link HydraniumWorkspaceLock.writeCancellations} right after this write was queued. */
+   readonly cancellations: number;
+   /**
+    * Set when the write starts to run, so its presence marks a running build:
+    * the text version of each changed URI the text store holds at that point.
+    */
+   takenVersions?: Map<string, number>;
+   /** The lock's promise for this write: settles when the build completes or is cancelled. */
+   readonly promise: Promise<void>;
+}
+
+/**
  * Extends Langium's {@link DefaultDocumentBuilder} with:
  *
  * - **Bug-fixes** (always on): an {@link awaitDocumentState} that waits where
@@ -134,6 +157,8 @@ export interface DocumentBuilderOptions extends LogNameOptions {
  *   non-validating build from suppressing validation, and a
  *   {@link shouldRelink} that never judges a document unaffected on an index
  *   that does not describe it.
+ * - **Shared locked builds** ({@link scheduleUpdate}): build requests that
+ *   coincide share one locked build instead of cancelling each other.
  * - **URI handling** (always on): directory-aware flattening and cascade
  *   deletes in {@link update}, plus the CST-rehydration and cross-document
  *   refresh resets in {@link resetToState}.
@@ -176,8 +201,10 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly uriPolicy: DocumentUriPolicy;
    protected readonly clock: Clock;
    protected readonly messageRenderer: MessageRenderer;
-   /** The lock a re-queued build takes; see {@link requeueOrphaned}. */
+   /** The lock {@link scheduleUpdate} builds under. */
    protected readonly workspaceLock: WorkspaceLock;
+   /** The latest write {@link scheduleUpdate} queued, until it ends; see {@link ScheduledUpdate}. */
+   protected scheduledUpdate?: ScheduledUpdate;
    /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
    protected readonly languageRegistry: ExtendedServiceRegistry;
    protected languageFileExtensions: string[] = [];
@@ -465,13 +492,16 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * logged rather than swallowed — it leaves the waiter pending until its own
     * cancellation token fires, which is worth a line in the log.
     *
-    * The build is an ordinary {@link WorkspaceLock} write, entered from a read.
-    * The read waits until no write runs or is queued, so the build neither runs
-    * beside a locked one nor cancels the build a re-queue is fired from. Unlocked,
-    * it runs beside a locked build that cannot cancel it: both validate the same
-    * version and deliver it twice. Taking the write directly, without the read,
-    * cancels the running build and skips the rest of its build-phase listeners.
-    * The read must not await the write, which queues behind that read.
+    * The build is a {@link scheduleUpdate}, entered from a {@link WorkspaceLock}
+    * read. The read waits until no write runs or is queued, so the build neither
+    * runs beside a locked one nor cancels the build a re-queue is fired from.
+    * Unlocked, it runs beside a locked build that cannot cancel it: both
+    * validate the same version and deliver it twice. Taking the write directly,
+    * without the read, cancels the running build and skips the rest of its
+    * build-phase listeners. The read must not await the write, which queues
+    * behind that read. A build scheduled in the gap between the read batch
+    * starting and this action running is still queued, so the re-queue merges
+    * into it rather than cancelling it.
     *
     * A write that ran while the read waited may have carried the document to
     * `state` already, and a second build would deliver that version again; the
@@ -484,14 +514,141 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          if (document.state >= state) {
             return;
          }
-         this.workspaceLock
-            .write(token => this.update([document.uri], [], token))
-            .catch((err: unknown) => {
-               if (!isOperationCancelled(err)) {
-                  tracer.error(`Re-queue build failed: ${err instanceof Error ? err.message : String(err)}`);
-               }
-            });
+         this.scheduleUpdate([document.uri], []).catch((err: unknown) => {
+            if (!isOperationCancelled(err)) {
+               tracer.error(`Re-queue build failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+         });
       });
+   }
+
+   // ============================================================
+   // Scheduled updates — one locked build for requests that coincide
+   // ============================================================
+
+   /**
+    * Build `changed` and `deleted` under the {@link WorkspaceLock}, as
+    * `workspaceLock.write(token => update(changed, deleted, token))` would,
+    * except where the build this method queued last already carries the
+    * request. The promise settles when the build that carries the request
+    * ends, completed or cancelled, as the lock's own promise does.
+    *
+    * Without it, requests that coincide cancel each other: each lock write
+    * cancels the one before it, after Langium's `update` has already reset the
+    * documents, scanned the workspace for relinking and called every
+    * `onUpdate` listener.
+    *
+    * - **Queued, not yet running:** the request merges into it, so nothing is
+    *   cancelled. The later of a change and a deletion of one URI wins, so
+    *   each URI reaches `update` in one list only: a file deleted and written
+    *   again before the build starts is a change.
+    * - **Running:** the request joins it only when {@link canJoinRunningUpdate}
+    *   holds, which keeps an edit made while it runs cancelling it.
+    * - **Otherwise,** or when anything else has cancelled that write since it
+    *   was queued, a new write, which cancels the running build as any lock
+    *   write does.
+    *
+    * `reason` is staged through {@link markNextReason} when the write runs. The
+    * latest reason of a merged request wins, as it does in the update
+    * handler's own debounced burst; a joining request's reason is dropped, since
+    * the build it joins has already started. A request without one leaves a
+    * reason staged by the caller in place.
+    *
+    * A caller that must run code of its own inside the write action takes the
+    * lock itself, and forgoes the sharing. A lock that is not a
+    * {@link HydraniumWorkspaceLock} cannot report a cancelled queued write, so
+    * every request then takes its own write.
+    */
+   scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void> {
+      const lock = this.workspaceLock;
+      if (!(lock instanceof HydraniumWorkspaceLock)) {
+         return lock.write(token => {
+            if (reason !== undefined) {
+               this.markNextReason(reason);
+            }
+            return this.update(changed, deleted, token);
+         });
+      }
+      const scheduled = this.scheduledUpdate;
+      if (scheduled && scheduled.cancellations === lock.writeCancellations) {
+         if (!scheduled.takenVersions) {
+            for (const uri of changed) {
+               scheduled.changed.set(uri.toString(), uri);
+               scheduled.deleted.delete(uri.toString());
+            }
+            for (const uri of deleted) {
+               scheduled.deleted.set(uri.toString(), uri);
+               scheduled.changed.delete(uri.toString());
+            }
+            scheduled.reason = reason ?? scheduled.reason;
+            return scheduled.promise;
+         }
+         if (this.canJoinRunningUpdate(scheduled, changed, deleted)) {
+            return scheduled.promise;
+         }
+      }
+      // The action runs on a later tick, by which time `request` is assigned.
+      const promise = lock.write(token => this.runScheduledUpdate(request, token));
+      const request: ScheduledUpdate = {
+         changed: new Map(changed.map(uri => [uri.toString(), uri])),
+         deleted: new Map(deleted.map(uri => [uri.toString(), uri])),
+         reason,
+         cancellations: lock.writeCancellations,
+         promise
+      };
+      this.scheduledUpdate = request;
+      return promise;
+   }
+
+   /**
+    * Whether a request for `changed` and `deleted` is carried by the running
+    * `scheduled` build, whose write nothing has cancelled: the request deletes
+    * nothing, and each changed URI is one the build took, held by the text
+    * store at the version it had when the build started.
+    *
+    * Each condition keeps a request from joining a build that would miss its
+    * change. Text that moved since the start may be newer than what the build
+    * parsed; a URI the text store does not hold is read from its file, which
+    * may have changed after the build read it; and a deletion may concern a
+    * document the build has already built. A joined request is also absent
+    * from the running `update`'s `onUpdate` call, which reported the store as
+    * it was when the build started; at an unchanged version that is the store
+    * the request sees.
+    */
+   protected canJoinRunningUpdate(scheduled: ScheduledUpdate, changed: URI[], deleted: URI[]): boolean {
+      const taken = scheduled.takenVersions;
+      if (!taken || deleted.length > 0) {
+         return false;
+      }
+      return changed.every(uri => taken.has(uri.toString()) && taken.get(uri.toString()) === this.textDocuments?.get(uri)?.version);
+   }
+
+   /**
+    * The write action of a {@link scheduleUpdate}: freeze the request, record
+    * what it takes, stage its reason and run `update`. Releases
+    * {@link scheduledUpdate} inside the lock, whatever throws, so a request
+    * arriving after the build ends starts a write of its own rather than
+    * joining a build that is over.
+    */
+   protected async runScheduledUpdate(request: ScheduledUpdate, token: CancellationToken): Promise<void> {
+      try {
+         const taken = new Map<string, number>();
+         for (const [key, uri] of request.changed) {
+            const version = this.textDocuments?.get(uri)?.version;
+            if (version !== undefined) {
+               taken.set(key, version);
+            }
+         }
+         request.takenVersions = taken;
+         if (request.reason !== undefined) {
+            this.markNextReason(request.reason);
+         }
+         await this.update([...request.changed.values()], [...request.deleted.values()], token);
+      } finally {
+         if (this.scheduledUpdate === request) {
+            this.scheduledUpdate = undefined;
+         }
+      }
    }
 
    /**

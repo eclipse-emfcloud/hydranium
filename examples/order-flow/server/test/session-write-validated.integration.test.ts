@@ -13,9 +13,9 @@
  *
  * The echo carries the writer's id, and a client drops its own echo. So an
  * answer taken before validation loses the diagnostics for good whenever the
- * writer's own build is cancelled and a later build validates the document:
- * by another client's edit, or by the writer's own `updateAll`, whose second
- * rebuild cancels the first.
+ * writer's own build is cancelled and a later build validates the document,
+ * as another client's edit does. The writer's own `updateAll` shares one
+ * build between its documents, and its answers wait for that build too.
  *
  * Needs the real builder and write lock: the loss is the cancelled build.
  */
@@ -130,7 +130,7 @@ describe('a session write answers with its document validated', () => {
       expect(answer.diagnostics).toHaveLength(2);
    });
 
-   it('when the writer’s own updateAll cancels the first document’s build', async () => {
+   it('when the writer’s own updateAll builds its documents together', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;
       const writer = models.createSession('writer', 'writer');

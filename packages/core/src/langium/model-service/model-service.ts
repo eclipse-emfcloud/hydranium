@@ -58,17 +58,17 @@ const SAVE_SETTLE_TIMEOUT_MS = 10_000;
  */
 export interface ModelServiceOptions extends LogNameOptions {
    /**
-    * Serialise the facade's own build under the workspace WRITE lock, the way
-    * Langium's `DefaultDocumentUpdateHandler` dispatches its build. Default
-    * `true`.
+    * Serialise the facade's own build under the workspace WRITE lock, through
+    * `HydraniumDocumentBuilder.scheduleUpdate` as the LSP update handler
+    * builds. Default `true`.
     *
     * **Why it defaults on.** Unlocked, the facade's build races the LSP bridge's
     * build of the same URI — both are legitimate (the bridge exists only under a
     * `Connection`, so the facade stands in for it headless), but nothing
     * serialises them, so both run a full validation pass and Langium appends the
     * second onto the first. Every diagnostic is then duplicated, and the
-    * duplication compounds per rebuild. Serialised, Langium elides the second
-    * build entirely, so the redundant work goes too.
+    * duplication compounds per rebuild. Serialised, the second request shares
+    * the first build where it carries both, so the redundant work goes too.
     *
     * **What `false` costs.** The facade's build is then unserialised and can run
     * concurrently with the bridge's build of the same URI, so the affected
@@ -470,24 +470,23 @@ export class DefaultModelService<
     * Force a fresh build of the document at `uri` and wait for it to
     * reach `state` (or the integrity-settled landmark
     * {@link IntegrityService.SettledState} if omitted).
-    * Always triggers `DocumentBuilder.update([uri], [])` regardless of
-    * whether the document is already in the registry — call this when
-    * you want to re-process from scratch.
+    * Always builds the document, whether or not it is already in the
+    * registry, in a build of its own or in one already scheduled that carries
+    * it — call this when you want to re-process from scratch.
     *
-    * The facade is responsible for firing `DocumentBuilder.update`
-    * directly because Langium's `DefaultDocumentUpdateHandler.didChangeContent`
+    * The facade is responsible for requesting the build itself because Langium's `DefaultDocumentUpdateHandler.didChangeContent`
     * (the standard text-document → builder bridge) only runs under an
     * LSP `Connection`. Running headless the bridge never fires; the
     * facade stands in for it on its own update path.
     *
     * Coexistence with an LSP head running on the same `DocumentBuilder` is
-    * fine, but not because the builder merges the two: Langium does NOT
-    * coalesce concurrent builds of the same URI. The LSP head fires `update`
-    * from the LSP-driven event and the facade fires it from its own RPC-driven
-    * event — both legitimate — so this method takes the workspace WRITE lock,
-    * the same one Langium's own text-change bridge builds under, to serialise
-    * them. Two unserialised builds of one URI each run a full validation pass
-    * and Langium appends the second set onto the first, duplicating every
+    * fine: the LSP head builds from the LSP-driven event and the facade from
+    * its own RPC-driven event — both legitimate — and both go through
+    * `HydraniumDocumentBuilder.scheduleUpdate`, which serialises them under
+    * the workspace WRITE lock and lets the second share the first's build
+    * where that build carries it. Langium alone does not coalesce concurrent
+    * builds of one URI: two unserialised builds each run a full validation
+    * pass and Langium appends the second set onto the first, duplicating every
     * diagnostic. Opt out via
     * {@link ModelServiceOptions.serializeBuilds} — see there for the
     * non-reentrancy hazard that is the reason the opt-out exists.
@@ -512,8 +511,8 @@ export class DefaultModelService<
 
    /**
     * Internal build core operating on an already-{@link CanonicalUri canonical}
-    * URI — the build counterpart to {@link waitForDocumentStateCanonical}. Drives
-    * `DocumentBuilder.update` then waits via the canonical wait core, so the
+    * URI — the build counterpart to {@link waitForDocumentStateCanonical}.
+    * Requests the build, then waits via the canonical wait core, so the
     * identity is resolved once at the public door and neither sink re-runs the
     * `realpath`. (`DocumentBuilder.update` still resolves each URI internally for
     * directory flattening — that is the build's own existence-aware resolution,
@@ -525,15 +524,15 @@ export class DefaultModelService<
       cancelToken?: CancellationToken
    ): Promise<AstDocument<TAst, TDiagnostic>> {
       const documentUri = UriUtils.toUri(uri);
-      // Runs under the workspace WRITE lock, matching Langium's own
-      // `DefaultDocumentUpdateHandler`, which dispatches its build as
-      // `workspaceLock.write(token => documentBuilder.update(...))`.
+      // Runs under the workspace WRITE lock, through the builder's
+      // `scheduleUpdate` like the LSP update handler's build, so the build the
+      // store's change event already scheduled for this write carries this
+      // request too rather than being cancelled by it.
       //
       // Unlocked, this build races the LSP bridge's build of the same URI: both
       // are legitimate (the bridge only exists under a `Connection`, so the
-      // facade stands in for it headless), and the coexistence note above relied
-      // on Langium coalescing them by URI. It does not — nothing serialises the
-      // two, so both reach `Validated`, and because each computes its missing
+      // facade stands in for it headless), and nothing serialises the two, so
+      // both reach `Validated`, and because each computes its missing
       // validation categories before the other has recorded its own, both run a
       // FULL pass and Langium appends the second onto the first (its append is
       // meant for category-partitioned passes). The user-visible result is every
@@ -556,13 +555,9 @@ export class DefaultModelService<
          if (isInsideWriteLock()) {
             throw new ReentrantWriteLockError(uri);
          }
-         // The lock's OWN token, not the caller's: a later `write` cancels the
-         // running one through that token, so substituting the caller's would
-         // leave this build deaf to the lock's cancellation protocol. A caller
-         // token still governs the phase wait below.
-         await this.services.workspace.WorkspaceLock.write(lockToken =>
-            this.services.workspace.DocumentBuilder.update([documentUri], [], lockToken)
-         );
+         // The build runs on the lock's own token, which a later write cancels;
+         // the caller's token governs only the phase wait below.
+         await this.services.workspace.DocumentBuilder.scheduleUpdate([documentUri], []);
       } else {
          await this.services.workspace.DocumentBuilder.update([documentUri], [], cancelToken);
       }

@@ -312,7 +312,8 @@ export function makeTestServices<
 ): TestServicesBundle<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic> {
    const documents = makeStubLangiumDocuments<TAst, TDiagnostic>(options.seedDocuments);
    const textDocuments = makeStubHydraniumTextDocuments();
-   const documentBuilder = makeStubDocumentBuilder();
+   const workspaceLock = new HydraniumWorkspaceLock();
+   const documentBuilder = makeStubDocumentBuilder(workspaceLock);
    const selfSaveRegistry = makeStubSelfSaveRegistry();
    const fileSystem = makeStubWritableFileSystem(selfSaveRegistry);
    const projectManager = makeStubProjectManager<TProject>(options.seedProjects);
@@ -366,7 +367,7 @@ export function makeTestServices<
          // Spread for the same reason as `ServiceRegistry` above — the slot must
          // be genuinely ABSENT, not present-and-undefined, when no index was seeded.
          ...(indexManager ? { IndexManager: indexManager } : {}),
-         WorkspaceLock: new HydraniumWorkspaceLock(),
+         WorkspaceLock: workspaceLock,
          FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: documentUriPolicy } })
       },
       model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic>['model'],

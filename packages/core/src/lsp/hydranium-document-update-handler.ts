@@ -81,10 +81,11 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *  3. **Build-reason stamping** — the LSP event overrides
  *     (`didOpenDocument`, `didChangeContent`, `didChangeWatchedFiles`)
  *     populate {@link nextReason} with a canonical reason string.
- *     {@link fireDocumentUpdate} captures the reason; {@link dispatch} stages
- *     it on the builder via {@link HydraniumDocumentBuilder.markNextReason},
- *     so a subclass that formats build logs can tag its line with the event
- *     that caused the build without per-adopter wiring to capture it.
+ *     {@link fireDocumentUpdate} captures the reason; {@link dispatch} hands
+ *     it to {@link HydraniumDocumentBuilder.scheduleUpdate}, which stages it
+ *     through {@link HydraniumDocumentBuilder.markNextReason} when the build
+ *     runs, so a subclass that formats build logs can tag its line with the
+ *     event that caused the build without per-adopter wiring to capture it.
  *  4. **Editor save gate** ({@link willSaveDocumentWaitUntil}) — the editor
  *     writes the file itself, so the server's disk writes of that document
  *     are ordered around it: the editor's save waits for the ones already
@@ -102,13 +103,12 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  * Adopters with their own handler subclass should extend this class
  * (not Langium's `DefaultDocumentUpdateHandler`) so all of them are
  * preserved. The {@link dispatch} hook is the canonical override
- * point for adopters that need to stamp additional per-build metadata
- * inside the workspace-lock callback.
+ * point for adopters that need to stamp additional per-build metadata.
  */
 export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler {
    /**
     * Narrow Langium's `DefaultDocumentUpdateHandler.documentBuilder` typing to
-    * the framework subclass: `markNextReason` is the only method this handler
+    * the framework subclass: `scheduleUpdate` is the only method this handler
     * reaches for beyond the Langium interface.
     */
    declare protected readonly documentBuilder: HydraniumDocumentBuilder;
@@ -140,9 +140,9 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
    protected nextReason?: string;
    /**
     * Build-reason captured at `fireDocumentUpdate` time, drained by
-    * {@link dispatch} into `markNextReason`. Survives across debounced
-    * batches (`?? pendingReason` in `fireDocumentUpdate` retains the
-    * first reason in a coalesced burst).
+    * {@link dispatch} into the scheduled build. Survives across debounced
+    * batches: `fireDocumentUpdate` replaces it with each event's reason, so a
+    * coalesced burst carries its latest.
     */
    protected pendingReason?: string;
 
@@ -342,15 +342,13 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
     * flush immediately (`immediateFlush` or `debounceMs <= 0`) or restart
     * the trailing-edge timer. Subclasses that need to stamp per-build
     * metadata can override and inspect the merged sets — but the canonical
-    * override point for the workspace-lock callback is {@link dispatch},
-    * not this method.
+    * override point for the build is {@link dispatch}, not this method.
     */
    protected override fireDocumentUpdate(changed: URI[], deleted: URI[]): void {
       // Capture the reason set by the LSP event handler immediately before
-      // we merge into the pending sets. `?? pendingReason` keeps the
-      // first reason in a coalesced burst (LSP events arriving inside an
-      // active debounce window all stamp the same `pendingReason` once,
-      // because subsequent stamps see the field already non-undefined).
+      // we merge into the pending sets. Each event stamps its own reason, so
+      // a coalesced burst carries its latest; `?? pendingReason` keeps the
+      // earlier one only for a call no event stamped.
       this.pendingReason = this.nextReason ?? this.pendingReason;
       this.nextReason = undefined;
       for (const uri of changed) {
@@ -388,26 +386,25 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
    }
 
    /**
-    * Workspace-lock + `documentBuilder.update` call for the merged sets.
-    * Mirrors Langium's `super.fireDocumentUpdate` body plus
-    * `markNextReason(pendingReason)` inside the write-lock callback, so the
-    * build the lock is about to run carries the LSP event that triggered it.
-    * Adopters override to stamp additional per-build metadata — the canonical
-    * pattern is to read the reason via `this.pendingReason`, call
-    * `super.dispatch(...)` or replicate the
-    * `workspaceManager.ready -> workspaceLock.write` block, and add
-    * adopter-specific behaviour inside the write callback.
+    * Build the merged sets once the workspace is ready, through
+    * {@link HydraniumDocumentBuilder.scheduleUpdate} with the pending reason,
+    * so the build carries the LSP event that triggered it. A session's write
+    * fires the store's change event before the session rebuilds the document
+    * itself, and the scheduled build is what the two share.
+    *
+    * Adopters override to stamp additional per-build metadata: read the reason
+    * via `this.pendingReason` and call `super.dispatch(...)`; the build may
+    * be shared with other requests, so metadata stamped for it describes
+    * theirs too. An override that needs code inside the write action takes
+    * `workspaceLock.write` itself, as Langium's `fireDocumentUpdate` does, and
+    * stages the reason through `markNextReason` there; its build then cancels
+    * a scheduled one it coincides with rather than sharing it.
     */
    protected dispatch(changed: URI[], deleted: URI[]): void {
       const reason = this.pendingReason;
       this.pendingReason = undefined;
       this.workspaceManager.ready
-         .then(() =>
-            this.workspaceLock.write(token => {
-               this.documentBuilder.markNextReason(reason);
-               return this.documentBuilder.update(changed, deleted, token);
-            })
-         )
+         .then(() => this.documentBuilder.scheduleUpdate(changed, deleted, reason))
          .catch(err => {
             // A deferred rebuild can finish after the LSP peer has gone away.
             // Unless the head was started through `startLanguageServer`, whose

@@ -416,11 +416,9 @@ describe('order-flow data head', () => {
       expect(head.harness.events[head.harness.events.length - 1].document.uri).toBe(uri);
    });
 
-   it('answers updateModelDocuments with every written document validated, the first one included', async () => {
-      // The second document's rebuild cancels the first one's, so the first
-      // document is validated in a later build. The echo carrying its
-      // diagnostics names this client, which drops it, so the answer is the
-      // only place they can arrive.
+   it('answers updateModelDocuments with every written document validated', async () => {
+      // The echo carrying a document's diagnostics names this client, which
+      // drops it, so the answer is the only place they can arrive.
       const head = await driveDataHead();
       const audit = head.uri(WORKSPACE_FILES.auditLeak);
       const returns = head.uri(WORKSPACE_FILES.returnsProcess);

@@ -106,7 +106,7 @@ interface ServicesStubOptions {
    /** Drives `SelfSaveRegistry.isRegistered`. Defaults to `() => false` (no self-save match). */
    selfSaveRegistered?: (fsPath: string, mtimeMs: number) => boolean;
    /** Optional bookkeeping side-channels. When provided, the stub appends to these arrays. */
-   markNextReasonCalls?: Array<string | undefined>;
+   scheduledReasons?: Array<string | undefined>;
    /** Drives `TextDocuments.onDidCloseLastOpen`. */
    lastOpenClosed?: Emitter<{ uri: string }>;
    loggedErrors?: string[];
@@ -134,7 +134,7 @@ interface ServicesStubOptions {
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
    const getAuthor = opts.getAuthor ?? (() => LANGUAGE_CLIENT_ID);
    const selfSaveRegistered = opts.selfSaveRegistered ?? (() => false);
-   const markNextReasonCalls = opts.markNextReasonCalls;
+   const scheduledReasons = opts.scheduledReasons;
    const loggedErrors = opts.loggedErrors;
    const loggedWarnings = opts.loggedWarnings;
    const fileSystemTaskQueue = opts.enqueue
@@ -161,10 +161,10 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
       workspace: {
          WorkspaceManager: { ready: Promise.resolve() },
          DocumentBuilder: {
-            update: () => Promise.resolve(),
-            markNextReason: (reason: string | undefined) => markNextReasonCalls?.push(reason)
+            scheduleUpdate: async (_changed: URI[], _deleted: URI[], reason?: string) => {
+               scheduledReasons?.push(reason);
+            }
          },
-         WorkspaceLock: { write: (cb: (token: unknown) => unknown) => cb(undefined) },
          TextDocuments: {
             getAuthor,
             onDidCloseLastOpen: (opts.lastOpenClosed ?? new Emitter<{ uri: string }>()).event,
@@ -385,14 +385,13 @@ describe('HydraniumDocumentUpdateHandler — MaybeObservableValue<number> for de
 
 describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
    // These use a BARE handler, not `CapturingHandler`, so the real `dispatch`
-   // runs and the reason reaches the `markNextReason` side-channel on the
-   // services stub. `dispatch` then calls `documentBuilder.update`, itself a
-   // stub returning a resolved promise, so the ordering under assertion
-   // (reason staged before update) settles deterministically.
+   // runs and the reason reaches the `scheduleUpdate` side-channel on the
+   // services stub, a stub returning a resolved promise, so the reason under
+   // assertion settles deterministically.
 
    it('didOpenDocument stamps `didOpen` and bypasses debouncing', async () => {
-      const markNextReasonCalls: Array<string | undefined> = [];
-      const services = makeServicesStub({ markNextReasonCalls });
+      const scheduledReasons: Array<string | undefined> = [];
+      const services = makeServicesStub({ scheduledReasons });
       const handler = new HydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didOpenDocument(event);
@@ -401,40 +400,40 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       // already set (via the `??=`) and inherits it; immediateFlush
       // bypasses the debounce window.
       await flushMicrotasks();
-      expect(markNextReasonCalls).toEqual(['didOpen']);
+      expect(scheduledReasons).toEqual(['didOpen']);
    });
 
    it('didChangeContent alone stamps `didChangeContent`', async () => {
-      const markNextReasonCalls: Array<string | undefined> = [];
-      const services = makeServicesStub({ markNextReasonCalls });
+      const scheduledReasons: Array<string | undefined> = [];
+      const services = makeServicesStub({ scheduledReasons });
       const handler = new HydraniumDocumentUpdateHandler(services);
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didChangeContent(event);
       await flushMicrotasks();
-      expect(markNextReasonCalls).toEqual(['didChangeContent']);
+      expect(scheduledReasons).toEqual(['didChangeContent']);
    });
 
    it('coalesced didChangeContent burst forwards a single reason on the trailing flush', async () => {
       const clock = makeFakeClock();
-      const markNextReasonCalls: Array<string | undefined> = [];
-      const services = makeServicesStub({ markNextReasonCalls, clock });
+      const scheduledReasons: Array<string | undefined> = [];
+      const services = makeServicesStub({ scheduledReasons, clock });
       const handler = new HydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didChangeContent(event);
       handler.didChangeContent(event);
       handler.didChangeContent(event);
-      expect(markNextReasonCalls).toEqual([]); // still debounced
+      expect(scheduledReasons).toEqual([]); // still debounced
       clock.advance(50); // fires the trailing flush → dispatch (synchronous part)
       // makeFakeClock fakes only our clock, so real microtasks flow — the
       // dispatch's `.then` chain settles with a plain microtask flush (no
       // fake-timer / real-timer juggling).
       await flushMicrotasks();
-      expect(markNextReasonCalls).toEqual(['didChangeContent']);
+      expect(scheduledReasons).toEqual(['didChangeContent']);
    });
 
    it('didChangeWatchedFiles stamps `didChangeWatchedFiles` (overwriting any prior reason)', async () => {
-      const markNextReasonCalls: Array<string | undefined> = [];
-      const services = makeServicesStub({ markNextReasonCalls });
+      const scheduledReasons: Array<string | undefined> = [];
+      const services = makeServicesStub({ scheduledReasons });
       const handler = new HydraniumDocumentUpdateHandler(services);
       // Stage a `didChangeContent` reason first — the watched-files event
       // must overwrite it (the watcher fires for an external write, which
@@ -442,7 +441,7 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       handler.didChangeContent({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
       await flushMicrotasks();
       // didChangeContent fired with debounceMs=0 default → already flushed.
-      markNextReasonCalls.length = 0;
+      scheduledReasons.length = 0;
       handler.didChangeWatchedFiles({
          changes: [{ uri: 'file:///b.a', type: 1 /* Created */ }]
       });
@@ -452,7 +451,7 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       // dispatch chain.
       await new Promise(resolve => setTimeout(resolve, 10));
       await flushMicrotasks();
-      expect(markNextReasonCalls).toEqual(['didChangeWatchedFiles']);
+      expect(scheduledReasons).toEqual(['didChangeWatchedFiles']);
    });
 
    it('dispatches nothing on a close, which leaves the last-close revert to the text store', () => {
