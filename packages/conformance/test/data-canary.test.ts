@@ -47,6 +47,10 @@ const SET = 'updateModelDocuments writes a set all or none';
 const SESSION_SAVE = 'a session saves only a document it has open';
 const CONNECTION_END = 'ending a connection ends its sessions';
 const UNREGISTERED = 'a document request under an id no session was registered for fails';
+const WRITE_ANSWER = 'a write of the invalid model answers with its diagnostics';
+const DIRTY = 'a document is dirty while its text differs from its file, and clean once saved';
+const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
+const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -108,12 +112,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
    });
 
-   it('plans exactly the twenty-one checks the must-fail cases below name', () => {
+   it('plans exactly the twenty-five checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(21);
+      expect(titles).toHaveLength(25);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -135,9 +139,13 @@ describe('the /data battery discriminates', () => {
          SET,
          SESSION_SAVE,
          CONNECTION_END,
-         UNREGISTERED
+         UNREGISTERED,
+         WRITE_ANSWER,
+         DIRTY,
+         LAST_CLOSE,
+         UNSAVED_CREATE
       ];
-      expect(matching(titles, covered)).toHaveLength(21);
+      expect(matching(titles, covered)).toHaveLength(25);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -147,7 +155,13 @@ describe('the /data battery discriminates', () => {
       { label: 'a project with an empty id', defects: { emptyProjectId: true }, expected: [PROJECT_SHAPE] },
       { label: 'two projects sharing one id', defects: { duplicateProjectIds: true }, expected: [PROJECT_SHAPE] },
       { label: 'no projects at all, with projects expected', defects: { noProjects: true }, expected: [PROJECT_NON_EMPTY] },
-      { label: 'a readiness call that rejects', defects: { readyRejects: true }, expected: [READY] },
+      {
+         // Also the unsaved create's check, which ends on a readiness call to
+         // show the connection outlived the close.
+         label: 'a readiness call that rejects',
+         defects: { readyRejects: true },
+         expected: [READY, UNSAVED_CREATE]
+      },
       { label: 'a transfer root with a blank $type', defects: { blankRootType: true }, expected: [VALID_ENVELOPE] },
       {
          // Also every check writing on a version the envelope reported, so a
@@ -157,7 +171,12 @@ describe('the /data battery discriminates', () => {
          expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
-      { label: 'an invalid model reported clean', defects: { cleanInvalid: true }, expected: [INVALID_DIAGNOSTICS] },
+      {
+         // Also the write's answer, which is the same document.
+         label: 'an invalid model reported clean',
+         defects: { cleanInvalid: true },
+         expected: [INVALID_DIAGNOSTICS, WRITE_ANSWER]
+      },
       {
          label: 'a diagnostic keeping its code but dropping its params',
          defects: { diagnosticParamsDropped: true },
@@ -166,10 +185,11 @@ describe('the /data battery discriminates', () => {
       {
          // Also the gate, and necessarily: a head that stores no edit never
          // advances a version, so nothing a caller holds can go stale. And the
-         // set check, whose current set carries an edit.
+         // set check, whose current set carries an edit, and the dirty and
+         // last-close checks, whose unsaved text is an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, LAST_CLOSE]
       },
       {
          label: 'a write accepted whatever version it claims',
@@ -227,10 +247,24 @@ describe('the /data battery discriminates', () => {
       { label: 'a session close that leaves the document open', defects: { closeKeepsOpen: true }, expected: [SESSION_WRITE] },
       { label: 'opens that outlive their session', defects: { sessionOpensSurviveEnd: true }, expected: [CLOSE_SESSION] },
       { label: 'a create that replaces an existing document', defects: { createOverwrites: true }, expected: [CREATE] },
-      { label: 'a create that leaves the document closed', defects: { createLeavesClosed: true }, expected: [CREATE] },
+      {
+         // Also every check that goes on to save or close what it created.
+         label: 'a create that leaves the document closed',
+         defects: { createLeavesClosed: true },
+         expected: [CREATE, DIRTY, LAST_CLOSE, UNSAVED_CREATE]
+      },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
-      { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] }
+      { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
+      { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },
+      { label: 'every document reported clean', defects: { neverDirty: true }, expected: [DIRTY] },
+      { label: 'a last close keeping a saved document’s unsaved text', defects: { releaseKeepsText: true }, expected: [LAST_CLOSE] },
+      { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },
+      {
+         label: 'a close reverting while another session has the document open',
+         defects: { releaseOnAnyClose: true },
+         expected: [LAST_CLOSE]
+      }
    ];
 
    for (const canary of canaries) {

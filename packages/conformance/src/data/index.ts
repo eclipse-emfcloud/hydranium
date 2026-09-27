@@ -83,6 +83,10 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
     * once per check for isolation; the kit disposes it after the check. The
     * adopter must initialise the workspace before returning, so `waitForReady`
     * resolves rather than hanging.
+    *
+    * Some checks save documents beside each fixture's `valid`, and nothing in
+    * the protocol deletes a file, so give each check a workspace the kit may
+    * write to and throw away.
     */
    readonly connect: () => DataConformanceDriver<TTransfer, TDiagnostic> | Promise<DataConformanceDriver<TTransfer, TDiagnostic>>;
    /** Per-language fixtures; the grammar-bearing checks run once per language. */
@@ -154,8 +158,8 @@ async function openOrCreate<TTransfer extends TransferElement, TDiagnostic exten
 /**
  * Write `model` to its URI under a new session labelled `label`, and answer the
  * session's id. The session keeps the document open until the driver is
- * disposed: the kit writes nothing to disk, so closing it would revert the
- * document to what disk holds.
+ * disposed: closing it would revert the document to its file, which holds
+ * another text or none.
  */
 async function seed<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
    driver: DataConformanceDriver<TTransfer, TDiagnostic>,
@@ -197,6 +201,31 @@ async function registerWithin<TTransfer extends TransferElement, TDiagnostic ext
       if (!isDuplicateClientIdError(refusal) || Date.now() >= deadline) {
          throw refusal;
       }
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
+   }
+}
+
+/** A URI beside `uri` in its folder, its file name prefixed with `prefix`, so the language and project stay the fixture's. */
+function siblingOf(uri: string, prefix: string): string {
+   const slash = uri.lastIndexOf('/') + 1;
+   return `${uri.slice(0, slash)}${prefix}${uri.slice(slash)}`;
+}
+
+/**
+ * Read `uri` until `settled` holds of the answer, for up to two seconds; fail
+ * with `message` after that. For an effect a head may finish after its request
+ * answered, such as the revert of a last close. A refused read reaches
+ * `settled` as `undefined`.
+ */
+async function readUntil<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
+   driver: DataConformanceDriver<TTransfer, TDiagnostic>,
+   uri: string,
+   settled: (document: TransferDocument<TTransfer, TDiagnostic> | undefined) => boolean,
+   message: string
+): Promise<void> {
+   const deadline = Date.now() + 2_000;
+   while (!settled(await driver.proxy.getModelDocument({ uri }).catch(() => undefined))) {
+      assert.ok(Date.now() < deadline, message);
       await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
    }
 }
@@ -574,10 +603,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                await seed(driver, model);
                const clientId = await startSession(driver, 'conformance-session');
-               // A sibling of the valid model, so the new document's language
-               // and project are the ones the fixture already exercises.
-               const slash = model.uri.lastIndexOf('/') + 1;
-               const createdUri = `${model.uri.slice(0, slash)}conformance-created-${model.uri.slice(slash)}`;
+               const createdUri = siblingOf(model.uri, 'conformance-created-');
 
                const created = await driver.proxy.createModelDocument({ uri: createdUri, clientId, text: model.text });
                TransferDocument.assertLoaded(created);
@@ -586,6 +612,90 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
 
                const existing = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
                assert.ok(existing !== undefined, `createModelDocument accepted ${model.uri}, which already exists`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a write of the invalid model answers with its diagnostics ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(invalid);
+               const clientId = await startSession(driver, 'conformance-session');
+               await openOrCreate(driver, clientId, model);
+               // Another text first, so that the invalid one is a change: the
+               // answer to a write that changes nothing can carry the
+               // diagnostics of an earlier validation. This does not prove the
+               // answer waited for this write's validation, only that it
+               // carries diagnostics at all.
+               const firstText = resolveDeferred(valid.text);
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: firstText, basedOn: 'anything' });
+               // The answer alone, with no read after it: a caller that shows
+               // the problems of what it wrote should not need a second
+               // request, and a read could find a later write's state.
+               const answer = await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' });
+               assert.ok(answer.diagnostics.length >= 1, 'writing the invalid model answered with no diagnostics');
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a created document never saved leaves with its last close ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, 'conformance-unsaved-');
+               const clientId = await startSession(driver, 'conformance-session');
+               await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               // Served before the close, so a refusal after it is the head's
+               // answer for this document and not for every created one.
+               TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
+               await driver.proxy.closeSession({ clientId });
+               // It has no file to go back to, so no text is left to serve. The
+               // protocol promises an unknown URI an envelope with no root; a
+               // head that refuses the read instead is taken as giving the same
+               // answer.
+               await readUntil(
+                  driver,
+                  uri,
+                  document => document?.root === undefined,
+                  `${uri}, created and never saved, still has a document after its last close`
+               );
+               // And the connection outlived the close, so no refusal above was
+               // a dropped connection's.
+               await driver.proxy.waitForReady();
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a document is dirty while its text differs from its file, and clean once saved ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               // Only `dirty` is asserted, so any second text serves.
+               const unsaved = resolveDeferred(invalid.text);
+               const uri = siblingOf(model.uri, `conformance-saved-${globalThis.crypto.randomUUID()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+
+               const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, basedOn: 'anything' });
+               assert.strictEqual(saved.dirty, false, `the save of ${uri} answered dirty: ${String(saved.dirty)}, not false`);
+               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: unsaved, basedOn: 'anything' });
+               assert.strictEqual(edited.dirty, true, `an unsaved write of ${uri} answered dirty: ${String(edited.dirty)}, not true`);
+               const resaved = await driver.proxy.saveModelDocument({ uri, clientId, model: unsaved, basedOn: 'anything' });
+               assert.strictEqual(resaved.dirty, false, `the second save of ${uri} answered dirty: ${String(resaved.dirty)}, not false`);
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -657,8 +767,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             : undefined
       });
 
-      // Opt-in: both remaining checks need a second, observably different model
-      // text, which only `edit` supplies.
+      // Opt-in: a check that needs a second, observably different model text
+      // takes it from `edit`, and skips without one.
       const editSkipReason = 'fixture supplies no `edit` (data-slice only; omit it if this language is not driven through the data head)';
 
       checks.push({
@@ -732,6 +842,46 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        model: resolveDeferred(edit.to),
                        basedOn: fresh.version
                     });
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
+      });
+
+      checks.push({
+         title: `the last close drops a document's unsaved text and keeps what its save wrote ${tag}`,
+         skipReason: edit ? undefined : editSkipReason,
+         body: edit
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    const model = resolveModel(valid);
+                    const edited = resolveDeferred(edit.to);
+                    const uri = siblingOf(model.uri, `conformance-reverted-${globalThis.crypto.randomUUID()}-`);
+                    const writer = await startSession(driver, 'conformance-writer');
+                    // Created with the edit, so that going back to the created
+                    // text instead of the saved one shows.
+                    await driver.proxy.createModelDocument({ uri, clientId: writer, text: edited });
+                    const saved = await driver.proxy.saveModelDocument({ uri, clientId: writer, model: model.text, basedOn: 'anything' });
+                    assert.ok(!edit.expect(saved.root), 'edit.expect holds of the valid text, so this check cannot tell the edit apart');
+                    const reader = await openAs(driver, uri, 'conformance-reader');
+                    await driver.proxy.updateModelDocument({ uri, clientId: writer, model: edited, basedOn: 'anything' });
+
+                    // Not the last close: the reader still shows the writer's
+                    // text. Read at once, so a head that reverts after answering
+                    // could still pass this half.
+                    await driver.proxy.closeSession({ clientId: writer });
+                    const held = await driver.proxy.getModelDocument({ uri });
+                    assert.ok(edit.expect(held.root), `closing one of two sessions dropped the unsaved text of ${uri}`);
+
+                    await driver.proxy.closeSession({ clientId: reader });
+                    await readUntil(
+                       driver,
+                       uri,
+                       document => document?.root !== undefined && !edit.expect(document.root),
+                       `${uri} did not go back to the text its save wrote after its last close`
+                    );
                  } finally {
                     driver.dispose();
                  }

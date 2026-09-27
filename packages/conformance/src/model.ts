@@ -81,6 +81,7 @@ export function resolveModel(model: ConformanceModel): ResolvedConformanceModel 
 export interface EditSpec {
    /** Replacement model text; {@link Deferred} for the same reasons as `ConformanceModel.text`. */
    readonly to: Deferred<string>;
+   /** True of the root after the edit and false of `valid`'s root, so a check can tell the two apart. */
    readonly expect: (root: unknown) => boolean;
 }
 
@@ -161,7 +162,8 @@ export interface LanguageFixture {
    readonly invalid: ConformanceModel;
    /**
     * Optional: an edit plus its observability assertion. The data slice's
-    * round-trip and subscription-delivery checks run only when it is supplied.
+    * checks that need a second, observably different text run only when it is
+    * supplied.
     */
    readonly edit?: EditSpec;
    /** Optional: a position at which the LSP completion check requests completion. */
