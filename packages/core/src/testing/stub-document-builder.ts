@@ -14,7 +14,8 @@ import {
    type DocumentState,
    type DocumentUpdateListener,
    type LangiumDocument,
-   type URI
+   type URI,
+   type WorkspaceLock
 } from '@hydranium/langium';
 import { type CancellationToken, Disposable } from 'vscode-languageserver';
 import { type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
@@ -65,16 +66,17 @@ export interface StubWaitUntilGate {
  * Picks the methods the framework reads from {@link DocumentBuilder} on
  * the slot path — the compiler enforces those signatures stay aligned.
  * `update`, `onDocumentPhase`, `onUpdate`, and `waitUntil` carry stubbed
- * implementations; `build`, `onBuildPhase`, and `resetToState` are
- * implemented as loud-failing `notSupported` throwers so production code
- * that goes through the cast at the bind site (i.e. accesses methods the
+ * implementations, and `scheduleUpdate` calls `update` in one lock write per
+ * call (see {@link makeStubDocumentBuilder}); `build`, `onBuildPhase`, and
+ * `resetToState` are implemented as loud-failing `notSupported` throwers
+ * so production code that goes through the cast at the bind site (i.e. accesses methods the
  * stub claims but doesn't meaningfully implement) fails with a clear
  * message instead of "undefined is not a function".
  */
 export interface StubDocumentBuilder
    extends
       Pick<DocumentBuilder, 'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'>,
-      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered'> {
+      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate'> {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
     * two overloads (`(state, cancelToken?): Promise<void>` and
@@ -138,8 +140,13 @@ function reraise(result: unknown): void {
  * want to observe rebuilt state should `set` the new root on the document
  * registry and then call `firePhase` to trigger the framework's post-build
  * read path.
+ *
+ * `workspaceLock` is the lock `scheduleUpdate` writes under, without the real
+ * builder's sharing: pass the services tree's own, so a caller's lock ordering
+ * and reentrancy behave as against the real builder. Without one,
+ * `scheduleUpdate` records the update unlocked.
  */
-export function makeStubDocumentBuilder(): StubDocumentBuilder {
+export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocumentBuilder {
    const phaseListeners = new Map<DocumentState, DocumentPhaseListener[]>();
    const deliveredListeners = new Map<DocumentState, Array<(document: LangiumDocument, version: number) => void>>();
    const buildPhaseListeners = new Map<DocumentState, DocumentBuildListener[]>();
@@ -163,6 +170,9 @@ export function makeStubDocumentBuilder(): StubDocumentBuilder {
       },
       async update(changed: URI[], deleted: URI[]) {
          updateCalls.push({ args: [changed, deleted] });
+      },
+      scheduleUpdate(changed: URI[], deleted: URI[]) {
+         return workspaceLock ? workspaceLock.write(() => stub.update(changed, deleted)) : stub.update(changed, deleted);
       },
       async waitUntil(state: DocumentState, uri?: URI) {
          waitUntilCalls.push({ args: [state, uri] });

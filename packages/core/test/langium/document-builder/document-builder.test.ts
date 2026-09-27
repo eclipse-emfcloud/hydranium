@@ -809,14 +809,16 @@ describe('HydraniumDocumentBuilder', () => {
          await builder.drained();
          expect(builder.updateCalls).toHaveLength(1);
 
+         // Drained per observation, since re-queues still queued together
+         // share one build and would stay under the bound without it.
          for (let i = 0; i < 10; i++) {
             await builder.fireBuildPhase(DocumentState.Validated);
+            await builder.drained();
          }
 
          // Bounded, not one-shot: a re-queue legitimately fails to land while a
          // busy workspace keeps cancelling builds, so a few retries are allowed
          // before giving up.
-         await builder.drained();
          expect(builder.updateCalls.length).toBeLessThanOrEqual(5);
       });
 
@@ -827,14 +829,17 @@ describe('HydraniumDocumentBuilder', () => {
          const crawling = documentAt(DocumentState.Parsed);
          const builder = new OrphanBuilder(crawling, DocumentState.Validated);
          void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         // Drained per observation, since re-queues still queued together
+         // share one build.
+         await builder.drained();
 
          for (const state of [DocumentState.IndexedContent, DocumentState.ComputedScopes, DocumentState.Linked]) {
             crawling.state = state;
             await builder.fireBuildPhase(DocumentState.Validated);
+            await builder.drained();
          }
 
          // One per observation, none suppressed — 1 at registration + 3 more.
-         await builder.drained();
          expect(builder.updateCalls).toHaveLength(4);
       });
 

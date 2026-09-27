@@ -29,7 +29,28 @@ import { runInWriteLockScope } from './write-lock-scope.js';
  * would turn ordinary read-then-write sequences into false positives.
  */
 export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
+   /** Backs {@link writeCancellations}. */
+   protected cancelledWriteCount = 0;
+
+   /**
+    * How many calls have cancelled the lock's latest write: every `write`,
+    * which cancels the write before it, and every `cancelWrite`. A caller that
+    * reads this right after queuing a write, and reads the same number later,
+    * holds a write nothing has cancelled, whether it is still queued or
+    * already running. Its token answers that only once the write runs, since
+    * a queued write has not been handed it yet.
+    */
+   get writeCancellations(): number {
+      return this.cancelledWriteCount;
+   }
+
    override write(action: (token: CancellationToken) => MaybePromise<void>): Promise<void> {
       return super.write(token => runInWriteLockScope(() => action(token)));
+   }
+
+   /** Counted here rather than in {@link write}, because Langium's `write` cancels through this method too. */
+   override cancelWrite(): void {
+      this.cancelledWriteCount++;
+      super.cancelWrite();
    }
 }
