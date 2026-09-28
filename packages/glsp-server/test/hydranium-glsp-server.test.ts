@@ -18,6 +18,7 @@ import {
    DiagramModule,
    DefaultGLSPServer,
    GGraph,
+   type GLSPServer,
    GLSPServerError,
    type GModelFactory,
    ModelState,
@@ -201,9 +202,9 @@ function stubSharedServices(): ServerSharedServices {
    } as unknown as ServerSharedServices;
 }
 
-function makeFixtureHarness() {
+function makeFixtureHarness(serverModule = new ServerModule()) {
    return makeGlspHarness<TestState>({
-      serverModule: new ServerModule().configureDiagramModule(new TestDiagramModule()),
+      serverModule: serverModule.configureDiagramModule(new TestDiagramModule()),
       diagramType: TEST_DIAGRAM_TYPE,
       appModules: [
          new ContainerModule(bind => {
@@ -284,5 +285,38 @@ describe('a failed request on a closed client connection', () => {
 
    it('settles without throwing for a save request, whose error notification also fails to send', async () => {
       await expect(new ClosedConnectionServer().failRequest(RequestSaveModelAction.KIND)).resolves.toBeUndefined();
+   });
+});
+
+// ---------------------------------------------------------------------------
+// Which server the server container resolves. The framework's replaces
+// upstream's, and an adopter extending it keeps their own.
+// ---------------------------------------------------------------------------
+
+@injectable()
+class AdopterServer extends HydraniumGlspServer {}
+
+class AdopterServerModule extends ServerModule {
+   protected override bindGLSPServer(): BindingTarget<GLSPServer> {
+      return AdopterServer;
+   }
+}
+
+function serverBoundBy(serverModule: ServerModule): unknown {
+   const harness = makeFixtureHarness(serverModule);
+   try {
+      return harness.server;
+   } finally {
+      harness.dispose();
+   }
+}
+
+describe('the GLSP server a server module binds', () => {
+   it("is replaced by the framework's when it is upstream's", () => {
+      expect(serverBoundBy(new ServerModule())).toBeInstanceOf(HydraniumGlspServer);
+   });
+
+   it("is kept when it extends the framework's", () => {
+      expect(serverBoundBy(new AdopterServerModule())).toBeInstanceOf(AdopterServer);
    });
 });

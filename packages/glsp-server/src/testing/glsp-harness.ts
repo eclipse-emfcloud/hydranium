@@ -328,10 +328,10 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
    const container = new Container();
    container.load(defaultAppModule, ...(options.appModules ?? []), captureProxyModule);
    container.load(options.serverModule);
-   // After the serverModule, which binds `GLSPServer`: the override rebinds that
-   // symbol, so it needs the binding to exist. The launchers reach the same tier
-   // by passing this to `configure` — a harness that skipped it would answer
-   // request failures differently from every real bringup.
+   // Into the container the serverModule binds `GLSPServer` in, as the
+   // launchers' `configure` loads it: a harness that skipped it would keep
+   // upstream's server and answer request failures differently from every
+   // real bringup.
    container.load(createGlspServerOverrides());
    const server = container.get<GLSPServer>(GLSPServer);
 

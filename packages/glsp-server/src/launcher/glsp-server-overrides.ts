@@ -18,15 +18,16 @@ import { HydraniumGlspServer } from './hydranium-glsp-server.js';
  *
  * **The tier matters, and the app container cannot stand in for it.** GLSP's
  * launcher creates the server container as a child and loads the adopter's
- * `ServerModule` into it, so a `GLSPServer` binding made further up is shadowed
- * rather than consulted, and inversify refuses to rebind a parent's binding
- * from a child at all. The framework's app-tier overrides therefore cannot
- * reach this symbol.
+ * `ServerModule` into it. The framework's server is a singleton of that
+ * container; bound in the app container, every connected application would
+ * share one server.
  *
- * **Load this AFTER the adopter's `ServerModule`, never beside it.** Both bind
- * `GLSPServer`, so a plain second binding resolves to an ambiguous-match error
- * rather than to either one; `rebind` needs the first binding to already be
- * present.
+ * **An adopter's server is kept when it extends {@link HydraniumGlspServer}.**
+ * Any other `GLSPServer` the adopter's `ServerModule` binds, upstream's default
+ * included, is replaced when the container first creates it, so a server that
+ * extends upstream's directly is discarded. The replacement happens on
+ * activation because `rebind` would replace an adopter's subclass as well; the
+ * discarded server is constructed once and never used.
  *
  * Keeping this out of the adopter's hands is the point: an adopter passes their
  * own `ServerModule` in, so anything they must add themselves is a fix the
@@ -40,7 +41,10 @@ import { HydraniumGlspServer } from './hydranium-glsp-server.js';
  * a further adopter subclass moves it again.
  */
 export function createGlspServerOverrides(): ContainerModule {
-   return new ContainerModule((_bind, _unbind, _isBound, rebind) => {
-      rebind(GLSPServer).to(HydraniumGlspServer).inSingletonScope();
+   return new ContainerModule((bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
+      bind(HydraniumGlspServer).toSelf().inSingletonScope();
+      onActivation<GLSPServer>(GLSPServer, (context, server) =>
+         server instanceof HydraniumGlspServer ? server : context.container.get(HydraniumGlspServer)
+      );
    });
 }

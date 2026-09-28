@@ -154,8 +154,7 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
    const launcher = appContainer.resolve<SocketServerLauncher>(SocketServerLauncher);
    // Passed as an additional module rather than folded into the app container:
    // the launcher loads these into the per-connection SERVER container, which is
-   // the only tier where the adopter's `ServerModule` binding of `GLSPServer`
-   // can be rebound.
+   // the tier where each connection gets a server of its own.
    launcher.configure(options.serverModule, createGlspServerOverrides());
 
    const started = new Deferred<void>();

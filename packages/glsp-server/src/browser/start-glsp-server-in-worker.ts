@@ -144,9 +144,8 @@ export function startGlspServerInWorker(options: BrowserGlspServerOptions): Inte
 
    const launcher = appContainer.resolve<WorkerServerLauncher>(HydraniumGlspWorkerServerLauncher);
    // Additional module rather than an app-container binding, as on Node: the
-   // launcher loads these into the per-connection SERVER container, the only
-   // tier where the adopter's `ServerModule` binding of `GLSPServer` is
-   // rebindable.
+   // launcher loads these into the per-connection SERVER container, the tier
+   // where each connection gets a server of its own.
    launcher.configure(options.serverModule, createGlspServerOverrides());
 
    try {
