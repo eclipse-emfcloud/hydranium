@@ -162,7 +162,9 @@ function makeStubServices(
          DocumentUriPolicy: {
             canonicalUri: (uri: URI | string) => (typeof uri === 'string' ? uri : uri.toString()),
             loadUri: (uri: URI | string) => (typeof uri === 'string' ? URI.parse(uri) : uri)
-         }
+         },
+         // A build that throws checks its waits from a read of the lock.
+         WorkspaceLock: new HydraniumWorkspaceLock()
       }
    });
 }
@@ -744,6 +746,10 @@ describe('HydraniumDocumentBuilder', () => {
          firePhase(document: LangiumDocument, state: DocumentState): Promise<void> {
             return this.notifyDocumentPhase(document, state, CancellationToken.None);
          }
+         /** Stand in for a build that threw: its waits are checked once the lock drains. */
+         failBuild(): void {
+            this.checkWaitsOnceDrained();
+         }
          /** Run a build over no documents: every phase, and no `onBuildPhase` notification. */
          completeBuild(): Promise<void> {
             return this.buildDocuments([], {}, CancellationToken.None);
@@ -849,6 +855,46 @@ describe('HydraniumDocumentBuilder', () => {
 
          // One per observation, none suppressed — 1 at registration + 3 more.
          expect(builder.updateCalls).toHaveLength(4);
+      });
+
+      it('keeps re-queuing through repeated cancellations while the document progresses', async () => {
+         const crawling = documentAt(DocumentState.Parsed);
+         const builder = new OrphanBuilder(crawling, DocumentState.Validated);
+         void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await builder.drained();
+
+         for (const state of [
+            DocumentState.IndexedContent,
+            DocumentState.ComputedScopes,
+            DocumentState.Linked,
+            DocumentState.IndexedReferences
+         ]) {
+            crawling.state = state;
+            // A completed build that leaves it behind, then cancellations
+            // that each drain, with no progress between them.
+            await builder.completeBuild();
+            await builder.drained();
+            for (let i = 0; i < 2; i++) {
+               builder.failBuild();
+               await builder.drained();
+            }
+         }
+         const before = builder.updateCalls.length;
+         builder.failBuild();
+         await builder.drained();
+         expect(builder.updateCalls.length).toBe(before + 1);
+      });
+
+      it('stops re-queuing a document whose build keeps failing', async () => {
+         const stuck = documentAt(DocumentState.ComputedScopes);
+         const builder = new OrphanBuilder(stuck, DocumentState.Validated);
+         void builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI);
+         await builder.drained();
+         for (let i = 0; i < 10; i++) {
+            builder.failBuild();
+            await builder.drained();
+         }
+         expect(builder.updateCalls.length).toBeLessThanOrEqual(4);
       });
 
       it('resolves immediately without re-queuing when the document already reached the target', async () => {
