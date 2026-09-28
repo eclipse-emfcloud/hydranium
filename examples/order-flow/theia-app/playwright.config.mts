@@ -23,7 +23,8 @@ import { resolve } from 'node:path';
  *
  * **Port 3001, not Theia's default 3000.** A second Theia app on the default
  * port is routinely run beside this one, and a shared port silently makes one
- * suite drive the other's binary.
+ * suite drive the other's binary. `THEIA_PORT` moves it for a run beside another
+ * of this suite; `npm start` reads the same variable.
  */
 
 /**
@@ -71,6 +72,9 @@ const tier = process.env.HYDRANIUM_PLAYWRIGHT_TIER ?? 'e2e';
 
 const RELOAD_SPEC = /order-flow-reload\.spec\.mts$/;
 
+/** The default must match `scripts/start.mjs`. */
+const PORT = Number(process.env.THEIA_PORT ?? 3001);
+
 export default defineConfig({
    testDir: './test/e2e',
    timeout: 60_000,
@@ -99,7 +103,7 @@ export default defineConfig({
    ],
    outputDir: `test-results/${tier}`,
    use: {
-      baseURL: 'http://localhost:3001',
+      baseURL: `http://localhost:${PORT}`,
       trace: 'retain-on-failure',
       screenshot: 'only-on-failure',
       // Theia's plugin-host process can take a few seconds to deploy the local
@@ -126,7 +130,7 @@ export default defineConfig({
    ],
    webServer: {
       command: 'npm start',
-      url: 'http://localhost:3001',
+      url: `http://localhost:${PORT}`,
       // Note the interaction with the capture above: a server this suite did NOT
       // start never saw `serverLog.env`, so a reused backend from a manual
       // `npm start` produces no log. Kill it first when a capture is what you are

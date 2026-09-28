@@ -12,12 +12,14 @@
  * on them: the config (base URL and web server), the global setup that starts
  * the proxy, and the spec that drives it.
  *
- * Distinct from the main suite's 3001 so the two tiers cannot drive each other's
+ * Distinct from the main suite's port so the two tiers cannot drive each other's
  * backend — this one half-kills connections, which would look to the other like
- * the very defect it is testing for.
+ * the very defect it is testing for. Both follow `THEIA_PORT`, so a run moved
+ * off the default moves all of them together.
  */
-export const APP_PORT = 3002;
-export const PROXY_PORT = 3003;
+const MAIN_PORT = Number(process.env.THEIA_PORT ?? 3001);
+export const APP_PORT = MAIN_PORT + 1;
+export const PROXY_PORT = MAIN_PORT + 2;
 export const CONTROL_PORT = PROXY_PORT + 1000;
 
 /** Where the spec reaches the proxy. The control channel is HTTP because the

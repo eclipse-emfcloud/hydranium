@@ -37,7 +37,8 @@ theia, app). `build` is three steps: a native rebuild
 
 **Port 3001, not Theia's default 3000**, because a second Theia app is routinely
 run beside this one and a shared port silently makes one suite drive the other's
-binary.
+binary. `THEIA_PORT` moves it, for `npm start` and for every e2e tier: the
+reconnect tier's backend and proxy take the two ports above it.
 
 ## The e2e suite
 
@@ -60,7 +61,7 @@ sharing the backend would lose its language server too.
 
 Four more things that have cost time:
 
-- **`reuseExistingServer` is on outside CI.** If anything already holds `:3001`,
+- **`reuseExistingServer` is on outside CI.** If anything already holds the port,
   Playwright tests _that_ server instead of booting ours, and a suspiciously
   fast pass is the tell. It also means a backend you started by hand never saw
   the log-capture environment, so no server log is produced. The port is 3001
