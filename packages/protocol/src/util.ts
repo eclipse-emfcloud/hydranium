@@ -248,3 +248,27 @@ export function getAt<T = unknown>(obj: unknown, path: string[]): T | undefined 
    }
    return cur as T;
 }
+
+/**
+ * The two 32-bit words cyrb53 ends on, each unsigned, for `parts` read as one
+ * string. The 53-bit cyrb53 value is `2097151 & high` above `low`. It tells
+ * whether a text changed, not who can forge one, and needs no `node:*` module,
+ * so every host runs it. The parts are hashed in turn, so a caller never
+ * concatenates a large text to hash it with others.
+ */
+export function cyrb53(parts: readonly string[]): { readonly high: number; readonly low: number } {
+   let h1 = 0xdeadbeef;
+   let h2 = 0x41c6ce57;
+   for (const part of parts) {
+      for (let i = 0; i < part.length; i++) {
+         const code = part.charCodeAt(i);
+         h1 = Math.imul(h1 ^ code, 2654435761);
+         h2 = Math.imul(h2 ^ code, 1597334677);
+      }
+   }
+   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+   h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+   h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+   return { high: h2 >>> 0, low: h1 >>> 0 };
+}

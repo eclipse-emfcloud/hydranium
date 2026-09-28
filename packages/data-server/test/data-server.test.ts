@@ -2452,3 +2452,28 @@ describe('DataServer — findNextName routing', () => {
       }
    });
 });
+
+describe('DataServer fingerprint digests', () => {
+   /** Reaches the fingerprint the de-dup compares. */
+   class FingerprintProbe extends TestDataServer {
+      fingerprintOf(document: LangiumDocument): string {
+         return this.computeDocumentFingerprint(document);
+      }
+   }
+
+   it.each([
+      ['transfer-document', '7cdc4ef0a32d9b3e'],
+      ['text-diagnostics', 'ea435fb69664cb28']
+   ] as const)('keeps the %s digest', (strategy, digest) => {
+      const bundle = buildBundle();
+      const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'Größe 𝒳' }, { text: 'entity Größe { 𝒳: string }\n' });
+      const harness = makeDataServerHarness<FingerprintProbe, FakeRoot, FakeDiagnostic>({
+         server: channel => new FingerprintProbe(channel, bundle.services, { fingerprintStrategy: strategy })
+      });
+      try {
+         expect(harness.server.fingerprintOf(document)).toBe(digest);
+      } finally {
+         harness.pair.dispose();
+      }
+   });
+});
