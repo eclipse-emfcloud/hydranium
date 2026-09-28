@@ -59,8 +59,10 @@ export function findRealpathDivergence(uri: URI | string, fs: RealpathCapableFil
  * - {@link loadUri} — EXISTENCE-AWARE: maps a URI to the *load* URI, or
  *   `undefined` when there is no loadable on-disk content for it. Use where the
  *   next step actually touches the filesystem (loading a document, walking a
- *   directory): `undefined` means "skip / treat as empty" rather than attempt a
- *   doomed read. The default treats every URI as loadable (returns it
+ *   directory): `undefined` means "skip the read" rather than attempt a doomed
+ *   one. It does not mean there is no document: one created and not yet saved
+ *   has no file, and the text store and `LangiumDocuments` hold it under
+ *   {@link canonicalUri}. The default treats every URI as loadable (returns it
  *   unchanged); a real-path policy returns the resolved file URI, or `undefined`
  *   for a not-yet-written path.
  *
@@ -84,7 +86,9 @@ export interface DocumentUriPolicy {
    /**
     * Existence-aware resolution to the load URI, or `undefined` when there is
     * no loadable content for `uri` (missing / synthetic). Callers that read the
-    * filesystem next use `undefined` to skip rather than attempt a doomed read.
+    * filesystem next use `undefined` to skip rather than attempt a doomed read,
+    * and still look the URI up under {@link canonicalUri}: a document created
+    * and not yet saved is held there with no file behind it.
     */
    loadUri(uri: URI | string): URI | undefined;
 }

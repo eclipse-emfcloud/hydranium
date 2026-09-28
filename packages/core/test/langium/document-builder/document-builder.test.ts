@@ -593,14 +593,25 @@ describe('HydraniumDocumentBuilder', () => {
          }
       }
 
-      function makeWalkBuilder(fsProvider: FileSystemProvider, uriPolicy: DocumentUriPolicy = identityPolicy): WalkBuilder {
+      // `inStore` and `registered` are the URIs the text store and the document
+      // registry hold, by the key each is looked up with.
+      function makeWalkBuilder(
+         fsProvider: FileSystemProvider,
+         uriPolicy: DocumentUriPolicy = identityPolicy,
+         { inStore = [], registered = [] }: { inStore?: string[]; registered?: string[] } = {}
+      ): WalkBuilder {
          // FileSystemProvider goes in as an override (the walk stub is read-only, so
          // it doesn't satisfy the slot's writable narrowing — the loose override slot
          // accepts it without a per-slot cast).
          const services = makeNoopSharedServices({
             Logger: makeNoopLogger(),
             workspace: {
-               LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
+               LangiumDocuments: {
+                  getDocument: () => undefined,
+                  hasDocument: (uri: URI) => registered.includes(uri.toString()),
+                  all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) }
+               },
+               TextDocuments: { get: (uri: URI | string) => (inStore.includes(uri.toString()) ? {} : undefined) },
                FileSystemProvider: fsProvider,
                DocumentUriPolicy: uriPolicy
             }
@@ -633,6 +644,37 @@ describe('HydraniumDocumentBuilder', () => {
             loadUri: () => undefined
          };
          expect(makeWalkBuilder(provider, noContent).flatten('file:///ws/a.a')).toEqual([]);
+      });
+
+      describe('a URI with no loadable content that a layer holds', () => {
+         // A created document not saved yet: the policy finds no file. The
+         // canonical form differs from the requested spelling, so each case
+         // shows which key is looked up.
+         const absent: DocumentUriPolicy = {
+            canonicalUri: uri => (typeof uri === 'string' ? uri : uri.toString()).replace('/link/', '/real/') as CanonicalUri,
+            loadUri: () => undefined
+         };
+         const provider = makeFsProvider({});
+
+         it('builds one the text store holds, under its canonical URI', () => {
+            const builder = makeWalkBuilder(provider, absent, { inStore: ['file:///real/new.a'] });
+            expect(builder.flatten('file:///link/new.a')).toEqual(['file:///real/new.a']);
+         });
+
+         it('builds one the document registry holds, under its canonical URI', () => {
+            const builder = makeWalkBuilder(provider, absent, { registered: ['file:///real/new.a'] });
+            expect(builder.flatten('file:///link/new.a')).toEqual(['file:///real/new.a']);
+         });
+
+         it('drops one held by a key other than its canonical URI', () => {
+            const builder = makeWalkBuilder(provider, absent, { inStore: ['file:///link/new.a'], registered: ['file:///link/new.a'] });
+            expect(builder.flatten('file:///link/new.a')).toEqual([]);
+         });
+
+         it('drops one held in a language no grammar registers', () => {
+            const builder = makeWalkBuilder(provider, absent, { inStore: ['file:///real/new.txt'] });
+            expect(builder.flatten('file:///link/new.txt')).toEqual([]);
+         });
       });
 
       it('treats a missing path as a non-directory (no throw)', () => {

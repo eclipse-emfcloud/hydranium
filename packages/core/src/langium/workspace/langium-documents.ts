@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type LangiumDocuments, type URI } from '@hydranium/langium';
+import { type AstNode, DefaultLangiumDocuments, type LangiumDocument, type LangiumDocuments, type URI, UriUtils } from '@hydranium/langium';
 import { defineMessage } from '@hydranium/protocol';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from './document-uri-policy.js';
@@ -159,6 +159,13 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
             }
             throw error;
          }
+      }
+      // No file, but possibly a document: one created and not yet saved is
+      // built from its text and registered under its canonical URI.
+      const created = this.getDocument(UriUtils.toUri(this.uriPolicy.canonicalUri(uri)));
+      if (created) {
+         this.services.workspace.CstResidencyService.rehydrate(created);
+         return created;
       }
       // The seam reports no loadable content, so there is nothing to read and
       // no error from a read to carry.

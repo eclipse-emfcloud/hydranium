@@ -73,6 +73,7 @@
 
 import type { LanguageFixture } from '@hydranium/conformance';
 import { type DataConformanceDriver, runDataConformance } from '@hydranium/conformance/vitest';
+import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium/core';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { REFERENCE_SERVER_PROTOCOL_METHODS, type ReferenceServerProtocol } from '@hydranium/protocol/data';
 import { DataServer } from '@hydranium/data-server';
@@ -80,6 +81,7 @@ import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import type { DomainModel, LayoutModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { OrderFlowOptions } from '../src/language-server/order-flow-module.js';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
 
 /** The wire root type: one server, three grammars, so the root is a union. */
@@ -265,23 +267,42 @@ function driveConnection(services: OrderFlowHarness): DataConformanceDriver<Orde
 /** The services tree each driver `connect` built runs on, for its sibling connection. */
 const servicesOf = new WeakMap<DataConformanceDriver<OrderFlowTransfer>, OrderFlowHarness>();
 
-runDataConformance<OrderFlowTransfer>({
-   connect: async () => {
-      workspace?.dispose();
-      const { harness: services, workspace: fresh } = await makeScratchWorkspaceHarness();
-      workspace = fresh;
-      const driver = driveConnection(services);
-      servicesOf.set(driver, services);
-      return driver;
-   },
-   // A second connection to the same services tree, which is what "the same
-   // server" is in process.
-   attach: driver => driveConnection(servicesOf.get(driver)!),
-   languages: [domainFixture, processFixture, layoutFixture],
-   // `OrderFlowProjectManager` turns every `.domain` project header in the
-   // workspace into a `Project`, so this head genuinely has a project tier and
-   // the claim is true. Without it the kit cannot tell an empty project list
-   // apart from an unimplemented `getProjects` and reports skipped.
-   expectsProjects: true,
-   suiteTitle: 'conformance: data-server (order-flow, three grammars)'
-});
+/**
+ * The kit seeds its fixtures with a create, which the real-path policy reports
+ * as having no loadable content until it is saved, so a layer that trusts that
+ * answer alone fails the second entry and not the first.
+ */
+const policies: ReadonlyArray<{ readonly title: string; readonly options: OrderFlowOptions }> = [
+   { title: 'default URI policy', options: {} },
+   {
+      title: 'real-path URI policy',
+      options: {
+         extraSharedModules: [
+            { workspace: { DocumentUriPolicy: (services: ServerSharedServices) => new RealpathDocumentUriPolicy(services) } }
+         ]
+      }
+   }
+];
+
+for (const policy of policies) {
+   runDataConformance<OrderFlowTransfer>({
+      connect: async () => {
+         workspace?.dispose();
+         const { harness: services, workspace: fresh } = await makeScratchWorkspaceHarness(undefined, policy.options);
+         workspace = fresh;
+         const driver = driveConnection(services);
+         servicesOf.set(driver, services);
+         return driver;
+      },
+      // A second connection to the same services tree, which is what "the same
+      // server" is in process.
+      attach: driver => driveConnection(servicesOf.get(driver)!),
+      languages: [domainFixture, processFixture, layoutFixture],
+      // `OrderFlowProjectManager` turns every `.domain` project header in the
+      // workspace into a `Project`, so this head genuinely has a project tier and
+      // the claim is true. Without it the kit cannot tell an empty project list
+      // apart from an unimplemented `getProjects` and reports skipped.
+      expectsProjects: true,
+      suiteTitle: `conformance: data-server (order-flow, three grammars, ${policy.title})`
+   });
+}
