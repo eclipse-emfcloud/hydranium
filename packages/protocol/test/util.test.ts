@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type Disposable, DisposableCollection, isPromiseLike, type MaybePromise } from '../src/util';
+import { cyrb53, type Disposable, DisposableCollection, isPromiseLike, type MaybePromise } from '../src/util';
 
 function tracked(log: string[], label: string, throwOnDispose = false): Disposable {
    return {
@@ -129,5 +129,12 @@ describe('isPromiseLike', () => {
       const asyncValue: MaybePromise<number> = Promise.resolve(7);
       const resolved = isPromiseLike(asyncValue) ? await asyncValue : asyncValue;
       expect(resolved).toBe(7);
+   });
+});
+
+describe('cyrb53', () => {
+   it('hashes parts as the string they join into', () => {
+      expect(cyrb53(['entity ', 'Größe 𝒳'])).toEqual(cyrb53(['entity Größe 𝒳']));
+      expect(cyrb53(['ab'])).not.toEqual(cyrb53(['ba']));
    });
 });
