@@ -233,14 +233,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected lastCancelledTraceId?: number;
    /** Registered through {@link onDocumentPhaseDelivered}, by phase. */
    protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, (document: LangiumDocument, version: number) => void>();
-   /**
-    * Called with `false` by {@link buildDocuments} once a build has run every
-    * phase, and with `true` by {@link checkWaitsOnceDrained} after a build that
-    * threw; see {@link awaitDocumentState}. A listener runs synchronously,
-    * inside the build or inside that check's lock read. A throw fails the
-    * finished build; in the read it skips the listeners after it and surfaces
-    * only as an unhandled rejection.
-    */
+   /** Registered through {@link onBuildEnded}. */
    protected readonly buildEndedListeners = new Set<(drained: boolean) => void>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
@@ -300,6 +293,20 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    onDocumentPhaseDelivered(state: DocumentState, listener: (document: LangiumDocument, version: number) => void): Disposable {
       this.documentPhaseDeliveredListeners.add(state, listener);
       return Disposable.create(() => this.documentPhaseDeliveredListeners.delete(state, listener));
+   }
+
+   /**
+    * Call `listener` with `drained` false once a build has run every phase
+    * ({@link buildDocuments}), and true once the lock has drained after a
+    * build that threw ({@link checkWaitsOnceDrained}); builds that throw
+    * before that drain share one call, so this does not count builds. A
+    * listener runs synchronously, inside the build or inside that check's lock
+    * read. A throw fails the finished build; in the read it skips the
+    * listeners after it and surfaces only as an unhandled rejection.
+    */
+   protected onBuildEnded(listener: (drained: boolean) => void): Disposable {
+      this.buildEndedListeners.add(listener);
+      return Disposable.create(() => this.buildEndedListeners.delete(listener));
    }
 
    /**
@@ -443,8 +450,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                requeue(drained ? 'build ended early' : 'build ended short of the target');
             }
          };
-         this.buildEndedListeners.add(buildEnded);
-         const buildDisposable = Disposable.create(() => this.buildEndedListeners.delete(buildEnded));
+         const buildDisposable = this.onBuildEnded(buildEnded);
          const cancelDisposable = cancelToken.onCancellationRequested(() => {
             cleanup();
             reject(OperationCancelled);
