@@ -27,6 +27,7 @@ import {
    type TransferElement,
    TransferDocument
 } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { DataServer, type DataServerUriWatchRecord } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import {
@@ -34,11 +35,19 @@ import {
    type ClientSessionUpdateAllArgs,
    type ClientSessionWriteArgs,
    DefaultClientSession,
+   HydraniumTextDocuments,
    initializeWorkspaceProgrammatically,
    type ServerSharedServices
 } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
-import type { DataServerProtocol, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
+import type {
+   DataServerProtocol,
+   TransferUpdateDocumentArgs,
+   TransferDocumentDirtyChangedEvent,
+   TransferUpdateDocumentsArgs,
+   WatchModelDocumentArgs
+} from '@hydranium/protocol/data';
+import { Emitter, type Event } from 'vscode-jsonrpc';
 import type { CancellationToken } from 'vscode-languageserver';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -57,9 +66,57 @@ const EDITED = `entity Solo {
    b : string
 }
 `;
+const THEIRS = `entity Solo {
+   a : string
+   c : string
+}
+`;
 const SESSION = 'form#wire-1';
+const GRACE_MS = 300;
 
 type Harness = DataServerHarness<DataServer<DomainModel>, DomainModel>;
+
+/**
+ * Records the writes it is sent, can lose its connection as a dropped
+ * transport ends it, runs a hook after each watch, which a restore sends
+ * between its re-open and any write it sends again, and can hold the answer
+ * to an update it has applied.
+ */
+class RestoreProbeServer extends DataServer<DomainModel> {
+   readonly writes: string[] = [];
+   afterWatch?: () => Promise<void>;
+   /** Set, an update is applied at once and answers once this settles. */
+   answerGate?: Promise<void>;
+
+   lose(): void {
+      this.dispose('lost');
+   }
+
+   override async updateModelDocument(args: TransferUpdateDocumentArgs<DomainModel>): Promise<TransferDocument<DomainModel>> {
+      this.writes.push(`update ${args.uri}`);
+      const held = this.answerGate;
+      if (!held) {
+         return super.updateModelDocument(args);
+      }
+      // Applied at once and answered once released, stamped as it is sent,
+      // as a write whose validation outlasts the calls after it.
+      const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
+      await held;
+      return this.encodeDocument(astDocument);
+   }
+
+   override async updateModelDocuments(args: TransferUpdateDocumentsArgs<DomainModel>): Promise<TransferDocument<DomainModel>[]> {
+      this.writes.push(`updates ${args.updates.map(update => update.uri).join(' ')}`);
+      return super.updateModelDocuments(args);
+   }
+
+   override async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
+      await super.watchModelDocument(args);
+      await this.afterWatch?.();
+   }
+}
+
+type ProbeHarness = DataServerHarness<RestoreProbeServer, DomainModel>;
 
 /** Fails the snapshot an open answers with once told to, leaving the open itself intact. */
 class SnapshotFailingServer extends DataServer<DomainModel> {
@@ -89,14 +146,24 @@ interface Booted {
    readonly newUri: string;
    readonly path: (file: string) => string;
    /** A fresh data-server connection on the booted services. */
-   readonly connect: () => Harness;
+   readonly connect: () => ProbeHarness;
 }
 
-async function boot(): Promise<Booted> {
-   scratch = await makeScratchWorkspaceHarness(workspace => {
-      workspace.write(FILE, CLEAN);
-      workspace.write(OTHER_FILE, CLEAN);
-   });
+/** Boot a scratch workspace, with the text store's `revertGraceMs` when given. */
+async function boot(revertGraceMs?: number): Promise<Booted> {
+   scratch = await makeScratchWorkspaceHarness(
+      workspace => {
+         workspace.write(FILE, CLEAN);
+         workspace.write(OTHER_FILE, CLEAN);
+      },
+      revertGraceMs === undefined
+         ? {}
+         : {
+              extraSharedModules: [
+                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs }) } }
+              ]
+           }
+   );
    const { harness: services, workspace } = scratch;
    return {
       services,
@@ -105,8 +172,8 @@ async function boot(): Promise<Booted> {
       newUri: workspace.uri(NEW_FILE),
       path: file => workspace.resolve(file),
       connect: () => {
-         const head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
-            server: channel => new DataServer<DomainModel>(channel, services.shared)
+         const head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+            server: channel => new RestoreProbeServer(channel, services.shared)
          });
          heads.push(head);
          return head;
@@ -366,12 +433,17 @@ describe('data head sessions', () => {
  * host is told: the part of a `DataConnection` a restore talks to, with the
  * connection's transport replaced by switching harnesses.
  */
-function sessionOver(current: () => Harness, reported: ResolvedMessage[]): DataSession<DomainModel, DataServerProtocol<DomainModel>> {
+function sessionOver(
+   current: () => Harness,
+   reported: ResolvedMessage[],
+   onDidChangeDirty?: Event<TransferDocumentDirtyChangedEvent>
+): DataSession<DomainModel, DataServerProtocol<DomainModel>> {
    return new DataSession<DomainModel, DataServerProtocol<DomainModel>>(
       'form#restore',
       {
          connected: async () => current().proxy as RpcProxy<DataServerProtocol<DomainModel>>,
-         reportError: (_error, message) => reported.push(message)
+         reportError: (_error, message) => reported.push(message),
+         onDidChangeDirty
       },
       'form'
    );
@@ -384,7 +456,7 @@ function drop(head: Harness): void {
 }
 
 describe('DataSession restore against the real stack', () => {
-   it('reports unsaved edits a revert took, and sends them nowhere', async () => {
+   it('reports a write based on anything that a revert took, and sends it nowhere', async () => {
       // The session is the document's only client, so ending it reverts the
       // document to disk.
       const { services, uri, connect } = await boot();
@@ -405,9 +477,9 @@ describe('DataSession restore against the real stack', () => {
       expect(textDocuments.isOpenInClient(uri, 'form#restore')).toBe(true);
    });
 
-   it('reports unsaved edits a restarted server never had, and sends them nowhere', async () => {
+   it('reports a write based on anything that a restarted server never had, and sends it nowhere', async () => {
       const { uri, connect } = await boot();
-      let head = connect();
+      let head: Harness = connect();
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
@@ -442,5 +514,258 @@ describe('DataSession restore against the real stack', () => {
 
       expect(reported).toEqual([]);
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+});
+
+/** Outlast the revert grace of a store booted with {@link GRACE_MS}. */
+function outlastGrace(): Promise<void> {
+   return new Promise(resolve => setTimeout(resolve, GRACE_MS + 200));
+}
+
+describe('DataSession re-apply against the real stack', () => {
+   it('writes nothing to a document the revert grace kept, which still holds the edit', async () => {
+      const { services, uri, connect } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      const written = await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+
+      head.server.lose();
+      head.dispose();
+      head = connect();
+      await session.connected();
+
+      expect(head.server.writes).toEqual([]);
+      expect(reported).toEqual([]);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(textDocuments.version(uri)).toBe(written.version);
+   });
+
+   it('writes the edit again to a document reverted after the grace', async () => {
+      const { services, uri, connect } = await boot(GRACE_MS);
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+
+      head.server.lose();
+      head.dispose();
+      await outlastGrace();
+      expect(textDocuments.get(uri)).toBeUndefined();
+      head = connect();
+      await session.connected();
+
+      expect(head.server.writes).toEqual([`update ${uri}`]);
+      expect(reported).toEqual([]);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(textDocuments.isDirty(uri)).toBe(true);
+   });
+
+   it('reports, and writes nothing to, a document another client edited meanwhile', async () => {
+      const { services, uri, connect } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+
+      drop(head);
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+      head = connect();
+      await session.connected();
+
+      expect(head.server.writes).toEqual([]);
+      expect(reported.map(message => message.params)).toEqual([{ uris: uri }]);
+      expect(textDocuments.get(uri)?.getText()).toBe(THEIRS);
+   });
+
+   it('writes the edit again to a restarted server', async () => {
+      const { uri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      expect(head.server.writes).toEqual([`update ${uri}`]);
+      expect(reported).toEqual([]);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+
+   it('writes a set written together again in one call', async () => {
+      const { services, uri, otherUri, connect } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      const otherOpened = await session.openDocument({ uri: otherUri });
+      await session.updateDocuments({
+         updates: [
+            { uri, model: EDITED, basedOn: opened.version },
+            { uri: otherUri, model: EDITED, basedOn: otherOpened.version }
+         ]
+      });
+
+      drop(head);
+      head = connect();
+      await session.connected();
+
+      expect(head.server.writes).toEqual([`updates ${uri} ${otherUri}`]);
+      expect(reported).toEqual([]);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(textDocuments.get(otherUri)?.getText()).toBe(EDITED);
+   });
+
+   it('writes nothing of a set one of whose documents another client edited, and reports the set', async () => {
+      const { services, uri, otherUri, connect } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      const otherOpened = await session.openDocument({ uri: otherUri });
+      await session.updateDocuments({
+         updates: [
+            { uri, model: EDITED, basedOn: opened.version },
+            { uri: otherUri, model: EDITED, basedOn: otherOpened.version }
+         ]
+      });
+
+      drop(head);
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(otherUri);
+      await other.update({ uri: otherUri, model: THEIRS, basedOn: 'anything' });
+      head = connect();
+      await session.connected();
+
+      expect(head.server.writes).toEqual([]);
+      expect(reported.map(message => message.params)).toEqual([{ uris: `${uri}, ${otherUri}` }]);
+      expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(textDocuments.get(otherUri)?.getText()).toBe(THEIRS);
+   });
+
+   it('reports a write sent again that conflicts with an edit made after the re-open, and sends it once', async () => {
+      const { services, uri, connect } = await boot();
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+
+      drop(head);
+      head = connect();
+      const other = services.shared.model.ModelService.createSession('other');
+      head.server.afterWatch = async () => {
+         head.server.afterWatch = undefined;
+         await other.open(uri);
+         await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+      };
+      await session.connected();
+
+      expect(head.server.writes).toEqual([`update ${uri}`]);
+      expect(reported.map(message => message.params)).toEqual([{ uris: uri }]);
+      expect(textDocuments.get(uri)?.getText()).toBe(THEIRS);
+   });
+
+   it('reports nothing to a restarted server for a write another client saved with an edit of its own', async () => {
+      const { services, uri } = await boot();
+      const reported: ResolvedMessage[] = [];
+      const cleaned: string[] = [];
+      const dirtyChanged = new Emitter<TransferDocumentDirtyChangedEvent>();
+      let head: Harness;
+      const session = sessionOver(() => head, reported, dirtyChanged.event);
+      head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
+         server: channel => new DataServer<DomainModel>(channel, services.shared),
+         client: {
+            onDocumentDirtyChanged: event => {
+               dirtyChanged.fire(event);
+               if (!event.dirty) {
+                  cleaned.push(event.uri);
+               }
+            }
+         }
+      });
+      heads.push(head);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.save({ uri, model: THEIRS, basedOn: 'anything' });
+      await waitFor(() => cleaned.includes(uri), { message: 'the save never turned the document clean for the session' });
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      const probe = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(probe);
+      head = probe;
+      await session.connected();
+
+      expect(probe.server.writes).toEqual([]);
+      expect(reported).toEqual([]);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(THEIRS);
+   });
+
+   it('sends and reports nothing after a restart for a write that answered after the session saved it', async () => {
+      const { services, uri } = await boot();
+      const reported: ResolvedMessage[] = [];
+      const dirtyChanged = new Emitter<TransferDocumentDirtyChangedEvent>();
+      let head: ProbeHarness;
+      const session = sessionOver(() => head, reported, dirtyChanged.event);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, services.shared),
+         client: { onDocumentDirtyChanged: event => dirtyChanged.fire(event) }
+      });
+      heads.push(head);
+      const opened = await session.openDocument({ uri });
+      let release!: () => void;
+      head.server.answerGate = new Promise<void>(resolve => {
+         release = resolve;
+      });
+      const late = session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      const textDocuments = services.shared.workspace.TextDocuments;
+      await waitFor(() => textDocuments.get(uri)?.getText() === EDITED, { message: 'the write was never applied' });
+      await session.saveDocument({ uri, model: EDITED, basedOn: 'anything' });
+      // Another client moves the text on before the write answers, so the
+      // answer carries neither the saved text nor the write's base.
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+      release();
+      await late;
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      const probe = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(probe);
+      head = probe;
+      await session.connected();
+
+      expect(probe.server.writes).toEqual([]);
+      expect(reported).toEqual([]);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(EDITED);
    });
 });

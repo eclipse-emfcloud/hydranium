@@ -212,6 +212,8 @@ export interface CanaryDefects {
    readonly writeAnswersUnvalidated?: boolean;
    /** Every document is reported clean, saved or not. */
    readonly neverDirty?: boolean;
+   /** A document's text hash follows its version, so the same text at a later version hashes differently. */
+   readonly textHashByVersion?: boolean;
    /** The last close keeps a saved document's unsaved text instead of going back to its file. */
    readonly releaseKeepsText?: boolean;
    /** The last close keeps a document that has no file. */
@@ -548,7 +550,8 @@ export class CanaryDataServer {
          version: asSnapshotVersion(this.defects.fractionalVersion ? stored.version + 0.5 : stored.version),
          root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
          diagnostics,
-         dirty: !this.defects.neverDirty && stored.text !== this.disk.get(uri)
+         dirty: !this.defects.neverDirty && stored.text !== this.disk.get(uri),
+         textHash: this.defects.textHashByVersion ? String(stored.version) : stored.text
       };
    }
 }

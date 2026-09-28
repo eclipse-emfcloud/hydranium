@@ -51,6 +51,18 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
     * watching the document.
     */
    dirty?: boolean;
+   /**
+    * A hash of the text the server holds for this document when it sends it:
+    * set on every document a data server answers or sends that the server
+    * holds, and absent otherwise. Equal texts hash equal, whatever the
+    * version, so a client compares the text two snapshots hold, across a
+    * revert or a server restart that numbers versions afresh.
+    *
+    * Of the text alone. The data server's de-duplication fingerprint hashes the
+    * text or the transfer root together with the diagnostics, and changes with
+    * a diagnostic where this does not.
+    */
+   textHash?: string;
 }
 
 /**

@@ -39,8 +39,9 @@ author, and that keeps checking you as the framework moves.
 - **Client sessions, on the data head.** The `/data` battery opens and writes every document as a
   client session and holds the head to how sessions behave: a session writes and saves only what it
   has open, ids are refused while live or reserved, a write answers with its document's
-  diagnostics, `dirty` follows the file, and the last close reverts a document to what its save
-  wrote, or drops it when it was never saved. See [client sessions](../../docs/concepts/client-sessions.md).
+  diagnostics, `dirty` follows the file, `textHash` follows the text, and the last close reverts a
+  document to what its save wrote, or drops it when it was never saved. See
+  [client sessions](../../docs/concepts/client-sessions.md).
 
 ## Install
 
