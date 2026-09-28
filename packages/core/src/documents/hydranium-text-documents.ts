@@ -50,9 +50,9 @@ import {
    type CanonicalUri,
    type LanguageClientUri,
    asLanguageClientUri,
-   cyrb53,
    DisposableCollection,
    type Stopwatch,
+   textHash,
    type Tracer
 } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
@@ -231,7 +231,7 @@ export type RepairCommit<T extends TextDocument> =
 export interface VersionSequence {
    /** The shared version at last-client close. */
    readonly version: number;
-   /** {@link contentHash} of the synced text at last-client close. */
+   /** {@link textHash} of the synced text at last-client close. */
    readonly contentHash: string;
 }
 
@@ -271,7 +271,7 @@ export interface PendingLanguageClientPush {
     * position-independent (full-text) change.
     */
    readonly before: string | undefined;
-   /** {@link contentHash} of the text this push moves the client to. */
+   /** {@link textHash} of the text this push moves the client to. */
    readonly afterHash: string;
 }
 
@@ -308,19 +308,6 @@ function isFileNotFound(err: unknown, target: URI): boolean {
       return false;
    }
    return !('path' in err) || err.path === target.fsPath;
-}
-
-/**
- * Cheap, stable, non-cryptographic content hash (cyrb53) for the version
- * sequence's "did the content change across close/reopen?" question. Only
- * needs to be collision-resistant enough that an accidental match across two
- * DIFFERENT revisions of the same file is practically impossible; 53 bits of
- * a well-mixed hash over full text + length gives that without pulling in
- * `node:crypto` (this module must stay runnable in browser hosts).
- */
-function contentHash(text: string): string {
-   const { high, low } = cyrb53([text]);
-   return `${(4294967296 * (2097151 & high) + low).toString(36)}:${text.length}`;
 }
 
 /**
@@ -811,7 +798,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // here at release, not on every change.
       this.__versionSequences.set(uri, {
          version: syncedDocument.version,
-         contentHash: contentHash(syncedDocument.getText())
+         contentHash: textHash(syncedDocument.getText())
       });
       const wasDirty = this.__documents.get(uri)?.dirty === true;
       this.__syncedDocuments.delete(uri);
@@ -1023,7 +1010,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          // declared id as the sequence seed.
          const sequence = this.__versionSequences.get(uri);
          const version =
-            sequence === undefined ? td.version : sequence.contentHash === contentHash(text) ? sequence.version : sequence.version + 1;
+            sequence === undefined ? td.version : sequence.contentHash === textHash(text) ? sequence.version : sequence.version + 1;
          this.log(uri, `Open document: Version ${version} by ${this.formatClientId(clientId)} [first client${source}]`);
          document = this.configuration.create(uri, td.languageId, version, text);
          this.__syncedDocuments.set(uri, document);
@@ -1226,7 +1213,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (sequence === undefined) {
          return undefined;
       }
-      const hash = contentHash(text);
+      const hash = textHash(text);
       if (hash === sequence.contentHash) {
          return sequence.version;
       }
@@ -1712,7 +1699,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          pending = [];
          this.__pendingPushes.set(targetUri, pending);
       }
-      pending.push({ before, afterHash: contentHash(newText) });
+      pending.push({ before, afterHash: textHash(newText) });
       if (pending.length > PENDING_ECHO_CAP) {
          pending.shift();
          this.logUri(targetUri, `Pending-echo queue exceeded ${PENDING_ECHO_CAP} entries; dropped the oldest`, 'debug');
@@ -1789,7 +1776,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const probe = this.create(clientFacing, document.languageId, 0, clientText ?? document.getText());
       const reconstructed = this.update(probe, changes, 0).getText();
       if (pending !== undefined) {
-         const matchIndex = pending.findIndex(push => push.afterHash === contentHash(reconstructed));
+         const matchIndex = pending.findIndex(push => push.afterHash === textHash(reconstructed));
          if (matchIndex >= 0) {
             pending.splice(0, matchIndex + 1);
             return { kind: 'echo' };

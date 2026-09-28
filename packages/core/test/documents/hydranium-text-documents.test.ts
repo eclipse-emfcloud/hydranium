@@ -1855,9 +1855,9 @@ describe('HydraniumTextDocuments content hash', () => {
    }
 
    it.each([
-      ['empty text', '', 'wvjl67o803:0'],
-      ['one line', 'x\n', '22btu8j4rs9:2'],
-      ['text outside the BMP', 'entity Größe { 𝒳: string }\n', 'bc6cb77lvs:28']
+      ['empty text', '', '488bdcb81aee8d83'],
+      ['one line', 'x\n', 'c69ad199ae8398a9'],
+      ['text outside the BMP', 'entity Größe { 𝒳: string }\n', 'b5c4174ac6201d88']
    ])('keeps the digest a release records for %s', (_name, text, digest) => {
       const docs = new HashProbe(makeSharedServices(undefined, makeLogger()));
       openInLanguageClient(docs, text);

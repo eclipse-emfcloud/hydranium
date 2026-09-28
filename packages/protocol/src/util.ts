@@ -250,13 +250,22 @@ export function getAt<T = unknown>(obj: unknown, path: string[]): T | undefined 
 }
 
 /**
- * The two 32-bit words cyrb53 ends on, each unsigned, for `parts` read as one
- * string. The 53-bit cyrb53 value is `2097151 & high` above `low`. It tells
- * whether a text changed, not who can forge one, and needs no `node:*` module,
- * so every host runs it. The parts are hashed in turn, so a caller never
- * concatenates a large text to hash it with others.
+ * A stable, non-cryptographic digest of `text`, equal on every host for equal
+ * text: the `TransferDocument.textHash` a data server stamps, so a client can
+ * hash text of its own to compare. An array is read as its elements joined, so
+ * a large text is hashed in parts without concatenating it. It tells whether a
+ * text changed, not who could forge one.
  */
-export function cyrb53(parts: readonly string[]): { readonly high: number; readonly low: number } {
+export function textHash(text: string | readonly string[]): string {
+   const { high, low } = cyrb53(typeof text === 'string' ? [text] : text);
+   return high.toString(16).padStart(8, '0') + low.toString(16).padStart(8, '0');
+}
+
+/**
+ * The two 32-bit words cyrb53 ends on, each unsigned, for `parts` read as one
+ * string. It needs no `node:*` module, so every host runs it.
+ */
+function cyrb53(parts: readonly string[]): { readonly high: number; readonly low: number } {
    let h1 = 0xdeadbeef;
    let h2 = 0x41c6ce57;
    for (const part of parts) {
