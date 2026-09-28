@@ -178,6 +178,21 @@ describe('order-flow data head', () => {
       await expect(head.harness.server.findNextName({ uri, type: 'Entity', proposal: 'Entity', tier: 'local' })).resolves.toBe('Entity');
    });
 
+   it('passes on a failure to build a URI with no document, rather than answering as if it had none', async () => {
+      // Only the builder's own "no document" rejection means the URI has none.
+      // Any other failure before a document is registered, such as a read that
+      // fails, reaches the caller.
+      const head = await driveDataHead();
+      const uri = head.uri('orders/never-created.domain');
+      const modelService = head.services.shared.model.ModelService;
+      modelService.ensureDocumentState = () => Promise.reject(new Error('the read failed'));
+
+      await expect(head.harness.proxy.getModelDocument({ uri })).rejects.toThrow('the read failed');
+      await expect(head.harness.server.findNextName({ uri, type: 'Entity', proposal: 'Entity', tier: 'local' })).rejects.toThrow(
+         'the read failed'
+      );
+   });
+
    it('round-trips a TYPED transfer model through updateModelDocument', async () => {
       const head = await driveDataHead();
       const path = WORKSPACE_FILES.fulfillmentProcess;

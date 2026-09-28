@@ -65,7 +65,7 @@ import {
    type TransferUpdateDocumentArgs,
    type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
-import { REVERT_ON_CLOSE_CLIENT_ID, ReentrantWriteLockError } from '@hydranium/core';
+import { REVERT_ON_CLOSE_CLIENT_ID } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 
 /**
@@ -139,6 +139,13 @@ import { type CancellationToken, type MessageConnection, ResponseError } from 'v
  * the boundary is unambiguous.
  */
 const FINGERPRINT_SEPARATOR = '\0';
+
+/**
+ * `LSPErrorCodes.ServerCancelled`, with which Langium's document wait rejects
+ * for a URI that has no document; `vscode-languageserver-protocol` is not a
+ * dependency of this package.
+ */
+const SERVER_CANCELLED = -32802;
 
 /**
  * A session a data connection registered with a resume token, and how to end
@@ -1113,13 +1120,14 @@ export class DataServer<
 
    /**
     * Whether `error`, from waiting on `uri`'s document, means that `uri` has
-    * no document: a URI with neither a file nor text builds nothing, and the
-    * wait after the build rejects for want of one. A
-    * `ReentrantWriteLockError` never counts, since it names a call from
-    * inside a write-lock holder, whose remedy its caller needs.
+    * no document: a URI with neither a file nor text builds nothing, and
+    * Langium's wait after the build rejects for want of one, with a
+    * `ServerCancelled` response error. Any other failure, such as a read
+    * that fails before a document is registered, a cancelled wait or a
+    * `ReentrantWriteLockError`, is the caller's to see.
     */
    protected isMissingDocument(error: unknown, uri: string): boolean {
-      return !(error instanceof ReentrantWriteLockError) && this.modelService.getDocument(uri) === undefined;
+      return error instanceof ResponseError && error.code === SERVER_CANCELLED && this.modelService.getDocument(uri) === undefined;
    }
 
    /**
