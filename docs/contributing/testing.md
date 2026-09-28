@@ -273,12 +273,15 @@ rather than failing the test, and Vitest does not report it. Read the log.
 3. **Red first.** Write the assertion, watch it fail for the right reason, then
    make it pass. A characterization test that comes out **red against unmodified
    code is a latent bug** — investigate it, do not adjust the test to match the
-   surprising behaviour.
+   surprising behaviour. Name the failing run and why it failed under "how you
+   know it works" in the pull request description, as step 4 does for a control.
 4. **Run a control before believing a new test.** Where step 3 does not apply —
    a test written alongside the fix it guards, or over code that already
    works — break the code that test covers and confirm THAT test goes red. A
    test that cannot fail is worse than no test, because it reads as coverage.
-   Name the control and what it broke in the commit body.
+   Name the control and what it broke under "how you know it works" in the
+   pull request description. The commit body carries no test evidence: the
+   control is undone before the commit, so it is no part of the change.
 
    **A control that refuses to redden is a result**, not a nuisance: the test
    does not reach the path it claims to, and the next move is finding out why
