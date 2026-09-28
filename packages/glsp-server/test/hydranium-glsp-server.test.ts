@@ -21,6 +21,7 @@ import {
    type GLSPServer,
    GLSPServerError,
    type GModelFactory,
+   type Logger,
    ModelState,
    type ModelSubmissionHandler,
    NullLogger,
@@ -202,10 +203,11 @@ function stubSharedServices(): ServerSharedServices {
    } as unknown as ServerSharedServices;
 }
 
-function makeFixtureHarness(serverModule = new ServerModule()) {
+function makeFixtureHarness(serverModule = new ServerModule(), createLogger?: (caller?: string) => Logger) {
    return makeGlspHarness<TestState>({
       serverModule: serverModule.configureDiagramModule(new TestDiagramModule()),
       diagramType: TEST_DIAGRAM_TYPE,
+      createLogger,
       appModules: [
          new ContainerModule(bind => {
             bind(HydraniumTypes.SharedCoreServices).toConstantValue(stubSharedServices());
@@ -302,21 +304,48 @@ class AdopterServerModule extends ServerModule {
    }
 }
 
-function serverBoundBy(serverModule: ServerModule): unknown {
-   const harness = makeFixtureHarness(serverModule);
+@injectable()
+class UpstreamAdopterServer extends DefaultGLSPServer {}
+
+class UpstreamAdopterServerModule extends ServerModule {
+   protected override bindGLSPServer(): BindingTarget<GLSPServer> {
+      return UpstreamAdopterServer;
+   }
+}
+
+/** The server the container resolves, and the warnings logged while resolving it. */
+function serverBoundBy(serverModule: ServerModule): { server: unknown; warnings: string[] } {
+   const warnings: string[] = [];
+   const logger = new NullLogger();
+   logger.warn = (message: string): void => {
+      warnings.push(message);
+   };
+   const harness = makeFixtureHarness(serverModule, () => logger);
    try {
-      return harness.server;
+      return { server: harness.server, warnings };
    } finally {
       harness.dispose();
    }
 }
 
 describe('the GLSP server a server module binds', () => {
-   it("is replaced by the framework's when it is upstream's", () => {
-      expect(serverBoundBy(new ServerModule())).toBeInstanceOf(HydraniumGlspServer);
+   it("is replaced by the framework's, silently, when it is upstream's", () => {
+      const { server, warnings } = serverBoundBy(new ServerModule());
+      expect(server).toBeInstanceOf(HydraniumGlspServer);
+      expect(warnings).toEqual([]);
    });
 
-   it("is kept when it extends the framework's", () => {
-      expect(serverBoundBy(new AdopterServerModule())).toBeInstanceOf(AdopterServer);
+   it("is kept, silently, when it extends the framework's", () => {
+      const { server, warnings } = serverBoundBy(new AdopterServerModule());
+      expect(server).toBeInstanceOf(AdopterServer);
+      expect(warnings).toEqual([]);
+   });
+
+   it("is replaced with a warning naming it and the fix when it extends upstream's", () => {
+      const { server, warnings } = serverBoundBy(new UpstreamAdopterServerModule());
+      expect(server).toBeInstanceOf(HydraniumGlspServer);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('UpstreamAdopterServer');
+      expect(warnings[0]).toContain('extend HydraniumGlspServer');
    });
 });

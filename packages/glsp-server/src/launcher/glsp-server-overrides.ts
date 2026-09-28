@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { GLSPServer } from '@eclipse-glsp/server';
+import { DefaultGLSPServer, GLSPServer, LoggerFactory } from '@eclipse-glsp/server';
 import { ContainerModule } from 'inversify';
 import { HydraniumGlspServer } from './hydranium-glsp-server.js';
 
@@ -25,9 +25,10 @@ import { HydraniumGlspServer } from './hydranium-glsp-server.js';
  * **An adopter's server is kept when it extends {@link HydraniumGlspServer}.**
  * Any other `GLSPServer` the adopter's `ServerModule` binds, upstream's default
  * included, is replaced when the container first creates it, so a server that
- * extends upstream's directly is discarded. The replacement happens on
- * activation because `rebind` would replace an adopter's subclass as well; the
- * discarded server is constructed once and never used.
+ * extends upstream's directly is discarded, with a warning naming its class.
+ * The replacement happens on activation because `rebind` would replace an
+ * adopter's subclass as well; the discarded server is constructed once and
+ * never used.
  *
  * Keeping this out of the adopter's hands is the point: an adopter passes their
  * own `ServerModule` in, so anything they must add themselves is a fix the
@@ -43,8 +44,19 @@ import { HydraniumGlspServer } from './hydranium-glsp-server.js';
 export function createGlspServerOverrides(): ContainerModule {
    return new ContainerModule((bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
       bind(HydraniumGlspServer).toSelf().inSingletonScope();
-      onActivation<GLSPServer>(GLSPServer, (context, server) =>
-         server instanceof HydraniumGlspServer ? server : context.container.get(HydraniumGlspServer)
-      );
+      onActivation<GLSPServer>(GLSPServer, (context, server) => {
+         if (server instanceof HydraniumGlspServer) {
+            return server;
+         }
+         if (server.constructor !== DefaultGLSPServer) {
+            context.container
+               .get<LoggerFactory>(LoggerFactory)('HydraniumGlspServer')
+               .warn(
+                  `Replacing the bound GLSP server ${server.constructor.name} with HydraniumGlspServer; ` +
+                     'extend HydraniumGlspServer to keep its behaviour.'
+               );
+         }
+         return context.container.get(HydraniumGlspServer);
+      });
    });
 }
