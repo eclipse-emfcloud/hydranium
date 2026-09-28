@@ -155,13 +155,7 @@ describe('the /data battery discriminates', () => {
       { label: 'a project with an empty id', defects: { emptyProjectId: true }, expected: [PROJECT_SHAPE] },
       { label: 'two projects sharing one id', defects: { duplicateProjectIds: true }, expected: [PROJECT_SHAPE] },
       { label: 'no projects at all, with projects expected', defects: { noProjects: true }, expected: [PROJECT_NON_EMPTY] },
-      {
-         // Also the unsaved create's check, which ends on a readiness call to
-         // show the connection outlived the close.
-         label: 'a readiness call that rejects',
-         defects: { readyRejects: true },
-         expected: [READY, UNSAVED_CREATE]
-      },
+      { label: 'a readiness call that rejects', defects: { readyRejects: true }, expected: [READY] },
       { label: 'a transfer root with a blank $type', defects: { blankRootType: true }, expected: [VALID_ENVELOPE] },
       {
          // Also every check writing on a version the envelope reported, so a
@@ -260,6 +254,7 @@ describe('the /data battery discriminates', () => {
       { label: 'every document reported clean', defects: { neverDirty: true }, expected: [DIRTY] },
       { label: 'a last close keeping a saved document’s unsaved text', defects: { releaseKeepsText: true }, expected: [LAST_CLOSE] },
       { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },
+      { label: 'a read of a URI with no document that is refused', defects: { refusesUnknownRead: true }, expected: [UNSAVED_CREATE] },
       {
          label: 'a close reverting while another session has the document open',
          defects: { releaseOnAnyClose: true },

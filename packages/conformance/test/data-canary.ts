@@ -216,6 +216,8 @@ export interface CanaryDefects {
    readonly releaseKeepsText?: boolean;
    /** The last close keeps a document that has no file. */
    readonly releaseKeepsUnsaved?: boolean;
+   /** A read of a URI the server has no document for is refused, where the protocol answers an envelope with no root. */
+   readonly refusesUnknownRead?: boolean;
    /** Any close goes back to the file, even while another session has the document open. */
    readonly releaseOnAnyClose?: boolean;
    /**
@@ -344,6 +346,9 @@ export class CanaryDataServer {
    }
 
    async getModelDocument(args: GetModelDocumentArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+      if (this.defects.refusesUnknownRead && !this.documents.has(args.uri)) {
+         throw new Error(`No document found for URI: ${args.uri}`);
+      }
       return this.envelope(args.uri);
    }
 

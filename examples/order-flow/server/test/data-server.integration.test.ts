@@ -158,6 +158,19 @@ describe('order-flow data head', () => {
       expect(clean.diagnostics).toEqual([]);
    });
 
+   it.each([false, true])(
+      'answers a read of a URI with no document with an envelope that has no root (includeDiagnostics %s)',
+      async includeDiagnostics => {
+         const head = await driveDataHead();
+         const uri = head.uri('orders/never-created.domain');
+
+         const answer = await head.harness.proxy.getModelDocument({ uri, includeDiagnostics });
+
+         expect(answer).toMatchObject({ uri, diagnostics: [] });
+         expect(answer.root).toBeUndefined();
+      }
+   );
+
    it('round-trips a TYPED transfer model through updateModelDocument', async () => {
       const head = await driveDataHead();
       const path = WORKSPACE_FILES.fulfillmentProcess;

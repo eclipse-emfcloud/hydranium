@@ -65,7 +65,7 @@ import {
    type TransferUpdateDocumentArgs,
    type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
-import { REVERT_ON_CLOSE_CLIENT_ID } from '@hydranium/core';
+import { REVERT_ON_CLOSE_CLIENT_ID, ReentrantWriteLockError } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 
 /**
@@ -748,8 +748,17 @@ export class DataServer<
       // unsubscribed caller that needs diagnostics inline passes
       // `includeDiagnostics: true` to settle at `Validated` instead.
       const state = args.includeDiagnostics ? DocumentState.Validated : undefined;
-      const astDocument = await this.modelService.ensureDocumentState(args.uri, state);
-      return this.encodeDocument(astDocument);
+      try {
+         return this.encodeDocument(await this.modelService.ensureDocumentState(args.uri, state));
+      } catch (error: unknown) {
+         // A URI with neither a file nor text builds nothing, and the wait after
+         // the build rejects for want of a document. The protocol answers that
+         // read with an envelope that has no root.
+         if (!(error instanceof ReentrantWriteLockError) && this.modelService.getDocument(args.uri) === undefined) {
+            return this.envelope(UriUtils.toUri(args.uri));
+         }
+         throw error;
+      }
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
