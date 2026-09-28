@@ -27,8 +27,9 @@ mkdirSync(dirname(BACKEND_LOG), { recursive: true });
  * this config's: it is what an adopter would deploy, and the main suite benefits
  * from it too.
  *
- * What IS specific here is the proxy and the ports (3002/3003), so a main-suite
- * run on 3001 and this one cannot drive each other's backend.
+ * What IS specific here is the proxy and the ports, the two above the main
+ * suite's (3002/3003 by default), so a main-suite run and this one cannot
+ * drive each other's backend.
  *
  * Run it explicitly:
  *   npm --prefix examples/order-flow/theia-app run test:e2e:reconnect
