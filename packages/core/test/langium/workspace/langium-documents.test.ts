@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { type AstNode, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
+import type { CanonicalUri } from '@hydranium/protocol';
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
@@ -35,8 +36,15 @@ interface Harness {
    readonly rehydrated: LangiumDocument<AstNode>[];
 }
 
+/** A second spelling of {@link TARGET}, which canonicalises to it. */
+const LINK = URI.parse('file:///link/a.txt');
+
 /** Reports every URI unloadable, the answer a realpath policy gives for an absent path. */
 class UnloadableUriPolicy extends DefaultDocumentUriPolicy {
+   override canonicalUri(uri: URI | string): CanonicalUri {
+      return super.canonicalUri(uri.toString() === LINK.toString() ? TARGET : uri);
+   }
+
    override loadUri(): URI | undefined {
       return undefined;
    }
@@ -111,6 +119,20 @@ describe('HydraniumLangiumDocuments.getOrCreateDocument on a failed load', () =>
       await expect(documents.getOrCreateDocument(TARGET)).rejects.toThrow(/No loadable content/);
       // The seam already answered, so nothing should reach the filesystem.
       expect(loads).toEqual([]);
+   });
+
+   it('returns a registered document the seam reports no loadable content for, without a read', async () => {
+      // A document created and not yet saved: built from its text, so
+      // registered, with no file behind it.
+      // Asked by a spelling whose canonical form is TARGET, the key it is
+      // registered under.
+      const { documents, loads, rehydrated } = harness({ loadable: false });
+      const created = makeFakeDocument(TARGET, makeFakeAstNode<AstNode>({ $type: 'Created' }));
+      documents.addDocument(created);
+
+      await expect(documents.getOrCreateDocument(LINK)).resolves.toBe(created);
+      expect(loads).toEqual([]);
+      expect(rehydrated).toEqual([created]);
    });
 
    it('fabricates nothing, so a caller that asked to load never gets a stand-in', async () => {

@@ -973,13 +973,25 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * documents*: the Node provider walks the real filesystem (a freshly added
     * directory or never-opened file still builds), while a browser / empty
     * provider yields nothing. `uriPolicy.loadUri` first maps the URI to its
-    * load identity — `undefined` (no on-disk content) short-circuits to `[]`
-    * rather than a doomed read, and a symlink resolves to its real path so the
-    * built documents key the same way every other layer does.
+    * load identity, and a symlink resolves to its real path so the built
+    * documents key the same way every other layer does.
+    *
+    * A URI with no on-disk content is dropped rather than read, unless the text
+    * store or the document registry holds it, under its canonical URI, the key
+    * both hold it by. A document created and not yet saved has text but no
+    * file, and a policy that checks the disk reports it absent. A registered
+    * document whose file has gone is kept too: its rebuild then fails on the
+    * read, which is how the revert on last close learns to remove it rather
+    * than leave it holding its last client's text.
     */
    protected flattenAndAdaptURI(uri: URI): URI[] {
       const resolved = this.uriPolicy.loadUri(uri);
-      return resolved ? this.collectLanguageFiles(resolved) : [];
+      if (resolved) {
+         return this.collectLanguageFiles(resolved);
+      }
+      const canonical = UriUtils.toUri(this.uriPolicy.canonicalUri(uri));
+      const held = this.textDocuments?.get(canonical) !== undefined || this.langiumDocuments.hasDocument(canonical);
+      return held ? this.collectLanguageFiles(canonical) : [];
    }
 
    /** Recurse `uri` through the `FileSystemProvider`, gathering registered

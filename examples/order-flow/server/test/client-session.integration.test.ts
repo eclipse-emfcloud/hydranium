@@ -24,6 +24,7 @@ import {
    DocumentNotOpenError,
    DuplicateClientIdError,
    LANGUAGE_CLIENT_ID,
+   RealpathDocumentUriPolicy,
    ReservedClientIdError,
    type ServerSharedServices,
    SessionClosedError
@@ -33,6 +34,7 @@ import { asSnapshotVersion, isConflictError, type TransferElement } from '@hydra
 import { type CancellationToken } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
+import { isDomainModel, isEntity } from '../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 const FILE = 'session.domain';
@@ -608,6 +610,36 @@ describe('ClientSession.create', () => {
 
       await expect(session.create(newUri, EDITED)).rejects.toThrow(/open/);
       expect(harness.shared.workspace.TextDocuments.get(newUri)?.getText()).toBe(CLEAN);
+   });
+});
+
+describe('ClientSession.create under RealpathDocumentUriPolicy', () => {
+   // The policy answers "no loadable content" for a path not on disk, which a
+   // created document is until its first save.
+   it('builds a created document before its first save and after it', async () => {
+      scratch = await makeScratchWorkspaceHarness(undefined, {
+         extraSharedModules: [
+            { workspace: { DocumentUriPolicy: (services: ServerSharedServices) => new RealpathDocumentUriPolicy(services) } }
+         ]
+      });
+      const models = scratch.harness.shared.model.ModelService;
+      const newUri = scratch.workspace.uri(NEW_FILE);
+      const session = models.createSession('form');
+      const builtFields = async (): Promise<string[]> => {
+         const { root } = await models.validated(newUri);
+         const entities = isDomainModel(root) ? root.declarations.filter(isEntity) : [];
+         return entities.flatMap(entity => entity.fields.map(field => `${entity.name}.${field.name}`));
+      };
+
+      await session.create(newUri, CLEAN);
+      expect(await builtFields()).toEqual(['Solo.a']);
+      // The lookup every LSP request handler makes for its document.
+      const registered = await scratch.harness.shared.workspace.LangiumDocuments.getOrCreateDocument(URI.parse(newUri));
+      expect(registered.textDocument.getText()).toBe(CLEAN);
+
+      await session.save({ uri: newUri, model: EDITED, basedOn: 'anything' });
+      expect(readFileSync(scratch.workspace.resolve(NEW_FILE), 'utf8')).toBe(EDITED);
+      expect(await builtFields()).toEqual(['Solo.a', 'Solo.b']);
    });
 });
 
