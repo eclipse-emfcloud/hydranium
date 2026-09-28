@@ -733,10 +733,9 @@ export class DataServer<
       try {
          return this.encodeDocument(await this.modelService.ensureDocumentState(args.uri, state));
       } catch (error: unknown) {
-         // A URI with neither a file nor text builds nothing, and the wait after
-         // the build rejects for want of a document. The protocol answers that
-         // read with an envelope that has no root.
-         if (!(error instanceof ReentrantWriteLockError) && this.modelService.getDocument(args.uri) === undefined) {
+         // The protocol answers a read of a URI with no document with an
+         // envelope that has no root.
+         if (this.isMissingDocument(error, args.uri)) {
             return this.envelope(UriUtils.toUri(args.uri));
          }
          throw error;
@@ -939,9 +938,18 @@ export class DataServer<
          return nameProvider.findNextProjectQualifiedName(args.type, args.proposal);
       }
       if (tier === 'local') {
-         // Document-scoped uniqueness: the document root is the container.
-         const document = await this.modelService.ensureDocumentState(args.uri);
-         return document.root ? nameProvider.findNextName(args.type, args.proposal, document.root) : args.proposal;
+         // Document-scoped uniqueness: the document root is the container. A
+         // URI with no document has nothing to collide with, like a document
+         // with no root.
+         try {
+            const document = await this.modelService.ensureDocumentState(args.uri);
+            return document.root ? nameProvider.findNextName(args.type, args.proposal, document.root) : args.proposal;
+         } catch (error: unknown) {
+            if (this.isMissingDocument(error, args.uri)) {
+               return args.proposal;
+            }
+            throw error;
+         }
       }
       const project = this.services.workspace.ProjectManager.getProject(uri);
       if (!project) {
@@ -1102,6 +1110,17 @@ export class DataServer<
    // ============================================================
    // Internal plumbing
    // ============================================================
+
+   /**
+    * Whether `error`, from waiting on `uri`'s document, means that `uri` has
+    * no document: a URI with neither a file nor text builds nothing, and the
+    * wait after the build rejects for want of one. A
+    * `ReentrantWriteLockError` never counts, since it names a call from
+    * inside a write-lock holder, whose remedy its caller needs.
+    */
+   protected isMissingDocument(error: unknown, uri: string): boolean {
+      return !(error instanceof ReentrantWriteLockError) && this.modelService.getDocument(uri) === undefined;
+   }
 
    /**
     * Build a {@link TransferDocument} envelope from the current document state,

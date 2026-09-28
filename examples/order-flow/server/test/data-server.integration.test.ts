@@ -171,6 +171,13 @@ describe('order-flow data head', () => {
       }
    );
 
+   it('answers a local-tier findNextName on a URI with no document with the proposal', async () => {
+      const head = await driveDataHead();
+      const uri = head.uri('orders/never-created.domain');
+
+      await expect(head.harness.server.findNextName({ uri, type: 'Entity', proposal: 'Entity', tier: 'local' })).resolves.toBe('Entity');
+   });
+
    it('round-trips a TYPED transfer model through updateModelDocument', async () => {
       const head = await driveDataHead();
       const path = WORKSPACE_FILES.fulfillmentProcess;
