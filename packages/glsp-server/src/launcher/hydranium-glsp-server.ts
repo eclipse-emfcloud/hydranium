@@ -39,10 +39,10 @@ import { injectable } from 'inversify';
  * Only the REQUEST path needs this. Non-request actions fail through
  * upstream's `handleProcessError`, which reads `message` directly.
  *
- * Adopters who bind their own GLSP server should extend this class rather than
- * {@link DefaultGLSPServer}; the framework's server-container override replaces
- * whatever the adopter's `ServerModule` bound, so a subclass of upstream's
- * server would be discarded.
+ * An adopter who binds their own GLSP server extends this class rather than
+ * {@link DefaultGLSPServer}: the framework's server-container override keeps a
+ * server that extends this one and replaces any other, so a subclass of
+ * upstream's server is discarded.
  */
 @injectable()
 export class HydraniumGlspServer extends DefaultGLSPServer {
