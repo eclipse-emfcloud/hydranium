@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { cyrb53, type Disposable, DisposableCollection, isPromiseLike, type MaybePromise } from '../src/util';
+import { type Disposable, DisposableCollection, isPromiseLike, type MaybePromise, textHash } from '../src/util';
 
 function tracked(log: string[], label: string, throwOnDispose = false): Disposable {
    return {
@@ -132,9 +132,18 @@ describe('isPromiseLike', () => {
    });
 });
 
-describe('cyrb53', () => {
+describe('textHash', () => {
    it('hashes parts as the string they join into', () => {
-      expect(cyrb53(['entity ', 'Größe 𝒳'])).toEqual(cyrb53(['entity Größe 𝒳']));
-      expect(cyrb53(['ab'])).not.toEqual(cyrb53(['ba']));
+      expect(textHash(['entity ', 'Größe 𝒳'])).toBe(textHash('entity Größe 𝒳'));
+      expect(textHash('ab')).not.toBe(textHash('ba'));
+   });
+
+   // Pinned: a client and a server of different builds compare these.
+   it.each([
+      ['empty text', '', '488bdcb81aee8d83'],
+      ['one line', 'x\n', 'c69ad199ae8398a9'],
+      ['text outside the BMP', 'entity Größe { 𝒳: string }\n', 'b5c4174ac6201d88']
+   ])('keeps the digest of %s', (_name, text, digest) => {
+      expect(textHash(text)).toBe(digest);
    });
 });

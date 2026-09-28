@@ -40,7 +40,7 @@ import {
    type TransferElement,
    UNKNOWN_CLIENT_ID,
    asSnapshotVersion,
-   cyrb53
+   textHash
 } from '@hydranium/protocol';
 import {
    DATA_SERVER_DIAGNOSTICS_METHODS,
@@ -141,21 +141,6 @@ import { type CancellationToken, type MessageConnection, ResponseError } from 'v
 const FINGERPRINT_SEPARATOR = '\0';
 
 /**
- * Portable, non-cryptographic 64-bit hash (cyrb53), returning a 16-char hex
- * digest, for the fingerprint and for {@link TransferDocument.textHash}.
- *
- * A cryptographic hash via `node:crypto` is the wrong trade: both only
- * need a stable signal that what they hash changed, and a `node:*` import
- * would cost `@hydranium/data-server` its browser-portability. Parts are fed
- * incrementally, char by char, so multi-MB document text is never
- * concatenated into one string.
- */
-function fingerprintHash(parts: readonly string[]): string {
-   const { high, low } = cyrb53(parts);
-   return high.toString(16).padStart(8, '0') + low.toString(16).padStart(8, '0');
-}
-
-/**
  * A session a data connection registered with a resume token, and how to end
  * it from another connection. See {@link DataServer.resumableSessions}.
  */
@@ -186,18 +171,14 @@ export type FingerprintStrategy = 'transfer-document' | 'text-diagnostics';
 
 /** Hash a document's raw text + diagnostics — the `'text-diagnostics'` strategy. */
 function textDiagnosticsFingerprint(document: LangiumDocument): string {
-   return fingerprintHash([document.textDocument.getText(), FINGERPRINT_SEPARATOR, JSON.stringify(document.diagnostics ?? [])]);
+   return textHash([document.textDocument.getText(), FINGERPRINT_SEPARATOR, JSON.stringify(document.diagnostics ?? [])]);
 }
 
 /** Hash an encoded transfer document's root + diagnostics — the `'transfer-document'` strategy. */
 function transferDocumentFingerprint(transferDocument: Pick<TransferDocument<TransferElement, unknown>, 'root' | 'diagnostics'>): string {
    // null, not undefined: `JSON.stringify(undefined)` yields undefined rather
    // than a string, putting a non-string into the hash inputs.
-   return fingerprintHash([
-      JSON.stringify(transferDocument.root ?? null),
-      FINGERPRINT_SEPARATOR,
-      JSON.stringify(transferDocument.diagnostics)
-   ]);
+   return textHash([JSON.stringify(transferDocument.root ?? null), FINGERPRINT_SEPARATOR, JSON.stringify(transferDocument.diagnostics)]);
 }
 /**
  * `logAfterMs` threshold passed to {@link Tracer.time} around
@@ -723,7 +704,7 @@ export class DataServer<
       }
       // Stamped again with the version, in one step: a write landing after the
       // read would otherwise pair its version with the read's text hash.
-      return this.withDirtyState({ ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) });
+      return this.withServerState({ ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) });
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
@@ -1147,17 +1128,17 @@ export class DataServer<
          // override `envelope`.
          return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
-      return this.withDirtyState(this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>);
+      return this.withServerState(this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>);
    }
 
    /**
     * The transfer document a request answers with for `astDocument`, the
     * store's current `dirty` and `textHash` stamped on it by
-    * {@link withDirtyState}. Every document a request answers with goes
+    * {@link withServerState}. Every document a request answers with goes
     * through here, so none goes out without the stamp.
     */
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      return this.withDirtyState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
+      return this.withServerState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
    }
 
    /**
@@ -1168,14 +1149,14 @@ export class DataServer<
     * a save changes `dirty` without a rebuild, and the store's text moves on
     * before the build that follows it.
     */
-   protected withDirtyState(document: TransferDocument<TTransfer, TDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
+   protected withServerState(document: TransferDocument<TTransfer, TDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
       const text = (
          this.services.workspace.TextDocuments.get(document.uri) ?? this.modelService.getDocument(document.uri)?.textDocument
       )?.getText();
       return {
          ...document,
          dirty: this.services.workspace.TextDocuments.isDirty(document.uri),
-         ...(text === undefined ? {} : { textHash: fingerprintHash([text]) })
+         ...(text === undefined ? {} : { textHash: textHash(text) })
       };
    }
 
@@ -1407,7 +1388,7 @@ export class DataServer<
     * fingerprint, so the first event after a watch is de-duplicated against
     * the state the watcher just fetched; it goes with the last watcher, so the
     * next first watch re-baselines rather than adopting a stale digest. A
-    * cyrb53 digest keeps its memory constant in document size; see
+    * digest keeps its memory constant in document size; see
     * {@link computeDocumentFingerprint} for the inputs.
     */
    protected dispatchPhaseEvent(document: LangiumDocument, cancelToken: CancellationToken): void {
@@ -1487,7 +1468,7 @@ export class DataServer<
                   ? textDiagnosticsFingerprint(document)
                   : transferDocumentFingerprint(this.encoder.toTransferDocument(document));
             const extra = this.additionalFingerprintInputs(document);
-            return extra.length === 0 ? base : fingerprintHash([base, FINGERPRINT_SEPARATOR, ...extra.map(value => JSON.stringify(value))]);
+            return extra.length === 0 ? base : textHash([base, FINGERPRINT_SEPARATOR, ...extra.map(value => JSON.stringify(value))]);
          },
          'debug',
          { logAfterMs: FINGERPRINT_LOG_AFTER_MS }
