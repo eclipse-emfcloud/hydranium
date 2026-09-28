@@ -61,3 +61,68 @@ describe('a wait for Validated armed during the initial workspace build', () => 
       }
    }, 30_000);
 });
+
+/**
+ * A wait for `Validated` whose build ends early, and no build follows. A lock
+ * write cancels the build running when it is queued, and a write that builds
+ * nothing, such as a last-close revert that finds the document reopened, leaves
+ * the wait with no build to carry its document; so does a build that fails. A
+ * phase listener holds the build at `Linked` while the wait is armed.
+ */
+describe('a wait for Validated whose build ends before validating', () => {
+   async function boot(): Promise<{
+      harness: ReturnType<typeof makeServices>;
+      processUri: URI;
+      dispose: () => void;
+   }> {
+      const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-cut-wait-' });
+      const harness = makeServices();
+      await initializeWorkspaceProgrammatically(harness.shared, workspace.root);
+      const processUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.fulfillmentProcess));
+      return { harness, processUri, dispose: () => workspace.dispose() };
+   }
+
+   it.each([
+      ['a lock write that builds nothing cancels it', 'cancel'],
+      ['it fails', 'fail']
+   ] as const)(
+      'resolves when %s',
+      async (_name, ending) => {
+         const { harness, processUri, dispose } = await boot();
+         try {
+            const builder = harness.shared.workspace.DocumentBuilder;
+            const reachedBarrier = new Deferred<void>();
+            const release = new Deferred<void>();
+            let barrierArmed = true;
+            builder.onBuildPhase(DocumentState.Linked, async () => {
+               if (!barrierArmed) {
+                  return;
+               }
+               barrierArmed = false;
+               reachedBarrier.resolve();
+               await release.promise;
+               if (ending === 'fail') {
+                  throw new Error('the build failed');
+               }
+            });
+
+            const building = builder.scheduleUpdate([processUri], []).catch(() => undefined);
+            await reachedBarrier.promise;
+            let validated = false;
+            void builder.waitUntil(DocumentState.Validated, processUri).then(() => (validated = true));
+            if (ending === 'cancel') {
+               void harness.shared.workspace.WorkspaceLock.write(() => undefined);
+            }
+            release.resolve();
+            await building;
+
+            // Bounded, so a wait nothing will resolve fails instead of hanging.
+            await waitFor(() => validated, { timeoutMs: 5_000, message: 'the wait on the build that ended early never resolved' });
+            expect(harness.shared.workspace.LangiumDocuments.getDocument(processUri)?.state).toBe(DocumentState.Validated);
+         } finally {
+            dispose();
+         }
+      },
+      30_000
+   );
+});
