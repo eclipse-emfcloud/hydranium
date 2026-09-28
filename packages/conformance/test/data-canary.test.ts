@@ -49,6 +49,7 @@ const CONNECTION_END = 'ending a connection ends its sessions';
 const UNREGISTERED = 'a document request under an id no session was registered for fails';
 const WRITE_ANSWER = 'a write of the invalid model answers with its diagnostics';
 const DIRTY = 'a document is dirty while its text differs from its file, and clean once saved';
+const TEXT_HASH = "a document's text hash is equal for equal text and differs for different text";
 const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
 
@@ -112,12 +113,12 @@ describe('the /data battery discriminates', () => {
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
    });
 
-   it('plans exactly the twenty-five checks the must-fail cases below name', () => {
+   it('plans exactly the twenty-six checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(25);
+      expect(titles).toHaveLength(26);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -142,10 +143,11 @@ describe('the /data battery discriminates', () => {
          UNREGISTERED,
          WRITE_ANSWER,
          DIRTY,
+         TEXT_HASH,
          LAST_CLOSE,
          UNSAVED_CREATE
       ];
-      expect(matching(titles, covered)).toHaveLength(25);
+      expect(matching(titles, covered)).toHaveLength(26);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -179,11 +181,11 @@ describe('the /data battery discriminates', () => {
       {
          // Also the gate, and necessarily: a head that stores no edit never
          // advances a version, so nothing a caller holds can go stale. And the
-         // set check, whose current set carries an edit, and the dirty and
-         // last-close checks, whose unsaved text is an edit.
+         // set check, whose current set carries an edit, and the dirty,
+         // text-hash and last-close checks, whose second text is an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, LAST_CLOSE]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, TEXT_HASH, LAST_CLOSE]
       },
       {
          label: 'a write accepted whatever version it claims',
@@ -242,19 +244,26 @@ describe('the /data battery discriminates', () => {
       { label: 'opens that outlive their session', defects: { sessionOpensSurviveEnd: true }, expected: [CLOSE_SESSION] },
       { label: 'a create that replaces an existing document', defects: { createOverwrites: true }, expected: [CREATE] },
       {
-         // Also every check that goes on to save or close what it created.
+         // Also every check that goes on to write, save or close what it created.
          label: 'a create that leaves the document closed',
          defects: { createLeavesClosed: true },
-         expected: [CREATE, DIRTY, LAST_CLOSE, UNSAVED_CREATE]
+         expected: [CREATE, DIRTY, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE]
       },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
       { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
       { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },
       { label: 'every document reported clean', defects: { neverDirty: true }, expected: [DIRTY] },
+      { label: 'a text hash that follows the version', defects: { textHashByVersion: true }, expected: [TEXT_HASH] },
       { label: 'a last close keeping a saved document’s unsaved text', defects: { releaseKeepsText: true }, expected: [LAST_CLOSE] },
       { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },
-      { label: 'a read of a URI with no document that is refused', defects: { refusesUnknownRead: true }, expected: [UNSAVED_CREATE] },
+      {
+         // Also the text-hash check, which reads a URI with no document for
+         // the envelope that carries no hash.
+         label: 'a read of a URI with no document that is refused',
+         defects: { refusesUnknownRead: true },
+         expected: [TEXT_HASH, UNSAVED_CREATE]
+      },
       {
          label: 'a close reverting while another session has the document open',
          defects: { releaseOnAnyClose: true },

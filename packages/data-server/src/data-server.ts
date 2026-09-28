@@ -141,13 +141,12 @@ import { type CancellationToken, type MessageConnection, ResponseError } from 'v
 const FINGERPRINT_SEPARATOR = '\0';
 
 /**
- * Portable, non-cryptographic 64-bit fingerprint hash (cyrb53), returning a
- * 16-char hex digest.
+ * Portable, non-cryptographic 64-bit hash (cyrb53), returning a 16-char hex
+ * digest, for the fingerprint and for {@link TransferDocument.textHash}.
  *
- * **A cryptographic hash via `node:crypto` is the wrong trade**: the
- * fingerprint only needs a stable signal that `(text, diagnostics)` changed
- * between emissions, and a `node:*` import would cost
- * `@hydranium/data-server` its browser-portability. Parts are fed
+ * A cryptographic hash via `node:crypto` is the wrong trade: both only
+ * need a stable signal that what they hash changed, and a `node:*` import
+ * would cost `@hydranium/data-server` its browser-portability. Parts are fed
  * incrementally, char by char, so multi-MB document text is never
  * concatenated into one string.
  */
@@ -722,7 +721,9 @@ export class DataServer<
          await rollback?.().catch(() => undefined);
          throw error;
       }
-      return { ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) };
+      // Stamped again with the version, in one step: a write landing after the
+      // read would otherwise pair its version with the read's text hash.
+      return this.withDirtyState({ ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) });
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
@@ -1151,21 +1152,31 @@ export class DataServer<
 
    /**
     * The transfer document a request answers with for `astDocument`, the
-    * store's current `dirty` stamped on it by {@link withDirtyState}. Every
-    * document a request answers with goes through here, so none goes out
-    * without the stamp.
+    * store's current `dirty` and `textHash` stamped on it by
+    * {@link withDirtyState}. Every document a request answers with goes
+    * through here, so none goes out without the stamp.
     */
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
       return this.withDirtyState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
    }
 
    /**
-    * `document` with the store's current {@link TransferDocument.dirty}. Read
-    * when the document is sent rather than kept with the build: a save changes
-    * the answer without a rebuild.
+    * `document` with the store's current {@link TransferDocument.dirty} and
+    * the {@link TransferDocument.textHash} of the text the server holds for
+    * it: the store's text while a client has it open, the build's otherwise.
+    * Both are read when the document is sent rather than kept with the build:
+    * a save changes `dirty` without a rebuild, and the store's text moves on
+    * before the build that follows it.
     */
    protected withDirtyState(document: TransferDocument<TTransfer, TDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      return { ...document, dirty: this.services.workspace.TextDocuments.isDirty(document.uri) };
+      const text = (
+         this.services.workspace.TextDocuments.get(document.uri) ?? this.modelService.getDocument(document.uri)?.textDocument
+      )?.getText();
+      return {
+         ...document,
+         dirty: this.services.workspace.TextDocuments.isDirty(document.uri),
+         ...(text === undefined ? {} : { textHash: fingerprintHash([text]) })
+      };
    }
 
    /**

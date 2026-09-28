@@ -27,9 +27,16 @@ import { type Clock, SystemClock } from '../../src/clock';
 import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
 import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
-import { DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '../../src/client/data-session';
+import { DATA_SESSION_RESTORE_FAILED, DATA_SESSION_UNSAVED_LOST, DataSession, type DataSessionHost } from '../../src/client/data-session';
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol } from '../../src/data';
-import { DuplicateClientIdError, isDuplicateClientIdError, isReservedClientIdError, isSessionClosedError } from '../../src/errors';
+import {
+   ConflictError,
+   DuplicateClientIdError,
+   isDuplicateClientIdError,
+   isReservedClientIdError,
+   isSessionClosedError
+} from '../../src/errors';
+import { asSnapshotVersion } from '../../src/model-service/based-on';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { makeFakeClock, tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
@@ -57,8 +64,15 @@ const URI_B = 'file:///b.x';
 const URI_C = 'file:///c.x';
 const MODEL = { $type: 'TypeOne' } as const;
 
-function document(uri: string, version = 1, dirty?: boolean): unknown {
-   return { uri, version, root: { $type: 'TypeOne' }, diagnostics: [], ...(dirty !== undefined ? { dirty } : {}) };
+function document(uri: string, version = 1, dirty?: boolean, textHash?: string): unknown {
+   return {
+      uri,
+      version,
+      root: { $type: 'TypeOne' },
+      diagnostics: [],
+      ...(dirty !== undefined ? { dirty } : {}),
+      ...(textHash !== undefined ? { textHash } : {})
+   };
 }
 
 /** A promise a test releases by hand, for holding a server handler open. */
@@ -82,9 +96,9 @@ interface ServerBehaviour {
    /** Held before an open answers. */
    openGate?: Promise<void>;
    /**
-    * The version an open and an update of a URI answer with. Absent, an update
-    * answers 1 and an open the count of opens so far, so a re-open is told
-    * apart from the first.
+    * The version every answer for a URI carries. Absent, each connection
+    * numbers a URI afresh from 1, as a restarted server does, and each write
+    * moves it on by one.
     */
    versions?: Map<string, number>;
    /** Held before the registration answers. */
@@ -100,6 +114,13 @@ interface ServerBehaviour {
    dirty?: Map<string, boolean>;
    /** Runs as a watch arrives, before it answers. */
    beforeWatch?: (uri: string) => void;
+   /**
+    * Per URI, the text the server holds. Set, every answer carries it as its
+    * `textHash`, and a write replaces it with the written model.
+    */
+   texts?: Map<string, string>;
+   /** Refuse every update, with a `ConflictError` or with a plain error. */
+   refuseUpdates?: 'conflict' | 'error';
    /** URIs whose open fails. */
    failOpens?: Set<string>;
    /**
@@ -109,11 +130,14 @@ interface ServerBehaviour {
    canonical?: (uri: string) => string;
 }
 
+function textOf(model: unknown): string {
+   return typeof model === 'string' ? model : JSON.stringify(model);
+}
+
 /**
  * Bind a server that records every call, on one connection generation. The
- * `calls` array is shared across generations, and an open answers with a
- * version counting every open so far, so a re-open is told apart from the
- * first.
+ * `calls` array is shared across generations; the versions it answers with
+ * are not, see {@link ServerBehaviour.versions}.
  */
 function recordingServer(connection: MessageConnection, calls: ServerCall[], behaviour: ServerBehaviour): void {
    const record = (
@@ -130,6 +154,20 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       });
    };
    const answered = (uri: string): string => behaviour.canonical?.(uri) ?? uri;
+   const numbered = new Map<string, number>();
+   const versionOf = (uri: string): number => behaviour.versions?.get(uri) ?? numbered.get(uri) ?? 1;
+   const moveOn = (uri: string): number => {
+      numbered.set(uri, (numbered.get(uri) ?? 1) + 1);
+      return versionOf(uri);
+   };
+   const written = (uri: string, model: unknown): string | undefined => {
+      behaviour.dirty?.set(uri, true);
+      if (!behaviour.texts) {
+         return undefined;
+      }
+      behaviour.texts.set(uri, textOf(model));
+      return textOf(model);
+   };
    const target = {
       waitForReady: async (): Promise<void> => {
          await behaviour.readyGate;
@@ -150,13 +188,10 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          if (behaviour.failOpens?.has(args.uri)) {
             throw new Error('open refused');
          }
-         return document(
-            answered(args.uri),
-            behaviour.versions?.get(args.uri) ?? calls.filter(call => call.method === 'open').length,
-            behaviour.dirty?.get(args.uri)
-         );
+         return document(answered(args.uri), versionOf(args.uri), behaviour.dirty?.get(args.uri), behaviour.texts?.get(args.uri));
       },
-      getModelDocument: async (args: { uri: string }): Promise<unknown> => document(answered(args.uri), 1, behaviour.dirty?.get(args.uri)),
+      getModelDocument: async (args: { uri: string }): Promise<unknown> =>
+         document(answered(args.uri), versionOf(args.uri), behaviour.dirty?.get(args.uri), behaviour.texts?.get(args.uri)),
       createModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('create', args);
          return document(answered(args.uri));
@@ -174,16 +209,29 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       updateModelDocument: async (args: { uri: string; clientId: string; basedOn: unknown; model: unknown }): Promise<unknown> => {
          record('update', args);
          await behaviour.updateGate;
-         return document(answered(args.uri), behaviour.versions?.get(args.uri) ?? 1);
+         if (behaviour.refuseUpdates === 'conflict') {
+            throw new ConflictError(args.uri, 0, 1);
+         }
+         if (behaviour.refuseUpdates === 'error') {
+            throw new Error('update refused');
+         }
+         return document(answered(args.uri), moveOn(args.uri), undefined, written(args.uri, args.model));
       },
-      updateModelDocuments: async (args: { clientId: string; updates: { uri: string; basedOn: unknown }[] }): Promise<unknown> => {
+      updateModelDocuments: async (args: {
+         clientId: string;
+         updates: { uri: string; basedOn: unknown; model: unknown }[];
+      }): Promise<unknown> => {
          record('updates', args);
-         return args.updates.map(update => document(answered(update.uri), behaviour.versions?.get(update.uri) ?? 1));
+         return args.updates.map(update =>
+            document(answered(update.uri), moveOn(update.uri), undefined, written(update.uri, update.model))
+         );
       },
-      saveModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+      saveModelDocument: async (args: { uri: string; clientId: string; model: unknown }): Promise<unknown> => {
          record('save', args);
          await behaviour.saveGate;
-         return document(answered(args.uri));
+         const textHash = written(args.uri, args.model);
+         behaviour.dirty?.set(args.uri, false);
+         return document(answered(args.uri), versionOf(args.uri), undefined, textHash);
       }
    };
    bindRpcMethods(
@@ -223,6 +271,8 @@ interface Harness {
    dropTransport(): void;
    /** Send the client a dirty flip over the current transport, as a server does. */
    notifyDirty(uri: string, dirty: boolean): Promise<void>;
+   /** Send the client an update event of `uri` holding `text`, as a server does for a watched document. */
+   notifyUpdated(uri: string, text: string, sourceClientId: string, reason?: 'changed' | 'rebuilt'): Promise<void>;
    dispose(): void;
 }
 
@@ -251,6 +301,12 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
          pairs.at(-1)?.dispose();
       },
       notifyDirty: (uri, dirty) => pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDirtyChanged`, { uri, dirty }),
+      notifyUpdated: (uri, text, sourceClientId, reason = 'changed') =>
+         pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentUpdated`, {
+            document: document(uri, 1, undefined, text),
+            sourceClientId,
+            reason
+         }),
       dispose: () => {
          connection.dispose();
          pairs.forEach(pair => pair.dispose());
@@ -680,7 +736,7 @@ describe('DataConnection sessions', () => {
    });
 
    it('withOpenDocument closes only an open it made', async () => {
-      const { connection, calls, dispose } = harness();
+      const { connection, calls, dispose } = harness({ versions: new Map([[URI_B, 2]]) });
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -740,7 +796,7 @@ describe('DataSession after a dropped connection', () => {
          dropTransport();
          await panel.saveDocument({ uri: URI_C, model: MODEL, basedOn: 'anything' });
 
-         // The re-opens answer v4 to v6 where the writes were answered v1: the
+         // The re-opens answer v1 where the writes were answered v2: the
          // text changed while the session was gone, and nothing is sent to
          // put it back.
          expect(calls.slice(before).map(call => `${call.method}:${call.uri ?? ''}`)).toEqual([
@@ -768,10 +824,12 @@ describe('DataSession after a dropped connection', () => {
    });
 
    it('reports nothing for a write the re-opened document still holds', async () => {
-      const { connection, calls, port, dropTransport, dispose } = harness({ versions: new Map([[URI_A, 5]]) });
+      const versions = new Map([[URI_A, 5]]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ versions });
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 6);
          await panel.updateDocument({ uri: URI_A, model: MODEL, basedOn: 'anything' });
          const before = calls.length;
 
@@ -799,6 +857,879 @@ describe('DataSession after a dropped connection', () => {
          dropTransport();
          await panel.connected();
 
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends nothing for a write the re-opened document still holds by its text, whatever its version', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+
+         dropTransport();
+         await panel.connected();
+
+         // The re-open answers v1 where the write was answered v2; the text
+         // is the write's all the same.
+         expect(calls.slice(before).map(call => call.method)).toEqual(['createSession', 'open', 'watch']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('re-sends the last written model, based on the re-opened version, to a document back at the text the first unsaved write was based on', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const first = await panel.updateDocument({ uri: URI_A, model: 'first', basedOn: opened.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: first.version });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(calls.slice(before).map(call => `${call.method}:${String(call.model ?? '')}:${String(call.basedOn ?? '')}`)).toEqual([
+            'createSession::',
+            'open::',
+            'watch::',
+            'update:edited:1'
+         ]);
+         expect(port.reported).toEqual([]);
+
+         // The re-sent write is the session's last one now: a document still
+         // holding it needs nothing.
+         const again = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(again), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports, and re-sends nothing to, a document whose text is neither the last write nor its base', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a write based on anything, whose base the session cannot tell', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: 'anything' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('takes the base from a read when the first write is based on a version no call of the session answered', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map<string, number>();
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts, versions });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         // Another client's write, which the caller learns of from a read.
+         texts.set(URI_A, 'theirs');
+         versions.set(URI_A, 7);
+         const read = await (await panel.connected()).getModelDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: read.version });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('re-sends a set written together in one call, and only when every document of it passes', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', basedOn: openedA.version },
+               { uri: URI_B, model: 'edited-b', basedOn: openedB.version }
+            ]
+         });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([
+            {
+               method: 'updates',
+               clientId: 'panel',
+               updates: [
+                  { uri: URI_A, basedOn: 1 },
+                  { uri: URI_B, basedOn: 1 }
+               ]
+            }
+         ]);
+         expect(port.reported).toEqual([]);
+
+         const again = calls.length;
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(again), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: `${URI_A}, ${URI_B}` }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a re-send the server refuses as a conflict, and retries nothing', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         behaviour.refuseUpdates = 'conflict';
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toHaveLength(1);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+
+         // Reported once: the record is gone.
+         const again = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(again), 'update')).toEqual([]);
+         expect(port.reported).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('takes no base from a read at another version than the write was based on', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map<string, number>();
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts, versions });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 9);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: asSnapshotVersion(5) });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes again only the documents of a set that the re-open lost', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', basedOn: openedA.version },
+               { uri: URI_B, model: 'edited-b', basedOn: openedB.version }
+            ]
+         });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([
+            { method: 'updates', clientId: 'panel', updates: [{ uri: URI_A, basedOn: 1 }] }
+         ]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('pairs each answer of a set written again with its own document', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         // B first, alone, so the session met B before A.
+         const single = await panel.updateDocument({ uri: URI_B, model: 'single-b', basedOn: openedB.version });
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', basedOn: openedA.version },
+               { uri: URI_B, model: 'edited-b', basedOn: single.version }
+            ]
+         });
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'clean');
+         await panel.connected();
+         expect(of(calls, 'updates')).toHaveLength(2);
+
+         // Each record holds its own document's answer, so both still hold
+         // their write.
+         const again = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(again), 'update', 'updates')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing of a set one of whose documents cannot be re-opened', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', basedOn: openedA.version },
+               { uri: URI_B, model: 'edited-b', basedOn: openedB.version }
+            ]
+         });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'clean');
+         behaviour.failOpens = new Set([URI_B]);
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_RESTORE_FAILED.code, DATA_SESSION_UNSAVED_LOST.code]);
+         expect(port.reported[1].message.params).toEqual({ uris: URI_A });
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write sent again that fails without a conflict, and reports it as not restored', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         behaviour.refuseUpdates = 'error';
+         await panel.connected();
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_RESTORE_FAILED.code]);
+
+         // The next restore decides again, and writes it.
+         behaviour.refuseUpdates = undefined;
+         const again = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(again), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('leaves out a document closed while the restore runs, and writes nothing to it', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+         const held = gate();
+         behaviour.openGate = held.promise;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         const restoring = panel.connected();
+         await waitFor(() => of(calls.slice(before), 'open').length === 1, { message: 'the restore never re-opened' });
+         const closing = panel.closeDocument({ uri: URI_A });
+         await tick();
+         held.release();
+         await restoring;
+         await closing;
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(of(calls.slice(before), 'close')).toHaveLength(1);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing for a session disposed while its restore runs', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+         const held = gate();
+         behaviour.openGate = held.promise;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         const restoring = panel.connected().catch(() => undefined);
+         await waitFor(() => of(calls.slice(before), 'open').length === 1, { message: 'the restore never re-opened' });
+         panel.dispose();
+         held.release();
+         await restoring;
+         await waitFor(() => of(calls.slice(before), 'closeSession').length === 1, { message: 'the session never ended' });
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write that answered while a save of the document ran', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const saving = gate();
+      const behaviour: ServerBehaviour = { texts, saveGate: saving.promise };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const saved = panel.saveDocument({ uri: URI_A, model: 'clean', basedOn: opened.version });
+         await waitFor(() => of(calls, 'save').length === 1, { message: 'the save never reached the server' });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         saving.release();
+         await saved;
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps no record of a write that answered after a save of the document at its version', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const held = gate();
+      const behaviour: ServerBehaviour = { texts, versions, updateGate: held.promise };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
+         // The save persists the write, whose answer then comes last.
+         versions.set(URI_A, 2);
+         await panel.saveDocument({ uri: URI_A, model: 'edited', basedOn: 'anything' });
+         held.release();
+         await late;
+         const before = calls.length;
+
+         // The re-open finds another client's text, which a record of the
+         // saved write would report as the write lost.
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write whose answer comes after a repeat open at its version', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const held = gate();
+      const behaviour: ServerBehaviour = { texts, versions, updateGate: held.promise };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
+         // The write is applied, and a repeat open answers at its version first.
+         versions.set(URI_A, 2);
+         texts.set(URI_A, 'edited');
+         await panel.withOpenDocument({ uri: URI_A }, () => undefined);
+         held.release();
+         await late;
+         const before = calls.length;
+
+         // A restarted server, whose file still holds the base text.
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write applied after a save of the document', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.saveDocument({ uri: URI_A, model: 'clean', basedOn: opened.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps no record of a write after a save that answered at the version the write left unchanged', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts, versions });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 2);
+         await panel.saveDocument({ uri: URI_A, model: 'saved', basedOn: opened.version });
+         // The server holds the text already, so the write mints no version.
+         await panel.updateDocument({ uri: URI_A, model: 'saved', basedOn: asSnapshotVersion(2) });
+         const before = calls.length;
+
+         // The re-open finds another client's text, which a record of the
+         // write would report as the write lost.
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write to a restarted server numbered below the last save', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 5]]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts, versions });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.saveDocument({ uri: URI_A, model: 'clean', basedOn: opened.version });
+
+         // The restarted server numbers afresh, below the save's v5.
+         dropTransport();
+         versions.set(URI_A, 1);
+         await panel.connected();
+         versions.set(URI_A, 2);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: asSnapshotVersion(1) });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the later of two writes when a save answers between them', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const heldUpdate = gate();
+      const heldSave = gate();
+      const behaviour: ServerBehaviour = { texts, versions, updateGate: heldUpdate.promise, saveGate: heldSave.promise };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const earlier = panel.updateDocument({ uri: URI_A, model: 'earlier', basedOn: opened.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the first write never reached the server' });
+         const saving = panel.saveDocument({ uri: URI_A, model: 'saved', basedOn: 'anything' });
+         await waitFor(() => of(calls, 'save').length === 1, { message: 'the save never reached the server' });
+         behaviour.updateGate = undefined;
+         versions.set(URI_A, 6);
+         await panel.updateDocument({ uri: URI_A, model: 'later', basedOn: opened.version });
+         // The save answers v4 and the earlier write v5, both below the later
+         // write's v6.
+         versions.set(URI_A, 4);
+         heldSave.release();
+         await saving;
+         versions.set(URI_A, 5);
+         heldUpdate.release();
+         await earlier;
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['later']);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the later of two writes of a document that answer out of order', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const held = gate();
+      const behaviour: ServerBehaviour = { texts, versions, updateGate: held.promise };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const first = panel.updateDocument({ uri: URI_A, model: 'first', basedOn: opened.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the first write never reached the server' });
+         behaviour.updateGate = undefined;
+         versions.set(URI_A, 3);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         versions.set(URI_A, 2);
+         held.release();
+         await first;
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('numbers from the re-opened version of a restarted server that kept the write', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 5]]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts, versions });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 6);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+
+         dropTransport();
+         versions.set(URI_A, 1);
+         await panel.connected();
+         versions.set(URI_A, 2);
+         await panel.updateDocument({ uri: URI_A, model: 'later', basedOn: asSnapshotVersion(1) });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['later']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('numbers from the answer of a write sent again to a restarted server', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 5]]);
+      const behaviour: ServerBehaviour = { texts, versions };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 6);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+
+         // The re-open answers v1, and the write sent again v2.
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         behaviour.beforeWatch = () => versions.set(URI_A, 2);
+         await panel.connected();
+         behaviour.beforeWatch = undefined;
+         versions.set(URI_A, 3);
+         await panel.updateDocument({ uri: URI_A, model: 'later', basedOn: asSnapshotVersion(2) });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['later']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('numbers from the re-opened version of a restarted server a write sent again failed on', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 5]]);
+      const behaviour: ServerBehaviour = { texts, versions };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         versions.set(URI_A, 6);
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         behaviour.refuseUpdates = 'error';
+         await panel.connected();
+         behaviour.refuseUpdates = undefined;
+         versions.set(URI_A, 2);
+         await panel.updateDocument({ uri: URI_A, model: 'later', basedOn: asSnapshotVersion(1) });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['later']);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('drops the record of a write once its document turns clean, and keeps it while the document turns dirty', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, notifyDirty, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         await notifyDirty(URI_A, true);
+         await waitFor(() => connection.toldDirty.get(URI_A) === true, { message: 'the dirty flip never arrived' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+
+         // Another client saves the text with an edit of its own, and the
+         // server restarts: the file holds neither the write nor its base,
+         // yet nothing of the session's was lost.
+         await notifyDirty(URI_A, false);
+         await waitFor(() => connection.toldDirty.get(URI_A) === false, { message: 'the clean flip never arrived' });
+         const again = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+         expect(of(calls.slice(again), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('drops the record of a write another client replaced while the connection held, and reports nothing', async () => {
+      // Superseded before the answer, the answer names the other client's text
+      // and nothing is reported; superseded after it, the same.
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, events, calls, port, dropTransport, notifyUpdated, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         const heard = new Promise<void>(resolve => events.onDidUpdateDocument(() => resolve()));
+         texts.set(URI_A, 'theirs');
+         await notifyUpdated(URI_A, 'theirs', 'other');
+         await heard;
+         const before = calls.length;
+
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write through its own echo, an event holding its text and a rebuild', async () => {
+      // The echo of an earlier write of its own arrives late, with that
+      // write's text. An integrity repair already in the write's answer
+      // arrives under the integrity author with the answered text. Neither
+      // replaced the write.
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, events, calls, dropTransport, notifyUpdated, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         let heard = 0;
+         events.onDidUpdateDocument(() => heard++);
+         await notifyUpdated(URI_A, 'an earlier write', 'panel');
+         await notifyUpdated(URI_A, 'edited', 'integrity');
+         await notifyUpdated(URI_A, 'other text', 'unknown', 'rebuilt');
+         await waitFor(() => heard === 3, { message: 'the update events never arrived' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('drops the record of a write once its document turns clean under the URI the server keys it by', async () => {
+      const spelled = 'file:///C:/ws/a.x';
+      const canonical = 'file:///c%3A/ws/a.x';
+      const texts = new Map([[spelled, 'clean']]);
+      const { connection, calls, port, dropTransport, notifyDirty, dispose } = harness({
+         texts,
+         canonical: uri => (uri === spelled ? canonical : uri)
+      });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: spelled });
+         await panel.updateDocument({ uri: spelled, model: 'edited', basedOn: opened.version });
+         await notifyDirty(canonical, false);
+         await waitFor(() => connection.toldDirty.get(canonical) === false, { message: 'the clean flip never arrived' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(spelled, 'theirs');
+         await panel.connected();
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('drops the record of a write once its document turns clean under the URI its re-open named', async () => {
+      const spelled = 'file:///ws/link/a.x';
+      const moved = 'file:///ws/moved/a.x';
+      let target = 'file:///ws/target/a.x';
+      const texts = new Map([[spelled, 'clean']]);
+      const { connection, calls, port, dropTransport, notifyDirty, dispose } = harness({
+         texts,
+         canonical: uri => (uri === spelled ? target : uri)
+      });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: spelled });
+         await panel.updateDocument({ uri: spelled, model: 'edited', basedOn: opened.version });
+
+         // The server resolves the caller's URI to another file after the
+         // drop, as a link retargeted meanwhile does.
+         dropTransport();
+         target = moved;
+         await panel.connected();
+         await notifyDirty(moved, false);
+         await waitFor(() => connection.toldDirty.get(moved) === false, { message: 'the clean flip never arrived' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(spelled, 'theirs');
+         await panel.connected();
+         expect(of(calls.slice(before), 'update')).toEqual([]);
          expect(port.reported).toEqual([]);
       } finally {
          dispose();
@@ -1248,6 +2179,31 @@ describe('DataSession restore and the dirty state', () => {
          dropTransport();
          await other.connected();
          expect(flips).toEqual([`${canonical} true`, `${canonical} true`]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client a document written again is dirty, and never that it is clean', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, false]]), texts: new Map([[URI_A, 'clean']]) };
+      const { connection, events, notifyDirty, dropTransport, dispose } = harness(behaviour);
+      try {
+         const flips = dirtyFlips(events);
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', basedOn: opened.version });
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1);
+
+         // Reverted to its file while the connection was down, and then
+         // written again by the restore.
+         behaviour.dirty!.set(URI_A, false);
+         behaviour.texts!.set(URI_A, 'clean');
+         dropTransport();
+         await panel.connected();
+         await tick();
+
+         expect(flips).toEqual([`${URI_A} true`]);
       } finally {
          dispose();
       }

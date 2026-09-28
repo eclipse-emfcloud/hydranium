@@ -700,6 +700,42 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
          }
       });
 
+      checks.push({
+         title: `a document's text hash is equal for equal text and differs for different text ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               // Only the text is compared, so any second text serves.
+               const other = resolveDeferred(invalid.text);
+               const uri = siblingOf(model.uri, `conformance-hashed-${globalThis.crypto.randomUUID()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: other, basedOn: 'anything' });
+               // Back to the first text at a later version: the hash follows
+               // the text, which is what a client compares across a revert.
+               const restored = await driver.proxy.updateModelDocument({ uri, clientId, model: model.text, basedOn: 'anything' });
+
+               assert.strictEqual(typeof created.textHash, 'string', `the create of ${uri} answered with no textHash`);
+               assert.notStrictEqual(edited.textHash, created.textHash, `${uri} hashed a different text alike: ${String(edited.textHash)}`);
+               assert.strictEqual(
+                  restored.textHash,
+                  created.textHash,
+                  `${uri} hashed its first text again as ${String(restored.textHash)}`
+               );
+               const read = await driver.proxy.getModelDocument({ uri });
+               assert.strictEqual(read.textHash, restored.textHash, `a read of ${uri} hashed its text as ${String(read.textHash)}`);
+               const absent = await driver.proxy.getModelDocument({
+                  uri: siblingOf(model.uri, `conformance-absent-${globalThis.crypto.randomUUID()}-`)
+               });
+               assert.strictEqual(absent.textHash, undefined, `an envelope with no document carried textHash ${String(absent.textHash)}`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
       // The create-dialog query, and the reason it is its own check: it is the
       // only request a head receives whose URI names no file. Everything else
       // in this battery addresses a document, so a head that routes purely by

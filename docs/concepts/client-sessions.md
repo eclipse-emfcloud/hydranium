@@ -272,24 +272,66 @@ documents open again at once, under the same id and with the resume token the
 session has kept since it was created, so the server ends the old session if
 it has not noticed the drop yet. A session with nothing open registers again
 on its next call. The session then re-opens and re-watches every document it
-had open. It does not send its unsaved edits again:
+had open, and writes again what it wrote since a document's last save where
+the re-open lost it.
 
-- A document whose re-opened version is the version the session's last write
-  was answered with still holds that write, and nothing is reported.
-- Any other version means the document's version moved on since the
-  session's last unsaved write: another client edited it, even while the
-  session was still connected, the server reverted it to disk when the
-  session's open closed as the document's last, or the server restarted. The
-  session reports these documents once, through the connection's error sink,
-  with the message `DATA_SESSION_UNSAVED_LOST`, and forgets their unsaved
-  edits; they stay open.
+It decides by text, not by version: a revert moves a document's version on,
+and a restarted server numbers versions afresh. Every document the data head
+sends that it holds carries a `textHash` of its text, equal for equal text. For
+each document it wrote since its last save, the session keeps the hash of the
+text its first such write was based on, its last write, and that write's
+answer. After the re-open and the re-watch:
+
+- A document that holds the last write, because the server kept it through
+  the revert grace or no one changed it, needs nothing.
+- A document back at the text the first unsaved write was based on, because
+  the server reverted it to disk after the grace or restarted, is written
+  again: the last written model, based on the re-opened version. It is an
+  ordinary write, so an edit that lands between the re-open and the write
+  makes it conflict.
+- Any other document was changed by another client while the connection was
+  down, and nothing is written.
+
+Documents last written by one `updateDocuments` are written again by one, and
+only when every one of them can be. The session reports the documents it
+cannot put back once, through the connection's error sink, with the message
+`DATA_SESSION_UNSAVED_LOST`: those another client changed, the rest of their
+set, and those whose write conflicted, which is not retried. It forgets their
+unsaved edits; they stay open. A document closed while the restore runs is
+left out.
+
+A write's base is known when its `basedOn` is a version one of the session's
+own calls was answered with, or a version a read of the document still
+answers; the session reads the document once, for a document's first unsaved
+write, when it needs to. A write based on `'anything'` has no base, so after a
+revert or a restart it is reported rather than written again. A server that
+sends no `textHash` gets no write either, and a document counts as keeping the
+write there only at the version the write was answered with.
+
+The session drops what it keeps of a document on its own save, on a close,
+when the server tells its connection that the document turned clean, as
+another client's save makes it, and when another client writes over the
+document while the connection holds: an update event of reason `changed` that
+names another client and text other than the session's write. Its own echo,
+an integrity repair its write's answer already holds, and a rebuild leave the
+record. A write another client supersedes before it is answered needs nothing:
+the answer names the other client's text. So the report covers only what the
+drop cost. The server sends both events only for a document someone watches,
+so a document the session writes without watching it can still be reported
+lost after another client saved or wrote it. Two writes of one
+document in flight at once may answer out of order, so the session ignores
+an answer numbered below the one it keeps. It also ignores a write's answer
+numbered at or below its last save of the document: the server applied that
+write before the save, which persisted it.
 
 A document that cannot be re-opened is reported with the message
-`DATA_SESSION_RESTORE_FAILED`, and forgotten. A session that was a document's
-only client keeps its unsaved edits across a reconnect only when it re-opens
-the document within the server's revert grace, ten seconds by default; after
-that the document has reverted, and the session loses its unsaved edits and is
-told so.
+`DATA_SESSION_RESTORE_FAILED`, and forgotten, and nothing of its set is
+written again. A write that fails for another reason than a conflict, such as
+the connection dropping again, is reported with the same message, and the
+session keeps its unsaved edits, so the next restore decides again.
+
+The session tells the client each document's dirty state after any write it
+sent, so a document written again does not flash clean first.
 
 To hand out a subclass of `DataSession`, pass `sessionFactory` in the
 connection's options.
@@ -672,8 +714,9 @@ the language client closes last, the document reverts at once. An editor's
   makes that order certain: the conflict follows whenever the server's write
   lands first.
 - A client that reconnects after the revert grace has run out finds its
-  sole-client documents reverted: other sessions see the revert, and the
-  reconnecting session reports its unsaved edits lost.
+  sole-client documents reverted, and other sessions see the revert before
+  the reconnecting session writes its edits again. It reports them lost
+  wherever it cannot tell that its write lands on the text it was based on.
 - The disk baseline moves only when the server reads or writes the file, or a
   watcher reports a change, so it trails a write by another process until the
   watcher's report; a server without an LSP head has no watcher. The integrity

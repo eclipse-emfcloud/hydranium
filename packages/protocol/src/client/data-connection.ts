@@ -16,7 +16,8 @@ import {
    type DataServerProtocol,
    type DiagnosticOf,
    type ProjectOf,
-   type TransferDocumentDirtyChangedEvent
+   type TransferDocumentDirtyChangedEvent,
+   type TransferDocumentUpdatedEvent
 } from '../data';
 import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
 import type { TransferElement } from '../transfer-element';
@@ -107,6 +108,10 @@ export class DataConnection<
     * {@link DataSessionHost.restoreDirty}.
     */
    protected readonly dirtyStates = new Map<string, boolean>();
+   /** Backs each session's {@link DataSessionHost.onDidChangeDirty}. */
+   protected readonly dirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
+   /** Backs each session's {@link DataSessionHost.onDidUpdateDocument}. */
+   protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>>();
 
    constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient, TServer>) {
       const [options = {}] = rest as [
@@ -171,7 +176,9 @@ export class DataConnection<
                   this.deliverDirty(event);
                }
             },
-            forgetDirty: uri => this.dirtyStates.delete(uri)
+            forgetDirty: uri => this.dirtyStates.delete(uri),
+            onDidChangeDirty: this.dirtyChangedEmitter.event,
+            onDidUpdateDocument: this.documentUpdatedEmitter.event
          },
          label
       );
@@ -189,12 +196,17 @@ export class DataConnection<
    /**
     * The client, with its `onDocumentDirtyChanged` passing through
     * {@link deliverDirty} first, so {@link dirtyStates} holds what the server
-    * told it. Every other bound method forwards to the client unchanged, and
-    * one the client lacks stays absent, so the binding still refuses it.
+    * told it, and every session hears it through {@link dirtyChangedEmitter};
+    * and with its `onDocumentUpdated` heard by every session through
+    * {@link documentUpdatedEmitter} first. Every other bound method forwards
+    * to the client unchanged, and one the client lacks stays absent, so the
+    * binding still refuses it.
     */
    protected override localTarget(): TClient {
       const client = this.client as unknown as Record<string, unknown>;
-      if (typeof client.onDocumentDirtyChanged !== 'function') {
+      const hearsDirty = typeof client.onDocumentDirtyChanged === 'function';
+      const hearsUpdates = typeof client.onDocumentUpdated === 'function';
+      if (!hearsDirty && !hearsUpdates) {
          return this.client;
       }
       const target: Record<string, unknown> = {};
@@ -204,7 +216,19 @@ export class DataConnection<
             target[name] = (params: unknown): unknown => (method as (params: unknown) => unknown).call(client, params);
          }
       }
-      target.onDocumentDirtyChanged = (event: TransferDocumentDirtyChangedEvent): void => this.deliverDirty(event);
+      if (hearsDirty) {
+         target.onDocumentDirtyChanged = (event: TransferDocumentDirtyChangedEvent): void => {
+            this.dirtyChangedEmitter.fire(event);
+            this.deliverDirty(event);
+         };
+      }
+      if (hearsUpdates) {
+         const forward = target.onDocumentUpdated as (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>) => void;
+         target.onDocumentUpdated = (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>): void => {
+            this.documentUpdatedEmitter.fire(event);
+            forward(event);
+         };
+      }
       return target as unknown as TClient;
    }
 
@@ -246,6 +270,8 @@ export class DataConnection<
       // For a factory's session whose `detach` does not fire.
       this.sessions.clear();
       this.createSessionEmitter.dispose();
+      this.dirtyChangedEmitter.dispose();
+      this.documentUpdatedEmitter.dispose();
       super.dispose();
    }
 }
