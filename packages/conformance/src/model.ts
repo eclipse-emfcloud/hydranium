@@ -224,10 +224,10 @@ export interface LanguageFixture {
  * sentence they may reword. A substring long enough to be wrong if the render
  * did not happen is the whole requirement.
  *
- * `absentWithoutLocale` is what makes the check a pair rather than a single
+ * `absentWithLocale` is what makes the check a pair rather than a single
  * assertion: "the message contains X" also passes for a server whose English
  * happens to contain X, and for one that renders regardless of locale. Naming
- * the fragment that must DISAPPEAR when no locale is declared is what
+ * the fragment that must disappear once the locale is declared is what
  * distinguishes those.
  */
 export interface RenderedDiagnosticSpec {
