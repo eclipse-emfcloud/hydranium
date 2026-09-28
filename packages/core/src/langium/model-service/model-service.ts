@@ -165,10 +165,10 @@ export interface ModelServiceOptions extends LogNameOptions {
  * implementing the URI gate at each callsite.
  *
  * **Two families, and the distinction matters more than the names suggest.**
- * `waitFor*` is a pure wait — it never triggers a build, so a caller waiting on
- * a document no build has touched waits until something else builds it.
- * `ensureDocumentState` and the phase shorthands over it *dispatch*: warm
- * documents are awaited, cold ones are built.
+ * `waitFor*` requests no build of its own: a wait on a URI with no document
+ * rejects, and one on a document no build will carry is re-queued by the
+ * builder's wait. `ensureDocumentState` and the phase shorthands over it
+ * *dispatch*: warm documents are awaited, cold ones are built.
  *
  * **Diagnostics are typed `never` below `Validated`.** Validation is the last
  * phase, so at any earlier landmark the array either is not yet computed or
@@ -397,8 +397,7 @@ export class DefaultModelService<
    /**
     * Wait for the document at `uri` to reach `state`. Pure wait — does
     * not trigger a build. If `uri` is not yet in the document registry
-    * the call will hang until something else drives it through the
-    * pipeline; for the cold-start case use {@link rebuild} instead.
+    * the call rejects; for the cold-start case use {@link rebuild} instead.
     *
     * Wrapped in a debug-level timing log via {@link Tracer.time} so
     * slow per-URI waits surface in build telemetry; the URI is
@@ -497,9 +496,8 @@ export class DefaultModelService<
     * base's request start a build of its own, so the write is built and
     * delivered twice.
     *
-    * Returns an empty `{ root, diagnostics }` envelope when the document
-    * cannot be loaded; adopters that want to throw override this method
-    * on their subclass.
+    * Rejects when the build leaves no document for `uri`, as for a URI with
+    * neither a file nor text: the wait after it has nothing to wait on.
     *
     * Consumers wanting "give me this doc at state X, building only if
     * needed" — use the per-state methods ({@link parsed} / {@link linked}

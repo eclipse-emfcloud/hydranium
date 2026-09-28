@@ -655,23 +655,20 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const uri = siblingOf(model.uri, 'conformance-unsaved-');
                const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
-               // Served before the close, so a refusal after it is the head's
-               // answer for this document and not for every created one.
+               // Served before the close, so an envelope without a root after
+               // it is the close's doing and not the head's answer for every
+               // created document.
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
                await driver.proxy.closeSession({ clientId });
-               // It has no file to go back to, so no text is left to serve. The
-               // protocol promises an unknown URI an envelope with no root; a
-               // head that refuses the read instead is taken as giving the same
-               // answer.
+               // It has no file to go back to, so no text is left to serve, and
+               // the protocol answers a URI with no document with an envelope
+               // that has no root, not with a refusal.
                await readUntil(
                   driver,
                   uri,
-                  document => document?.root === undefined,
-                  `${uri}, created and never saved, still has a document after its last close`
+                  document => document !== undefined && !TransferDocument.isLoaded(document),
+                  `${uri}, created and never saved, was not answered with an envelope without a root after its last close`
                );
-               // And the connection outlived the close, so no refusal above was
-               // a dropped connection's.
-               await driver.proxy.waitForReady();
             } finally {
                driver.dispose();
             }
