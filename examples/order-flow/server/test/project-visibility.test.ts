@@ -23,11 +23,19 @@
  * holds a single file.
  */
 
-import { AstUtils, DocumentState, type ReferenceInfo } from '@hydranium/langium';
-import { describe, expect, it } from 'vitest';
+import { AstUtils, DocumentState, type ReferenceInfo, URI } from '@hydranium/langium';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { type DomainModel, type Entity, type Field, isEntity } from '../src/language-server/ast.js';
 import { ORDER_FLOW_STDLIB_URI } from '../src/language-server/order-flow-stdlib.js';
-import { documentFor, makeWorkspaceHarness, type OrderFlowHarness, workspaceUri } from './order-flow-harness.js';
+import {
+   documentFor,
+   makeScratchWorkspaceHarness,
+   makeWorkspaceHarness,
+   type OrderFlowHarness,
+   WORKSPACE_FILES,
+   workspaceUri
+} from './order-flow-harness.js';
 
 function entityNamed(model: DomainModel, name: string): Entity {
    const found = model.declarations.find(declaration => isEntity(declaration) && declaration.name === name);
@@ -209,5 +217,46 @@ describe('order-flow visibility — public declarations cross the project bounda
       expect(candidates).toContain('Money');
       // No transitive visibility the other way: commerce-core does not require orders.
       expect(candidates).not.toContain('Order');
+   });
+});
+
+describe('order-flow projects — a descriptor change', () => {
+   it('takes effect in the build the edit starts', async () => {
+      const { harness, workspace } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => workspace.dispose());
+      const projects = harness.shared.workspace.ProjectManager;
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const ordersPath = workspace.resolve(WORKSPACE_FILES.ordersDomain);
+      const ordersUri = URI.file(ordersPath);
+      const original = readFileSync(ordersPath, 'utf8');
+      const totalTypeName = (): string | undefined => {
+         const model = harness.shared.workspace.LangiumDocuments.getDocument(ordersUri)!.parseResult.value as DomainModel;
+         return fieldNamed(entityNamed(model, 'Order'), 'total').type.declared?.ref?.name;
+      };
+
+      workspace.write(WORKSPACE_FILES.ordersDomain, original.replace('project orders requires commerce-core', 'project orders'));
+      await builder.update([ordersUri], []);
+      expect(projects.getProjectById('orders')?.dependencies).toBeUndefined();
+      expect(totalTypeName()).toBeUndefined();
+
+      workspace.write(WORKSPACE_FILES.ordersDomain, original);
+      await builder.update([ordersUri], []);
+      expect(projects.getProjectById('orders')?.dependencies).toEqual(['commerce-core']);
+      expect(totalTypeName()).toBe('Money');
+   });
+
+   it('registers a descriptor created by an update in that update', async () => {
+      const { harness, workspace } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => workspace.dispose());
+      const projects = harness.shared.workspace.ProjectManager;
+      const refundsUri = URI.file(
+         workspace.write('refunds/refunds.domain', 'project refunds requires commerce-core\n\nentity Refund {\n   amount: Money\n}\n')
+      );
+
+      await harness.shared.workspace.DocumentBuilder.update([refundsUri], []);
+
+      expect(projects.getProjectById('refunds')?.dependencies).toEqual(['commerce-core']);
+      const model = harness.shared.workspace.LangiumDocuments.getDocument(refundsUri)!.parseResult.value as DomainModel;
+      expect(fieldNamed(entityNamed(model, 'Refund'), 'amount').type.declared?.ref?.name).toBe('Money');
    });
 });

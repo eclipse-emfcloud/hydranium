@@ -137,8 +137,8 @@ export interface HydraniumWorkspaceManagerOptions extends LogNameOptions {
  * URIs (its own members plus any transitive dependents per the
  * `getAffectedProjects` hook). This manager re-runs
  * `DocumentBuilder.resetToState(doc, DocumentState.Changed)` on each
- * affected document so the next build cycle re-links them with the new
- * visibility scope.
+ * affected document so the build of the update that changed the descriptor
+ * re-links them with the new visibility scope.
  *
  * Descriptor URIs that triggered the cycle are intentionally excluded
  * from the affected set by `AbstractProjectManager.onBuildUpdate` —
@@ -501,9 +501,9 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
 
    /**
     * Default cascade-rebuild handler. Iterates {@link ProjectChangeEvent.affectedDocuments}
-    * and resets each to {@link DocumentState.Changed} so the next build cycle
-    * re-runs the pipeline (parse → link → validate) under the new project
-    * visibility scope.
+    * and resets each to {@link DocumentState.Changed} so the build of the update
+    * that changed the descriptor re-runs the pipeline (parse → link → validate)
+    * under the new project visibility scope.
     *
     * Subclasses can override for additional behaviour (e.g. logging,
     * telemetry, custom rebuild policies); call `super` to preserve the
