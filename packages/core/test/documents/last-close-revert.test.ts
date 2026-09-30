@@ -17,7 +17,7 @@
 import { createMessagePortTransport, Deferred } from '@hydranium/protocol';
 import { makeFakeClock, type FakeClock, waitFor } from '@hydranium/protocol/testing';
 import { makeMessagePortPair } from '@hydranium/protocol/testing/node';
-import { URI } from '@hydranium/langium';
+import { OperationCancelled, URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
 import { createConnection, type WatchDog } from 'vscode-languageserver';
 import {
@@ -762,6 +762,24 @@ describe('HydraniumTextDocuments — a language client whose worker port closes'
          await waitFor(() => builds.length === 1);
          expect(docs.isOpenInClient(FILE, LANGUAGE_CLIENT_ID)).toBe(false);
          expect(docs.get(FILE)).toBeUndefined();
+      } finally {
+         port.dispose();
+      }
+   });
+
+   it('records an open, and closes it when the port closes, after the initial build was cancelled', async () => {
+      const cancelled = Promise.reject(OperationCancelled);
+      cancelled.catch(() => undefined);
+      const { docs, builds } = makeRig(undefined, cancelled);
+      const port = listenOnWorkerPort(docs);
+      try {
+         await openInEditor(port.editor, FILE);
+         await waitFor(() => docs.isOpenInClient(FILE, LANGUAGE_CLIENT_ID));
+
+         port.editor.dispose();
+
+         await waitFor(() => builds.length === 1);
+         expect(docs.isOpenInClient(FILE, LANGUAGE_CLIENT_ID)).toBe(false);
       } finally {
          port.dispose();
       }

@@ -358,13 +358,10 @@ export class DefaultModelService<
       // Deliberately NO fallback to Langium's `ready`: it resolves pre-build,
       // so falling back to it would silently reinstate the very gap this gate
       // exists to close.
-      // Captured rather than read off `this` inside the closure, which TS cannot
-      // prove runs after the field is assigned.
-      const tracer = this.tracer;
       this.ready = (async () => {
          try {
             await services.workspace.WorkspaceManager?.workspaceInitialized;
-         } catch (error: unknown) {
+         } catch {
             // NEVER rejects, deliberately. This gate is about TIMING — "the
             // initial build has finished" — not about whether it succeeded, and
             // Langium's `ready` (what it replaced) could not reject at all.
@@ -372,8 +369,8 @@ export class DefaultModelService<
             // build (routine — any write preempts one) and on a failed one
             // (e.g. a disposed connection at teardown). Propagating either would
             // fail every `waitForReady` for the rest of the process lifetime,
-            // a far worse failure than the late gate this exists to fix.
-            tracer.debug(`Initial workspace build did not complete cleanly: ${error instanceof Error ? error.message : String(error)}`);
+            // a far worse failure than the late gate this exists to fix. The
+            // workspace manager logs the outcome.
          }
       })();
       // One persistent listener mirroring non-LSP-client changes back to the LSP

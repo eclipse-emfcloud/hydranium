@@ -8,7 +8,15 @@
  ********************************************************************************/
 
 import { Deferred, type Logger, type Tracer } from '@hydranium/protocol';
-import { DefaultWorkspaceManager, DocumentState, type LangiumDocument, type Stream, UriUtils, type URI } from '@hydranium/langium';
+import {
+   DefaultWorkspaceManager,
+   DocumentState,
+   isOperationCancelled,
+   type LangiumDocument,
+   type Stream,
+   UriUtils,
+   type URI
+} from '@hydranium/langium';
 import { type CancellationToken, type InitializeParams } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import { type LogNameOptions, resolveLogFilePlaceholder, toLogFileWorkspaceToken } from '../diagnostics/logger.js';
@@ -20,6 +28,7 @@ import type { WritableFileSystemProvider } from '../../documents/ast-document-ma
 import { type DocumentUriPolicy, findRealpathDivergence } from './document-uri-policy.js';
 import { type AdditionalDocumentContribution, collectAdditionalDocuments } from './additional-document-contribution.js';
 import { onProcessEvent } from '../../util/environment.js';
+import { isConnectionGoneError } from '../../util/connection-liveness.js';
 
 /**
  * Module-level guard so repeated workspace-manager construction (e.g.
@@ -488,12 +497,22 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
     * and either delegate to `super.initializeWorkspace(...)` (preserving the
     * default resolve) or call `this.workspaceInitializedDeferred.resolve(...)`
     * themselves after the additional work finishes.
+    *
+    * A failed setup is logged here, since every framework waiter on
+    * {@link workspaceInitialized} discards the rejection; an override that
+    * rejects the deferred itself logs its own failure.
     */
    override async initializeWorkspace(folders: WorkspaceFolder[], cancelToken?: CancellationToken): Promise<void> {
       try {
          await super.initializeWorkspace(folders, cancelToken);
          this.workspaceInitializedDeferred.resolve(undefined);
-      } catch (error) {
+      } catch (error: unknown) {
+         const message = error instanceof Error ? error.message : String(error);
+         if (isOperationCancelled(error) || isConnectionGoneError(error)) {
+            this.tracer.debug(`Initial workspace build did not complete: ${message}`);
+         } else {
+            this.tracer.error(`Initial workspace build failed: ${message}`);
+         }
          this.workspaceInitializedDeferred.reject(error);
          throw error;
       }
