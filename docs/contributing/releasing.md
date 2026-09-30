@@ -64,7 +64,9 @@ a flag someone has to remember to flip on the day it stops being true.
 3. Preflights the publish environment (see below).
 4. Installs, builds, and runs the **whole contributor gate**
    (`npm run check`) in this workflow, before the publish.
-5. Runs `node scripts/release.mjs next`.
+5. Waits for the `platform-gate` job, which runs `npm run check:platform`
+   on every other platform CI covers.
+6. Runs `node scripts/release.mjs next`.
 
 Before merging a package or export change, also run the opt-in packed
 consumer smoke locally:
@@ -106,7 +108,8 @@ on the same `push: main` with no dependency either way, so they race and
 a red CI run cannot stop a publish. CI asserts the arrangement instead —
 a step reads `release.yml` and fails unless `npm run check` appears at a
 lower line number than the publish, because a gate after the publish is
-not a gate.
+not a gate, and unless the publishing job needs `platform-gate`. The
+platform gate's `os:` list must equal CI's, which CI compares too.
 
 ## Trusted publishing
 

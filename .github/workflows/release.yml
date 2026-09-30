@@ -112,13 +112,97 @@ jobs:
           fi
           git diff --name-only "$BEFORE" "$HEAD_SHA" | node scripts/release-changed.mjs
 
+  # The gate on CI's other platforms, so a commit red only there does not
+  # publish. A separate job because the publish must wait for every leg, which
+  # a matrix entry cannot. `os:` is ci.yml's verbatim, and ci.yml reddens if
+  # the two differ.
+  platform-gate:
+    name: Platform gate (${{ matrix.os }})
+    needs: [changes]
+    if: needs.changes.outputs.publishable == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2025, macos-26]
+        exclude:
+          - os: ubuntu-22.04
+
+    env:
+      NODE_OPTIONS: --report-on-fatalerror
+      TURBO_UI: stream
+      FORCE_COLOR: 1
+
+    steps:
+      # Full history, as on CI's legs, so a check that reads git gives the
+      # verdict it gives there.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Identical to the twin steps below and in ci.yml, so every leg gates on
+      # the toolchain the publish uses.
+      - name: Pin the toolchain
+        run: |
+          pinned=$(node -e "
+            const { packageManager } = require('./package.json');
+            if (typeof packageManager !== 'string' || !packageManager.startsWith('npm@')) {
+              console.error('Root packageManager is not an npm pin: ' + packageManager);
+              process.exit(1);
+            }
+            console.log(packageManager.slice(4));
+          ")
+          npm install -g "npm@$pinned" --no-fund --no-audit
+          if [ "$(npm --version)" != "$pinned" ]; then
+            echo "npm $(npm --version) is first on PATH, but package.json pins npm@$pinned." >&2
+            exit 1
+          fi
+          node -e "
+            const engines = require('./package.json').engines.node;
+            if (!engines.startsWith('>=')) {
+              console.error('engines.node is ' + engines + '; this check understands only a >=x.y[.z] floor.');
+              process.exit(1);
+            }
+            const pad = (version) => (version + '.0.0').split('.').slice(0, 3);
+            const rank = (version) => pad(version).reduce((acc, part) => acc * 1000 + Number(part), 0);
+            if (rank(process.versions.node) < rank(engines.slice(2).trim())) {
+              console.error('Node ' + process.versions.node + ' does not satisfy engines.node ' + engines + '.');
+              process.exit(1);
+            }
+          "
+
+      - name: Install dependencies
+        run: npm ci --no-fund --no-audit
+
+      # Built before linking: `npm ci` skips a workspace `bin` whose target
+      # does not exist yet, and the first example to call it exits 127.
+      - name: Build the framework packages
+        run: npm run build
+
+      - name: Link the workspace bins
+        run: npm install --no-fund --no-audit
+
+      - name: Build
+        run: npm run build:all
+
+      - name: Platform gate
+        run: npm run check:platform
+
   release:
     name: Release
-    needs: [changes]
-    # One condition, not two: the dispatch carve-out is inside the job above,
-    # so this cannot be satisfied by an event name while the verdict says
-    # otherwise. `needs` also means a `changes` job that DIED skips the
-    # release rather than publishing on an empty output.
+    needs: [changes, platform-gate]
+    # One condition, not two: the dispatch carve-out is inside `changes`, so
+    # this cannot be satisfied by an event name while the verdict says
+    # otherwise. `needs` also means a `changes` job that DIED, or a failed
+    # platform leg, skips the release rather than publishing.
     if: needs.changes.outputs.publishable == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30

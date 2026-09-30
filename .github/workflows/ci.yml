@@ -182,6 +182,9 @@ jobs:
           }
           compare node-version-file
           compare NODE_OPTIONS
+          # release.yml's platform gate lists the same legs, or a leg added
+          # here cannot block a publish.
+          workflows="ci release" compare os
 
       # The release workflow gates itself, in its own file, because the two
       # workflows share a `push: main` trigger with no dependency between them —
@@ -190,21 +193,30 @@ jobs:
       # publish that has LOST its gate is indistinguishable from one that never
       # had it until a bad version is on the registry, which npm does not let
       # you take back. Line numbers are compared because order is the property:
-      # a gate after the publish is not a gate.
+      # a gate after the publish is not a gate. The platform legs are a
+      # separate job, so for them it is the publishing job's `needs:`.
       - name: Release workflow gates itself before publishing
         if: matrix.os == 'ubuntu-22.04'
         run: |
           # awk rather than a `grep | head` pipeline: a non-matching grep under
           # `pipefail` aborts the step at the assignment, so the very case this
-          # exists to report would fail with no message at all. `index` keeps
-          # the match a fixed string, and awk exits 0 with nothing on stdout.
+          # exists to report would fail with no message at all. Whole
+          # lines: `run: npm run check` is a prefix of the platform gate's
+          # line, so a substring match passes with the full gate gone.
           locate() {
-            awk -v needle="$1" 'index($0, needle) { print NR; exit }' .github/workflows/release.yml
+            awk -v needle="$1" '{ line = $0; sub(/^ +/, "", line) } line == needle { print NR; exit }' .github/workflows/release.yml
           }
           gate=$(locate 'run: npm run check')
-          publish=$(locate 'run: node scripts/release.mjs')
+          platform=$(locate 'run: npm run check:platform')
+          waits=$(locate 'needs: [changes, platform-gate]')
+          publish=$(locate 'run: node scripts/release.mjs next')
           if [ -z "$gate" ]; then
             echo "release.yml no longer runs the full gate: its publish path is ungated." >&2
+            exit 1
+          fi
+          if [ -z "$platform" ] || [ -z "$waits" ]; then
+            echo "release.yml no longer runs the platform gate, or its publishing job no" >&2
+            echo "longer needs it: a commit red only on Windows or macOS would publish." >&2
             exit 1
           fi
           if [ -z "$publish" ]; then
