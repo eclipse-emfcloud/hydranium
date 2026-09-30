@@ -223,20 +223,16 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
 
       writeFileSync(file, before);
       const reader = sample();
-      for (let round = 0; round < ROUNDS; round++) {
+      // Writes until the reader has sampled enough for an empty `torn` to mean
+      // something. A fixed round count checked against a sample floor
+      // afterwards fails a starved run in which nothing tore.
+      for (let round = 0; round < ROUNDS || samples < ROUNDS; round++) {
          await Promise.all([provider.writeFile(uri, first), provider.writeFile(uri, second)]);
       }
       writing = false;
       await reader;
 
       expect(torn).toEqual([]);
-      // A run that never yielded to the reader proves nothing about tearing, so
-      // this floor guards against an empty `torn` for the wrong reason. One
-      // sample per round, deliberately far below what a healthy run produces: a
-      // floor set near the real sample count reddens for LIVENESS under load
-      // while `torn` is empty, which reports the opposite of the defect this
-      // case exists to catch. Tearing is caught by `torn`, not by this number.
-      expect(samples).toBeGreaterThanOrEqual(ROUNDS);
       expect(complete.has(readFileSync(file, 'utf8'))).toBe(true);
    });
 
