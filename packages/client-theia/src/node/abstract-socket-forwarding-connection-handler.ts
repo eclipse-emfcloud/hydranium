@@ -137,11 +137,17 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
          setTimeout(async () => {
             try {
                const port = await this.commandService.executeCommand<number>(this.portCommand);
-               if (port) {
-                  pendingContent.resolve(port);
+               // An empty answer fails the attempt like a throw does: left
+               // unanswered, it neither resolves nor re-queues, and the lookup
+               // stays pending with nothing logged.
+               if (!port) {
+                  throw new Error(`Port command '${this.portCommand}' answered without a port.`);
                }
+               pendingContent.resolve(port);
             } catch (error) {
                counter++;
+               const message = error instanceof Error ? error.message : String(error);
+               this.logger.debug(`[${this.logComponent}] Port command '${this.portCommand}' attempt ${counter} failed: ${message}`);
                if (this.findPortAttempts >= 0 && counter > this.findPortAttempts) {
                   pendingContent.reject(error);
                } else {
