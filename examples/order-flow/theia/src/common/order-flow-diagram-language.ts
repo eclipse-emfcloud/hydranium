@@ -62,24 +62,9 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
  *
  * Must match the `name` the VS Code extension passes to `new LanguageClient`
  * (`'Order Flow'`), because that is the channel `vscode-languageclient` creates
- * and the one `plugin-ext` surfaces to Theia. The GLSP server's own logs land
- * here too — they route through `GlspClientLogger` onto the LSP connection —
- * which is what lets the client contribution tail this one channel for
- * {@link ORDER_FLOW_GLSP_READY_MARKER}.
+ * and the one `plugin-ext` surfaces to Theia.
  */
 export const ORDER_FLOW_OUTPUT_CHANNEL = 'Order Flow';
-
-/**
- * Server-printed marker the client contribution tails before connecting.
- *
- * The string is `@eclipse-glsp/server`'s own, logged by its JSON-RPC launcher
- * when a client CONNECTS to the GLSP socket — not when the socket starts
- * listening, which is the earlier and less useful moment. It reaches this
- * channel because `startGlspServer` binds the container's logger onto the
- * adopter's `createLogger`, which routes over the LSP connection. Changing it
- * means changing what the launcher prints, so it is taken as given.
- */
-export const ORDER_FLOW_GLSP_READY_MARKER = 'Starting GLSP server connection';
 
 /**
  * Preference driving the framework log threshold, applied once at startup.

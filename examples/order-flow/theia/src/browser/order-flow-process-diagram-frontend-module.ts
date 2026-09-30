@@ -33,7 +33,7 @@ export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspTheiaFro
    protected readonly diagramManager = OrderFlowProcessDiagramManager;
    protected override readonly logLevelPreference = ORDER_FLOW_LOG_LEVEL_PREFERENCE;
 
-   // The workspace-deferred start + ready-marker tail; see the contribution.
+   // The workspace-deferred start; see the contribution.
    protected override bindClientContribution(): typeof OrderFlowGlspClientContribution {
       return OrderFlowGlspClientContribution;
    }

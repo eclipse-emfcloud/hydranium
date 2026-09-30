@@ -49,11 +49,8 @@
    }
 }
 
-/* Failure state: set only when the loader could NOT dispatch its error
-   StatusAction, so this overlay is the single remaining surface for the message.
-   The spinner goes (nothing is pending any more) and the text takes the error
-   colour. A load that failed and WAS reported never reaches this state — the
-   overlay is removed and GLSP's own status overlay shows it instead. */
+/* Failure state: the spinner goes, since nothing is pending any more, and the
+   text takes the error colour. */
 .hydranium-diagram-loading-failed .hydranium-diagram-loading-spinner {
    display: none;
 }

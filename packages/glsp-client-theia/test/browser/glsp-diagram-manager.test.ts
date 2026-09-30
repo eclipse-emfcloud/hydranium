@@ -11,6 +11,7 @@ import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/brow
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget.js';
 import { AbstractHydraniumGlspDiagramManager } from '../../src/browser/glsp-diagram-manager.js';
 
 /**
@@ -34,12 +35,31 @@ let received: Array<WidgetOpenerOptions | undefined>;
 // running app.
 vi.mock('@eclipse-glsp/theia-integration', () => ({
    GLSPDiagramManager: class {
+      createdWidget?: unknown;
       protected handleNavigations(_widget: unknown, options?: WidgetOpenerOptions): boolean {
          received.push(options);
          return options !== undefined && 'selection' in options;
       }
+      async createWidget(): Promise<unknown> {
+         return this.createdWidget;
+      }
+   },
+   GLSPDiagramWidget: class {
+      events: string[] = [];
+      /** Lumino's widget detaches, and GLSP's stores its viewport, when its parent is cleared. */
+      set parent(_parent: unknown) {
+         this.events.push('detach');
+      }
+      dispose(): void {
+         this.events.push('dispose');
+      }
    }
 }));
+// Its browser barrel pulls `@theia/output`, which touches DOM globals at load.
+vi.mock('@hydranium/client-theia/lib/browser', () => ({
+   ChannelLogger: class ChannelLogger {}
+}));
+vi.mock('../../src/browser/glsp-saveable', () => ({ HydraniumGlspSaveable: class HydraniumGlspSaveable {} }));
 
 const LANGUAGE: GLSPDiagramLanguage = {
    diagramType: 'test-diagram',
@@ -95,5 +115,128 @@ describe('AbstractHydraniumGlspDiagramManager.handleNavigations', () => {
       new TestDiagramManager().navigate(undefined);
 
       expect(received[0]).toBeUndefined();
+   });
+});
+
+describe('AbstractHydraniumGlspDiagramManager.reopen', () => {
+   const title = (name: string): { owner: unknown } => ({ owner: { name } });
+
+   class ReopenTestManager extends TestDiagramManager {
+      readonly opened: Array<{ uri: unknown; options?: WidgetOpenerOptions }> = [];
+      override async open(uri: GLSPDiagramWidget['uri'], options?: WidgetOpenerOptions): Promise<GLSPDiagramWidget> {
+         this.opened.push({ uri, options });
+         events.push('open');
+         return {} as GLSPDiagramWidget;
+      }
+   }
+
+   let events: string[];
+   let manager: ReopenTestManager;
+   let widget: HydraniumGlspDiagramWidget;
+
+   const placeIn = (titles: unknown[], active = false): void => {
+      Object.assign(manager, {
+         shell: {
+            getTabBarFor: () => ({ titles, currentTitle: widget.title }),
+            activeWidget: active ? widget : undefined
+         }
+      });
+   };
+
+   beforeEach(() => {
+      manager = new ReopenTestManager();
+      widget = new HydraniumGlspDiagramWidget();
+      events = (widget as unknown as { events: string[] }).events;
+      Object.defineProperties(widget, {
+         title: { value: title('diagram') },
+         uri: { value: 'file:///orders/fulfillment.process' },
+         options: { value: { editMode: 'editable' } }
+      });
+   });
+
+   it("reopens on the widget's request, after its left neighbour, detaching it before the dispose", async () => {
+      const left = title('left');
+      placeIn([left, widget.title, title('right')]);
+      Object.assign(manager, { createdWidget: widget });
+      await manager.createWidget({});
+
+      (widget as unknown as { reopenRequestEmitter: { fire(): void } }).reopenRequestEmitter.fire();
+      await vi.waitFor(() => expect(manager.opened).toHaveLength(1));
+
+      // Detached first, so the viewport is stored while the container still
+      // resolves; disposed before the open, since the fresh widget takes its id.
+      expect(events).toEqual(['detach', 'dispose', 'open']);
+      expect(manager.opened[0]).toEqual({
+         uri: 'file:///orders/fulfillment.process',
+         options: { mode: 'reveal', editMode: 'editable', widgetOptions: { ref: left.owner, mode: 'tab-after' } }
+      });
+   });
+
+   it('reopens a first tab before its right neighbour, and activates an active one', async () => {
+      const right = title('right');
+      placeIn([widget.title, right], true);
+
+      await manager.reopen(widget);
+
+      expect(manager.opened[0].options).toMatchObject({ mode: 'activate', widgetOptions: { ref: right.owner, mode: 'tab-before' } });
+   });
+
+   /** Each reopen places its replacement next to a neighbour, and a reopen
+    *  running alongside would take that neighbour out of the layout. */
+   it('reopens one diagram at a time', async () => {
+      const log: string[] = [];
+      const second = new HydraniumGlspDiagramWidget();
+      Object.defineProperties(second, {
+         title: { value: title('second') },
+         uri: { value: 'file:///orders/returns.process' },
+         options: { value: { editMode: 'editable' } }
+      });
+      Object.defineProperty(widget, 'parent', { set: () => log.push('detach first') });
+      Object.defineProperty(second, 'parent', { set: () => log.push('detach second') });
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      Object.assign(manager, {
+         open: async (uri: string) => {
+            log.push(`open ${uri}`);
+            await released;
+            log.push(`opened ${uri}`);
+         }
+      });
+      placeIn([widget.title, second.title]);
+
+      const both = Promise.all([manager.reopen(widget), manager.reopen(second)]);
+      await vi.waitFor(() => expect(log).toContain('open file:///orders/fulfillment.process'));
+      expect(log).not.toContain('detach second');
+      release();
+      await both;
+
+      expect(log).toEqual([
+         'detach first',
+         'open file:///orders/fulfillment.process',
+         'opened file:///orders/fulfillment.process',
+         'detach second',
+         'open file:///orders/returns.process',
+         'opened file:///orders/returns.process'
+      ]);
+   });
+
+   /** A Retry can land while a batch still holds the same diagram. */
+   it('skips a diagram that a queued reopen already replaced', async () => {
+      let disposed = false;
+      Object.defineProperty(widget, 'isDisposed', { get: () => disposed });
+      Object.assign(widget, { dispose: () => (disposed = true) });
+      placeIn([widget.title]);
+
+      await Promise.all([manager.reopen(widget), manager.reopen(widget)]);
+
+      expect(manager.opened).toHaveLength(1);
+   });
+
+   it('reopens a diagram alone in its tab bar where a new one opens', async () => {
+      placeIn([widget.title]);
+
+      await manager.reopen(widget);
+
+      expect(manager.opened[0].options?.widgetOptions).toBeUndefined();
    });
 });

@@ -1058,6 +1058,17 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#log-level')).toHaveValue('debug');
    });
 
+   /**
+    * The level filters what the server logs, so a host that waits for a logged
+    * line before connecting its diagram never connects above `info`. Nothing on
+    * this page does, and this keeps it so.
+    */
+   test('the diagram loads with the level above info from startup', async ({ page }) => {
+      await page.goto('/?log=warn');
+      await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
+      await expect(page.locator('#log').getByText('Log level info → warn (setting)', { exact: false })).toHaveCount(1);
+   });
+
    test('the log-level picker reaches the server threshold over LSP configuration', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);

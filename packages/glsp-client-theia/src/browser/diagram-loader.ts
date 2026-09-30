@@ -32,8 +32,7 @@ export interface DiagramLoadFailure {
    readonly error: unknown;
    /**
     * Whether the `severity: 'ERROR'` {@link StatusAction} reached the action
-    * dispatcher — i.e. whether GLSP's `StatusOverlay` is now displaying this
-    * failure.
+    * dispatcher. It says nothing about whether a status overlay shows it.
     *
     * `false` means the report itself failed, which happens when the action
     * dispatcher is the thing that could not initialize. A consumer that covers
@@ -102,10 +101,7 @@ export class HydraniumDiagramLoader extends DiagramLoader {
          await super.load(options);
          this.settle({ status: 'loaded' });
       } catch (err) {
-         // Report first, settle second, and carry whether the report landed: a
-         // consumer that uncovers the canvas on settle then finds the error
-         // already on the status overlay — or learns that it has to render the
-         // failure itself because nothing else can.
+         // Report first, settle second, and carry whether the report landed.
          const surfaced = await this.reportLoadFailure(err);
          this.settle({ status: 'failed', error: err, surfaced });
       }
@@ -158,9 +154,7 @@ export class HydraniumDiagramLoader extends DiagramLoader {
    /**
     * The sentence a failed load is reported with, on every surface that reports
     * it. Public because the canvas overlay is one of those surfaces and lives in
-    * another class: it renders this failure exactly when the `StatusAction` did
-    * not land, so a second copy of the sentence there could only ever drift
-    * unseen.
+    * another class, where a second copy of the sentence would drift.
     *
     * **The seam and the catalogue key answer different questions, so it carries
     * both.** Overriding this method changes the WORDING for every user of one
