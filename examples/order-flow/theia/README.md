@@ -46,9 +46,9 @@ wiring:
   the navigator, the tab bar and the open GLSP diagram all publish a selection
   this provider can read.
 - **`OrderFlowGlspClientContribution` holds the client back until a workspace is
-  open, then tails an Output channel for a server-printed ready marker.** In the
-  Theia deployment the server is launched by a _sideloaded VS Code extension_,
-  so connecting eagerly would dial a server that has not started.
+  open.** In the Theia deployment the server is launched by a _sideloaded VS Code
+  extension_; the backend forwarder holds the client's first request until the
+  server publishes its port.
 
 ## The port commands, and the one silent failure
 

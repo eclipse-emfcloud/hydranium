@@ -33,7 +33,7 @@ import { LanguageClient, type LanguageClientOptions, type ServerOptions, Transpo
 const LANGUAGE_IDS = ['order-flow-domain', 'order-flow-process', 'order-flow-layout'] as const;
 
 /** The client's name, which is also the Output channel `vscode-languageclient`
- *  creates. Theia-side integrations tail that channel by this exact string. */
+ *  creates. Theia-side integrations name that channel by this exact string. */
 export const ORDER_FLOW_LANGUAGE_CLIENT_NAME = 'Order Flow';
 
 /** Host command ids the two socket-head ports are reachable under.

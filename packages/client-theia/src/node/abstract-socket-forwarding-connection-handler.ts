@@ -133,10 +133,18 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
          }
          const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
          this.logger.error(`[${this.logComponent}] Could not connect to ${this.serverName}: ${message}`);
-         this.messageService.error(`Could not connect to ${this.serverName}: ` + message);
+         this.reportConnectFailure(message);
+         // Closed so the frontend learns of it: left open, the channel has no
+         // server behind it, and every request on it waits for good.
+         channel.close();
       } finally {
          closeSub.dispose();
       }
+   }
+
+   /** Tell the user this handler gave up; `message` is the reason it logged. */
+   protected reportConnectFailure(message: string): void {
+      this.messageService.error(`Could not connect to ${this.serverName}: ` + message);
    }
 
    /** Poll the port command until it answers, its attempts run out, or `signal` aborts. */

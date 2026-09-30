@@ -10,9 +10,10 @@
 import { codiconCSSString } from '@eclipse-glsp/client';
 import { GLSPDiagramManager } from '@eclipse-glsp/theia-integration';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
-import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/browser';
+import { type GLSPDiagramWidget, type GLSPWidgetOpenerOptions } from '@eclipse-glsp/theia-integration/lib/browser';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { injectable } from '@theia/core/shared/inversify';
+import { HydraniumGlspDiagramWidget } from './diagram-widget';
 
 /**
  * `GLSPDiagramManager` subclass that derives the language-correlated getters
@@ -47,6 +48,9 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
    /** Optional icon-class override; takes precedence over the language's `iconClass`. */
    protected readonly customIconClass?: string;
 
+   /** The reopens asked for so far, which run one at a time. */
+   protected reopening: Promise<void> = Promise.resolve();
+
    override get fileExtensions(): string[] {
       return [...this.diagramLanguage.fileExtensions];
    }
@@ -65,6 +69,51 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
 
    get label(): string {
       return this.managerLabel;
+   }
+
+   override async createWidget(options?: unknown): Promise<GLSPDiagramWidget> {
+      const widget = await super.createWidget(options);
+      if (widget instanceof HydraniumGlspDiagramWidget) {
+         widget.onDidRequestReopen(() => void this.reopen(widget));
+      }
+      return widget;
+   }
+
+   /**
+    * Replace `widget` with a fresh one for the same diagram, in the same tab
+    * position and with its viewport: a new container, client id and load.
+    * Reopens run one at a time, since each places its replacement next to a
+    * neighbour that a reopen running alongside could take out of the layout.
+    */
+   reopen(widget: GLSPDiagramWidget): Promise<void> {
+      const reopened = this.reopening.then(() => this.replaceWidget(widget));
+      this.reopening = reopened.catch(() => undefined);
+      return reopened;
+   }
+
+   /** Taken down as a close does, but without its save prompt, since a dirty
+    *  diagram whose server is gone has nothing to save to. */
+   protected async replaceWidget(widget: GLSPDiagramWidget): Promise<void> {
+      if (widget.isDisposed) {
+         return;
+      }
+      const tabBar = this.shell.getTabBarFor(widget);
+      const titles = tabBar?.titles ?? [];
+      const index = titles.indexOf(widget.title);
+      // ponytail: a diagram alone in its tab bar reopens where a new one opens,
+      // since its split closes with it; restore the dock layout if that matters.
+      const neighbour = index > 0 ? titles[index - 1].owner : titles[index + 1]?.owner;
+      const mode = this.shell.activeWidget === widget ? 'activate' : tabBar?.currentTitle === widget.title ? 'reveal' : 'open';
+      // Detached before the dispose, as a close does: the widget stores its
+      // viewport on detach, and its dispose empties the container it reads.
+      widget.parent = null;
+      widget.dispose();
+      const options: GLSPWidgetOpenerOptions = {
+         mode,
+         editMode: widget.options.editMode,
+         widgetOptions: neighbour ? { ref: neighbour, mode: index > 0 ? 'tab-after' : 'tab-before' } : undefined
+      };
+      await this.open(widget.uri, options);
    }
 
    /**

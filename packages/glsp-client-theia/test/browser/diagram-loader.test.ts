@@ -154,8 +154,6 @@ describe('HydraniumDiagramLoader', () => {
          const err = new Error('connection refused');
          loader.makeSuperLoadThrow(err);
          await loader.load();
-         // `surfaced: true` tells a canvas-covering consumer that GLSP's status
-         // overlay has the message, so it should uncover rather than double-report.
          expect(loader.loadOutcome).toEqual({ status: 'failed', error: err, surfaced: true });
       });
 

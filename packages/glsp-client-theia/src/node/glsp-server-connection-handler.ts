@@ -19,15 +19,7 @@ import type * as net from 'net';
 export interface GlspServerConnectionHandlerOptions {
    readonly languageContributionId: string;
    readonly portCommand: string;
-   /**
-    * Product name for the connect-failure dialog this handler raises.
-    *
-    * It reaches the adopter's UI verbatim, so the framework default leaks a
-    * framework noun into a product that is not ours. Not a translation concern —
-    * routing it through a catalogue would ask an adopter to "translate" English
-    * into their own product name, and would make their branding
-    * locale-dependent.
-    */
+   /** Name of the server in this handler's log lines. */
    readonly serverName?: string;
    readonly findPortTimeout?: number;
    readonly findPortAttempts?: number;
@@ -61,11 +53,15 @@ export class GlspServerConnectionHandler extends AbstractSocketForwardingConnect
          path: GLSPContribution.servicePath + '/' + options.languageContributionId,
          portCommand: options.portCommand,
          logComponent: 'GLSP',
-         serverName: options.serverName ?? 'Graphical Server',
+         serverName: options.serverName ?? 'Diagram Server',
          findPortTimeout: options.findPortTimeout,
          findPortAttempts: options.findPortAttempts,
          connectTimeoutMs: options.connectTimeoutMs,
          onSocketCreated: options.onSocketCreated
       });
    }
+
+   /** Logged only: the frontend contribution reports the failed start, and a
+    *  second notification would duplicate it. */
+   protected override reportConnectFailure(): void {}
 }

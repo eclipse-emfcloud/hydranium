@@ -19,7 +19,7 @@ data and GLSP heads reached over their own sockets.
 | Spec                              | What it observes                                                                                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `order-flow-properties.spec.mts`  | a panel write reaching the shared Langium workspace — renaming a `.process` root raises a diagnostic on its `.layout`, which is cross-document and cross-grammar |
-| `order-flow-diagram.spec.mts`     | the diagram loading, with the ready-marker handshake read out of the **server's own log** rather than the UI, which cannot tell "never printed" from "never received" |
+| `order-flow-diagram.spec.mts`     | the diagram loading, and its loading overlay coming down |
 | `order-flow-diagnostics.spec.mts` | the extension's _second_ channel to the data head answering at all                                                                                     |
 | `order-flow-restart.spec.mts`     | recovery after the language server is killed underneath the panel                                                                                      |
 

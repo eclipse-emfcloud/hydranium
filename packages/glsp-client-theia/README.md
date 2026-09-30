@@ -47,10 +47,13 @@ if you are mounting a hydranium GLSP diagram in a Theia application.
   `NoOpExternalMarkerManager` instead: markers still decorate the diagram, but
   Theia's Problems view stops double-listing them.
   **`AbstractHydraniumGlspDiagramManager`** derives the language-correlated
-  getters from one descriptor plus a label.
-- **`HydraniumGlspClientContribution`** — for a server that starts late: it tails
-  the Output channel for a server-printed ready marker and defers `start` until a
-  workspace is open.
+  getters from one descriptor plus a label, and `reopen` replaces a diagram
+  with a fresh widget in the same tab position, as the Retry of a failed load
+  does.
+- **`HydraniumGlspClientContribution`** — for a server that starts late: it
+  defers `start` until a workspace is open, fails a start that takes longer than
+  `startupTimeoutMs` (30 s by default), and offers a Retry that starts a fresh
+  client.
 - **`HydraniumGlspSaveable`** — the diagram widget's saveable. Each save is a
   `RequestSaveModelAction` the server answers: the save resolves on its own
   response, and rejects on its own rejection or after 10 s rather than GLSP's
@@ -85,7 +88,6 @@ hydranium GLSP server. The declared peer dependencies are:
 | `@hydranium/client-theia`         | `^1.0.0-next` |
 | `@hydranium/protocol`             | `^1.0.0-next` |
 | `@theia/core`                     | `^1.70.0`     |
-| `@theia/output`                   | `^1.70.0`     |
 | `@theia/process`                  | `^1.70.0`     |
 | `@theia/workspace`                | `^1.70.0`     |
 | `inversify`                       | `^6.0.0`      |

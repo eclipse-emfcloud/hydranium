@@ -20,6 +20,7 @@ vi.mock('@hydranium/client-theia/lib/browser', () => ({
 vi.mock('@eclipse-glsp/theia-integration', () => ({
    GLSPDiagramWidget: class GLSPDiagramWidget {
       onAfterAttachCalls = 0;
+      initializeDiagramCalls = 0;
       disposeCalls = 0;
       saveable?: { dispose(): void };
       readonly toDispose = {
@@ -37,6 +38,9 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
       }
       protected onAfterAttach(): void {
          this.onAfterAttachCalls++;
+      }
+      protected async initializeDiagram(): Promise<void> {
+         this.initializeDiagramCalls++;
       }
       dispose(): void {
          this.disposeCalls++;
@@ -67,12 +71,14 @@ interface OverlayHost {
    appendChild(child: FakeElement): void;
 }
 /** Enough of an element for the overlay lifecycle: a class list, the label child
- *  `showLoadFailure` looks up, and removal from the host. */
+ *  `showLoadFailure` looks up, appended children, and removal from the host. */
 interface FakeElement {
    className: string;
    readonly classes: Set<string>;
    readonly label: { textContent: string };
+   readonly appended: unknown[];
    classList: { add(token: string): void };
+   appendChild(child: unknown): void;
    querySelector(selector: string): { textContent: string } | undefined;
    remove(): void;
 }
@@ -120,6 +126,14 @@ class TestableWidget extends HydraniumGlspDiagramWidget {
       return this.loadingOverlay as unknown as FakeElement | undefined;
    }
 
+   retry(): void {
+      this.retryLoad();
+   }
+
+   protected override createRetryButton(): HTMLElement {
+      return { kind: 'retry button' } as unknown as HTMLElement;
+   }
+
    protected override get hydraniumDiagramLoader(): HydraniumDiagramLoader | undefined {
       return this.loader;
    }
@@ -128,11 +142,14 @@ class TestableWidget extends HydraniumGlspDiagramWidget {
       this.createdOverlays++;
       const classes = new Set([DIAGRAM_LOADING_CLASS]);
       const label = { textContent: this.loadingLabel };
+      const appended: unknown[] = [];
       const element: FakeElement = {
          className: DIAGRAM_LOADING_CLASS,
          classes,
          label,
+         appended,
          classList: { add: token => classes.add(token) },
+         appendChild: child => appended.push(child),
          querySelector: selector => (selector === `.${DIAGRAM_LOADING_CLASS}-label` ? label : undefined),
          remove: () => {
             const index = this.overlayHost.children.indexOf(element);
@@ -189,14 +206,39 @@ describe('HydraniumGlspDiagramWidget', () => {
       expect(widget.currentOverlay()).toBeUndefined();
    });
 
-   it('removes the overlay for a reported failure, revealing the error status underneath', async () => {
-      // The overlay is opaque and covers the widget node, while the loader reports
-      // the failure on GLSP's status overlay *inside* the base div. `surfaced: true`
-      // means that message is already there, so staying up would double-report.
+   /** The loader's report reaching the dispatcher does not put it on screen:
+    *  uncovering the canvas leaves it blank. */
+   it('keeps the overlay with the error and a Retry for a reported failure too', async () => {
       widget.attach();
       loader.settleNow({ status: 'failed', error: new Error('connection refused'), surfaced: true });
       await flush();
-      expect(widget.overlayHost.children).toHaveLength(0);
+
+      expect(widget.overlayHost.children).toHaveLength(1);
+      const overlay = widget.overlayHost.children[0];
+      expect(overlay.label.textContent).toBe('Diagram failed to load: connection refused');
+      expect(overlay.appended).toEqual([{ kind: 'retry button' }]);
+   });
+
+   /** A second load in the same container registers the model source's handlers twice. */
+   it('asks to be reopened on Retry rather than loading again in place', async () => {
+      const requests = vi.fn();
+      widget.onDidRequestReopen(requests);
+      widget.attach();
+      loader.settleNow({ status: 'failed', error: 'boom', surfaced: true });
+      await flush();
+
+      widget.retry();
+
+      expect(requests).toHaveBeenCalledTimes(1);
+      expect((widget as unknown as { initializeDiagramCalls: number }).initializeDiagramCalls).toBe(0);
+   });
+
+   it('ignores Retry unless the load failed', () => {
+      const requests = vi.fn();
+      widget.onDidRequestReopen(requests);
+      widget.attach();
+      widget.retry();
+      expect(requests).not.toHaveBeenCalled();
    });
 
    it('keeps the overlay and shows the error when the failure could not be surfaced', async () => {

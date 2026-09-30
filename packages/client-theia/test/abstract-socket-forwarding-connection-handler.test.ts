@@ -147,6 +147,31 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
    });
 
    /**
+    * A frontend learns that the backend gave up only from its channel closing.
+    * Left open, the channel has no server behind it and the frontend's first
+    * request waits for good.
+    */
+   it('closes the channel when it gives up connecting', async () => {
+      const handler = new TestHandler({ ...baseOptions(), findPortTimeout: 1, findPortAttempts: 0 });
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+      const executeCommand = vi.fn(async () => undefined);
+      Object.assign(handler, {
+         logger,
+         commandService: { executeCommand } as unknown as CommandService,
+         messageService: { error: vi.fn() }
+      });
+      const close = vi.fn();
+      const channel = new ForwardingChannel('test', close, () => {
+         throw new Error('write buffer not needed for this test');
+      });
+
+      await handler.initialize(channel);
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("'test:port'"));
+   });
+
+   /**
     * The heads bind `127.0.0.1`, so the dial has to name that address rather
     * than leave Node to resolve its `localhost` default: on a dual-stack machine
     * where `localhost` yields `::1` first, the connection is refused by an

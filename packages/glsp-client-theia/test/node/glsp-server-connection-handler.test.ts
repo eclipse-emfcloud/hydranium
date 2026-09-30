@@ -87,7 +87,9 @@ describe('GlspServerConnectionHandler', () => {
       await expect(handler.exposeFindPort()).rejects.toThrow('port unavailable');
    });
 
-   it('initializeServerConnection surfaces failures via MessageService.error', async () => {
+   /** The frontend contribution reports the failed start; a toast here would be
+    *  a second notification for it. */
+   it('logs a failed connection and closes the channel without a notification', async () => {
       const handler = new TestHandler({
          languageContributionId: 'foo',
          portCommand: 'foo/port',
@@ -99,17 +101,20 @@ describe('GlspServerConnectionHandler', () => {
       } as unknown as CommandService;
       const errorSpy = vi.fn();
       handler['messageService'] = { error: errorSpy } as unknown as MessageService;
+      const logger = stubLogger();
       // `logger` is a readonly injected field, so override it through a cast.
-      (handler as unknown as { logger: ILogger }).logger = stubLogger();
-      // Don't actually open a socket — pass a stub channel whose `onMessage`
-      // returns a no-op disposable; findPort rejects before connectToServer is
-      // reached, so the buffer-subscription added by the race-fix never sees
-      // any messages.
+      (handler as unknown as { logger: ILogger }).logger = logger;
+      // Don't actually open a socket — findPort rejects before connectToServer
+      // is reached, so the buffer subscription never sees any messages.
+      const close = vi.fn();
       const stubChannel = {
          onMessage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
-         onClose: vi.fn().mockReturnValue({ dispose: vi.fn() })
+         onClose: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+         close
       } as unknown as Channel;
       await handler.exposeInitialize(stubChannel);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('boom'));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('boom'));
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledTimes(1);
    });
 });

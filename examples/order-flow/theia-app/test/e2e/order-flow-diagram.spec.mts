@@ -15,28 +15,14 @@
  * the data head, the diagram to the GLSP head — and a diagram that never
  * finishes loading would otherwise take the panel's passing assertions down with
  * it, or worse, be masked by them.
- *
- * The ready-marker test reads the LANGUAGE SERVER's own log rather than the UI,
- * and that is the point of it: `HydraniumGlspClientContribution.waitForBackendConnected`
- * gates the client on a server-printed marker arriving in a Theia Output
- * channel, so when the diagram hangs there are two very different causes — the
- * server never printed the marker, or it printed it and the Theia side never saw
- * it. The UI cannot tell them apart. The captured log can, and reading a file
- * perturbs nothing, whereas opening the Output view to look would itself change
- * the state under test.
  */
 
 import { expect } from '@playwright/test';
-import { resolveServerLogPath } from '@hydranium/core/testing/playwright';
 import { type TheiaApp, TheiaExplorerView } from '@theia/playwright';
-import { readFileSync } from 'node:fs';
 import { loadOrderFlowApp, test } from './order-flow-app.mjs';
 
 /** Class contract published by `@hydranium/glsp-client-theia`'s diagram widget. */
 const LOADING_OVERLAY_CLASS = 'hydranium-diagram-loading';
-
-/** Must match `ORDER_FLOW_GLSP_READY_MARKER` in `order-flow-theia`. */
-const GLSP_READY_MARKER = 'Starting GLSP server connection';
 
 /**
  * Watch for the loading overlay from *before* the diagram is opened.
@@ -110,24 +96,5 @@ test.describe.serial('Order-flow diagram in Theia', () => {
       // "slow" from "never".
       expect(await loadingOverlayWasSeen(app)).toBe(true);
       await expect(app.page.locator(`.${LOADING_OVERLAY_CLASS}`)).toHaveCount(0);
-   });
-
-   test('the GLSP ready marker is emitted on the language server connection', async () => {
-      // Diagnostic, and ordered last on purpose: it runs after the diagram test
-      // so it reports on that attempt, and it reads a file rather than the UI so
-      // it cannot itself resolve the very wait it is investigating.
-      //
-      // The marker is `JsonRpcGLSPServerLauncher.configureClientConnection`'s
-      // log line, i.e. it is printed when a client CONNECTS to the GLSP socket,
-      // not when the socket starts listening. It reaches this log through
-      // `GlspClientLogger`, the same sink that carries it to the Theia Output
-      // channel the client contribution tails — so its presence here means the
-      // server side of that handshake happened and the frontend's failure to see
-      // it is a delivery problem, and its absence means no client ever reached
-      // the socket.
-      const logPath = resolveServerLogPath(app.workspace.path);
-      expect(logPath, 'server-log capture is off; run with HYDRANIUM_SERVER_LOG_DIR set').toBeDefined();
-      const log = readFileSync(logPath!, 'utf-8');
-      expect(log).toContain(GLSP_READY_MARKER);
    });
 });

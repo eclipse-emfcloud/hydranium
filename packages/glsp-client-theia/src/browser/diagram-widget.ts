@@ -12,6 +12,7 @@ import { GLSPDiagramWidget, type GLSPDiagramWidgetOptions } from '@eclipse-glsp/
 // Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
 import { type Message } from '@theia/core/lib/browser';
+import { Emitter, type Event, nls } from '@theia/core';
 import { type Container, injectable } from '@theia/core/shared/inversify';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspSaveable } from './glsp-saveable';
@@ -47,12 +48,10 @@ export const DIAGRAM_LOADING_FAILED_CLASS = `${DIAGRAM_LOADING_CLASS}-failed`;
  * whether the canvas is pending and the two mechanisms compose instead of
  * competing.
  *
- * **The one case where this overlay reports the failure itself.** When
- * `DiagramLoadFailure.surfaced` is `false` the loader could not dispatch its
- * `StatusAction` — the action dispatcher was what failed — so the status overlay
- * shows nothing. Uncovering the canvas would then leave a blank diagram whose only
- * explanation is a line in the Output channel. In that case, and only that case,
- * the overlay stays up and swaps the spinner for the error text.
+ * A failed load keeps the overlay up with the error and a Retry, which asks for
+ * a fresh widget through {@link onDidRequestReopen}. Uncovering the canvas
+ * instead leaves it blank: GLSP's status overlay does not show the loader's
+ * report in this host.
  *
  * Bound unconditionally by `AbstractHydraniumGlspTheiaFrontendModule`. To opt out,
  * override {@link showLoadingOverlay} to a no-op; to change what is rendered,
@@ -64,6 +63,13 @@ export const DIAGRAM_LOADING_FAILED_CLASS = `${DIAGRAM_LOADING_CLASS}-failed`;
 @injectable()
 export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
    protected loadingOverlay?: HTMLElement;
+   protected readonly reopenRequestEmitter = new Emitter<void>();
+
+   /** Fires when this diagram asks to be replaced by a fresh widget, as its
+    *  Retry does; `AbstractHydraniumGlspDiagramManager` reopens it. A load is
+    *  not repeated in place, since GLSP's model source registers its handlers
+    *  once per load. */
+   readonly onDidRequestReopen: Event<void> = this.reopenRequestEmitter.event;
 
    /**
     * Replaces the saveable GLSP's `configure` builds inline, with no factory
@@ -75,6 +81,7 @@ export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
       this.saveable.dispose();
       this.saveable = this.createSaveable();
       this.toDispose.push(this.saveable);
+      this.toDispose.push(this.reopenRequestEmitter);
    }
 
    /** The widget's saveable. Override to change how saves and dirty state behave. */
@@ -121,15 +128,9 @@ export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
       );
    }
 
-   /**
-    * Take the overlay down, or keep it as the failure's only reporter.
-    *
-    * The overlay is retained ONLY for a failure the loader could not surface;
-    * anything else uncovers the canvas, so a load that failed *and was reported*
-    * reveals GLSP's status overlay rather than double-reporting on top of it.
-    */
+   /** Take the overlay down, or keep it as the failure's report. */
    protected onLoadSettled(outcome: DiagramLoadOutcome): void {
-      if (outcome.status === 'failed' && !outcome.surfaced) {
+      if (outcome.status === 'failed') {
          this.showLoadFailure(outcome.error);
          return;
       }
@@ -157,6 +158,23 @@ export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
       if (label) {
          label.textContent = loader.loadFailureLabel(error);
       }
+      overlay.appendChild(this.createRetryButton());
+   }
+
+   /** Ask for a fresh widget, after a failed load. */
+   protected retryLoad(): void {
+      if (this.hydraniumDiagramLoader?.loadOutcome?.status === 'failed') {
+         this.reopenRequestEmitter.fire();
+      }
+   }
+
+   /** Build the failure overlay's Retry button, which calls {@link retryLoad}. */
+   protected createRetryButton(): HTMLElement {
+      const button = document.createElement('button');
+      button.className = `theia-button ${DIAGRAM_LOADING_CLASS}-retry`;
+      button.textContent = nls.localize('hydranium/glsp-client-theia/diagram-load-retry', 'Retry');
+      button.addEventListener('click', () => this.retryLoad());
+      return button;
    }
 
    protected hideLoadingOverlay(): void {
