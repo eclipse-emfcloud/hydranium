@@ -117,24 +117,46 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
       // window.
       const buffered: MessageProvider[] = [];
       const bufferSub = channel.onMessage(provider => buffered.push(provider));
+      const closed = new AbortController();
+      const closeSub = channel.onClose(() => closed.abort());
       try {
-         const port = await this.findPort();
+         const port = await this.findPort(closed.signal);
+         closed.signal.throwIfAborted();
          this.logger.info(`[${this.logComponent}] Connecting to ${this.serverName} on port ${port}...`);
          await this.connectToServer(channel, port, { bufferSub, buffered });
          this.logger.info(`[${this.logComponent}] Connected to ${this.serverName} on port ${port}.`);
       } catch (error) {
          bufferSub.dispose();
+         if (closed.signal.aborted) {
+            this.logger.info(`[${this.logComponent}] Stopped connecting to ${this.serverName}: the frontend closed the channel.`);
+            return;
+         }
          const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
          this.logger.error(`[${this.logComponent}] Could not connect to ${this.serverName}: ${message}`);
          this.messageService.error(`Could not connect to ${this.serverName}: ` + message);
+      } finally {
+         closeSub.dispose();
       }
    }
 
-   protected async findPort(): Promise<number> {
+   /** Poll the port command until it answers, its attempts run out, or `signal` aborts. */
+   protected async findPort(signal?: AbortSignal): Promise<number> {
       const pendingContent = new Deferred<number>();
       let counter = 0;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stop = (): void => {
+         clearTimeout(timer);
+         pendingContent.reject(signal?.reason);
+      };
+      if (signal?.aborted) {
+         stop();
+      }
+      signal?.addEventListener('abort', stop, { once: true });
       const tryQueryingPort = (): void => {
-         setTimeout(async () => {
+         if (signal?.aborted) {
+            return;
+         }
+         timer = setTimeout(async () => {
             try {
                const port = await this.commandService.executeCommand<number>(this.portCommand);
                // An empty answer fails the attempt like a throw does: left

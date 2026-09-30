@@ -30,6 +30,11 @@ class TestHandler extends AbstractSocketForwardingConnectionHandler {
       this.replayBufferedMessages(channel, buffered);
    }
 
+   /** Reach the protected connection setup under test. */
+   initialize(channel: Channel): Promise<void> {
+      return this.initializeServerConnection(channel);
+   }
+
    /** Reach the protected port lookup under test. */
    lookUpPort(): Promise<number> {
       return this.findPort();
@@ -107,6 +112,38 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
       expect(executeCommand).toHaveBeenCalledTimes(3);
       expect(logger.debug).toHaveBeenCalledTimes(3);
       expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("'test:port'"));
+   });
+
+   /**
+    * A frontend that gave up opens a fresh channel, and the default lookup
+    * polls forever: left running for the closed one, each give-up adds a poll
+    * loop, and every loop dials once the port is published.
+    */
+   it('stops looking up the port once the frontend closes the channel', async () => {
+      const handler = new TestHandler({ ...baseOptions(), findPortTimeout: 1 });
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+      // Slower than the poll interval, so the close lands while a query is in flight.
+      const executeCommand = vi.fn(() => new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 5)));
+      const messageService = { error: vi.fn() };
+      Object.assign(handler, { logger, messageService, commandService: { executeCommand } as unknown as CommandService });
+      const channel = new ForwardingChannel(
+         'test',
+         () => {},
+         () => {
+            throw new Error('write buffer not needed for this test');
+         }
+      );
+
+      const initialized = handler.initialize(channel);
+      await vi.waitFor(() => expect(executeCommand).toHaveBeenCalled());
+      channel.onCloseEmitter.fire({ reason: 'closed by the frontend' });
+      await initialized;
+      const queries = executeCommand.mock.calls.length;
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      expect(executeCommand).toHaveBeenCalledTimes(queries);
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(messageService.error).not.toHaveBeenCalled();
    });
 
    /**
