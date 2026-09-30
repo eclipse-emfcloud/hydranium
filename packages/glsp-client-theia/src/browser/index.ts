@@ -22,6 +22,7 @@ export * from './glsp-saveable';
 export * from './glsp-theia-frontend-module';
 export * from './hidden-bounds-updater';
 export * from './hydranium-glsp-diagram-configuration';
+export * from './status-overlay';
 
 // Upstream's root entry is its browser tier and re-exports no `lib/common`, so the
 // type our abstract `diagramLanguage` members are declared with has no bare-specifier

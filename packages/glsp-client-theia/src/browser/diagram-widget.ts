@@ -37,21 +37,13 @@ export const DIAGRAM_LOADING_FAILED_CLASS = `${DIAGRAM_LOADING_CLASS}-failed`;
  * model to read as a broken editor rather than a slow one.
  *
  * **How the pending state is sourced.** From {@link HydraniumDiagramLoader}, not
- * from `actionDispatcher.onceModelInitialized()`. The loader settles on failure
- * as well as on success, and it does so even when its own error-reporting
- * dispatch throws; `onceModelInitialized()` simply never settles on a failed
- * load. That distinction is not academic here: this overlay is opaque and covers
- * the widget node, while GLSP's `StatusOverlay` — where the loader reports the
- * failure — mounts *inside* the diagram's base div. Keyed on model
- * initialization, a failed load would leave a spinner turning on top of the
- * error message explaining it. Keyed on the loader, exactly one component decides
- * whether the canvas is pending and the two mechanisms compose instead of
- * competing.
+ * from `actionDispatcher.onceModelInitialized()`: the loader settles on failure
+ * as well as on success, even when its own error report throws, while
+ * `onceModelInitialized()` never settles on a failed load and would leave the
+ * spinner turning for good.
  *
  * A failed load keeps the overlay up with the error and a Retry, which asks for
- * a fresh widget through {@link onDidRequestReopen}. Uncovering the canvas
- * instead leaves it blank: GLSP's status overlay does not show the loader's
- * report in this host.
+ * a fresh widget through {@link onDidRequestReopen}.
  *
  * Bound unconditionally by `AbstractHydraniumGlspTheiaFrontendModule`. To opt out,
  * override {@link showLoadingOverlay} to a no-op; to change what is rendered,
