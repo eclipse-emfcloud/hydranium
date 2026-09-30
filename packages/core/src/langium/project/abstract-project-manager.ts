@@ -12,13 +12,14 @@ import {
    type AstNode,
    AstUtils,
    type DocumentBuilder,
+   DocumentState,
    type FileSystemProvider,
    type LangiumDocument,
    type LangiumDocuments,
    type URI,
    UriUtils
 } from '@hydranium/langium';
-import { Disposable } from 'vscode-languageserver';
+import { CancellationToken, Disposable } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
@@ -377,6 +378,13 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    protected async loadDescriptor(uri: URI): Promise<TProject | undefined> {
       try {
          const document = await this.langiumDocuments.getOrCreateDocument(uri);
+         if (document.state < DocumentState.Parsed) {
+            // `onUpdate` fires before the build parses, so the AST is still the previous edit's.
+            // The state is restored so the build still runs, and notifies, its own parse phase.
+            const state = document.state;
+            await this.services.workspace.LangiumDocumentFactory.update(document, CancellationToken.None);
+            document.state = state;
+         }
          const project = await this.parseProjectDescriptor(uri, document);
          if (project) {
             this.projects.set(project.id, project);

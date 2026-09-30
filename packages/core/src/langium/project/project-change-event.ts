@@ -28,8 +28,8 @@ import type { URI } from '@hydranium/langium';
  * - {@link affectedDocuments} lists URIs whose reachable scope changed. The
  *   default cascade plumbing in `HydraniumWorkspaceManager` subscribes to
  *   this event and re-runs `DocumentBuilder.resetToState` for each entry,
- *   which the next build cycle picks up. Consumers can subscribe
- *   independently for other reactions.
+ *   which the build of the update that changed the descriptor picks up.
+ *   Consumers can subscribe independently for other reactions.
  */
 export interface ProjectChangeEvent<TProject extends Project = Project> {
    /** Ids of projects newly registered since the last event. */
