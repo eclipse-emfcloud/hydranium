@@ -29,11 +29,10 @@ text edits.
   with a `servicePath`; it supplies the channel, the workspace gate, the
   reconnect signal and the `MessageService` error sink. Bind one per service path
   in singleton scope. Hand it to `DataConnectionWithEvents` (from
-  `@hydranium/protocol`) with its `connectionLifecycle` —
-  `new DataConnectionWithEvents(port, port.connectionLifecycle)` — and each
-  connection reports through the `ConnectionReporter`, a data server not ready
-  after 30 s included; the connection, its sessions and its event fan-out are the
-  host-neutral ones every other shell uses.
+  `@hydranium/protocol`) and each connection reports through the
+  `ConnectionReporter`, a data server not ready after 30 s included; the
+  connection, its sessions and its event fan-out are the host-neutral ones every
+  other shell uses.
 - **`EmitterDataClient`** (on `./common`, not `./browser`) — the default
   client-side implementation of the data protocol's inbound notifications,
   fanning each one out to a Theia `Event`: `onDidUpdateDocument`,

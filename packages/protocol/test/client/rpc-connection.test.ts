@@ -85,7 +85,7 @@ interface Harness {
    dispose(): void;
 }
 
-function harness(lifecycle: RpcConnectionLifecycle = {}): Harness {
+function harness(lifecycle: RpcConnectionLifecycle = {}, portLifecycle?: RpcConnectionLifecycle): Harness {
    const pairs: DuplexConnectionPair[] = [];
    const servers: ServerDouble[] = [];
    const client = new RecordingClient();
@@ -97,6 +97,7 @@ function harness(lifecycle: RpcConnectionLifecycle = {}): Harness {
          return pair.right;
       }
    });
+   Object.assign(port, { connectionLifecycle: portLifecycle });
    const rpc = new ProbeRpcConnection<TestServer, RecordingClient>(port, client, {
       methodNamespace: WIRE_PREFIX,
       clientMethods: CLIENT_METHODS,
@@ -114,6 +115,36 @@ function harness(lifecycle: RpcConnectionLifecycle = {}): Harness {
       }
    };
 }
+
+describe('RpcConnection lifecycle', () => {
+   /** A host reports its connections through its port; a connection that had
+    *  to be handed the port's hooks as well would report nothing when not. */
+   it("calls the port's lifecycle beside the one its options pass", async () => {
+      const calls: string[] = [];
+      const test = harness(
+         { onConnecting: () => calls.push('options connecting'), onReady: () => calls.push('options ready') },
+         { onConnecting: () => calls.push('port connecting'), onReady: () => calls.push('port ready') }
+      );
+      try {
+         await test.rpc.connected();
+         expect(calls).toEqual(['port connecting', 'options connecting', 'port ready', 'options ready']);
+      } finally {
+         test.dispose();
+      }
+   });
+
+   it('calls a lifecycle passed both ways once', async () => {
+      let connecting = 0;
+      const lifecycle: RpcConnectionLifecycle = { onConnecting: () => connecting++ };
+      const test = harness(lifecycle, lifecycle);
+      try {
+         await test.rpc.connected();
+         expect(connecting).toBe(1);
+      } finally {
+         test.dispose();
+      }
+   });
+});
 
 describe('RpcConnection reconnect', () => {
    it('builds a fresh generation after the port disposes', async () => {

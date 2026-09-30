@@ -9,6 +9,7 @@
 
 import type { Event, MessageConnection } from 'vscode-jsonrpc';
 import type { ResolvedMessage } from '../messages/primitives';
+import type { RpcConnectionLifecycle } from './rpc-connection';
 
 /**
  * The one thing a host has to supply for the data head: a live JSON-RPC
@@ -28,7 +29,7 @@ import type { ResolvedMessage } from '../messages/primitives';
  * method allowlists, which cannot drift. Everything a form or a tree actually
  * does — the wire contract, the open/watch/update/close sequence, `basedOn`
  * conflict handling, echo filtering by `sourceClientId` — is host-invariant and
- * lives above this interface. What varies between hosts is exactly the four
+ * lives above this interface. What varies between hosts is exactly the
  * members below.
  *
  * **Why the transport hop and not merely the protocol.** In a Theia frontend
@@ -90,4 +91,11 @@ export interface DataPort {
     * `Disposable` on the *wire* would not be.
     */
    readonly onDispose: Event<void>;
+
+   /**
+    * Called for each connection generation, beside the lifecycle the
+    * connection's options pass, so a host reporting its connections itself
+    * does so without every connection built over it passing this on.
+    */
+   readonly connectionLifecycle?: RpcConnectionLifecycle;
 }
