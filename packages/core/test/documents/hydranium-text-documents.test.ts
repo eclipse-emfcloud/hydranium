@@ -79,7 +79,11 @@ function makeLogger(): LoggerStub {
    return stub;
 }
 
-function makeSharedServices(connection: ConnectionStub | undefined, logger?: LoggerStub): ServerSharedServices {
+function makeSharedServices(
+   connection: ConnectionStub | undefined,
+   logger?: LoggerStub,
+   uriPolicy: unknown = new DefaultDocumentUriPolicy()
+): ServerSharedServices {
    return {
       lsp: connection ? { Connection: connection } : undefined,
       Logger: { for: () => logger },
@@ -92,12 +96,15 @@ function makeSharedServices(connection: ConnectionStub | undefined, logger?: Log
          WorkspaceManager: { workspaceInitialized: Promise.resolve() },
          // The store always resolves keys through the canonicalizer; the framework
          // default (syntactic normalize) is what production binds absent a stronger identity.
-         DocumentUriPolicy: new DefaultDocumentUriPolicy()
+         DocumentUriPolicy: uriPolicy
       }
    } as unknown as ServerSharedServices;
 }
 
-function makeDocs(connection: ConnectionStub | undefined = undefined): {
+function makeDocs(
+   connection: ConnectionStub | undefined = undefined,
+   uriPolicy?: unknown
+): {
    docs: HydraniumTextDocuments<TextDocument>;
    recorded: RecordedApplyEdit[];
    logger: LoggerStub;
@@ -112,7 +119,7 @@ function makeDocs(connection: ConnectionStub | undefined = undefined): {
       }
    };
    const logger = makeLogger();
-   const services = makeSharedServices(wrappedConnection, logger);
+   const services = makeSharedServices(wrappedConnection, logger, uriPolicy);
    // The framework's tracer surface is `with(uri).warn(msg)`; the LoggerStub
    // matches it and is returned from both `services.Logger.for(...)` and
    // `services.Tracer.for(...)` — the latter is what the constructor resolves.
@@ -395,6 +402,340 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
       // against also drops the header line and half a member, so counting one
       // marker would pass on a differently-shaped corruption.
       expect(clientText).toBe(USER_EDITED);
+   });
+
+   describe('a push that follows an applied one before its echo', () => {
+      // A version-checking client that steps its version once per applied edit
+      // and holds the echoes back, as an editor does for its echo latency.
+      function makeEchoingClient(): {
+         docs: HydraniumTextDocuments<TextDocument>;
+         recorded: RecordedApplyEdit[];
+         logger: LoggerStub;
+         client: { text: string; version: number };
+         deliverEchoes: () => void;
+         holdNextReply: () => () => void;
+      } {
+         const client = { text: 'a\nb\nc\n', version: 1 };
+         const echoes: Array<{ version: number; edits: TextEdit[] }> = [];
+         let heldReply: Promise<void> | undefined;
+         const { docs, recorded, logger } = makeDocs({
+            workspace: {
+               applyEdit: async params => {
+                  const change = params.edit.documentChanges![0] as { textDocument: { version: number | null }; edits: TextEdit[] };
+                  if (change.textDocument.version !== null && change.textDocument.version !== client.version) {
+                     return { applied: false };
+                  }
+                  const text = TextDocumentImpl.applyEdits(TextDocumentImpl.create(URI, 'plaintext', 0, client.text), change.edits);
+                  // An edit that changes nothing is applied without a step or an echo.
+                  if (text !== client.text) {
+                     client.text = text;
+                     client.version++;
+                     echoes.push({ version: client.version, edits: change.edits });
+                  }
+                  const reply = heldReply;
+                  heldReply = undefined;
+                  await reply;
+                  return { applied: true };
+               }
+            }
+         });
+         const deliverEchoes = (): void => {
+            for (const echo of echoes.splice(0)) {
+               docs.notifyDidChangeTextDocument(
+                  {
+                     textDocument: { uri: URI, version: echo.version },
+                     contentChanges: echo.edits.map(edit => ({ range: edit.range, text: edit.newText }))
+                  },
+                  LANGUAGE_CLIENT_ID
+               );
+            }
+         };
+         // The next push applies at once but answers only on release.
+         const holdNextReply = (): (() => void) => {
+            let release: () => void = () => undefined;
+            heldReply = new Promise<void>(resolve => (release = resolve));
+            return release;
+         };
+         openInLanguageClient(docs, client.text);
+         return { docs, recorded, logger, client, deliverEchoes, holdNextReply };
+      }
+
+      it('is addressed at the version the applied push moved the client to', async () => {
+         const { docs, recorded, client } = makeEchoingClient();
+
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         const second = await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
+
+         expect(second).toEqual({ applied: true });
+         const identifier = (recorded[1].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+         expect(identifier.version).toBe(2);
+         expect(client.text).toBe('a\nB\nC\n');
+      });
+
+      it('still recognises the late echoes, and addresses the next push past them', async () => {
+         const { docs, recorded, logger, client, deliverEchoes } = makeEchoingClient();
+
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
+         deliverEchoes();
+         const third = await docs.applyEditToLanguageClient(URI, 'A\nB\nC\n');
+
+         expect(logger.warnCalls).toEqual([]);
+         expect(third).toEqual({ applied: true });
+         const identifier = (recorded[2].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+         expect(identifier.version).toBe(3);
+         expect(client.text).toBe('A\nB\nC\n');
+         // A dropped echo would leave its push pending, and this keystroke's
+         // range would then be read against the text before that push.
+         deliverEchoes();
+         client.version++;
+         docs.notifyDidChangeTextDocument(
+            {
+               textDocument: { uri: URI, version: client.version },
+               contentChanges: [{ range: Range.create(3, 0, 3, 0), text: 'd\n' }]
+            },
+            LANGUAGE_CLIENT_ID
+         );
+         expect(docs.get(URI)?.getText()).toBe('A\nB\nC\nd\n');
+      });
+
+      it('is addressed at the declared version after a full replace that changed nothing', async () => {
+         const { docs, recorded, client } = makeEchoingClient();
+         // No baseline, so the push is a full replace; the client already holds its text.
+         docs.invalidateLanguageClientText(URI);
+         await docs.applyEditToLanguageClient(URI, client.text);
+
+         const next = await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+
+         const identifier = (recorded[1].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+         expect(identifier.version).toBe(1);
+         expect(next).toEqual({ applied: true });
+      });
+
+      it('is addressed at the reopened buffer, not a version pushed before the close', async () => {
+         const { docs, recorded, client, deliverEchoes } = makeEchoingClient();
+         // Another holder keeps the tracking record alive across the editor's close.
+         docs.attachClient(URI, 'data-session');
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
+         await docs.applyEditToLanguageClient(URI, 'A\nB\nC\n');
+         deliverEchoes();
+         docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+
+         // Reopened from disk, so the buffer numbers from 1 again. Joining a held
+         // document makes the first push a full replace, and its echo a baseline.
+         client.text = 'a\nb\nc\n';
+         client.version = 1;
+         openInLanguageClient(docs, client.text);
+         await docs.applyEditToLanguageClient(URI, 'A\nB\nC\n');
+         deliverEchoes();
+         await docs.applyEditToLanguageClient(URI, 'A\nB\nC2\n');
+
+         const identifier = (recorded[4].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+         expect(identifier.version).toBe(2);
+         expect(client.text).toBe('A\nB\nC2\n');
+      });
+
+      it('names both versions when the client refuses a push', async () => {
+         const { docs, logger, client } = makeEchoingClient();
+
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         // A keystroke in the editor that the server has not heard of yet.
+         client.version++;
+         const second = await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
+
+         expect(second).toEqual({ applied: false });
+         expect(logger.warnCalls.map(call => call.message)).toEqual([
+            'Language client refused applyEdit addressed at version 2 (it last declared version 1)'
+         ]);
+      });
+
+      it('is addressed at a declared version that has overtaken the pushed one', async () => {
+         const { docs, client, deliverEchoes } = makeEchoingClient();
+
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         deliverEchoes();
+         // A keystroke the server has heard, so the client declared past the push.
+         client.text = 'a\nB\nc\nd\n';
+         client.version++;
+         docs.notifyDidChangeTextDocument(
+            { textDocument: { uri: URI, version: client.version }, contentChanges: [{ text: client.text }] },
+            LANGUAGE_CLIENT_ID
+         );
+         const second = await docs.applyEditToLanguageClient(URI, 'a\nB\nC\nd\n');
+
+         expect(second).toEqual({ applied: true });
+         expect(client.text).toBe('a\nB\nC\nd\n');
+      });
+
+      it('is not addressed at a version reported by a reply that lands after a reopen', async () => {
+         const { docs, recorded, client, deliverEchoes, holdNextReply } = makeEchoingClient();
+         // Another holder keeps the tracking record alive across the editor's close.
+         docs.attachClient(URI, 'data-session');
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         deliverEchoes();
+         const release = holdNextReply();
+         const inFlight = docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
+
+         // The editor closes and reopens from disk before that reply arrives.
+         docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+         client.text = 'a\nB\nC\n';
+         client.version = 1;
+         openInLanguageClient(docs, client.text);
+         release();
+         await inFlight;
+         // A heard keystroke gives the store a baseline for a line-keyed push.
+         client.text = 'a\nB\nC\nd\n';
+         client.version = 2;
+         docs.notifyDidChangeTextDocument(
+            { textDocument: { uri: URI, version: client.version }, contentChanges: [{ text: client.text }] },
+            LANGUAGE_CLIENT_ID
+         );
+         const next = await docs.applyEditToLanguageClient(URI, 'A\nB\nC\nd\n');
+
+         const identifier = (recorded.at(-1)!.params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
+         expect(identifier.version).toBe(2);
+         expect(next).toEqual({ applied: true });
+      });
+   });
+
+   describe('a file open under two language-client URIs', () => {
+      const REAL = 'file:///real/a.x';
+      const LINK = 'file:///link/a.x';
+      const toText = (uri: string | { toString(): string }): string => (typeof uri === 'string' ? uri : uri.toString());
+      const linkAware = {
+         canonicalUri: (uri: string | { toString(): string }): string => (toText(uri) === LINK ? REAL : toText(uri)),
+         loadUri: (uri: string | { toString(): string }) => ({ toString: () => (toText(uri) === LINK ? REAL : toText(uri)) })
+      };
+
+      // Two version-checking tabs, each its own buffer with its own counter, both
+      // brought to version 2 with the store holding a baseline for each.
+      async function makeTwoTabs(): Promise<{
+         docs: HydraniumTextDocuments<TextDocument>;
+         tabs: Record<string, { text: string; version: number }>;
+      }> {
+         const tabs: Record<string, { text: string; version: number }> = {
+            [LINK]: { text: 'a\nb\n', version: 1 },
+            [REAL]: { text: 'a\nb\n', version: 1 }
+         };
+         const { docs } = makeDocs(
+            {
+               workspace: {
+                  applyEdit: async params => {
+                     const change = params.edit.documentChanges![0] as {
+                        textDocument: { uri: string; version: number | null };
+                        edits: TextEdit[];
+                     };
+                     const tab = tabs[change.textDocument.uri];
+                     if (change.textDocument.version !== null && change.textDocument.version !== tab.version) {
+                        return { applied: false };
+                     }
+                     tab.text = TextDocumentImpl.applyEdits(TextDocumentImpl.create(REAL, 'plaintext', 0, tab.text), change.edits);
+                     tab.version++;
+                     return { applied: true };
+                  }
+               }
+            },
+            linkAware
+         );
+         for (const uri of [LINK, REAL]) {
+            docs.notifyDidOpenTextDocument(
+               { textDocument: { uri, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+               LANGUAGE_CLIENT_ID
+            );
+         }
+         await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
+         for (const uri of [LINK, REAL]) {
+            docs.notifyDidChangeTextDocument(
+               { textDocument: { uri, version: 2 }, contentChanges: [{ text: 'a\nB\n' }] },
+               LANGUAGE_CLIENT_ID
+            );
+         }
+         return { docs, tabs };
+      }
+
+      it('addresses each tab at its own version', async () => {
+         const { docs, tabs } = await makeTwoTabs();
+
+         const result = await docs.applyEditToLanguageClient(REAL, 'a\nB\nc\n');
+
+         expect(result).toEqual({ applied: true });
+         expect(tabs[LINK].text).toBe('a\nB\nc\n');
+         expect(tabs[REAL].text).toBe('a\nB\nc\n');
+      });
+
+      it('does not splice a tab whose unheard keystroke reached the version the other tab was pushed to', async () => {
+         const { docs, tabs } = await makeTwoTabs();
+         tabs[REAL] = { text: 'z\na\nB\n', version: 3 };
+
+         await docs.applyEditToLanguageClient(REAL, 'a\nX\n');
+
+         expect(tabs[REAL].text).toBe('z\na\nB\n');
+      });
+
+      // A keystroke the store hears, as a full-text change at the tab's next version.
+      function type(
+         docs: HydraniumTextDocuments<TextDocument>,
+         tabs: Record<string, { text: string; version: number }>,
+         uri: string,
+         text: string
+      ): void {
+         tabs[uri] = { text, version: tabs[uri].version + 1 };
+         docs.notifyDidChangeTextDocument(
+            { textDocument: { uri, version: tabs[uri].version }, contentChanges: [{ text }] },
+            LANGUAGE_CLIENT_ID
+         );
+      }
+
+      it("applies one tab's change after the other declared a higher version", async () => {
+         const { docs, tabs } = await makeTwoTabs();
+         type(docs, tabs, LINK, 'a\nB\nl3\n');
+         type(docs, tabs, LINK, 'a\nB\nl3\nl4\n');
+
+         type(docs, tabs, REAL, 'r\na\nB\n');
+
+         expect(docs.get(REAL)?.getText()).toBe('r\na\nB\n');
+      });
+
+      it('addresses each tab at the version that tab declared', async () => {
+         const { docs, tabs } = await makeTwoTabs();
+         type(docs, tabs, LINK, 'a\nB\nl3\n');
+         type(docs, tabs, LINK, 'a\nB\nl3\nl4\n');
+
+         const result = await docs.applyEditToLanguageClient(REAL, 'a\nB\nl3\nl4\nS\n');
+
+         expect(result).toEqual({ applied: true });
+         expect(tabs[REAL].text).toBe('a\nB\nl3\nl4\nS\n');
+      });
+
+      it('keeps the document open while the other tab still holds it', async () => {
+         const { docs, tabs } = await makeTwoTabs();
+
+         docs.notifyDidCloseTextDocument({ textDocument: { uri: LINK } }, LANGUAGE_CLIENT_ID);
+         type(docs, tabs, REAL, 'r\na\nB\n');
+
+         expect(docs.isOpenInAnyClient(REAL)).toBe(true);
+         expect(docs.get(REAL)?.getText()).toBe('r\na\nB\n');
+         docs.notifyDidCloseTextDocument({ textDocument: { uri: REAL } }, LANGUAGE_CLIENT_ID);
+         expect(docs.isOpenInAnyClient(REAL)).toBe(false);
+      });
+
+      it('closes every tab when the document is deleted, so a reopen recreates it', async () => {
+         const { docs, tabs } = await makeTwoTabs();
+
+         docs.delete(REAL);
+
+         expect(docs.get(REAL)).toBeUndefined();
+         expect(docs.isOpenInAnyClient(REAL)).toBe(false);
+         tabs[REAL] = { text: 'b\n', version: 1 };
+         docs.notifyDidOpenTextDocument(
+            { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'b\n' } },
+            LANGUAGE_CLIENT_ID
+         );
+         expect(docs.get(REAL)?.getText()).toBe('b\n');
+         type(docs, tabs, REAL, 'b\nc\n');
+         expect(docs.get(REAL)?.getText()).toBe('b\nc\n');
+      });
    });
 });
 
@@ -1694,7 +2035,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
    class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
       languageClientState(uri: string): { uris: string[]; shadowed: string[]; pending: string[] } {
          return {
-            uris: [...(this.__documents.get(this.documentKey(uri))?.languageClientUris ?? [])].sort(),
+            uris: [...(this.__documents.get(this.documentKey(uri))?.languageClientDocuments?.keys() ?? [])].sort(),
             shadowed: [LINK, REAL].filter(clientUri => this.__shadow.isTracked(clientUri)).sort(),
             pending: [...this.__pendingPushes.keys()].sort()
          };
