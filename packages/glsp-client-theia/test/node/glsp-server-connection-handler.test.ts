@@ -106,7 +106,8 @@ describe('GlspServerConnectionHandler', () => {
       // reached, so the buffer-subscription added by the race-fix never sees
       // any messages.
       const stubChannel = {
-         onMessage: vi.fn().mockReturnValue({ dispose: vi.fn() })
+         onMessage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+         onClose: vi.fn().mockReturnValue({ dispose: vi.fn() })
       } as unknown as Channel;
       await handler.exposeInitialize(stubChannel);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('boom'));
