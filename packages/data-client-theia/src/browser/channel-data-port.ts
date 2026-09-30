@@ -7,7 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { ChannelLogger, ConnectionReporter, type ConnectionAttempt, type ConnectionTarget } from '@hydranium/client-theia/lib/browser';
+import {
+   DATA_SERVER_CONNECT_FAILED,
+   DATA_SERVER_NOT_READY,
+   renderFrameworkMessage,
+   type DataPort,
+   type ResolvedMessage,
+   type RpcConnectionLifecycle
+} from '@hydranium/protocol';
 import { Emitter, MessageService, nls, type Event } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { RemoteConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
@@ -34,6 +42,8 @@ export abstract class ChannelDataPort implements DataPort {
    @inject(RemoteConnectionProvider) protected readonly connectionProvider!: ServiceConnectionProvider;
    @inject(WorkspaceService) protected readonly workspaceService!: WorkspaceService;
    @inject(MessageService) protected readonly messageService!: MessageService;
+   @inject(ConnectionReporter) protected readonly connectionReporter!: ConnectionReporter;
+   @inject(ChannelLogger) protected readonly logger!: ChannelLogger;
 
    /** Frontend service path the backend forwarder for this head is registered under. */
    protected abstract readonly servicePath: string;
@@ -50,6 +60,34 @@ export abstract class ChannelDataPort implements DataPort {
    readonly onDispose: Event<void> = this.disposeEmitter.event;
 
    protected handle?: ChannelConnectionHandle;
+
+   /** How long a connection may take before it is reported as failed; it keeps trying after. */
+   protected readonly connectFailureNoticeMs: number = 30_000;
+   protected attempt?: ConnectionAttempt;
+   protected attemptTimer?: ReturnType<typeof setTimeout>;
+   /** Set once {@link connectionLifecycle} reports, which then owns the connection failures. */
+   protected reportsConnections = false;
+
+   /**
+    * Reports each connection generation through the {@link ConnectionReporter}.
+    * Pass it to the `DataConnection` built over this port; without it the
+    * connection failures are raised as notifications of their own.
+    */
+   readonly connectionLifecycle: RpcConnectionLifecycle = {
+      onConnecting: () => {
+         this.reportsConnections = true;
+         this.settleAttempt();
+         const attempt = this.connectionReporter.connecting(this.connectionTarget);
+         this.attempt = attempt;
+         this.attemptTimer = setTimeout(() => {
+            attempt.failed(this.connectTimeoutMessage());
+            // The generation keeps waiting; a follow-up attempt reports it connecting.
+            this.attempt = this.connectionReporter.connecting(this.connectionTarget);
+         }, this.connectFailureNoticeMs);
+      },
+      onReady: () => this.settleAttempt(attempt => attempt.connected()),
+      onFailed: () => this.settleAttempt(attempt => attempt.failed(this.unreachableMessage()))
+   };
 
    /**
     * Open the workspace-gated channel and hand back its listening connection.
@@ -88,10 +126,49 @@ export abstract class ChannelDataPort implements DataPort {
     * inside another's and leave no translator in control of the whole.
     */
    reportError(_error: unknown, reported: ResolvedMessage): void {
-      this.messageService.error(renderFrameworkMessage(reported, nls.localization?.translations));
+      const connectionFailure = reported.code === DATA_SERVER_CONNECT_FAILED.code || reported.code === DATA_SERVER_NOT_READY.code;
+      const message = renderFrameworkMessage(reported, nls.localization?.translations);
+      if (connectionFailure && this.reportsConnections) {
+         // The reporter shows the failure without its detail, so it is kept here.
+         this.logger.warn(message);
+         return;
+      }
+      this.messageService.error(message);
+   }
+
+   /** End the current attempt through `settle`, or cancel it. */
+   protected settleAttempt(settle: (attempt: ConnectionAttempt) => void = attempt => attempt.cancelled()): void {
+      clearTimeout(this.attemptTimer);
+      const attempt = this.attempt;
+      this.attempt = undefined;
+      if (attempt) {
+         settle(attempt);
+      }
+   }
+
+   protected get connectionTarget(): ConnectionTarget {
+      return (this.cachedConnectionTarget ??= {
+         connectingMessage: nls.localize('hydranium/data-client-theia/data-server-connecting', 'Connecting to the data server…'),
+         connectedMessage: nls.localize('hydranium/data-client-theia/data-server-connected', 'Connected to the data server.')
+      });
+   }
+   /** One object per port: the reporter keys what it has shown on it. */
+   protected cachedConnectionTarget?: ConnectionTarget;
+
+   protected unreachableMessage(): string {
+      return nls.localize('hydranium/data-client-theia/data-server-unreachable', 'Could not connect to the data server.');
+   }
+
+   protected connectTimeoutMessage(): string {
+      return nls.localize(
+         'hydranium/data-client-theia/data-server-timeout',
+         'The data server did not answer within {0} seconds.',
+         String(Math.round(this.connectFailureNoticeMs / 1000))
+      );
    }
 
    dispose(): void {
+      this.settleAttempt();
       this.handle?.dispose();
       this.handle = undefined;
       this.disposeEmitter.fire(undefined);

@@ -17,13 +17,15 @@
 // `super.bindGLSPClientContribution` binds the token itself, so "this override
 // bound it" and "the base bound it" would produce the same observable and every
 // assertion below would pass whatever the override did.
-const { bindLogLevelPreferenceMock, registerDiagramManagerMock, superCalls } = vi.hoisted(() => ({
+const { bindConnectionReporterMock, bindLogLevelPreferenceMock, registerDiagramManagerMock, superCalls } = vi.hoisted(() => ({
+   bindConnectionReporterMock: vi.fn(),
    bindLogLevelPreferenceMock: vi.fn(),
    registerDiagramManagerMock: vi.fn(),
    superCalls: { initialize: 0, bindGLSPClientContribution: 0, bindDiagramWidgetFactory: 0 }
 }));
 
 vi.mock('@hydranium/client-theia/lib/browser', () => ({
+   bindConnectionReporter: bindConnectionReporterMock,
    bindLogLevelPreference: bindLogLevelPreferenceMock,
    ChannelLogger: class ChannelLogger {}
 }));
@@ -169,6 +171,14 @@ describe('AbstractHydraniumGlspTheiaFrontendModule', () => {
 
          expect(superCalls.initialize).toBe(1);
          expect(bindLogLevelPreferenceMock).not.toHaveBeenCalled();
+      });
+
+      /** The client contribution reports through the slot, so a module that
+       *  forgets it fails at the contribution's construction. */
+      it('binds the connection reporter the client contribution reports through', () => {
+         new ModuleUnderTest().initialize(recorder);
+
+         expect(bindConnectionReporterMock).toHaveBeenCalledWith(recorder.bind, recorder.isBound);
       });
 
       it('binds the log-level preference on top of the base wiring when one is named', () => {

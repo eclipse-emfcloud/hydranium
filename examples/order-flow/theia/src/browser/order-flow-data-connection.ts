@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { bindConnectionReporter } from '@hydranium/client-theia/lib/browser';
 import { DataSessionStopContribution } from '@hydranium/data-client-theia/lib/browser';
 import {
    DataConnectionWithEvents,
@@ -50,7 +51,7 @@ export interface OrderFlowDataServer extends DataServerProtocol<OrderFlowTransfe
 @injectable()
 export class OrderFlowDataConnection extends DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer> {
    constructor(@inject(OrderFlowTheiaDataPort) port: OrderFlowTheiaDataPort) {
-      super(port);
+      super(port, port.connectionLifecycle);
    }
 }
 
@@ -67,6 +68,7 @@ export function bindOrderFlowDataConnection(bind: interfaces.Bind, isBound: inte
    if (isBound(OrderFlowTheiaDataPort)) {
       return;
    }
+   bindConnectionReporter(bind, isBound);
    bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
    bind(OrderFlowDataConnection)
       .toSelf()

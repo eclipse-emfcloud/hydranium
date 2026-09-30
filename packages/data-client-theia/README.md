@@ -29,8 +29,11 @@ text edits.
   with a `servicePath`; it supplies the channel, the workspace gate, the
   reconnect signal and the `MessageService` error sink. Bind one per service path
   in singleton scope. Hand it to `DataConnectionWithEvents` (from
-  `@hydranium/protocol`) and the connection, its sessions and its event fan-out
-  are the host-neutral ones every other shell uses.
+  `@hydranium/protocol`) with its `connectionLifecycle` —
+  `new DataConnectionWithEvents(port, port.connectionLifecycle)` — and each
+  connection reports through the `ConnectionReporter`, a data server not ready
+  after 30 s included; the connection, its sessions and its event fan-out are the
+  host-neutral ones every other shell uses.
 - **`EmitterDataClient`** (on `./common`, not `./browser`) — the default
   client-side implementation of the data protocol's inbound notifications,
   fanning each one out to a Theia `Event`: `onDidUpdateDocument`,
@@ -83,8 +86,10 @@ extension builds on. That extension's `package.json` declares the entries, and
 each entry names one frontend/backend module pair:
 
 - the **frontend** module binds your `ChannelDataPort` subclass and the
-  connection over it, both in singleton scope (and, for the diagnostics commands,
-  calls `bindHostDiagnostics`);
+  connection over it, both in singleton scope, and calls
+  `bindConnectionReporter` and `bindChannelLogger` from `@hydranium/client-theia`
+  (the port logs the connection failures it leaves to the reporter there), and,
+  for the diagnostics commands, `bindHostDiagnostics`;
 - the **backend** module is typically a one-liner:
   `export default createDataServerConnectionContainerModule(MyHandler)`, where
   `MyHandler` extends `DataServerConnectionHandler`.

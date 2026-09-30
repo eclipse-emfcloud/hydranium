@@ -19,6 +19,8 @@
 import { forwardBrowserConsole, serverLogFixtures, type ServerLogFixtures } from '@hydranium/core/testing/playwright';
 import { expect, test as base, type Browser, type PlaywrightWorkerArgs } from '@playwright/test';
 import { type TheiaApp, TheiaAppLoader, TheiaExplorerView, TheiaView, TheiaWorkspace } from '@theia/playwright';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 
 /**
@@ -237,4 +239,34 @@ async function pickQuickInputItem(app: TheiaApp, filter: string, expected = filt
    const focused = app.page.locator(`${QUICK_INPUT} .monaco-list-row.focused .monaco-highlighted-label`);
    await expect(focused).toHaveText(expected);
    await app.page.keyboard.press('Enter');
+}
+
+/**
+ * Matches the forked language server, and nothing else on the machine.
+ *
+ * RESOLVED, not written out. The VS Code extension launches the server with
+ * exactly this specifier, and `require.resolve` reports the realpath — so this
+ * is the absolute path that appears in the child's argv, derived the same way
+ * the launcher derives it. A hand-written fragment of that path instead rots
+ * silently in BOTH directions, and both have happened here: after the example
+ * moved one directory deeper the old fragment matched nothing, and because
+ * `pgrep` exits 1 on no match and {@link languageServerPids} maps that to an
+ * empty list, the spec stops testing restart recovery rather than failing. The
+ * mirror image is worse, because it looks like a pass: a fragment loose enough
+ * to match a leftover process from a previous layout makes the guard below
+ * succeed and `pkill` kill something the test never started.
+ */
+export const SERVER_PROCESS_PATTERN = createRequire(import.meta.url).resolve('@hydranium/example-order-flow-server/lib/main.js');
+
+/** PIDs of the running language servers. Empty is a legitimate answer. */
+export function languageServerPids(): string[] {
+   try {
+      return execFileSync('pgrep', ['-f', SERVER_PROCESS_PATTERN], { encoding: 'utf-8' })
+         .split('\n')
+         .map(line => line.trim())
+         .filter(line => line.length > 0);
+   } catch {
+      // `pgrep` exits 1 when nothing matches.
+      return [];
+   }
 }

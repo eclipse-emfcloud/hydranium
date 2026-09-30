@@ -7,8 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The real base class pulls Theia's monaco-coupled chain. The stand-in carries
-// only the members the contribution reads, with upstream's defaults.
+// The real base class pulls Theia's monaco-coupled chain, and the real
+// client-theia browser barrel touches `document`. The stand-ins carry only what
+// the contribution reads, with upstream's defaults.
 vi.mock('@eclipse-glsp/theia-integration', async () => {
    const { Deferred } = await import('@theia/core/lib/common/promise-util');
    const { DisposableCollection } = await import('@theia/core');
@@ -30,21 +31,50 @@ vi.mock('@eclipse-glsp/theia-integration', async () => {
       }
    };
 });
+vi.mock('@hydranium/client-theia/lib/browser', () => ({
+   ChannelLogger: class ChannelLogger {},
+   ConnectionReporter: Symbol('ConnectionReporter')
+}));
 vi.mock('@theia/workspace/lib/browser', () => ({
    WorkspaceService: class WorkspaceService {}
 }));
 
+import { ClientState } from '@eclipse-glsp/client';
 import { type Channel } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS, HydraniumGlspClientContribution } from '../../src/browser/client-contribution';
+
+interface FakeConnection {
+   onDispose(): void;
+   onClose(listener: () => void): void;
+   close(): void;
+}
+
+function makeConnection(): FakeConnection {
+   const listeners: Array<() => void> = [];
+   return {
+      onDispose: () => undefined,
+      onClose: listener => listeners.push(listener),
+      close: () => listeners.forEach(listener => listener())
+   };
+}
 
 interface FakeClient {
    readonly name: string;
    start(): Promise<void>;
    initializeServer(): Promise<object>;
    stop(): void;
+   onCurrentStateChanged(listener: (state: ClientState) => void): { dispose(): void };
+   setState(state: ClientState): void;
+}
+
+/** What the reporter was told, one entry per attempt. */
+interface ReportedAttempt {
+   outcome?: 'connected' | 'failed' | 'cancelled';
+   message?: string;
+   retry?: () => void;
 }
 
 /** Each start takes its connection from `connections`, in order, so a test
@@ -52,19 +82,28 @@ interface FakeClient {
 class TestContribution extends HydraniumGlspClientContribution {
    readonly connections: Array<Deferred<FakeConnection>> = [];
    readonly clients: FakeClient[] = [];
-   readonly errors = vi.fn(async (_message: string, ..._actions: string[]): Promise<string | undefined> => undefined);
+   readonly attempts: ReportedAttempt[] = [];
    readonly infos = vi.fn();
-   readonly progress = { cancel: vi.fn() };
-   readonly showProgress = vi.fn(async () => this.progress);
    /** Whether each client's `initializeServer` never answers. */
    initializeHangs = false;
 
-   constructor(startupTimeoutMs?: number, connectingNoticeDelayMs = 1_000) {
+   constructor(startupTimeoutMs?: number) {
       super({ languageContributionId: 'test', startupTimeoutMs });
       Object.assign(this, {
-         connectingNoticeDelayMs,
+         restartDelaysMs: [1],
          workspaceService: { tryGetRoots: () => [{}] },
-         messageService: { error: this.errors, info: this.infos, showProgress: this.showProgress }
+         logger: { info: this.infos },
+         connectionReporter: {
+            connecting: () => {
+               const attempt: ReportedAttempt = {};
+               this.attempts.push(attempt);
+               return {
+                  connected: () => (attempt.outcome = 'connected'),
+                  cancelled: () => (attempt.outcome = 'cancelled'),
+                  failed: (message: string, retry?: () => void) => Object.assign(attempt, { outcome: 'failed', message, retry })
+               };
+            }
+         }
       });
    }
 
@@ -100,57 +139,65 @@ class TestContribution extends HydraniumGlspClientContribution {
    }
 
    protected override async createGLSPClient(): Promise<never> {
+      const listeners: Array<(state: ClientState) => void> = [];
       const client: FakeClient = {
          name: `client ${this.clients.length + 1}`,
          start: async () => undefined,
          initializeServer: () => (this.initializeHangs ? new Promise<object>(() => undefined) : Promise.resolve({})),
-         stop: () => undefined
+         stop: () => undefined,
+         onCurrentStateChanged: listener => {
+            listeners.push(listener);
+            return { dispose: () => listeners.splice(listeners.indexOf(listener), 1) };
+         },
+         setState: state => [...listeners].forEach(listener => listener(state))
       };
       this.clients.push(client);
       return client as never;
    }
 }
 
-interface FakeConnection {
-   onDispose(): void;
-   onClose(listener: () => void): void;
-   close(): void;
-}
-
-function makeConnection(): FakeConnection {
-   const listeners: Array<() => void> = [];
-   return {
-      onDispose: () => undefined,
-      onClose: listener => listeners.push(listener),
-      close: () => listeners.forEach(listener => listener())
-   };
-}
-
-const connection = makeConnection();
-
 describe('HydraniumGlspClientContribution', () => {
+   const contributions: TestContribution[] = [];
+   const make = (startupTimeoutMs?: number): TestContribution => {
+      const contribution = new TestContribution(startupTimeoutMs);
+      contributions.push(contribution);
+      return contribution;
+   };
+   afterEach(() => contributions.splice(0).forEach(contribution => contribution.dispose()));
+
    it('bounds a start by 30 s unless the options say otherwise', () => {
-      expect(new TestContribution().startupTimeout).toBe(DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS);
+      expect(make().startupTimeout).toBe(DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS);
       expect(DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS).toBe(30_000);
-      expect(new TestContribution(5).startupTimeout).toBe(5);
+      expect(make(5).startupTimeout).toBe(5);
+   });
+
+   it('reports a start that connects', async () => {
+      const contribution = make();
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+
+      const client = await contribution.glspClient;
+      expect(client).toBe(contribution.clients[0]);
+      expect(contribution.attempts).toEqual([{ outcome: 'connected' }]);
    });
 
    /**
     * A server that never answers leaves every diagram load waiting on the
     * client, with nothing reported.
     */
-   it('fails a start that runs out of time and offers a Retry', async () => {
-      const contribution = new TestContribution(10);
+   it('fails a start that runs out of time, with a Retry', async () => {
+      const contribution = make(10);
       contribution.nextConnection();
       void contribution.begin();
 
       await expect(contribution.glspClient).rejects.toThrow('The diagram server did not answer within 0 seconds.');
-      await vi.waitFor(() => expect(contribution.errors).toHaveBeenCalledTimes(1));
-      expect(contribution.errors).toHaveBeenCalledWith('The diagram server did not answer within 0 seconds.', 'Retry');
+      await vi.waitFor(() => expect(contribution.attempts[0].outcome).toBe('failed'));
+      expect(contribution.attempts[0].message).toBe('The diagram server did not answer within 0 seconds.');
+      expect(contribution.attempts[0].retry).toBeTypeOf('function');
    });
 
    it('fails a start whose connection closes before the server answers', async () => {
-      const contribution = new TestContribution();
+      const contribution = make();
       contribution.initializeHangs = true;
       const closing = makeConnection();
       contribution.nextConnection().resolve(closing);
@@ -159,75 +206,142 @@ describe('HydraniumGlspClientContribution', () => {
       closing.close();
 
       await expect(contribution.glspClient).rejects.toThrow('Could not connect to the diagram server.');
-      await vi.waitFor(() => expect(contribution.errors).toHaveBeenCalledWith('Could not connect to the diagram server.', 'Retry'));
+      await vi.waitFor(() => expect(contribution.attempts[0].message).toBe('Could not connect to the diagram server.'));
    });
 
-   it('shows progress while a start is slow, then one notification with the result', async () => {
-      const contribution = new TestContribution(undefined, 1);
-      const arriving = contribution.nextConnection();
-      void contribution.begin();
-      await vi.waitFor(() => expect(contribution.showProgress).toHaveBeenCalledTimes(1));
-      expect(contribution.showProgress).toHaveBeenCalledWith({ text: 'Connecting to the diagram server…' });
-
-      arriving.resolve(connection);
-      await vi.waitFor(() => expect(contribution.infos).toHaveBeenCalledWith('Connected to the diagram server.'));
-      expect(contribution.progress.cancel).toHaveBeenCalledTimes(1);
-      expect(contribution.errors).not.toHaveBeenCalled();
-   });
-
-   it('replaces the progress with the failure when a slow start fails', async () => {
-      const contribution = new TestContribution(20, 1);
+   /** The server can come up after the first attempt gave up; waiting for a
+    *  user to act would leave every diagram failed until then. */
+   it('starts again on its own after a failed start', async () => {
+      const contribution = make(10);
       contribution.nextConnection();
+      contribution.nextConnection().resolve(makeConnection());
       void contribution.begin();
-      await expect(contribution.glspClient).rejects.toThrow();
 
-      await vi.waitFor(() => expect(contribution.progress.cancel).toHaveBeenCalledTimes(1));
-      expect(contribution.errors).toHaveBeenCalledTimes(1);
-      expect(contribution.infos).not.toHaveBeenCalled();
-   });
-
-   it('resolves the client once it is started and initialized', async () => {
-      const contribution = new TestContribution();
-      contribution.nextConnection().resolve(connection);
-      await contribution.begin();
-
+      await vi.waitFor(() => expect(contribution.attempts.map(attempt => attempt.outcome)).toEqual(['failed', 'connected']));
       const client = await contribution.glspClient;
       expect(client).toBe(contribution.clients[0]);
-      // Quick enough that no progress showed, so nothing is announced either.
-      expect(contribution.showProgress).not.toHaveBeenCalled();
-      expect(contribution.infos).not.toHaveBeenCalled();
-      expect(contribution.errors).not.toHaveBeenCalled();
    });
 
-   /** Every diagram load reads the client, so reading it is what lets a diagram
-    *  retry, or a reopened tab, recover from a failed start. */
+   /** Every diagram load reads the client, so reading it is what lets a
+    *  diagram's retry, or a reopened tab, recover from a failed start. */
    it('starts a fresh client when the client is read after a failed start', async () => {
-      const contribution = new TestContribution(10);
+      const contribution = make(10);
       contribution.nextConnection();
       void contribution.begin();
       await expect(contribution.glspClient).rejects.toThrow();
 
-      contribution.nextConnection().resolve(connection);
+      contribution.nextConnection().resolve(makeConnection());
       const client = await contribution.glspClient;
       expect(client).toBe(contribution.clients[0]);
    });
 
-   it('restarts from the notification’s Retry', async () => {
-      const contribution = new TestContribution(10);
-      contribution.errors.mockResolvedValueOnce('Retry');
-      contribution.nextConnection();
-      const retried = contribution.nextConnection();
-      void contribution.begin();
-      await expect(contribution.glspClient).rejects.toThrow();
+   /** A language-server restart takes the GLSP server with it; without a
+    *  restart the diagrams have no server until the window reloads. */
+   it('starts a fresh client when a started one loses its connection', async () => {
+      const contribution = make();
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      await contribution.glspClient;
 
-      await vi.waitFor(() => expect(contribution.connections).toHaveLength(0));
-      retried.resolve(connection);
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.clients[0].setState(ClientState.ServerError);
+
       const client = await contribution.glspClient;
-      expect(client).toBe(contribution.clients[0]);
+      expect(client).toBe(contribution.clients[1]);
+      await vi.waitFor(() => expect(contribution.attempts.map(attempt => attempt.outcome)).toEqual(['connected', 'connected']));
+   });
+
+   /** A dispose stops the client too, and that stop is not a loss to recover from. */
+   it('does not replace a client that a dispose stopped', async () => {
+      const contribution = make();
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      const client = await contribution.glspClient;
+      const lost = vi.fn();
+      contribution.onDidLoseClient(lost);
+
+      contribution.dispose();
+      contribution.clients[0].setState(ClientState.Stopped);
+
+      expect(lost).not.toHaveBeenCalled();
+      expect(await contribution.glspClient).toBe(client);
+   });
+
+   /** A listener reopening its diagrams then loads them on the replacement, not the lost client. */
+   it('announces a lost client once the client it hands out is the replacement', async () => {
+      const contribution = make();
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      const started = vi.fn();
+      contribution.onDidStartClient(started);
+      await contribution.glspClient;
+      let afterLoss: Promise<unknown> | undefined;
+      contribution.onDidLoseClient(() => (afterLoss = contribution.glspClient));
+
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.clients[0].setState(ClientState.ServerError);
+
+      expect(await afterLoss).toBe(contribution.clients[1]);
+      await vi.waitFor(() => expect(started).toHaveBeenLastCalledWith(contribution.clients[1]));
+   });
+
+   /** Upstream's client logs that it will not be restarted, and its id names the server, not the client. */
+   it('logs each client it starts and loses, by number', async () => {
+      const contribution = make();
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      await contribution.glspClient;
+
+      contribution.clients[0].setState(ClientState.ServerError);
+      await vi.waitFor(() => expect(contribution.infos).toHaveBeenCalledTimes(3));
+
+      expect(contribution.infos.mock.calls.map(call => call[0])).toEqual([
+         '[test] Diagram client 1 started.',
+         '[test] Diagram client 1 lost; starting a fresh one in 1 ms.',
+         '[test] Diagram client 2 started.'
+      ]);
+   });
+
+   /** A server that fails right after it starts would otherwise be restarted as fast as it can fail. */
+   it('backs off while clients are lost soon after starting', async () => {
+      const contribution = make();
+      Object.assign(contribution, { restartDelaysMs: [1, 1_000] });
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      await contribution.glspClient;
+
+      contribution.clients[0].setState(ClientState.ServerError);
+      await vi.waitFor(() => expect(contribution.clients).toHaveLength(2));
+      await contribution.glspClient;
+      contribution.clients[1].setState(ClientState.ServerError);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(contribution.clients).toHaveLength(2);
+   });
+
+   it('starts the delays over once a client stayed up', async () => {
+      const contribution = make();
+      Object.assign(contribution, { restartDelaysMs: [1, 1_000], restartEscalationResetMs: 10 });
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      await contribution.glspClient;
+
+      contribution.clients[0].setState(ClientState.ServerError);
+      await vi.waitFor(() => expect(contribution.clients).toHaveLength(2));
+      await contribution.glspClient;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      contribution.clients[1].setState(ClientState.ServerError);
+
+      await vi.waitFor(() => expect(contribution.clients).toHaveLength(3), { timeout: 200 });
    });
 
    it('keeps a start that a restart overtook from settling its successor', async () => {
-      const contribution = new TestContribution(10);
+      const contribution = make(10);
       const late = contribution.nextConnection();
       void contribution.begin();
       await expect(contribution.glspClient).rejects.toThrow();
@@ -236,7 +350,7 @@ describe('HydraniumGlspClientContribution', () => {
       Object.assign(contribution, { glspClientStartupTimeout: 0 });
       contribution.nextConnection();
       const successor = contribution.glspClient;
-      late.resolve(connection);
+      late.resolve(makeConnection());
       await vi.waitFor(() => expect(contribution.clients).toHaveLength(1));
 
       const outcome = await Promise.race([
@@ -250,22 +364,20 @@ describe('HydraniumGlspClientContribution', () => {
     *  are not, and the next channel on the same path then cannot open. */
    it('closes the channel it tears down', async () => {
       const close = vi.fn();
-      await new TestContribution().closeChannel({ close } as unknown as Channel);
+      await make().closeChannel({ close } as unknown as Channel);
       expect(close).toHaveBeenCalledTimes(1);
    });
 
-   /** A start disposed with it would otherwise still time out and report. */
-   it('reports nothing for a start that a dispose ended', async () => {
-      const contribution = new TestContribution(10, 5);
+   /** Left running, a start the dispose ended keeps its progress up. */
+   it('cancels the report of a start that a dispose ended', async () => {
+      const contribution = make(0);
       contribution.nextConnection();
       void contribution.begin();
-      await Promise.resolve();
+      await vi.waitFor(() => expect(contribution.attempts).toHaveLength(1));
 
       contribution.dispose();
-      await new Promise(resolve => setTimeout(resolve, 30));
 
-      expect(contribution.errors).not.toHaveBeenCalled();
-      expect(contribution.showProgress).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(contribution.attempts).toEqual([{ outcome: 'cancelled' }]));
    });
 
    /**
@@ -273,7 +385,7 @@ describe('HydraniumGlspClientContribution', () => {
     * past the first then throws "already open" without reaching its handler.
     */
    it('hands the first channel to arrive to the latest start, and closes one nobody waits for', async () => {
-      const contribution = new TestContribution();
+      const contribution = make();
       const opens: Array<{ handler: (path: string, channel: Channel) => void; reconnect: boolean }> = [];
       Object.assign(contribution, {
          connectionProvider: {

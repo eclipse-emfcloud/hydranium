@@ -14,5 +14,6 @@ export * from './browser-capture';
 export * from './memory-diagnostics-contribution';
 export * from './session-aware-connection-source';
 export * from './connection-diagnostics-contribution';
+export * from './connection-reporter';
 export * from './editor-disk-sync';
 export * from './hydranium-file-service';

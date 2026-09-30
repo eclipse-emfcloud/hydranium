@@ -7,13 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type GLSPClient, type InitializeResult } from '@eclipse-glsp/client';
+import { ClientState, type GLSPClient, type InitializeResult } from '@eclipse-glsp/client';
 import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
-import { type Channel, Disposable, Event, nls, type Progress } from '@theia/core';
+import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/lib/browser';
+import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { HydraniumGlspClient } from './glsp-client';
 
 export const DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS = 30_000;
 
@@ -31,25 +33,46 @@ export interface ClientContributionOptions {
  *
  * The client starts once a workspace is open and sends its first request at
  * once; the backend handler holds it until its socket to the server is up. A
- * start still running after three seconds shows its progress, and ends in one
- * notification. A failed start rejects {@link glspClient}, and its
- * notification's Retry, like reading {@link glspClient} again, starts a fresh
- * client.
+ * start that fails, and a connection lost after one succeeded, start a fresh
+ * client after a backoff, for as long as the contribution lives. Each start is
+ * reported through the {@link ConnectionReporter}, and announced through
+ * {@link onDidStartClient} and {@link onDidLoseClient}.
  *
  * A `GLSPClient` override filtering inbound messages by clientId is
  * deliberately NOT provided: upstream's `BaseJsonrpcGLSPClient.onActionMessage`
- * already filters by clientId, so the `TheiaJsonrpcGLSPClient` returned by
- * `BaseGLSPClientContribution.createGLSPClient` is correct as-is.
+ * already filters by clientId.
  */
 @injectable()
 export class HydraniumGlspClientContribution extends BaseGLSPClientContribution {
    @inject(WorkspaceService) protected readonly workspaceService!: WorkspaceService;
+   @inject(ConnectionReporter) protected readonly connectionReporter!: ConnectionReporter;
+   @inject(ChannelLogger) protected readonly logger!: ChannelLogger;
 
    readonly id: string;
 
+   /** Delay before the restart following each consecutive failed start or lost
+    *  client; the last repeats. */
+   protected readonly restartDelaysMs: readonly number[] = [1_000, 2_000, 4_000, 8_000];
+   /** How long a client must stay up before the restart delays start over, so
+    *  a server that fails right after starting is not restarted at once. */
+   protected readonly restartEscalationResetMs: number = 30_000;
+   protected consecutiveFailures = 0;
+   protected restartTimer?: ReturnType<typeof setTimeout>;
+   /** When the current client started; `0` once a restart has taken it into account. */
+   protected startedAt = 0;
+   /** Clients started so far, which numbers them in the log: they share {@link id}. */
+   protected startedClients = 0;
    /** The attempt waiting for a channel, if any. */
    protected channelRequest?: Deferred<Channel>;
    protected disposed = false;
+   protected readonly clientStartedEmitter = new Emitter<GLSPClient>();
+   protected readonly clientLostEmitter = new Emitter<void>();
+
+   /** Fires with each client once it has started and its server has answered. */
+   readonly onDidStartClient: Event<GLSPClient> = this.clientStartedEmitter.event;
+   /** Fires when the started client stops; {@link glspClient} already waits
+    *  for its replacement then. */
+   readonly onDidLoseClient: Event<void> = this.clientLostEmitter.event;
 
    constructor(@unmanaged() options: ClientContributionOptions) {
       super();
@@ -62,16 +85,25 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
       return this.glspClientDeferred.state === 'rejected' ? this.restart() : this.glspClientDeferred.promise;
    }
 
-   /** Start a fresh client over a fresh channel if the last start failed. */
+   /** Start a fresh client over a fresh channel at once, if the last start failed. */
    restart(): Promise<GLSPClient> {
       if (!this.disposed && this.glspClientDeferred.state === 'rejected') {
-         this.toDispose.dispose();
-         // Upstream refuses to open a channel while the collection is disposed.
-         this.toDispose.push(Disposable.NULL);
-         this.glspClientDeferred = new Deferred<GLSPClient>();
+         this.replaceClient();
          void this.activateClient();
       }
       return this.glspClientDeferred.promise;
+   }
+
+   /** Point {@link glspClient} at a fresh client still to start, and tear down
+    *  the old one's channel. */
+   protected replaceClient(): void {
+      clearTimeout(this.restartTimer);
+      // Replaced before the old channel goes, so the old client stopping is
+      // not taken for a loss of the new one.
+      this.glspClientDeferred = new Deferred<GLSPClient>();
+      this.toDispose.dispose();
+      // Upstream refuses to open a channel while the collection is disposed.
+      this.toDispose.push(Disposable.NULL);
    }
 
    /** Settles the promise current when it began, so a start a restart overtook
@@ -79,30 +111,37 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
    protected override async activateClient(): Promise<void> {
       const pending = this.glspClientDeferred;
       await this.workspaceOpened();
-      let progress: Promise<Progress> | undefined;
-      const notice = setTimeout(() => (progress = this.showConnecting()), this.connectingNoticeDelayMs);
+      if (this.disposed) {
+         return;
+      }
+      const attempt = this.connectionReporter.connecting(this.connectionTarget);
       const timeout =
          this.glspClientStartupTimeout > 0
             ? setTimeout(() => pending.reject(new Error(this.startupTimeoutMessage())), this.glspClientStartupTimeout)
             : undefined;
       pending.promise.then(
-         () => {
-            if (!this.disposed) {
-               this.reportStarted(progress);
-            }
+         client => {
+            clearTimeout(timeout);
+            attempt.connected();
+            this.startedAt = Date.now();
+            this.logger.info(`[${this.id}] Diagram client ${++this.startedClients} started.`);
+            this.clientStartedEmitter.fire(client);
+            this.restartOnLoss(client);
          },
          (error: unknown) => {
-            if (!this.disposed) {
-               void this.reportStartFailure(error, progress);
+            clearTimeout(timeout);
+            if (this.disposed) {
+               attempt.cancelled();
+               return;
             }
+            attempt.failed(error instanceof Error ? error.message : String(error), () => void this.restart());
+            this.scheduleRestart(() => {
+               if (this.glspClientDeferred === pending) {
+                  void this.restart();
+               }
+            });
          }
       );
-      void pending.promise
-         .finally(() => {
-            clearTimeout(notice);
-            clearTimeout(timeout);
-         })
-         .catch(() => undefined);
       try {
          const connection = await this.createConnection();
          // Ahead of the client's own listener, whose teardown rejects with a
@@ -117,6 +156,37 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
       }
    }
 
+   /** Run `restart` after the delay for the failures so far, and return that delay. */
+   protected scheduleRestart(restart: () => void): number {
+      if (this.startedAt > 0 && Date.now() - this.startedAt >= this.restartEscalationResetMs) {
+         this.consecutiveFailures = 0;
+      }
+      this.startedAt = 0;
+      const delay = this.restartDelaysMs[Math.min(this.consecutiveFailures, this.restartDelaysMs.length - 1)];
+      this.consecutiveFailures++;
+      clearTimeout(this.restartTimer);
+      this.restartTimer = setTimeout(restart, delay);
+      return delay;
+   }
+
+   /** Once `client` stops, replace it and start its replacement after the
+    *  restart delay, unless a dispose stopped it. */
+   protected restartOnLoss(client: GLSPClient): void {
+      const listener = client.onCurrentStateChanged(state => {
+         if (state !== ClientState.ServerError && state !== ClientState.Stopped) {
+            return;
+         }
+         listener.dispose();
+         if (!this.disposed) {
+            this.replaceClient();
+            this.clientLostEmitter.fire();
+            const delay = this.scheduleRestart(() => void this.activateClient());
+            // Upstream's client has just logged that it will not be restarted, which holds for it alone.
+            this.logger.info(`[${this.id}] Diagram client ${this.startedClients} lost; starting a fresh one in ${delay} ms.`);
+         }
+      });
+   }
+
    /** Start the client and initialize its server, rejecting on failure; the
     *  caller settles {@link glspClient}. */
    protected override async start(glspClient: GLSPClient): Promise<void> {
@@ -124,9 +194,17 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
       await this.initialize(glspClient);
    }
 
-   /** Without upstream's own error notification, which would duplicate the result one. */
+   /** Without upstream's own error notification, which would duplicate the reporter's. */
    protected override async initialize(glspClient: GLSPClient): Promise<InitializeResult> {
       return glspClient.initializeServer(await this.createInitializeParameters());
+   }
+
+   /** Upstream's base client, without the notifications of its Theia subclass,
+    *  which would duplicate the reporter's. */
+   protected override async createGLSPClient(
+      connectionProvider: Parameters<BaseGLSPClientContribution['createGLSPClient']>[0]
+   ): Promise<GLSPClient> {
+      return new HydraniumGlspClient({ id: this.id, connectionProvider });
    }
 
    /**
@@ -173,8 +251,11 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
    /** Also fails a start in flight, so nothing reports it after this. */
    override dispose(): void {
       this.disposed = true;
+      clearTimeout(this.restartTimer);
       this.glspClientDeferred.promise.catch(() => undefined);
       this.glspClientDeferred.reject(new Error('The diagram client was disposed.'));
+      this.clientStartedEmitter.dispose();
+      this.clientLostEmitter.dispose();
       super.dispose();
    }
 
@@ -185,31 +266,14 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
       }
    }
 
-   /** A start that takes longer than this shows a progress notification. */
-   protected readonly connectingNoticeDelayMs: number = 3_000;
-
-   protected showConnecting(): Promise<Progress> {
-      return this.messageService.showProgress({
-         text: nls.localize('hydranium/glsp-client-theia/diagram-server-connecting', 'Connecting to the diagram server…')
+   protected get connectionTarget(): ConnectionTarget {
+      return (this.cachedConnectionTarget ??= {
+         connectingMessage: nls.localize('hydranium/glsp-client-theia/diagram-server-connecting', 'Connecting to the diagram server…'),
+         connectedMessage: nls.localize('hydranium/glsp-client-theia/diagram-server-connected', 'Connected to the diagram server.')
       });
    }
-
-   /** A start that showed progress ends in a notification; a quick one stays silent. */
-   protected reportStarted(progress: Promise<Progress> | undefined): void {
-      if (progress) {
-         void progress.then(shown => shown.cancel());
-         this.messageService.info(nls.localize('hydranium/glsp-client-theia/diagram-server-connected', 'Connected to the diagram server.'));
-      }
-   }
-
-   protected async reportStartFailure(error: unknown, progress: Promise<Progress> | undefined): Promise<void> {
-      void progress?.then(shown => shown.cancel());
-      const retry = nls.localize('hydranium/glsp-client-theia/diagram-retry', 'Retry');
-      const choice = await this.messageService.error(error instanceof Error ? error.message : String(error), retry);
-      if (choice === retry) {
-         void this.restart();
-      }
-   }
+   /** One object per contribution: the reporter keys what it has shown on it. */
+   protected cachedConnectionTarget?: ConnectionTarget;
 
    protected unreachableMessage(): string {
       return nls.localize('hydranium/glsp-client-theia/diagram-server-unreachable', 'Could not connect to the diagram server.');

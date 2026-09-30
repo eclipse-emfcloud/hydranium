@@ -7,10 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { DiagramLoader } from '@eclipse-glsp/client';
 import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/browser';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { HydraniumGlspClientContribution } from '../../src/browser/client-contribution.js';
+import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader.js';
 import { HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget.js';
 import { AbstractHydraniumGlspDiagramManager } from '../../src/browser/glsp-diagram-manager.js';
 
@@ -44,6 +47,7 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
          return this.createdWidget;
       }
    },
+   BaseGLSPClientContribution: class {},
    GLSPDiagramWidget: class {
       events: string[] = [];
       /** Lumino's widget detaches, and GLSP's stores its viewport, when its parent is cleared. */
@@ -57,8 +61,10 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
 }));
 // Its browser barrel pulls `@theia/output`, which touches DOM globals at load.
 vi.mock('@hydranium/client-theia/lib/browser', () => ({
-   ChannelLogger: class ChannelLogger {}
+   ChannelLogger: class ChannelLogger {},
+   ConnectionReporter: Symbol('ConnectionReporter')
 }));
+vi.mock('@theia/workspace/lib/browser', () => ({ WorkspaceService: class WorkspaceService {} }));
 vi.mock('../../src/browser/glsp-saveable', () => ({ HydraniumGlspSaveable: class HydraniumGlspSaveable {} }));
 
 const LANGUAGE: GLSPDiagramLanguage = {
@@ -145,6 +151,7 @@ describe('AbstractHydraniumGlspDiagramManager.reopen', () => {
 
    beforeEach(() => {
       manager = new ReopenTestManager();
+      Object.assign(manager, { diagramServiceProvider: { getGLSPClientContribution: () => undefined } });
       widget = new HydraniumGlspDiagramWidget();
       events = (widget as unknown as { events: string[] }).events;
       Object.defineProperties(widget, {
@@ -238,5 +245,56 @@ describe('AbstractHydraniumGlspDiagramManager.reopen', () => {
       await manager.reopen(widget);
 
       expect(manager.opened[0].options?.widgetOptions).toBeUndefined();
+   });
+});
+
+describe('AbstractHydraniumGlspDiagramManager on client events', () => {
+   class EventTestManager extends TestDiagramManager {
+      readonly reopened: unknown[] = [];
+      widgets: GLSPDiagramWidget[] = [];
+      override get all(): GLSPDiagramWidget[] {
+         return this.widgets;
+      }
+      override async reopen(widget: GLSPDiagramWidget): Promise<void> {
+         this.reopened.push(widget);
+      }
+   }
+
+   const diagram = (status?: 'loaded' | 'failed'): GLSPDiagramWidget => {
+      const loader = new HydraniumDiagramLoader();
+      Object.assign(loader, { outcome: status && { status } });
+      return { diContainer: { get: (id: unknown) => (id === DiagramLoader ? loader : undefined) } } as unknown as GLSPDiagramWidget;
+   };
+
+   const setUp = (): { manager: EventTestManager; contribution: HydraniumGlspClientContribution } => {
+      const manager = new EventTestManager();
+      const contribution = new HydraniumGlspClientContribution({ languageContributionId: 'test-contribution' });
+      Object.assign(manager, { diagramServiceProvider: { getGLSPClientContribution: () => contribution } });
+      return { manager, contribution };
+   };
+   const fire = (contribution: HydraniumGlspClientContribution, emitter: 'clientLostEmitter' | 'clientStartedEmitter'): void =>
+      (contribution as unknown as Record<string, { fire(value?: unknown): void }>)[emitter].fire({});
+
+   /** None of them has a server behind it any more. */
+   it('reopens every diagram once the client is lost', async () => {
+      const { manager, contribution } = setUp();
+      await manager.createWidget({});
+      manager.widgets = [diagram('loaded'), diagram(), diagram('failed')];
+
+      fire(contribution, 'clientLostEmitter');
+
+      expect(manager.reopened).toEqual(manager.widgets);
+   });
+
+   /** A diagram whose load failed stays failed otherwise, though a client is up now. */
+   it('reopens only the failed diagrams once a client starts', async () => {
+      const { manager, contribution } = setUp();
+      await manager.createWidget({});
+      const failed = diagram('failed');
+      manager.widgets = [diagram('loaded'), diagram(), failed];
+
+      fire(contribution, 'clientStartedEmitter');
+
+      expect(manager.reopened).toEqual([failed]);
    });
 });
