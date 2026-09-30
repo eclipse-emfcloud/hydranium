@@ -51,7 +51,7 @@ export interface OrderFlowDataServer extends DataServerProtocol<OrderFlowTransfe
 @injectable()
 export class OrderFlowDataConnection extends DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer> {
    constructor(@inject(OrderFlowTheiaDataPort) port: OrderFlowTheiaDataPort) {
-      super(port, port.connectionLifecycle);
+      super(port);
    }
 }
 

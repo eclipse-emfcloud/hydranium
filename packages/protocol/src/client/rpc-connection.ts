@@ -55,6 +55,16 @@ export interface RpcConnectionLifecycle {
    readonly onFailed?: (error: unknown) => void;
 }
 
+/** Calls each distinct lifecycle's hooks in order; one passed twice is called once. */
+function composeLifecycles(...lifecycles: (RpcConnectionLifecycle | undefined)[]): RpcConnectionLifecycle {
+   const present = [...new Set(lifecycles)].filter((lifecycle): lifecycle is RpcConnectionLifecycle => lifecycle !== undefined);
+   return {
+      onConnecting: () => present.forEach(lifecycle => lifecycle.onConnecting?.()),
+      onReady: () => present.forEach(lifecycle => lifecycle.onReady?.()),
+      onFailed: error => present.forEach(lifecycle => lifecycle.onFailed?.(error))
+   };
+}
+
 /** Everything {@link RpcConnection} needs once a subclass has resolved its defaults. */
 export interface ResolvedRpcConnectionOptions<TClient extends object> {
    readonly methodNamespace: string;
@@ -109,7 +119,7 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
    ) {
       this.methodNamespace = options.methodNamespace;
       this.clientMethods = options.clientMethods;
-      this.lifecycle = options.lifecycle;
+      this.lifecycle = composeLifecycles(port.connectionLifecycle, options.lifecycle);
       this.portDisposeListener = this.port.onDispose(() => this.dropGeneration());
    }
 

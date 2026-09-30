@@ -68,11 +68,7 @@ export abstract class ChannelDataPort implements DataPort {
    /** Set once {@link connectionLifecycle} reports, which then owns the connection failures. */
    protected reportsConnections = false;
 
-   /**
-    * Reports each connection generation through the {@link ConnectionReporter}.
-    * Pass it to the `DataConnection` built over this port; without it the
-    * connection failures are raised as notifications of their own.
-    */
+   /** Reports each connection generation through the {@link ConnectionReporter}. */
    readonly connectionLifecycle: RpcConnectionLifecycle = {
       onConnecting: () => {
          this.reportsConnections = true;
