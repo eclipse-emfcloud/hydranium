@@ -922,7 +922,7 @@ export class DefaultModelService<
          try {
             let result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
             if (result?.applied === false && !this.pendingSync.has(uri)) {
-               // The push is addressed at the client's LAST DECLARED VERSION, so a
+               // The push is addressed at the client's last known version, so a
                // rejection normally means the client's buffer moved while the
                // line-keyed diff was in flight — exactly the case where applying it
                // would splice the file. Dropping the push there would leave the
@@ -940,7 +940,7 @@ export class DefaultModelService<
                // `pendingSync` check skips the retry when a newer settle has already
                // queued — best-effort, since a settle arriving later simply pushes
                // after this and still wins.
-               uriLogger.warn(`Language client rejected applyEdit at its declared version — re-pushing a full replace`);
+               uriLogger.debug(`Re-pushing a full replace after the language client refused applyEdit`);
                result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
                if (result?.applied === false) {
                   uriLogger.warn(`Language client rejected the full-replace retry too — client content is stale`);

@@ -130,6 +130,22 @@ export interface DocumentDirtyChangedEvent {
 }
 
 /**
+ * The language client's open of a document under one URI, from its didOpen to
+ * its didClose. Each URI is its own editor buffer with its own version counter,
+ * so a file reached through a symlink and its real path has one of these each.
+ */
+export interface LanguageClientDocumentState {
+   /** The version the client last declared for this URI. */
+   declaredVersion: number;
+   /**
+    * The version an applied versioned push moved this URI to, ahead of its
+    * echo. Apart from `declaredVersion`, whose staleness guard would drop that
+    * echo and strand its pending push.
+    */
+   pushedVersion?: number;
+}
+
+/**
  * All per-URI client-facing tracking the manager keys by normalized URI,
  * collapsed into one record so a URI's full state lives in one place and the
  * last-client close clears every axis in a single delete. (Parallel per-axis
@@ -153,24 +169,26 @@ export interface DocumentTrackingRecord {
    readonly versionAuthors: string[];
    /**
     * Last version id each client declared for this document (didOpen baseline,
-    * advanced by every accepted didChange). Client version ids are CLIENT-owned
-    * per LSP (Monaco numbers its own buffer) and are used ONLY for this
-    * per-client staleness guard — they never leak into the shared version
-    * sequence, which the server assigns (see {@link HydraniumTextDocuments.__versionSequences}).
+    * advanced by every accepted didChange), for the per-client staleness guard.
+    * Client version ids are CLIENT-owned per LSP (Monaco numbers its own
+    * buffer) — they never leak into the shared version sequence, which the
+    * server assigns (see {@link HydraniumTextDocuments.__versionSequences}).
+    * The language client's entry is the latest any of its URIs declared; the
+    * store checks and addresses it per URI, through
+    * {@link DocumentTrackingRecord.languageClientDocuments}.
     */
    readonly clientVersions: Map<string, number>;
    /** Content staged by integrity rules for a closed document. Consumed on next open. */
    pendingContent?: string;
    /**
-    * The URI(s) the LSP textual language client opened this (canonically-keyed)
-    * document under. Usually one; a set because the same physical file can be
-    * opened under more than one URI (a symlink path and its real path). This is
-    * the egress address: `applyEditToLanguageClient`
-    * targets these, since the document is *keyed* by its canonical identity but
-    * Monaco holds it under the URI it opened. Lifecycle-bound — cleared with the
-    * record on last close.
+    * Each URI the LSP textual language client opened this (canonically-keyed)
+    * document under, with that open's state. Usually one; more when the same
+    * file is opened under a symlink path and its real path. These are the
+    * egress addresses: the document is *keyed* by its canonical identity, but
+    * Monaco holds it under the URI it opened. The language client holds the
+    * document while any entry remains.
     */
-   languageClientUris?: Set<LanguageClientUri>;
+   languageClientDocuments?: Map<LanguageClientUri, LanguageClientDocumentState>;
    /**
     * The clients whose close of this document was caused by a lost connection
     * and that have not opened it again, each with a stopwatch started at its
@@ -568,9 +586,12 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          // client knowing). Gating on the shared version drops real edits in
          // exactly that lag window. A client with no baseline (never opened —
          // a protocol anomaly) falls back to the shared-version compare, the
-         // conservative answer.
+         // conservative answer. The language client is checked per URI: each is
+         // its own buffer, and one URI's higher id would drop the other's edits.
          const record = this.trackingFor(uri);
-         const lastSeen = record.clientVersions.get(clientId) ?? document.version;
+         const languageClientDocument =
+            clientId === LANGUAGE_CLIENT_ID ? record.languageClientDocuments?.get(this.toLanguageClientUri(td.uri)) : undefined;
+         const lastSeen = languageClientDocument?.declaredVersion ?? record.clientVersions.get(clientId) ?? document.version;
          if (lastSeen >= td.version) {
             // Distinguish "already at this version" (common: an echo from the client that triggered
             // the update) from "incoming version older than ours" (stale race).
@@ -580,6 +601,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             return;
          }
          record.clientVersions.set(clientId, td.version);
+         if (languageClientDocument) {
+            languageClientDocument.declaredVersion = td.version;
+         }
 
          // A language-client change is keyed to the buffer that client holds,
          // which is the synced text only while the two agree — an authored
@@ -700,6 +724,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       cause: SessionEndCause = 'closed'
    ): void {
       const uri = this.documentKey(event.textDocument.uri);
+      if (clientId === LANGUAGE_CLIENT_ID) {
+         const clientFacing = this.toLanguageClientUri(event.textDocument.uri);
+         const languageClientDocuments = this.__documents.get(uri)?.languageClientDocuments;
+         if (languageClientDocuments?.delete(clientFacing) && languageClientDocuments.size > 0) {
+            // Another URI still holds the document, so only this one's buffer goes.
+            this.__shadow.invalidate(clientFacing);
+            this.__pendingPushes.delete(clientFacing);
+            return;
+         }
+      }
       if (!this.__sessions.removeOpen(uri, clientId)) {
          return;
       }
@@ -714,11 +748,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.__onDidClose.fire(Object.freeze({ document: syncedDocument, clientId }));
 
          if (clientId === LANGUAGE_CLIENT_ID) {
-            // Monaco closed the document; drop the URI it held and the shadow
-            // baselined under it. (If this was the last URI/client the whole record
-            // is deleted on release, clearing the set anyway.)
+            // Monaco closed the document; drop the shadow baselined under the URI
+            // it held. (If this was the last client the whole record is deleted on
+            // release.)
             const droppedUri = this.toLanguageClientUri(event.textDocument.uri);
-            this.__documents.get(uri)?.languageClientUris?.delete(droppedUri);
             this.__shadow.invalidate(droppedUri);
             this.__pendingPushes.delete(droppedUri);
          }
@@ -974,8 +1007,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          if (clientId === LANGUAGE_CLIENT_ID) {
             const clientFacing = this.toLanguageClientUri(td.uri);
             const record = this.__documents.get(uri);
-            if (record && !record.languageClientUris?.has(clientFacing)) {
-               (record.languageClientUris ??= new Set<LanguageClientUri>()).add(clientFacing);
+            if (record && !record.languageClientDocuments?.has(clientFacing)) {
+               (record.languageClientDocuments ??= new Map()).set(clientFacing, { declaredVersion: td.version });
                // This tab's own buffer, NOT the synced text: a second tab is a second
                // client model, read from disk, so a server-authored write already
                // applied to the first tab leaves it BEHIND the synced document. Keying
@@ -996,7 +1029,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       if (clientId === LANGUAGE_CLIENT_ID) {
          // Remember the URI Monaco opened under (may differ from the canonical key)
          // so outbound applyEditToLanguageClient can address the URI it actually holds.
-         (record.languageClientUris ??= new Set<LanguageClientUri>()).add(this.toLanguageClientUri(td.uri));
+         // A fresh state, since a reopened buffer numbers its versions afresh.
+         (record.languageClientDocuments ??= new Map()).set(this.toLanguageClientUri(td.uri), { declaredVersion: td.version });
       }
       if (!document) {
          // Use integrity-staged content if available, otherwise the client-provided (disk) text.
@@ -1122,7 +1156,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * two URIs for one physical file (a symlink path and its real path) into a
     * single registration — dedup at the editor layer, not just in
     * `LangiumDocuments`. The URI the client opened under is preserved separately
-    * for egress addressing (see {@link DocumentTrackingRecord.languageClientUris}). The
+    * for egress addressing (see {@link DocumentTrackingRecord.languageClientDocuments}). The
     * policy is always bound (the framework defaults it to
     * `DefaultDocumentUriPolicy`, where canonical ≡ syntactic normalize).
     */
@@ -1485,15 +1519,24 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    async closeLanguageClientDocuments(): Promise<void> {
       await this.services.workspace.WorkspaceManager.workspaceInitialized;
       for (const uri of this.__sessions.opensOf(LANGUAGE_CLIENT_ID)) {
-         // Every spelling the client opened the file under, since the close
-         // below drops only the canonical one's.
-         const clientUris = this.__documents.get(uri)?.languageClientUris;
-         for (const clientUri of clientUris ?? []) {
-            this.invalidateLanguageClientText(clientUri);
-         }
-         clientUris?.clear();
+         this.untrackLanguageClientDocuments(uri);
          this.notifyDidCloseTextDocument({ textDocument: { uri } });
       }
+   }
+
+   /**
+    * Stop tracking every URI the language client holds the document `key`
+    * under, with its shadow and pending pushes. Call before a close by
+    * canonical key that means all of them: a close for one URI while others
+    * remain drops only that URI's and keeps the client's hold.
+    */
+   protected untrackLanguageClientDocuments(key: CanonicalUri): void {
+      const languageClientDocuments = this.__documents.get(key)?.languageClientDocuments;
+      for (const clientUri of languageClientDocuments?.keys() ?? []) {
+         this.__shadow.invalidate(clientUri);
+         this.__pendingPushes.delete(clientUri);
+      }
+      languageClientDocuments?.clear();
    }
 
    /**
@@ -1525,6 +1568,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    override delete(uri: string | URI | T): void {
       const key = this.documentKey((typeof uri === 'object' && 'uri' in uri ? uri.uri : uri).toString());
+      this.untrackLanguageClientDocuments(key);
       for (const clientId of this.__sessions.clientsOf(key)) {
          this.notifyDidCloseTextDocument({ textDocument: { uri: key } }, clientId);
       }
@@ -1596,8 +1640,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * and the client applying, the ranges address the wrong lines and splice the
     * buffer (observed as a duplicated declaration, which the integrity tier then
     * "repairs" into a suffixed name and persists). The edit is therefore
-    * addressed at the language client's LAST DECLARED VERSION rather than at
-    * `null` ("version intentionally unknown"), which is what lets the client
+    * addressed at the language client's last known version for that URI (see
+    * {@link languageClientVersion}) rather than at `null` ("version
+    * intentionally unknown"), which is what lets the client
     * reject a push its buffer has outrun. On rejection the shadow is invalidated,
     * so the caller's retry is a full-range replace — position-independent, and
     * safe to apply to whatever the client now holds.
@@ -1617,8 +1662,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // when the same file was opened under a symlink and its real path. Falls back
       // to the normalized URI when nothing is tracked. The shadow is keyed by each
       // URI, so every diff is against the right baseline.
-      const recorded = this.__documents.get(this.documentKey(uri))?.languageClientUris;
-      const targets: Iterable<LanguageClientUri> = recorded && recorded.size > 0 ? recorded : [this.toLanguageClientUri(uri)];
+      const recorded = this.__documents.get(this.documentKey(uri))?.languageClientDocuments;
+      const targets: Iterable<LanguageClientUri> = recorded && recorded.size > 0 ? [...recorded.keys()] : [this.toLanguageClientUri(uri)];
       let lastResult: ApplyWorkspaceEditResult | undefined;
       for (const targetUri of targets) {
          // Read BEFORE computeEdits, which overwrites the baseline and drops
@@ -1639,7 +1684,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             // stale-by-one version into a refused update for no safety gain — and
             // it is exactly what the caller retries with after a rejection, so
             // gating it there would refuse the recovery too.
-            const version = isFullReplace(edits) ? UNKNOWN_CLIENT_VERSION : this.languageClientVersion(uri);
+            const version = isFullReplace(edits) ? UNKNOWN_CLIENT_VERSION : this.languageClientVersion(uri, targetUri);
+            // Captured before the await: a reopen replaces the state, so a late
+            // reply then writes to the old one instead of the new buffer's.
+            const languageClientDocument = recorded?.get(targetUri);
             // A full `ApplyWorkspaceEditParams`, `edit` and all — NOT a bare
             // `WorkspaceEdit` with a `label` beside it. `applyEdit` takes
             // `ApplyWorkspaceEditParams | WorkspaceEdit` and discriminates on
@@ -1658,6 +1706,20 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             if (result && result.applied === false) {
                this.__shadow.invalidate(targetUri);
                this.__pendingPushes.delete(targetUri);
+               if (version !== UNKNOWN_CLIENT_VERSION) {
+                  this.tracer
+                     .with(uri)
+                     .warn(
+                        `Language client refused applyEdit addressed at version ${version} (it last declared version ${languageClientDocument?.declaredVersion})`
+                     );
+               }
+            } else if (result?.applied && version !== UNKNOWN_CLIENT_VERSION && languageClientDocument) {
+               // A client steps once per applied edit that changes its buffer. A
+               // line edit does while the shadow is right; a full replace may be a
+               // no-op the client drops. Left to the echo, a push sent first is
+               // refused; advanced after a no-op, one could pass at a version a
+               // keystroke reached.
+               languageClientDocument.pushedVersion = version + 1;
             }
             lastResult = result;
          } catch (err) {
@@ -1670,21 +1732,27 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
-    * The version the LSP textual language client last declared for `uri`, for
-    * addressing an outgoing `workspace/applyEdit`.
+    * The version the LSP textual language client holds `uri` at under
+    * `targetUri`, for addressing an outgoing `workspace/applyEdit`.
     *
     * Client version ids are CLIENT-owned per LSP, so this is the id the client
-    * itself stamped on its last `didOpen` / `didChange` — never the shared
-    * server version, which advances on authored writes the client knows nothing
-    * about and would therefore reject every push.
+    * itself stamped on its last `didOpen` / `didChange` for `targetUri`, or the
+    * one an applied push moved it to ahead of the push's echo
+    * ({@link LanguageClientDocumentState}) — never the shared server version,
+    * which advances on authored writes the client knows nothing about and would
+    * therefore reject every push.
     *
-    * Falls back to {@link UNKNOWN_CLIENT_VERSION} when the client has never
-    * declared one, which is the honest answer for a document it has not opened.
-    * That is also the case in which there is no shadow, so the push is already a
+    * Falls back to {@link UNKNOWN_CLIENT_VERSION} when the client has not opened
+    * the document under `targetUri`, which is the honest answer. That is also
+    * the case in which there is no shadow, so the push is already a
     * position-independent full replace and has nothing to gain from a gate.
     */
-   protected languageClientVersion(uri: DocumentUri): number {
-      return this.__documents.get(this.documentKey(uri))?.clientVersions.get(LANGUAGE_CLIENT_ID) ?? UNKNOWN_CLIENT_VERSION;
+   protected languageClientVersion(uri: DocumentUri, targetUri: LanguageClientUri = this.toLanguageClientUri(uri)): number {
+      const state = this.__documents.get(this.documentKey(uri))?.languageClientDocuments?.get(targetUri);
+      if (state === undefined) {
+         return UNKNOWN_CLIENT_VERSION;
+      }
+      return Math.max(state.declaredVersion, state.pushedVersion ?? state.declaredVersion);
    }
 
    /**

@@ -844,7 +844,7 @@ export class MonacoLspAdapter {
     *   exists so that if it is ever reached the failure is loud rather than a
     *   slow desynchronisation.
     * - **A stale version.** The framework addresses a position-dependent
-    *   (line-keyed) push at the version this client last declared, precisely so
+    *   (line-keyed) push at its last known version of this buffer, precisely so
     *   the client can refuse a push its buffer has outrun: applying a stale
     *   range does not fail, it splices the file at the wrong lines. Refusing is
     *   not a dead branch — `ModelService` re-pushes a full-range replace on
