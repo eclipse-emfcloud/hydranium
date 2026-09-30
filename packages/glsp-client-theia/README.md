@@ -21,7 +21,9 @@ if you are mounting a hydranium GLSP diagram in a Theia application.
 - **`createGlspClientTheiaModule(context, options)`** — the standard per-diagram
   bindings, all unconditional: the cross-head `ChannelLogger`,
   `HydraniumGlspActionDispatcher`, `HydraniumDiagramLoader`,
-  `HydraniumHiddenBoundsUpdater`, and `HydraniumGlspMessageService`. Each
+  `HydraniumHiddenBoundsUpdater`, `HydraniumGlspMessageService`, and
+  `HydraniumStatusOverlay`, which keeps GLSP's status overlay on the page after
+  sprotty's first render replaces the diagram's base div. Each
   replaces a GLSP default with a strict superset of its behaviour, so a head that
   wants the original rebinds that one token back.
 - **Loading feedback that cannot silently vanish.** `HydraniumDiagramLoader`

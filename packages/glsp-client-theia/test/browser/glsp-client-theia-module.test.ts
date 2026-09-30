@@ -26,7 +26,7 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
    TheiaGLSPMessageService: class TheiaGLSPMessageService {}
 }));
 
-import { DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater } from '@eclipse-glsp/client';
+import { DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater, StatusOverlay } from '@eclipse-glsp/client';
 import { TheiaGLSPMessageService } from '@eclipse-glsp/theia-integration';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HydraniumGlspActionDispatcher } from '../../src/browser/action-dispatcher';
@@ -34,6 +34,7 @@ import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
 import { createGlspClientTheiaModule, type GlspClientTheiaModuleOptions } from '../../src/browser/glsp-client-theia-module';
 import { HydraniumGlspMessageService } from '../../src/browser/glsp-message-service';
 import { HydraniumHiddenBoundsUpdater } from '../../src/browser/hidden-bounds-updater';
+import { HydraniumStatusOverlay } from '../../src/browser/status-overlay';
 import { type BindRecorder, type BindRecorderOptions, makeBindRecorder } from '../../src/testing/bind-recorder';
 
 const CHANNEL = { channelName: 'Test' };
@@ -74,6 +75,10 @@ describe('createGlspClientTheiaModule', () => {
          `to(<${HydraniumHiddenBoundsUpdater.name}>)`,
          'inSingletonScope()'
       ]);
+   });
+
+   it('rebinds StatusOverlay to the one that keeps its element on the page', () => {
+      expect(record().find('rebind', StatusOverlay)?.chain).toEqual([`to(<${HydraniumStatusOverlay.name}>)`, 'inSingletonScope()']);
    });
 
    it('rebinds the Theia message service so the duplicate model-loading toast is dropped', () => {

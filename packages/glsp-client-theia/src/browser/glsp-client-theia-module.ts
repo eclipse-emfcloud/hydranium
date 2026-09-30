@@ -8,9 +8,10 @@
  ********************************************************************************/
 
 import { bindChannelLogger, type ChannelLoggerOptions } from '@hydranium/client-theia/lib/browser';
-import { type BindingContext, DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater } from '@eclipse-glsp/client';
+import { type BindingContext, DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater, StatusOverlay } from '@eclipse-glsp/client';
 import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { HydraniumDiagramLoader } from './diagram-loader';
+import { HydraniumStatusOverlay } from './status-overlay';
 import { bindHydraniumGlspMessageService } from './glsp-message-service';
 import { HydraniumHiddenBoundsUpdater } from './hidden-bounds-updater';
 
@@ -50,5 +51,6 @@ export function createGlspClientTheiaModule(context: BindingContext, options: Gl
    rebind(GLSPActionDispatcher).toService(HydraniumGlspActionDispatcher);
    rebind(DiagramLoader).to(HydraniumDiagramLoader).inSingletonScope();
    rebind(GLSPHiddenBoundsUpdater).to(HydraniumHiddenBoundsUpdater).inSingletonScope();
+   rebind(StatusOverlay).to(HydraniumStatusOverlay).inSingletonScope();
    bindHydraniumGlspMessageService(bind, isBound, rebind);
 }

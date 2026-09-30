@@ -97,4 +97,10 @@ test.describe.serial('Order-flow diagram in Theia', () => {
       expect(await loadingOverlayWasSeen(app)).toBe(true);
       await expect(app.page.locator(`.${LOADING_OVERLAY_CLASS}`)).toHaveCount(0);
    });
+
+   test("GLSP's status overlay is on the page, where a server status can show", async () => {
+      // It is inserted into the diagram's base div before sprotty's first render
+      // replaces that div; left there, it is never on the page at all.
+      await expect(app.page.locator('.sprotty-status')).toHaveCount(1);
+   });
 });
