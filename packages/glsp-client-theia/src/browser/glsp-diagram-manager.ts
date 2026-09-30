@@ -7,12 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { codiconCSSString } from '@eclipse-glsp/client';
+import { codiconCSSString, DiagramLoader } from '@eclipse-glsp/client';
 import { GLSPDiagramManager } from '@eclipse-glsp/theia-integration';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
 import { type GLSPDiagramWidget, type GLSPWidgetOpenerOptions } from '@eclipse-glsp/theia-integration/lib/browser';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
+import { type Disposable, DisposableCollection } from '@theia/core';
 import { injectable } from '@theia/core/shared/inversify';
+import { HydraniumGlspClientContribution } from './client-contribution';
+import { HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspDiagramWidget } from './diagram-widget';
 
 /**
@@ -48,6 +51,7 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
    /** Optional icon-class override; takes precedence over the language's `iconClass`. */
    protected readonly customIconClass?: string;
 
+   protected clientListeners?: Disposable;
    /** The reopens asked for so far, which run one at a time. */
    protected reopening: Promise<void> = Promise.resolve();
 
@@ -72,11 +76,41 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
    }
 
    override async createWidget(options?: unknown): Promise<GLSPDiagramWidget> {
+      this.listenToClient();
       const widget = await super.createWidget(options);
       if (widget instanceof HydraniumGlspDiagramWidget) {
          widget.onDidRequestReopen(() => void this.reopen(widget));
       }
       return widget;
+   }
+
+   /**
+    * Reopen every diagram once its client is lost, since none of them has a
+    * server behind it any more, and a failed one once a client starts.
+    */
+   protected listenToClient(): void {
+      if (this.clientListeners) {
+         return;
+      }
+      const contribution = this.diagramServiceProvider.getGLSPClientContribution(this.contributionId);
+      this.clientListeners =
+         contribution instanceof HydraniumGlspClientContribution
+            ? new DisposableCollection(
+                 contribution.onDidLoseClient(() => this.reopenAll(() => true)),
+                 contribution.onDidStartClient(() => this.reopenAll(widget => this.loadFailed(widget)))
+              )
+            : new DisposableCollection();
+   }
+
+   protected reopenAll(which: (widget: GLSPDiagramWidget) => boolean): void {
+      for (const widget of this.all.filter(which)) {
+         void this.reopen(widget);
+      }
+   }
+
+   protected loadFailed(widget: GLSPDiagramWidget): boolean {
+      const loader = widget.diContainer.get<DiagramLoader>(DiagramLoader);
+      return loader instanceof HydraniumDiagramLoader && loader.loadOutcome?.status === 'failed';
    }
 
    /**

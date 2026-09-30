@@ -49,11 +49,18 @@ if you are mounting a hydranium GLSP diagram in a Theia application.
   **`AbstractHydraniumGlspDiagramManager`** derives the language-correlated
   getters from one descriptor plus a label, and `reopen` replaces a diagram
   with a fresh widget in the same tab position, as the Retry of a failed load
-  does.
+  does. It reopens every diagram when their client is lost, and a failed one
+  when a client starts.
 - **`HydraniumGlspClientContribution`** — for a server that starts late: it
   defers `start` until a workspace is open, fails a start that takes longer than
-  `startupTimeoutMs` (30 s by default), and offers a Retry that starts a fresh
-  client.
+  `startupTimeoutMs` (30 s by default), and starts a fresh client after a failed
+  start or a lost connection, after a delay that grows while clients keep
+  failing, reporting each attempt through `client-theia`'s
+  `ConnectionReporter`. `onDidStartClient` and `onDidLoseClient` announce each
+  client, and each start and loss is logged to the application-scope
+  `ChannelLogger` an adopter binds with `bindChannelLogger`. Its client is
+  `HydraniumGlspClient`, which ends a session without the server once the
+  connection is gone.
 - **`HydraniumGlspSaveable`** — the diagram widget's saveable. Each save is a
   `RequestSaveModelAction` the server answers: the save resolves on its own
   response, and rejects on its own rejection or after 10 s rather than GLSP's

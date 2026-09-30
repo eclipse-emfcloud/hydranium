@@ -18,6 +18,12 @@ hydranium server; a non-Theia host does not need it.
   sides of the conversation read as one transcript. The same call also binds
   `ChannelTracer`, the `Tracer` token frontend services inject when they time
   something.
+- **`ConnectionReporter`** with `bindConnectionReporter` — the slot every head
+  reports its connection attempts through, reconnects included.
+  `DefaultConnectionReporter` shows a progress notification for an attempt still
+  running after 3 s and ends it in at most one notification, raising a failure
+  once until the head connects again. Rebind the slot to report differently, or
+  not at all; the heads keep their retries either way.
 - **`LogLevelPreferenceContribution`** with `bindLogLevelPreference` — applies the
   framework log threshold from a Theia preference once per application, and keeps
   it in sync on change. It is a `FrontendApplicationContribution` on purpose: the
@@ -115,7 +121,7 @@ from here:
 | Subpath     | Holds                                                                                                                                                                                       | Environment                      |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `.`         | Nothing. Deliberately empty, so an environment-specific import cannot reach the wrong bundle through a barrel.                                                                              | browser-neutral (gated)          |
-| `./browser` | `ChannelLogger`, `ChannelTracer`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, `EditorDiskSync`, `HydraniumFileService`, the `bind*` helpers, `captureBrowserRuntime` | browser / Theia frontend (gated) |
+| `./browser` | `ChannelLogger`, `ChannelTracer`, `ConnectionReporter`, `DefaultConnectionReporter`, `LogLevelPreferenceContribution`, `MemoryDiagnosticsContribution`, `EditorDiskSync`, `HydraniumFileService`, the `bind*` helpers, `captureBrowserRuntime` | browser / Theia frontend (gated) |
 | `./common`  | `Clock`, the framed socket write buffer and the connection-resilience options                                                                                                               | browser-neutral (gated)          |
 | `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                  | Node / Theia backend             |
 | `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                  | browser-neutral (gated)          |

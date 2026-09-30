@@ -32,10 +32,18 @@
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { resolveServerLogPath } from '@hydranium/core/testing/playwright';
 import type { TheiaApp } from '@theia/playwright';
-import { loadOrderFlowApp, openPropertiesPanel, PROPERTIES_PANEL as PANEL, runCommand, selectFile, test } from './order-flow-app.mjs';
+import {
+   languageServerPids,
+   loadOrderFlowApp,
+   openPropertiesPanel,
+   PROPERTIES_PANEL as PANEL,
+   runCommand,
+   SERVER_PROCESS_PATTERN,
+   selectFile,
+   test
+} from './order-flow-app.mjs';
 
 /**
  * Two diagnostics commands as the palette lists them (`category: title`), from
@@ -58,36 +66,6 @@ const DUMP_LATENCY = 'Order Flow: Dump RPC/LSP Latency (Server)';
  */
 function diagnosticsToast(app: TheiaApp, summary: string): ReturnType<TheiaApp['page']['locator']> {
    return app.page.locator('.theia-notification-message').filter({ hasText: summary }).first();
-}
-
-/**
- * Matches the forked language server, and nothing else on the machine.
- *
- * RESOLVED, not written out. The VS Code extension launches the server with
- * exactly this specifier, and `require.resolve` reports the realpath — so this
- * is the absolute path that appears in the child's argv, derived the same way
- * the launcher derives it. A hand-written fragment of that path instead rots
- * silently in BOTH directions, and both have happened here: after the example
- * moved one directory deeper the old fragment matched nothing, and because
- * `pgrep` exits 1 on no match and {@link languageServerPids} maps that to an
- * empty list, the spec stops testing restart recovery rather than failing. The
- * mirror image is worse, because it looks like a pass: a fragment loose enough
- * to match a leftover process from a previous layout makes the guard below
- * succeed and `pkill` kill something the test never started.
- */
-const SERVER_PROCESS_PATTERN = createRequire(import.meta.url).resolve('@hydranium/example-order-flow-server/lib/main.js');
-
-/** PIDs of the running language servers. Empty is a legitimate answer. */
-function languageServerPids(): string[] {
-   try {
-      return execFileSync('pgrep', ['-f', SERVER_PROCESS_PATTERN], { encoding: 'utf-8' })
-         .split('\n')
-         .map(line => line.trim())
-         .filter(line => line.length > 0);
-   } catch {
-      // `pgrep` exits 1 when nothing matches.
-      return [];
-   }
 }
 
 /**
@@ -217,8 +195,10 @@ test.describe.serial('Order-flow data connection across a language-server restar
       };
       await expect
          .poll(sinceTheKill, { message: 'the panel never registered again on the new server', timeout: 90_000 })
+         // The diagram the explorer opened recovers too, and whichever of the
+         // two reaches the document first opens it; the other attaches.
          .toMatch(
-            /Session started: order-flow-theia-properties#[\s\S]*fulfillment\.process\] Open document: .* by order-flow-theia-properties#/
+            /Session started: order-flow-theia-properties#[\s\S]*fulfillment\.process\] (?:Open document: .* by|Attach client:) order-flow-theia-properties#/
          );
    });
 
