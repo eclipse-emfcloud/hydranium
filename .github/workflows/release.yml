@@ -112,12 +112,16 @@ jobs:
           fi
           git diff --name-only "$BEFORE" "$HEAD_SHA" | node scripts/release-changed.mjs
 
-  # The gate on CI's other platforms, so a commit red only there does not
-  # publish. A separate job because the publish must wait for every leg, which
-  # a matrix entry cannot. `os:` is ci.yml's verbatim, and ci.yml reddens if
-  # the two differ.
-  platform-gate:
-    name: Platform gate (${{ matrix.os }})
+  # The contributor gate on every platform CI covers, in this workflow: CI runs
+  # on the same trigger with no dependency either way, so a red run there
+  # cannot stop the publish below. `workflow_run` could order the two, but it
+  # reads the workflow file from the default branch rather than the pushed
+  # commit, and a skipped or cancelled CI run would then block every release.
+  #
+  # `os:` and the gate command are ci.yml's verbatim, and ci.yml reddens if
+  # either differs.
+  gate:
+    name: Gate (${{ matrix.os }})
     needs: [changes]
     if: needs.changes.outputs.publishable == 'true'
     runs-on: ${{ matrix.os }}
@@ -126,8 +130,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04, windows-2025, macos-26]
-        exclude:
-          - os: ubuntu-22.04
 
     env:
       NODE_OPTIONS: --report-on-fatalerror
@@ -193,16 +195,19 @@ jobs:
       - name: Build
         run: npm run build:all
 
-      - name: Platform gate
-        run: npm run check:platform
+      - name: Full gate
+        run: npm run ${{ matrix.os == 'ubuntu-22.04' && 'check' || 'check:platform' }}
 
+  # Builds and publishes, and gates nothing itself: it rebuilds the commit the
+  # `gate` legs passed, from the same lockfile, so dropping `gate` from
+  # `needs:` leaves the publish ungated.
   release:
     name: Release
-    needs: [changes, platform-gate]
+    needs: [changes, gate]
     # One condition, not two: the dispatch carve-out is inside `changes`, so
     # this cannot be satisfied by an event name while the verdict says
     # otherwise. `needs` also means a `changes` job that DIED, or a failed
-    # platform leg, skips the release rather than publishing.
+    # gate leg, skips the release rather than publishing.
     if: needs.changes.outputs.publishable == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -353,19 +358,6 @@ jobs:
 
       - name: Build
         run: npm run build:all
-
-      # The whole contributor gate, in THIS workflow, before the publish step.
-      # The alternatives were weighed and rejected: `workflow_run` resolves the
-      # workflow file from the default branch rather than the pushed commit and
-      # needs its own conclusion check, so a CI run that was skipped or
-      # cancelled silently blocks every release; and folding this job into
-      # ci.yml with `needs:` rewrites both files to buy the same property.
-      # Nothing else can supply it — CI runs on the same trigger with no
-      # dependency either way, so the two RACE, and a red gate over there
-      # cannot stop what happens below. The duplicated run is cheap: the build
-      # above populates the turbo cache this reuses.
-      - name: Full gate
-        run: npm run check
 
       # The version is derived and stamped HERE, in a throwaway tree, and is
       # never committed. That is what keeps `package-lock.json` honest: a

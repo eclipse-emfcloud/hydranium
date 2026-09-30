@@ -182,50 +182,53 @@ jobs:
           }
           compare node-version-file
           compare NODE_OPTIONS
-          # release.yml's platform gate lists the same legs, or a leg added
-          # here cannot block a publish.
+          # release.yml's gate lists the same legs, or a leg added here cannot
+          # block a publish.
           workflows="ci release" compare os
 
       # The release workflow gates itself, in its own file, because the two
       # workflows share a `push: main` trigger with no dependency between them —
       # so a red gate here cannot stop a publish and need not even finish
-      # first. Nothing but this assertion keeps that step in place, and a
+      # first. Nothing but this assertion keeps that gate in place, and a
       # publish that has LOST its gate is indistinguishable from one that never
       # had it until a bad version is on the registry, which npm does not let
-      # you take back. Line numbers are compared because order is the property:
-      # a gate after the publish is not a gate. The platform legs are a
-      # separate job, so for them it is the publishing job's `needs:`.
+      # you take back. The gate runs in its own job, so the property is that
+      # the publishing job `needs:` it.
       - name: Release workflow gates itself before publishing
         if: matrix.os == 'ubuntu-22.04'
         run: |
           # awk rather than a `grep | head` pipeline: a non-matching grep under
           # `pipefail` aborts the step at the assignment, so the very case this
-          # exists to report would fail with no message at all. Whole
-          # lines: `run: npm run check` is a prefix of the platform gate's
-          # line, so a substring match passes with the full gate gone.
-          locate() {
-            awk -v needle="$1" '{ line = $0; sub(/^ +/, "", line) } line == needle { print NR; exit }' .github/workflows/release.yml
+          # exists to report would fail with no message at all.
+          #
+          # The gate command is read out of both files rather than written
+          # here, because Actions would expand its expression inside this
+          # script before the shell saw it.
+          gate_command() {
+            awk '/^ *- name: Full gate$/ { getline; sub(/^ +/, ""); print; exit }' "$1"
           }
-          gate=$(locate 'run: npm run check')
-          platform=$(locate 'run: npm run check:platform')
-          waits=$(locate 'needs: [changes, platform-gate]')
-          publish=$(locate 'run: node scripts/release.mjs next')
-          if [ -z "$gate" ]; then
-            echo "release.yml no longer runs the full gate: its publish path is ungated." >&2
+          # The job a whole, trimmed line of release.yml sits in.
+          job_of() {
+            awk -v needle="$1" '/^  [A-Za-z0-9_-]+:$/ { job = $1; sub(/:$/, "", job) } { line = $0; sub(/^ +/, "", line) } line == needle { print job; exit }' .github/workflows/release.yml
+          }
+          ci_gate=$(gate_command .github/workflows/ci.yml)
+          release_gate=$(gate_command .github/workflows/release.yml)
+          if [ -z "$ci_gate" ] || [ "$release_gate" != "$ci_gate" ]; then
+            echo "release.yml's Full gate does not run the command ci.yml's does:" >&2
+            echo "  ci.yml: ${ci_gate:-<no Full gate step>}" >&2
+            echo "  release.yml: ${release_gate:-<no Full gate step>}" >&2
             exit 1
           fi
-          if [ -z "$platform" ] || [ -z "$waits" ]; then
-            echo "release.yml no longer runs the platform gate, or its publishing job no" >&2
-            echo "longer needs it: a commit red only on Windows or macOS would publish." >&2
-            exit 1
-          fi
-          if [ -z "$publish" ]; then
+          publish_job=$(job_of 'run: node scripts/release.mjs next')
+          if [ -z "$publish_job" ]; then
             echo "release.yml no longer invokes scripts/release.mjs, so this check cannot" >&2
             echo "locate the publish step it is asserting against." >&2
             exit 1
           fi
-          if [ "$gate" -ge "$publish" ]; then
-            echo "release.yml runs the gate at line $gate, not before the publish at line $publish." >&2
+          gate_job=$(job_of "$release_gate")
+          if [ "$(job_of "needs: [changes, $gate_job]")" != "$publish_job" ]; then
+            echo "release.yml's publishing job '$publish_job' does not need the gate job" >&2
+            echo "'$gate_job': its publish path is ungated." >&2
             exit 1
           fi
 

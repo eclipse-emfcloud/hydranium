@@ -59,13 +59,14 @@ a flag someone has to remember to flip on the day it stops being true.
 `.github/workflows/release.yml`, on every push to `main` and on
 `workflow_dispatch`:
 
-1. Checks out with `fetch-depth: 0` — the counter needs the tags.
-2. Pins the toolchain to the `packageManager` version.
-3. Preflights the publish environment (see below).
-4. Installs, builds, and runs the **whole contributor gate**
-   (`npm run check`) in this workflow, before the publish.
-5. Waits for the `platform-gate` job, which runs `npm run check:platform`
-   on every other platform CI covers.
+1. Runs the **contributor gate** in the `gate` job, in parallel on every
+   platform CI covers: `npm run check` on Linux, `npm run check:platform`
+   elsewhere, as CI does.
+2. Once every leg has passed, the publishing job checks out with
+   `fetch-depth: 0` — the counter needs the tags.
+3. Pins the toolchain to the `packageManager` version.
+4. Preflights the publish environment (see below).
+5. Installs and builds the same commit.
 6. Runs `node scripts/release.mjs next`.
 
 Before merging a package or export change, also run the opt-in packed
@@ -105,11 +106,14 @@ against the same baseline.
 
 The gate lives here rather than in CI deliberately: both workflows fire
 on the same `push: main` with no dependency either way, so they race and
-a red CI run cannot stop a publish. CI asserts the arrangement instead —
-a step reads `release.yml` and fails unless `npm run check` appears at a
-lower line number than the publish, because a gate after the publish is
-not a gate, and unless the publishing job needs `platform-gate`. The
-platform gate's `os:` list must equal CI's, which CI compares too.
+a red CI run cannot stop a publish. CI asserts the arrangement instead:
+a step reads `release.yml` and fails unless its gate runs the same command
+as CI's and the publishing job needs the gate job. The gate's `os:` list
+must equal CI's, which CI compares too.
+
+The publishing job rebuilds the commit rather than reusing the gated
+build, so the guarantee is that the commit passed, not that these exact
+files did. Both builds come from the same commit and lockfile.
 
 ## Trusted publishing
 
