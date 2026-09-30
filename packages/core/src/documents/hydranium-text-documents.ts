@@ -531,7 +531,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const disposables = new DisposableCollection();
       disposables.push(
          connection.onDidOpenTextDocument(async (event: DidOpenTextDocumentParams) => {
-            await this.services.workspace.WorkspaceManager.workspaceInitialized;
+            await this.initialBuildFinished();
             this.notifyDidOpenTextDocument(event);
          })
       );
@@ -1517,11 +1517,22 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * gone.
     */
    async closeLanguageClientDocuments(): Promise<void> {
-      await this.services.workspace.WorkspaceManager.workspaceInitialized;
+      await this.initialBuildFinished();
       for (const uri of this.__sessions.opensOf(LANGUAGE_CLIENT_ID)) {
          this.untrackLanguageClientDocuments(uri);
          this.notifyDidCloseTextDocument({ textDocument: { uri } });
       }
+   }
+
+   /**
+    * Settles once the initial workspace build has finished, whether it
+    * completed, was cancelled or failed. Awaiting `workspaceInitialized` itself
+    * throws after a cancelled build, which any write during startup causes, and
+    * every open and close gated on it is then dropped for the process lifetime.
+    * The workspace manager logs a failed build.
+    */
+   protected async initialBuildFinished(): Promise<void> {
+      await this.services.workspace.WorkspaceManager.workspaceInitialized.catch(() => undefined);
    }
 
    /**

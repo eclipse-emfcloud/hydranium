@@ -10,7 +10,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Logger, NoopLogger, type Project, type Tracer } from '@hydranium/protocol';
 import { type CapturedLine, makeCapturingLogger } from '../../../src/testing/make-test-tracer.js';
-import { type DocumentBuilder, DocumentState, type LangiumDocument, type LangiumDocuments, URI } from '@hydranium/langium';
+import {
+   type DocumentBuilder,
+   DocumentState,
+   type LangiumDocument,
+   type LangiumDocuments,
+   OperationCancelled,
+   URI
+} from '@hydranium/langium';
 import { Disposable } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
@@ -521,6 +528,33 @@ describe('HydraniumWorkspaceManager — wsRelativePath', () => {
       const mgr = new HydraniumWorkspaceManager(stubs.services);
       // `typeof uri === 'string'` is false here -> `uri.path.toString()` branch.
       expect(mgr.wsRelativePath(URI.parse('file:///workspace/A.a'))).toBe('/workspace/A.a');
+   });
+});
+
+describe('HydraniumWorkspaceManager — a failed initial build', () => {
+   class FailingWorkspaceManager extends HydraniumWorkspaceManager {
+      startupError: unknown;
+
+      protected override async performStartup(): Promise<LangiumDocument[]> {
+         throw this.startupError;
+      }
+   }
+
+   async function errorsFor(startupError: unknown): Promise<CapturedLine[]> {
+      const { tracer, lines } = makeCapturingTracer();
+      const stubs = makeStubs(new FakeProjectManager());
+      (stubs.services as unknown as { Tracer: Tracer }).Tracer = tracer;
+      const mgr = new FailingWorkspaceManager(stubs.services);
+      mgr.startupError = startupError;
+      await expect(mgr.initializeWorkspace([])).rejects.toBe(startupError);
+      await expect(mgr.workspaceInitialized).rejects.toBe(startupError);
+      return lines.filter(line => line.level === 'error');
+   }
+
+   it('logs a failure as an error, and a cancellation or a gone connection not', async () => {
+      expect(await errorsFor(new Error('boom'))).toHaveLength(1);
+      expect(await errorsFor(OperationCancelled)).toEqual([]);
+      expect(await errorsFor(new Error('Connection is disposed.'))).toEqual([]);
    });
 });
 
