@@ -11,9 +11,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { type Channel, type CommandService, type ILogger, type MessageService } from '@theia/core';
 import { GlspServerConnectionHandler } from '../../src/node/glsp-server-connection-handler';
 
-/** Backend `ILogger` stub — the handler logs connect/error lines through it. */
+/** Backend `ILogger` stub — the handler logs port attempts and connect/error lines through it. */
 function stubLogger(): ILogger {
-   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
 }
 
 class TestHandler extends GlspServerConnectionHandler {
@@ -46,6 +46,7 @@ describe('GlspServerConnectionHandler', () => {
          executeCommand: vi.fn<() => Promise<number>>().mockResolvedValue(5007)
       } as unknown as CommandService;
       handler['messageService'] = {} as MessageService;
+      (handler as unknown as { logger: ILogger }).logger = stubLogger();
       await expect(handler.exposeFindPort()).resolves.toBe(5007);
    });
 
@@ -66,6 +67,7 @@ describe('GlspServerConnectionHandler', () => {
          })
       } as unknown as CommandService;
       handler['messageService'] = {} as MessageService;
+      (handler as unknown as { logger: ILogger }).logger = stubLogger();
       await expect(handler.exposeFindPort()).resolves.toBe(5008);
       expect(attempts).toBe(3);
    });
@@ -81,6 +83,7 @@ describe('GlspServerConnectionHandler', () => {
          executeCommand: vi.fn<() => Promise<number>>().mockRejectedValue(new Error('port unavailable'))
       } as unknown as CommandService;
       handler['messageService'] = {} as MessageService;
+      (handler as unknown as { logger: ILogger }).logger = stubLogger();
       await expect(handler.exposeFindPort()).rejects.toThrow('port unavailable');
    });
 

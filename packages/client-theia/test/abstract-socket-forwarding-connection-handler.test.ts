@@ -9,7 +9,7 @@
 
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
-import { type Channel, Disposable, type ILogger } from '@theia/core';
+import { type Channel, type CommandService, Disposable, type ILogger } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import type { MessageProvider } from '@theia/core/lib/common/message-rpc/channel';
 import type * as net from 'node:net';
@@ -28,6 +28,11 @@ class TestHandler extends AbstractSocketForwardingConnectionHandler {
    /** Reach the protected race fix under test. */
    replay(channel: Channel, buffered: MessageProvider[]): void {
       this.replayBufferedMessages(channel, buffered);
+   }
+
+   /** Reach the protected port lookup under test. */
+   lookUpPort(): Promise<number> {
+      return this.findPort();
    }
 
    /** Reach the protected dial under test. */
@@ -83,6 +88,25 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
       expect(handler.config.findPortTimeout).toBe(50);
       expect(handler.config.findPortAttempts).toBe(3);
       expect(handler.config.connectTimeoutMs).toBe(1234);
+   });
+
+   /**
+    * A host's port command may answer before its language client is ready, and
+    * nothing obliges it to throw then rather than return nothing. An empty
+    * answer that neither resolves nor re-queues leaves the lookup pending for
+    * good and the head never connects, with nothing logged.
+    */
+   it('counts a port command that answers without a port as a failed attempt', async () => {
+      const handler = new TestHandler({ ...baseOptions(), findPortTimeout: 1, findPortAttempts: 2 });
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+      const executeCommand = vi.fn(async () => undefined);
+      Object.assign(handler, { logger, commandService: { executeCommand } as unknown as CommandService });
+
+      await expect(handler.lookUpPort()).rejects.toThrow(/'test:port'/);
+
+      expect(executeCommand).toHaveBeenCalledTimes(3);
+      expect(logger.debug).toHaveBeenCalledTimes(3);
+      expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("'test:port'"));
    });
 
    /**
