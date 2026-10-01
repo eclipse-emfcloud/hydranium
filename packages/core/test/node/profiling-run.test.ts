@@ -8,7 +8,6 @@
  ********************************************************************************/
 
 import * as fs from 'node:fs';
-import type * as NodeFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_LOG_FILE_ENV, LatencyCollector } from '@hydranium/protocol';
@@ -24,12 +23,12 @@ import type { ProfileReport } from '../../src/node/profile-capture.js';
  * driven to both answers; every test restores it.
  */
 vi.mock('node:fs', async importOriginal => {
-   const actual = await importOriginal<typeof NodeFs>();
+   const actual = await importOriginal<typeof fs>();
    return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 
 afterEach(async () => {
-   const actual = await vi.importActual<typeof NodeFs>('node:fs');
+   const actual = await vi.importActual<typeof fs>('node:fs');
    vi.mocked(fs.existsSync).mockImplementation(actual.existsSync);
 });
 

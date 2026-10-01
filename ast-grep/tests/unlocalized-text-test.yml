@@ -1,0 +1,17 @@
+id: unlocalized-message-service-text
+valid:
+  - "this.messageService.info(nls.localize('hydranium/x/saved', 'Model saved'));"
+  - 'this.messageService.info(5000);'
+  - "this.messageService.info('ok', { timeout: 5000 });"
+  - "messageService.info('Model saved');"
+invalid:
+  - "this.messageService.info('Model saved');"
+  - 'this.messageService.error(`Saved ${name} now`);'
+---
+id: unlocalized-command-label
+valid:
+  - "const command = { label: nls.localize('hydranium/x/label', 'Save model') };"
+  - "const command = { id: 'hydranium.save.model' };"
+invalid:
+  - "const command = { label: 'Save model' };"
+  - 'const command = { category: `Model ${name}` };'

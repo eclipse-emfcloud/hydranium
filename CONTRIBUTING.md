@@ -110,6 +110,22 @@ touching. Before proposing any new install-time lifecycle script, check it
 against both constraints — they have invalidated three otherwise reasonable
 fixes.
 
+## Linting
+
+Run `npm run lint` to run Oxlint across the workspace. Oxlint runs native
+rules only; `oxlint.config.cjs` scopes the architecture rules to their
+packages. Two checks cover what Oxlint has no native rule for:
+
+- `npm run check:phantom-deps` requires every import to be declared in its
+  workspace's manifest (`scripts/check-phantom-dependencies.mjs`).
+- `npm run check:ast-grep` runs the localization and test-fixture bans in
+  `ast-grep/rules`, after the rule tests in `ast-grep/tests`.
+
+`npm run check:lint-policy` plants violations and permitted exceptions at real
+paths and runs the enforcing tool on each. The Oxc and ast-grep VS Code
+extensions in `.vscode/extensions.json` show both kinds of finding in the
+editor.
+
 ## The gate
 
 `npm run check` is a chain of clauses, not a single command: `turbo run build

@@ -28,6 +28,7 @@ import {
    stripJsonComments,
    type WorkspaceProbe,
    findEslintConfig,
+   findOxlintConfig,
    findPrettierPrintWidth,
    workspaceGlobCovers
 } from '../src/commands/init-workspace.js';
@@ -251,5 +252,13 @@ describe('findEslintConfig', () => {
       expect(findEslintConfig(ROOT, fakeProbe({ 'eslint.config.mts': {} }))).toBe('eslint.config.mts');
       expect(findEslintConfig(ROOT, fakeProbe({ '.eslintrc.json': {} }))).toBe('.eslintrc.json');
       expect(findEslintConfig(ROOT, fakeProbe({ 'package.json': { name: 'repo' } }))).toBeUndefined();
+   });
+});
+
+describe('findOxlintConfig', () => {
+   it('detects JSON and module configs without evaluating them', () => {
+      expect(findOxlintConfig(ROOT, fakeProbe({ 'oxlint.config.cjs': 'module.exports = {};' }))).toBe('oxlint.config.cjs');
+      expect(findOxlintConfig(ROOT, fakeProbe({ '.oxlintrc.json': {} }))).toBe('.oxlintrc.json');
+      expect(findOxlintConfig(ROOT, fakeProbe({ 'eslint.config.js': {} }))).toBeUndefined();
    });
 });

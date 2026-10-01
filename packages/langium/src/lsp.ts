@@ -13,4 +13,5 @@
  * so framework packages and adopters reach every Langium subpath through
  * this package and inherit its version pin instead of owning one themselves.
  */
+// oxlint-disable-next-line import/export -- misreads export * from an npm package: https://github.com/oxc-project/oxc/pull/26872
 export * from 'langium/lsp';

@@ -17,7 +17,7 @@
     "bundle": "node esbuild.mjs",
     "clean": "rimraf out test-results playwright-report tsconfig.worker.tsbuildinfo tsconfig.page.tsbuildinfo",
     "generate": "node scripts/generate-workspace-seed.mjs",
-    "lint": "eslint src test --max-warnings 0",
+    "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",
     "start": "node scripts/serve.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",

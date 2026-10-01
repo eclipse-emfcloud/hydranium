@@ -23,6 +23,7 @@ import {
    type FileSystemProvider,
    type LangiumDocument,
    type LangiumDocuments,
+   URI,
    UriUtils
 } from '@hydranium/langium';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
@@ -81,7 +82,6 @@ export interface WritableFileSystemProvider extends FileSystemProvider {
 import { Disposable } from 'vscode-languageserver';
 import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languageserver-protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
-import { URI } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import { type HydraniumDocumentBuilder, labelPhaseListener } from '../langium/document-builder/index.js';
 import { UNKNOWN_CLIENT_ID } from './client-ids.js';

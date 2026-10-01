@@ -10,6 +10,7 @@
 import 'reflect-metadata';
 import {
    type Action,
+   ActionDispatchScope,
    type ActionMessage,
    ClientSessionManager,
    EndProgressAction,
@@ -35,7 +36,6 @@ import {
    type ServerModule,
    getRequestParentName
 } from '@eclipse-glsp/server/node.js';
-import { ActionDispatchScope } from '@eclipse-glsp/server';
 import { Container, ContainerModule, type interfaces } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';

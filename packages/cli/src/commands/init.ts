@@ -132,6 +132,8 @@ export interface InitWorkspacePlacement {
    readonly printWidth?: number;
    /** Filename of the workspace's eslint config; its presence is what makes the scaffold emit a `lint` script. */
    readonly eslintConfig?: string;
+   /** Filename of the workspace Oxlint config, when present. */
+   readonly oxlintConfig?: string;
 }
 
 /**
@@ -466,7 +468,8 @@ export function resolveInitPackaging(targetDir: string, options: InitPackagingOp
          baseTsconfig: detection.baseTsconfig,
          baseCompilerOptions: detection.baseCompilerOptions,
          printWidth: detection.printWidth,
-         eslintConfig: detection.eslintConfig
+         eslintConfig: detection.eslintConfig,
+         oxlintConfig: detection.oxlintConfig
       }
    };
 }
@@ -517,8 +520,10 @@ export function runInit(options: InitCommandOptions): void {
       if (detection.printWidth !== undefined) {
          write(`  Sources wrapped at ${detection.printWidth} columns, from ${detection.rootDir}'s prettier config.\n`);
       }
-      if (detection.eslintConfig !== undefined) {
-         write(`  A lint script was added — ${detection.eslintConfig} says this repo lints. Adjust it if your invocation differs.\n`);
+      if (detection.oxlintConfig !== undefined || detection.eslintConfig !== undefined) {
+         write(
+            `  A lint script was added — ${detection.oxlintConfig ?? detection.eslintConfig} says this repo lints. Adjust it if your invocation differs.\n`
+         );
       }
       // Printed rather than applied: `init` writes inside the target directory
       // and nowhere else, so a scaffold can never surprise-edit a manifest that

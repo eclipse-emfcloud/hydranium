@@ -9,8 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@hydranium/protocol';
-import { type AstNode, type AstNodeDescription, MapScope, type Scope } from '@hydranium/langium';
-import { URI } from '@hydranium/langium';
+import { type AstNode, type AstNodeDescription, MapScope, type Scope, URI } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { HydraniumScopeProvider, type HydraniumScopeProviderOptions } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type DescriptionTier, type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';

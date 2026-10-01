@@ -700,7 +700,7 @@ describe('runInit', () => {
  * here so neither half can pass by leaning on the other.
  */
 describe('planInitFiles, detected workspace facts', () => {
-   const plan = (workspace: { printWidth?: number; eslintConfig?: string }): readonly InitFile[] =>
+   const plan = (workspace: { printWidth?: number; eslintConfig?: string; oxlintConfig?: string }): readonly InitFile[] =>
       planInitFiles(
          resolveInitComposition('Bookstore', undefined, ['lsp', 'data', 'glsp'], {
             private: true,
@@ -725,6 +725,12 @@ describe('planInitFiles, detected workspace facts', () => {
       // Byte-identical to an explicit 120, which is what "falls back" has to
       // mean; asserting merely that it renders would pass at any width.
       expect(contentOf(plan({}), 'src/main.ts')).toBe(contentOf(plan({ printWidth: 120 }), 'src/main.ts'));
+   });
+
+   it('emits the Oxlint command in a migrated workspace', () => {
+      expect(contentOf(plan({ oxlintConfig: 'oxlint.config.cjs' }), 'package.json')).toContain(
+         '"lint": "oxlint --report-unused-disable-directives --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0"'
+      );
    });
 
    it('emits a lint script only where the workspace has an eslint config', () => {

@@ -121,7 +121,7 @@ describe('makeStubLangiumDocuments — differential against DefaultLangiumDocume
       expect(await stub.getOrCreateDocument(URI.parse(URI_A))).toBe(stubSeeded);
       // Anchor: the factory would have produced a differently-named root, so
       // this fails if the existing-document branch were skipped.
-      expect((real.getDocument(URI.parse(URI_A))?.parseResult.value as FakeRoot).name).toBe('seeded');
+      expect(real.getDocument(URI.parse(URI_A))?.parseResult.value).toMatchObject({ name: 'seeded' });
    });
 
    it('answers getDocument / hasDocument by canonicalised URI string on both sides', () => {
@@ -165,7 +165,7 @@ describe('makeStubLangiumDocuments — the seeding surface it declares itself', 
       // is a plain map assignment, so a test re-seeding a URI gets the newer
       // root rather than an error.
       expect(stub.entries.size).toBe(1);
-      expect((stub.getDocument(URI.parse(URI_A))?.parseResult.value as FakeRoot).name).toBe('second');
+      expect(stub.getDocument(URI.parse(URI_A))?.parseResult.value).toMatchObject({ name: 'second' });
    });
 
    it('exposes entries as the live backing map and empties it on clear', () => {

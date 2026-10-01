@@ -190,6 +190,8 @@ export interface WorkspaceDetection {
    readonly printWidth?: number;
    /** Filename of the root eslint config, when there is one. Absent means the repo does not lint. */
    readonly eslintConfig?: string;
+   /** Filename of the root Oxlint config, when present. */
+   readonly oxlintConfig?: string;
 }
 
 /**
@@ -398,6 +400,11 @@ export function findEslintConfig(rootDir: string, probe: WorkspaceProbe): string
    return probe.listFiles(rootDir).find(name => /^eslint\.config\.[cm]?[jt]s$/.test(name) || /^\.eslintrc(\..+)?$/.test(name));
 }
 
+/** Detect Oxlint without evaluating executable configuration files. */
+export function findOxlintConfig(rootDir: string, probe: WorkspaceProbe): string | undefined {
+   return probe.listFiles(rootDir).find(name => /^(oxlint\.config\.[cm]?[jt]s|\.oxlintrc\.jsonc?)$/.test(name));
+}
+
 /** POSIX-style relative path, which is what both `extends` and `--prefix` want on every platform. */
 function posixRelative(from: string, to: string): string {
    return path.relative(from, to).split(path.sep).join('/');
@@ -437,6 +444,7 @@ export function detectWorkspace(targetDir: string, probe: WorkspaceProbe): Works
       baseTsconfig: base && posixRelative(absoluteTarget, path.join(rootDir, base.file)),
       baseCompilerOptions: base?.compilerOptions,
       printWidth: findPrettierPrintWidth(rootDir, probe),
-      eslintConfig: findEslintConfig(rootDir, probe)
+      eslintConfig: findEslintConfig(rootDir, probe),
+      oxlintConfig: findOxlintConfig(rootDir, probe)
    };
 }
