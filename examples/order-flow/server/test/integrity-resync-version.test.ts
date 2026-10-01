@@ -116,8 +116,10 @@ describe('an integrity repair of a closed document lands on the store version se
 
       // A content transition while closed — the shape the store's Parsed-phase
       // reconciliation exists for. Driven directly rather than through a watcher.
+      // Under the write lock, as production builds are by default: unlocked, this build
+      // overlaps the close's revert, and the assertions read a repair still in flight.
       writeFileSync(workspace.resolve(FILE), diskWhileClosed, 'utf8');
-      await builder.update([uri], []);
+      await harness.shared.workspace.WorkspaceLock.write(token => builder.update([uri], [], token));
       await builder.waitUntil(DocumentState.Validated, uri);
    }
 
