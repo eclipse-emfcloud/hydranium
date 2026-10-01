@@ -41,7 +41,7 @@ import {
    SessionClosedError
 } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
-import { type AstNode } from '@hydranium/langium';
+import { type AstNode, type ParseResult } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import {
    AstDocument,
@@ -149,6 +149,16 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
    const candidate = diagnostic as { severity?: number; data?: { code?: unknown } };
    const code = candidate.data?.code;
    return candidate.severity === DiagnosticSeverity.Error && (code === 'lexing-error' || code === 'parsing-error');
+}
+
+/** Whether `parseResult` holds what Langium's validator reports as an error-severity `lexing-error` or `parsing-error`. */
+function hasStructuralErrors(parseResult: ParseResult): boolean {
+   const lexing = parseResult.lexerReport?.diagnostics ?? [];
+   return (
+      parseResult.parserErrors.length > 0 ||
+      parseResult.lexerErrors.length > 0 ||
+      lexing.some(diagnostic => (diagnostic.severity ?? 'error') === 'error')
+   );
 }
 
 /**
@@ -448,18 +458,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * + settle-hook actions are dispatched on a macrotask so the initial
     * `requestModel → setModel` handshake isn't perturbed.
     *
-    * **Whether the settled document carries diagnostics depends on how far it
-    * had already got, so the initial edit mode has two correct outcomes rather
-    * than one.** `settled()` strips nothing: it resolves AT OR ABOVE the
-    * integrity landmark and hands back the live document's own array. Its
-    * `AstDocument<TAst, never>` return type asserts emptiness for a document the
-    * wait had to DRIVE to that landmark, which is pre-validation — and for that
-    * one the mode here is `EDITABLE` and the flip to READONLY arrives with the
-    * first {@link handleModelUpdated}. A document already past `Validated` when
-    * the session opened resolves immediately with its diagnostics intact, and is
-    * decided correctly here with no later update owed. Any host that validates
-    * its workspace before a diagram is opened produces the second case, so
-    * neither is exceptional.
+    * The initial edit mode is decided from the root's own parse (see
+    * {@link isStructurallyBroken}), not from diagnostics: `settled()` can hand
+    * back a document it drove to the integrity landmark, before validation,
+    * with no diagnostics yet.
     *
     * **A correct decision is not a delivered one.** This dispatch happens inside
     * the initial `requestModel`, before the client has the model — so the UI
@@ -766,11 +768,18 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    /**
     * Seam: is the AST structurally broken (lexing/parsing errors)? Drives both
     * READONLY mode and the GModel resubmit skip — keeping the last valid canvas
-    * instead of blanking it mid-typing. Default: any error-severity diagnostic
-    * carrying a Langium `lexing-error` / `parsing-error` code. Adopters override
-    * to compose additional break reasons.
+    * instead of blanking it mid-typing. Default: the lexer and parser errors of
+    * the root's own parse, which exist from the parse on, so the answer does
+    * not wait for validation; for a root its document has since replaced, any
+    * error-severity diagnostic carrying a Langium `lexing-error` /
+    * `parsing-error` code. Adopters override to compose additional break
+    * reasons.
     */
    protected isStructurallyBroken(document: AstDocument<AstNode>): boolean {
+      const parsed = document.root.$document?.parseResult;
+      if (parsed?.value === document.root) {
+         return hasStructuralErrors(parsed);
+      }
       return document.diagnostics.some(diagnostic => isStructuralDiagnostic(diagnostic));
    }
 
