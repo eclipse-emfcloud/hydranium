@@ -13,17 +13,19 @@
  *
  * # What each configuration can and cannot establish
  *
- * `ModelServiceOptions.serializeBuilds` defaults to `true`, and with builds
+ * By default every facade build takes the write lock, and with builds
  * serialised the duplicate diagnostics this net exists to collapse never occur —
  * so that variant measures the LOCK, and its absolute no-duplicates assertion
  * is sound because the lock is what the promise rests on.
  *
- * Turning the option off runs the net for real, but **its completeness is not
+ * `ModelServiceOptions.allowReentrantBuilds` in a host with no write-lock scope
+ * tracker builds without the lock, which runs the net for real; the unlocked
+ * variant gets there by removing the Node tracker. **Its completeness is not
  * asserted here, because the framework does not promise it** in that
  * configuration: the dedupe cannot close the window Langium's appending
- * validate opens after it (see the publishing suite below). So the off variant
- * asserts only what does hold — that the net never swallows a real finding —
- * and classifies any duplicate to the log instead of failing.
+ * validate opens after it (see the publishing suite below). So the unlocked
+ * variant asserts only what does hold — that the net never swallows a real
+ * finding — and classifies any duplicate to the log instead of failing.
  *
  * Nothing in this file therefore asserts that the net collapses every duplicate
  * it is handed. That claim is carried by the `classifyDuplicates` unit tests
@@ -43,8 +45,8 @@
  * this path at all.**
  *
  * With a real connection two builds are requested: the update handler's and
- * the facade's `rebuildCanonical`. With the lock on they share one build; with
- * it off they run concurrently, each computes its missing validation
+ * the facade's `rebuildCanonical`. With the lock they share one build; without
+ * it they run concurrently, each computes its missing validation
  * categories before the other records its own, both run a full pass, and Langium's deliberate
  * append — meant for category-partitioned passes — duplicates the lot.
  *
@@ -58,8 +60,8 @@
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DefaultModelService } from '@hydranium/core';
-import { NodeFileSystem } from '@hydranium/core/node';
+import { DefaultModelService, setWriteLockScope } from '@hydranium/core';
+import { NodeFileSystem, nodeWriteLockScope } from '@hydranium/core/node';
 import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { type DeepPartial, URI, type Module } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver';
@@ -68,15 +70,15 @@ import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/la
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /**
- * Rebind `ModelService` with the serialisation opt-out. This is the whole
+ * Rebind `ModelService` with `allowReentrantBuilds`. This is the whole
  * reason `createOrderFlowServices` accepts extra shared modules: the framework
  * constructs its own services with no options, so rebinding the slot is the only
  * route to a non-default one.
  */
-function withSerializeBuilds(serializeBuilds: boolean): Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>> {
+function withReentrantBuilds(allowReentrantBuilds: boolean): Module<OrderFlowSharedServices, DeepPartial<OrderFlowSharedServices>> {
    return {
       model: {
-         ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { serializeBuilds })
+         ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { allowReentrantBuilds })
       }
    };
 }
@@ -85,6 +87,7 @@ let workspace: ScratchWorkspace | undefined;
 let harness: LspHarness | undefined;
 
 afterEach(() => {
+   setWriteLockScope(nodeWriteLockScope);
    harness?.dispose();
    harness = undefined;
    workspace?.dispose();
@@ -97,16 +100,19 @@ interface Booted {
    readonly uri: string;
 }
 
-/** Boot the three grammars behind a real in-process LSP connection. */
-async function boot(serializeBuilds: boolean): Promise<Booted> {
+/**
+ * Boot the three grammars behind a real in-process LSP connection, with the
+ * facade's builds unlocked when `locked` is `false`.
+ */
+async function boot(locked: boolean): Promise<Booted> {
+   if (!locked) {
+      setWriteLockScope(undefined);
+   }
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-dedupe-' });
    let shared: OrderFlowSharedServices | undefined;
    const booted = makeLspHarness({
       createServices: connection => {
-         shared = createOrderFlowServices(
-            { connection, ...NodeFileSystem },
-            { extraSharedModules: [withSerializeBuilds(serializeBuilds)] }
-         ).shared;
+         shared = createOrderFlowServices({ connection, ...NodeFileSystem }, { extraSharedModules: [withReentrantBuilds(!locked)] }).shared;
          return shared;
       }
    });
@@ -220,8 +226,8 @@ function recordDuplicates(payloads: readonly Payload[], offending: Payload): voi
  * `audit-leak.domain` is the workspace's one intended error, so there is a real
  * diagnostic to duplicate; the appended comment keeps it unresolvable.
  */
-async function publishedAfterWrite(serializeBuilds: boolean): Promise<Payload[]> {
-   const { shared, harness: booted, uri } = await boot(serializeBuilds);
+async function publishedAfterWrite(locked: boolean): Promise<Payload[]> {
+   const { shared, harness: booted, uri } = await boot(locked);
 
    const document = await shared.workspace.LangiumDocuments.getOrCreateDocument(URI.parse(uri));
    await shared.workspace.DocumentBuilder.build([document], { validation: true });
@@ -256,8 +262,8 @@ function expectIntendedErrorPublished(payloads: readonly Payload[]): void {
 /**
  * Assert the intended error is present, once, in every payload.
  *
- * Sound only where the framework promises it — see the `serializeBuilds` note
- * on the publishing suite below.
+ * Sound only where the framework promises it — see the note on the publishing
+ * suite below.
  */
 function expectNoDuplicates(payloads: readonly Payload[]): void {
    expectIntendedErrorPublished(payloads);
@@ -324,14 +330,14 @@ describe('classifyDuplicates', () => {
 /**
  * Duplicate-free publishing is promised with builds SERIALISED, and only then.
  *
- * With `serializeBuilds` off the framework makes no such promise, so the off
+ * With builds unlocked the framework makes no such promise, so the unlocked
  * variant must not assert one. `dedupeDiagnostics` runs ahead of the phase
  * listeners, but Langium's validate PUSHES onto the live diagnostics array and
  * two awaits separate the dedupe from the publisher, so a build settling inside
  * that window appends after the dedupe has already run. Only the build lock
  * closes the window.
  *
- * What the off variant asserts instead is the guarantee that does hold there:
+ * What the unlocked variant asserts instead is the guarantee that does hold there:
  * the dedupe must not over-collapse and swallow a real finding. Duplicates are
  * classified and reported rather than failed on, because an absolute assertion
  * over an unpromised configuration reports a framework defect for a
@@ -344,7 +350,7 @@ describe('diagnostics publishing', () => {
       expectNoDuplicates(await publishedAfterWrite(true));
    }, 60_000);
 
-   it('still publishes the intended error with serializeBuilds off', async () => {
+   it('still publishes the intended error with builds unlocked', async () => {
       const payloads = await publishedAfterWrite(false);
       expectIntendedErrorPublished(payloads);
       reportDuplicates(payloads);

@@ -411,13 +411,13 @@ describe('the headless locale seam', () => {
  * awaits, and Langium's `validate` pushes onto the live diagnostics array rather
  * than replacing it, so a second build settling inside that window appends
  * entries the pass never saw and the first build's publisher sends them
- * unrendered. `ModelServiceOptions.serializeBuilds` closes that window and
- * defaults to `true`.
+ * unrendered. The write lock closes that window, and every facade build takes
+ * it unless `ModelServiceOptions.allowReentrantBuilds` lets one skip it.
  *
  * **It does NOT witness that window, and that was measured rather than
- * assumed:** with `serializeBuilds: false` this suite still passed on three
+ * assumed:** with the facade's builds unlocked this suite still passed on three
  * consecutive runs. So the absolute assertion below pins the DEFAULT
- * configuration and nothing more — a leak on the opt-out path would not redden
+ * configuration and nothing more — a leak on the unlocked path would not redden
  * it. That is the same limit the dedupe suite reached and stated, and closing it
  * needs a test that drives the append window deterministically rather than
  * waiting for load to open it.

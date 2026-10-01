@@ -1541,10 +1541,11 @@ pass runs before the phase listeners, not atomically with them: the loop awaits,
 and Langium's `validate` PUSHES onto the live diagnostics array rather than
 replacing it, so a second build settling inside that window appends entries the
 pass never saw and the first build's publisher sends them unrendered. This is
-the same window `dedupeDiagnostics` has, closed by the same thing —
-`ModelServiceOptions.serializeBuilds`, which defaults to `true`. An adopter who
-opts out accepts unrendered diagnostics on the same terms as duplicate ones, and
-the framework promises neither in that configuration.
+the same window `dedupeDiagnostics` has, closed by the same thing — the write
+lock, which every facade build takes unless
+`ModelServiceOptions.allowReentrantBuilds` lets one skip it. An adopter who
+turns that on accepts unrendered diagnostics on the same terms as duplicate
+ones, and the framework promises neither in that configuration.
 
 That placement is also the only one that covers **lexer and parser errors**,
 which Langium pushes onto the document without routing them through

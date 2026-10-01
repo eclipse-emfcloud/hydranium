@@ -169,7 +169,7 @@ export interface ServerAddedSharedServices<
        * `ModelService.rebuild` build through this slot's
        * `scheduleUpdate`, so narrowing here is a load-bearing contract:
        * a builder without it fails every LSP-driven build, and every
-       * session write while `serializeBuilds` is on, at run time.
+       * session write that takes the lock, at run time.
        */
       /* override */ DocumentBuilder: HydraniumDocumentBuilder;
       /**
