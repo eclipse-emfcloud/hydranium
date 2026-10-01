@@ -530,7 +530,7 @@ export function createServerSharedModule(
          DocumentBuilder: services => new HydraniumDocumentBuilder(services),
          // The write-lock scope this marks is inert unless a host installs a
          // scope tracker — `@hydranium/core/node` does.
-         WorkspaceLock: () => new HydraniumWorkspaceLock(),
+         WorkspaceLock: services => new HydraniumWorkspaceLock(services),
          ProjectManager: services => new SingleProjectManager(services),
          SelfSaveRegistry: services => new DefaultSelfSaveRegistry(services),
          DocumentUriPolicy: () => new DefaultDocumentUriPolicy(),

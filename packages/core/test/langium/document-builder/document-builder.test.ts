@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type CanonicalUri, Disposable, Logger, type LogThreshold } from '@hydranium/protocol';
+import { type CanonicalUri, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
 import {
    type BuildOptions,
    DocumentState,
@@ -35,6 +35,7 @@ import {
    makeNoopLanguageServices,
    makeNoopLogger,
    makeNoopSharedServices,
+   makeNoopTracer,
    makeStubServiceRegistry
 } from '../../../src/testing/index.js';
 
@@ -164,7 +165,7 @@ function makeStubServices(
             loadUri: (uri: URI | string) => (typeof uri === 'string' ? URI.parse(uri) : uri)
          },
          // A build that throws checks its waits from a read of the lock.
-         WorkspaceLock: new HydraniumWorkspaceLock()
+         WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
       }
    });
 }
@@ -803,7 +804,7 @@ describe('HydraniumDocumentBuilder', () => {
             Logger: makeNoopLogger(),
             workspace: {
                LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
-               WorkspaceLock: new HydraniumWorkspaceLock()
+               WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
             }
          });
       }

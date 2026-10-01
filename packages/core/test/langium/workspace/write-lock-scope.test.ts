@@ -7,8 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { SystemClock } from '@hydranium/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { makeNoopTracer } from '../../../src/testing/index.js';
 import {
    ReentrantWriteLockError,
    isInsideWriteLock,
@@ -95,7 +97,7 @@ describe('write-lock scope', () => {
          // `read` is deliberately unmarked: a read action does not cancel a
          // running holder, so reaching the facade from one is not the hazard.
          setWriteLockScope(nodeWriteLockScope);
-         const lock = new HydraniumWorkspaceLock();
+         const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() });
          let duringWrite: boolean | undefined;
          let duringRead: boolean | undefined;
          await lock.write(async () => {
@@ -110,7 +112,7 @@ describe('write-lock scope', () => {
 
       it('keeps the scope across an await inside the write action', async () => {
          setWriteLockScope(nodeWriteLockScope);
-         const lock = new HydraniumWorkspaceLock();
+         const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() });
          let afterAwait: boolean | undefined;
          await lock.write(async () => {
             await Promise.resolve();
@@ -121,7 +123,7 @@ describe('write-lock scope', () => {
 
       it('does not report "inside" after the write action has settled', async () => {
          setWriteLockScope(nodeWriteLockScope);
-         const lock = new HydraniumWorkspaceLock();
+         const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() });
          await lock.write(async () => Promise.resolve());
          expect(isInsideWriteLock()).toBe(false);
       });

@@ -22,13 +22,17 @@
  * Answering it needs async-context propagation, which has no browser-neutral
  * implementation: Node's `AsyncLocalStorage` is a `node:async_hooks` import (so
  * it cannot appear on the portable `.` entry, which `check:neutral` gates), and
- * TC39's `AsyncContext` is unshipped. Hence the same seam shape the log file-tee
- * uses: this module declares the contract and defaults to inert, and
- * `@hydranium/core/node` installs a real implementation at entry load. A browser
- * bundle therefore gets NO detection rather than a broken approximation, which
- * is the right degradation — the reentrant shape is a server-side build concern,
- * and a false negative costs the pre-existing stall while a false positive would
- * reject a legitimate write.
+ * TC39's `AsyncContext` is unshipped. Userland polyfills lose the context at a
+ * native `await` unless every awaited path, Langium's included, is transpiled.
+ * Hence the same seam shape the log file-tee uses: this module declares the
+ * contract and defaults to inert, and `@hydranium/core/node` installs a real
+ * implementation at entry load. A browser bundle therefore gets NO detection
+ * rather than a broken approximation, which is the right degradation — the
+ * reentrant shape is a server-side build concern, and a false negative costs
+ * the stall, which `HydraniumWorkspaceLock` reports once the stalled write
+ * outlives its cancellation, while a false positive would reject a legitimate
+ * write. Detection without a tracker is tracked in
+ * https://github.com/eclipse-emfcloud/hydranium/issues/245.
  */
 export interface WriteLockScope {
    /** Run `fn` marked as executing inside a write-lock holder. */

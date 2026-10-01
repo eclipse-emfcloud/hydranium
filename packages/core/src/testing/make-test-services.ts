@@ -312,15 +312,15 @@ export function makeTestServices<
 ): TestServicesBundle<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic> {
    const documents = makeStubLangiumDocuments<TAst, TDiagnostic>(options.seedDocuments);
    const textDocuments = makeStubHydraniumTextDocuments();
-   const workspaceLock = new HydraniumWorkspaceLock();
+   const logger = options.logger ?? new NoopLogger();
+   const clock = options.clock ?? new SystemClock();
+   const tracer = new DefaultTracer(logger, clock);
+   const workspaceLock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: tracer });
    const documentBuilder = makeStubDocumentBuilder(workspaceLock);
    const selfSaveRegistry = makeStubSelfSaveRegistry();
    const fileSystem = makeStubWritableFileSystem(selfSaveRegistry);
    const projectManager = makeStubProjectManager<TProject>(options.seedProjects);
    const astDocumentManager = makeStubAstDocumentManager<TAst, TDiagnostic>(textDocuments, fileSystem, documents);
-   const logger = options.logger ?? new NoopLogger();
-   const clock = options.clock ?? new SystemClock();
-   const tracer = new DefaultTracer(logger, clock);
    const documentUriPolicy = options.documentUriPolicy ?? new DefaultDocumentUriPolicy();
    const serviceRegistry = options.languages
       ? makeStubServiceRegistry(options.languages, { openLanguageIds: options.openLanguageIds })

@@ -695,8 +695,8 @@ describe('ModelService write-lock reentrancy detection', () => {
       // NOT merely slower, it never completes. The inner `write` waits for the
       // outer holder to release while the outer waits for the inner call, so
       // both hang. A host without async-context support (a browser bundle)
-      // keeps exactly this behaviour — the degradation is a missing diagnosis,
-      // not a new failure.
+      // keeps exactly this behaviour — the degradation is a missing rejection,
+      // not a new failure, and the lock logs the stall instead.
       setWriteLockScope(undefined);
       const bundle = makeTestServices<FakeRoot>();
       let settled = false;
