@@ -174,6 +174,29 @@ describe('IntegrityService.enforceIntegrity — cancellation', () => {
       expect(calls).toEqual(['a']);
    });
 
+   it('stops the sweep and returns true when cancelled after a rule mutated the AST', async () => {
+      // Throwing here would skip the resync and leave the mutation against
+      // text the next build does not re-parse.
+      const service = makeService();
+      const calls: string[] = [];
+      const { token, cancel } = makeCancelToken();
+      registerRule(service, {
+         nodeType: 'Foo',
+         onEnforce: node => {
+            calls.push((node as FakeNode).id ?? '');
+            cancel();
+            return true;
+         }
+      });
+      const document = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [
+         makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'a' }),
+         makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'b' })
+      ]);
+
+      await expect(service.enforceIntegrity(document, DocumentState.Parsed, token)).resolves.toBe(true);
+      expect(calls).toEqual(['a']);
+   });
+
    it('runs to completion when the token is never cancelled', async () => {
       const service = makeService();
       const calls: string[] = [];
@@ -764,6 +787,37 @@ describe('IntegrityService enforceBatch', () => {
 
       expect(probe.resyncedUris).toEqual(['file:///b.fake']);
       expect(lines.some(line => /mutated=1/.test(line.message))).toBe(true);
+   });
+
+   it('resyncs a mutated document before honouring a cancellation that arrived during its sweep', async () => {
+      const { logger } = makeCapturingLogger();
+      const probe = makeBatchProbe(logger);
+      const { token, cancel } = makeCancelToken();
+      probe.register({
+         id: 'mutate-then-cancel',
+         nodeType: 'Foo',
+         phase: DocumentState.Parsed,
+         enforce: node => {
+            if ((node as FakeNode).id !== 'hit') {
+               return false;
+            }
+            cancel();
+            return true;
+         }
+      });
+      const documents = [
+         batchDocument('file:///b.fake', [makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'hit' })]),
+         batchDocument('file:///c.fake', [makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'hit' })])
+      ];
+
+      const caught = await probe.enforceBatch(documents, DocumentState.Parsed, token).then(
+         () => undefined,
+         (err: unknown) => err
+      );
+
+      expect(isOperationCancelled(caught)).toBe(true);
+      // The mutated document is resynced; the next one is left to the build that cancelled this.
+      expect(probe.resyncedUris).toEqual(['file:///b.fake']);
    });
 
    it('tolerates an undefined integrity slot — zero rules, empty phase bucket', async () => {

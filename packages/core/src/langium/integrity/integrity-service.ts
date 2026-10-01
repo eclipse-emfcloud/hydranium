@@ -8,8 +8,16 @@
  ********************************************************************************/
 
 import { isPromiseLike, Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
-import { type AstNode, AstUtils, DocumentState, interruptAndCheck, type LangiumDocument, UriUtils } from '@hydranium/langium';
-import { type CancellationToken, type Disposable } from 'vscode-languageserver';
+import {
+   type AstNode,
+   AstUtils,
+   DocumentState,
+   interruptAndCheck,
+   isOperationCancelled,
+   type LangiumDocument,
+   UriUtils
+} from '@hydranium/langium';
+import { CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
@@ -200,7 +208,8 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          const changed = await this.enforceIntegrity(document, phase, cancelToken, session);
          if (changed) {
             mutatedCount++;
-            await this.resyncDocument(document, cancelToken);
+            // Not cancellable: see `resyncDocument`.
+            await this.resyncDocument(document, CancellationToken.None);
          }
          await interruptAndCheck(cancelToken);
       }
@@ -261,8 +270,10 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * full rule sweep) — coarser than per (node × rule) to avoid a microtask
     * per inner iteration, finer than per-document so a long-running rule set
     * on a large file can still interrupt mid-stream. Throws
-    * `OperationCancelled` when the token is cancelled; Langium's build
-    * pipeline absorbs the throw at the lock-holder.
+    * `OperationCancelled` when the token is cancelled before any rule mutated
+    * the AST; Langium's build pipeline absorbs the throw at the lock-holder.
+    * After a mutation it stops the sweep and returns `true` instead, so the
+    * caller can resync what was mutated before the cancellation unwinds.
     */
    async enforceIntegrity(
       document: LangiumDocument,
@@ -296,7 +307,14 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             }
          }
          if (cancelToken !== undefined) {
-            await interruptAndCheck(cancelToken);
+            try {
+               await interruptAndCheck(cancelToken);
+            } catch (err: unknown) {
+               if (changed && isOperationCancelled(err)) {
+                  return true;
+               }
+               throw err;
+            }
          }
       }
       return changed;
@@ -306,15 +324,11 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * Re-serialise the document text after AST mutations, propagate corrections,
     * and re-parse at Parsed phase (safe because linking hasn't occurred yet).
     *
-    * `cancelToken` is checked at entry so a preempted build skips the
-    * serialise / disk-write atomic; the steps inside resync are not further
-    * subdivided because each is a single fast operation that does not yield
-    * a natural interruption point.
+    * Runs to the end whatever `cancelToken` says: the AST is already mutated,
+    * and skipping the resync leaves it against unchanged text that the next
+    * build does not re-parse. `cancelToken` reaches only the re-parse.
     */
    protected async resyncDocument(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void> {
-      if (cancelToken?.isCancellationRequested) {
-         return;
-      }
       const root = document.parseResult.value as TRoot;
       // Extracted while `document` still holds the text being replaced — the
       // resync that follows overwrites it with `newText`. Absent on a test
