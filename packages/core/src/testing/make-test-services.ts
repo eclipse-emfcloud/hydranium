@@ -218,7 +218,7 @@ export interface MakeTestServicesOptions<
    modelService?: (services: ServerSharedServices<TProject>) => ModelService<TAst, TDiagnostic, TTransfer>;
    /**
     * Framework {@link ModelServiceOptions} for the DEFAULT stub service, so a
-    * test can reach an option-gated path (`serializeBuilds`) without supplying
+    * test can reach an option-gated path (`allowReentrantBuilds`) without supplying
     * a whole {@link modelService} factory. Ignored when `modelService` is
     * given — that factory owns its own construction.
     */

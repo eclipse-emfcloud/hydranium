@@ -12,6 +12,7 @@ import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium
 import {
    ReentrantWriteLockError,
    isInsideWriteLock,
+   isWriteLockScopeInstalled,
    runInWriteLockScope,
    setWriteLockScope
 } from '../../../src/langium/workspace/write-lock-scope.js';
@@ -32,6 +33,14 @@ describe('write-lock scope', () => {
          });
          expect(ran).toBe(true);
          expect(result).toBe(false);
+         expect(isInsideWriteLock()).toBe(false);
+      });
+
+      it('reports whether a tracker is installed, which "not inside" alone cannot', () => {
+         setWriteLockScope(undefined);
+         expect(isWriteLockScopeInstalled()).toBe(false);
+         setWriteLockScope(nodeWriteLockScope);
+         expect(isWriteLockScopeInstalled()).toBe(true);
          expect(isInsideWriteLock()).toBe(false);
       });
    });
@@ -125,7 +134,7 @@ describe('write-lock scope', () => {
          expect(error.uri).toBe('file:///workspace/a.a');
          expect(error.message).toContain('file:///workspace/a.a');
          expect(error.message).toContain('FileSystemProvider.writeFile');
-         expect(error.message).toContain('serializeBuilds');
+         expect(error.message).toContain('allowReentrantBuilds');
       });
    });
 });

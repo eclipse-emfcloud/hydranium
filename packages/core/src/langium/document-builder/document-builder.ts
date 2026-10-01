@@ -1068,7 +1068,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * across two different builds.
     *
     * Builds outside the lock are not hypothetical even without an adopter: the
-    * model service with `serializeBuilds` off starts one. Two locked builds
+    * model service under `allowReentrantBuilds` starts one. Two locked builds
     * never overlap, since the lock starts a write only once the write it
     * cancelled has unwound.
     */
@@ -1246,7 +1246,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       // replacing it, and the publisher reads that array when it is invoked. A
       // build settling inside that window therefore appends after this call has
       // already deduped, and the appended duplicate is published by the listener
-      // of the build that deduped. Only `serializeBuilds` closes the window.
+      // of the build that deduped. Only the write lock closes the window.
       //
       // Dedupe before rendering: rendering is deterministic, so it cannot
       // change which entries are structurally equal, and fewer survive to render.
@@ -1372,8 +1372,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * twice: Langium's validate appends to `document.diagnostics` when they are
     * already set — deliberately, so a category-partitioned pass keeps the earlier
     * category's findings — and a repeated FULL pass therefore doubles the list.
-    * `ModelServiceOptions.serializeBuilds` prevents that at the source; this is
-    * the net for configurations that allow concurrent builds anyway.
+    * The write lock prevents that at the source; this is the net for builds
+    * that skip it, as `ModelServiceOptions.allowReentrantBuilds` lets one do.
     *
     * Clearing the list before a pass is NOT an alternative: the append happens at
     * pass completion, so two interleaved passes both clear, both finish, and the
@@ -1448,10 +1448,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * **It inherits {@link dedupeDiagnostics}'s window, and therefore the same
     * precondition.** A build settling inside the listener window appends
     * diagnostics this pass never saw, and the publisher of the build that
-    * rendered sends them — unrendered. `ModelServiceOptions.serializeBuilds`
-    * closes it and defaults to `true`, so "every diagnostic is rendered" holds
-    * by default and is an opt-out rather than a guarantee. Opting out accepts
-    * unrendered diagnostics on exactly the terms it already accepts duplicates.
+    * rendered sends them — unrendered. The write lock closes it, so "every
+    * diagnostic is rendered" holds while
+    * `ModelServiceOptions.allowReentrantBuilds` is `false`, its default.
+    * Turning it on accepts unrendered diagnostics on exactly the terms it
+    * already accepts duplicates.
     *
     * Entries are REPLACED rather than mutated: `sendDiagnostics` passes the
     * array by reference and serialises later, so an in-place message mutation

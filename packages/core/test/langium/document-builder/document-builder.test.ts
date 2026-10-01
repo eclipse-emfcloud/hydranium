@@ -1051,7 +1051,7 @@ describe('HydraniumDocumentBuilder', () => {
    });
 
    describe('dedupeDiagnostics', () => {
-      // The guard on `serializeBuilds: false`, where two unserialised validation
+      // The guard for a build that skips the write lock, where two unlocked validation
       // passes make Langium append a second full set onto the first. The contract
       // under test is that it removes ONLY byte-identical entries — anything else
       // would silently drop a distinct finding, and `data` in particular carries

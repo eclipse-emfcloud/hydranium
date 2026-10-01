@@ -68,9 +68,9 @@ function serializerOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>):
 }
 
 /** Read the option-derived field off a model service. */
-function optionsOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>): { serializeBuilds: boolean } {
-   const fields = service as unknown as { serializeBuilds: { value: boolean } };
-   return { serializeBuilds: fields.serializeBuilds.value };
+function optionsOf(service: ModelService<FakeRoot, AstDiagnostic, FakeRoot>): { allowReentrantBuilds: boolean } {
+   const fields = service as unknown as { allowReentrantBuilds: { value: boolean } };
+   return { allowReentrantBuilds: fields.allowReentrantBuilds.value };
 }
 
 function bundleWith(languages?: readonly StubLanguageDescriptor[]): ServerSharedServices {
@@ -124,7 +124,12 @@ describe('makeStubModelService — the serialize seam, against the real ModelSer
 describe('makeStubModelService — option forwarding, against the real ModelService', () => {
    it('derives the same option-gated state as a real ModelService given the same options', () => {
       const services = bundleWith();
-      const cases: readonly (ModelServiceOptions | undefined)[] = [undefined, {}, { serializeBuilds: false }, { serializeBuilds: true }];
+      const cases: readonly (ModelServiceOptions | undefined)[] = [
+         undefined,
+         {},
+         { allowReentrantBuilds: false },
+         { allowReentrantBuilds: true }
+      ];
 
       for (const options of cases) {
          const real = new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, options);
@@ -134,9 +139,9 @@ describe('makeStubModelService — option forwarding, against the real ModelServ
 
       // Two services that both derived nothing would agree above, so pin the
       // documented defaults and one non-default on the real side.
-      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services))).toEqual({ serializeBuilds: true });
-      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, { serializeBuilds: false }))).toEqual({
-         serializeBuilds: false
+      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services))).toEqual({ allowReentrantBuilds: false });
+      expect(optionsOf(new DefaultModelService<FakeRoot, AstDiagnostic, FakeRoot>(services, { allowReentrantBuilds: true }))).toEqual({
+         allowReentrantBuilds: true
       });
    });
 

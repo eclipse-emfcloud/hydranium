@@ -20,7 +20,7 @@ import {
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
-import { type AstNode, DocumentState, type LangiumDocument, UriUtils } from '@hydranium/langium';
+import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type WorkspaceLock } from '@hydranium/langium';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
@@ -634,16 +634,59 @@ describe('ModelService write-lock reentrancy detection', () => {
       expect(bundle.documentBuilder.updateCalls).toHaveLength(1);
    });
 
-   it('allows a reentrant rebuild when build serialisation is off', async () => {
-      // With `serializeBuilds: false` the build takes no lock, so there is
-      // nothing for the guard to refuse — which makes the existing opt-out the
-      // guard's opt-out, and is why the check sits on that branch.
+   it('builds a reentrant rebuild without the lock under allowReentrantBuilds', async () => {
+      // Completing at all is the assertion: a build that took the lock here
+      // would wait for the holder it runs inside.
       setWriteLockScope(nodeWriteLockScope);
-      const bundle = makeTestServices<FakeRoot>({ modelServiceOptions: { serializeBuilds: false } });
+      const bundle = makeTestServices<FakeRoot>({ modelServiceOptions: { allowReentrantBuilds: true } });
       await bundle.services.workspace.WorkspaceLock.write(async () => {
          await bundle.modelService.rebuild(URI_A);
       });
       expect(bundle.documentBuilder.updateCalls).toHaveLength(1);
+   });
+
+   /** Hold `lock` from outside any caller under test, until `release` is called. */
+   async function holdLock(lock: WorkspaceLock): Promise<{ release(): void; held: Promise<void> }> {
+      let release!: () => void;
+      let started!: () => void;
+      const running = new Promise<void>(resolve => (started = resolve));
+      const held = lock.write(() => {
+         started();
+         return new Promise<void>(resolve => (release = resolve));
+      });
+      await running;
+      return { release, held };
+   }
+
+   it('takes the lock for a rebuild from outside a holder under allowReentrantBuilds', async () => {
+      // Unlocked, this build could overlap another build of the same document,
+      // and the opt-in exists for the reentrant caller only.
+      setWriteLockScope(nodeWriteLockScope);
+      const bundle = makeTestServices<FakeRoot>({ modelServiceOptions: { allowReentrantBuilds: true } });
+      const { release, held } = await holdLock(bundle.services.workspace.WorkspaceLock);
+
+      const rebuilt = bundle.modelService.rebuild(URI_A);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(bundle.documentBuilder.updateCalls).toEqual([]);
+
+      release();
+      await held;
+      await expect(rebuilt).resolves.toBeDefined();
+      expect(bundle.documentBuilder.updateCalls).toHaveLength(1);
+   });
+
+   it('builds without the lock every time under allowReentrantBuilds when no tracker is installed', async () => {
+      // A reentrant caller cannot be told from any other without a tracker, so
+      // locking here would deadlock the caller the opt-in exists for.
+      setWriteLockScope(undefined);
+      const bundle = makeTestServices<FakeRoot>({ modelServiceOptions: { allowReentrantBuilds: true } });
+      const { release, held } = await holdLock(bundle.services.workspace.WorkspaceLock);
+
+      await expect(bundle.modelService.rebuild(URI_A)).resolves.toBeDefined();
+      expect(bundle.documentBuilder.updateCalls).toHaveLength(1);
+
+      release();
+      await held;
    });
 
    it('deadlocks without a tracker, which is the failure the detection replaces', async () => {

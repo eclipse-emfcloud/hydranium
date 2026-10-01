@@ -20,7 +20,7 @@ import {
 import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
-import { ReentrantWriteLockError, isInsideWriteLock } from '../workspace/write-lock-scope.js';
+import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { AstDocument, type AstDocumentSavedEvent, type AstDocumentUpdatedEvent } from '../../documents/ast-document-manager.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
@@ -58,45 +58,32 @@ const SAVE_SETTLE_TIMEOUT_MS = 10_000;
  */
 export interface ModelServiceOptions extends LogNameOptions {
    /**
-    * Serialise the facade's own build under the workspace WRITE lock, through
-    * `HydraniumDocumentBuilder.scheduleUpdate` as the LSP update handler
-    * builds. Default `true`.
+    * Let the facade's build run without the workspace write lock when its
+    * caller already holds it: an integrity rule or build-phase pass that
+    * writes back through a session's `update` / `save`, or calls `rebuild`.
+    * Default `false`.
     *
-    * **Why it defaults on.** Unlocked, the facade's build races the LSP bridge's
-    * build of the same URI — both are legitimate (the bridge exists only under a
-    * `Connection`, so the facade stands in for it headless), but nothing
-    * serialises them, so both run a full validation pass and Langium appends the
-    * second onto the first. Every diagnostic is then duplicated, and the
-    * duplication compounds per rebuild. Serialised, the second request shares
-    * the first build where it carries both, so the redundant work goes too.
+    * `WorkspaceLock` is not reentrant. Taking it from inside a holder cancels
+    * that holder and then waits for it to end, while the holder waits for this
+    * call, so neither completes. On `false` that call fails with
+    * {@link ReentrantWriteLockError} instead, wherever a host installs a
+    * write-lock scope tracker (`@hydranium/core/node` does at entry load); on
+    * `true` its build takes no lock. The wait after that build can still hang,
+    * because a document no build will carry is re-queued through the lock, and
+    * the re-queue waits for the holder to end.
     *
-    * **What `false` costs.** The facade's build is then unserialised and can run
-    * concurrently with the bridge's build of the same URI, so the affected
-    * documents are validated twice per write — double the validation work.
-    * Reported diagnostics stay correct even then, because
-    * `HydraniumDocumentBuilder.dedupeDiagnostics` collapses the byte-identical
-    * duplicates a repeated pass produces before any listener sees them; what this
-    * option removes is the wasted pass, not just its visible symptom.
-    *
-    * **What `false` buys.** `WorkspaceLock` is not reentrant. A caller that
-    * reaches a session's `update` / `save` or `rebuild` while already holding
-    * the write lock — an integrity rule or build-phase pass that writes
-    * back — deadlocks: acquiring the lock cancels the running holder, and the new
-    * acquisition then waits for that holder to release while the holder waits
-    * for this call. On `true` that shape is DETECTED and rejected with
-    * {@link ReentrantWriteLockError} rather than hanging, wherever a host
-    * installs a write-lock scope tracker (`@hydranium/core/node` does at entry
-    * load; see {@link isInsideWriteLock}). Setting `false` is the escape hatch
-    * for an adopter whose reentrant shape is unavoidable: the facade's own
-    * build then takes no lock, so it cannot cancel the holder it runs inside.
-    * The wait after it can still hang there, because a document no build will
-    * carry is re-queued through the lock, and that re-queue waits for the
-    * holder to end. Prefer `false` over serialised builds only in that case.
+    * Every other facade build takes the lock on either value. Unlocked, it can
+    * overlap another build of the same document: both run a full validation
+    * pass that Langium appends, and a caller can be handed a version that an
+    * integrity repair still running in the other build then moves past. Without
+    * a tracker the two cases cannot be told apart (see
+    * {@link isWriteLockScopeInstalled}), so `true` builds without the lock every
+    * time and accepts both.
     *
     * Accepts a {@link MaybeObservableValue} so it can be bound to a setting and
     * flipped without a restart.
     */
-   readonly serializeBuilds?: MaybeObservableValue<boolean>;
+   readonly allowReentrantBuilds?: MaybeObservableValue<boolean>;
 }
 
 /**
@@ -289,8 +276,8 @@ export class DefaultModelService<
     * (see {@link DocumentUriPolicy}).
     */
    protected readonly uriPolicy: DocumentUriPolicy;
-   /** See {@link ModelServiceOptions.serializeBuilds}. Defaults to `true`. */
-   protected readonly serializeBuilds: ObservableValue<boolean>;
+   /** See {@link ModelServiceOptions.allowReentrantBuilds}. Defaults to `false`. */
+   protected readonly allowReentrantBuilds: ObservableValue<boolean>;
 
    /**
     * Per-URI applyEdit coalescing: at most one in-flight `applyEditToLanguageClient`
@@ -351,7 +338,7 @@ export class DefaultModelService<
    ) {
       this.tracer = services.Tracer.for(options.logName ?? 'ModelService').trace('instantiated');
       this.uriPolicy = services.workspace.DocumentUriPolicy;
-      this.serializeBuilds = ObservableValue.from(options.serializeBuilds ?? true);
+      this.allowReentrantBuilds = ObservableValue.from(options.allowReentrantBuilds ?? false);
       // Optional-chain so a harness that binds no WorkspaceManager awaits
       // `undefined` and resolves immediately; production hosts always have it
       // bound.
@@ -483,9 +470,9 @@ export class DefaultModelService<
     * where that build carries it. Langium alone does not coalesce concurrent
     * builds of one URI: two unserialised builds each run a full validation
     * pass and Langium appends the second set onto the first, duplicating every
-    * diagnostic. Opt out via
-    * {@link ModelServiceOptions.serializeBuilds} — see there for the
-    * non-reentrancy hazard that is the reason the opt-out exists.
+    * diagnostic. A caller that already holds the lock builds without it only
+    * under {@link ModelServiceOptions.allowReentrantBuilds} — see there for the
+    * non-reentrancy hazard.
     *
     * An override calls the base before it awaits. Under an LSP connection the
     * store's change event has already asked the update handler to build a
@@ -533,28 +520,19 @@ export class DefaultModelService<
       // meant for category-partitioned passes). The user-visible result is every
       // diagnostic duplicated, plus double the validation work per write.
       //
-      // Opt out via `ModelServiceOptions.serializeBuilds` — see there for
-      // the non-reentrancy hazard that opt-out exists for.
-      if (this.serializeBuilds.value) {
-         // Fail loudly on the one shape the lock cannot survive. `WorkspaceLock`
-         // is not reentrant: acquiring the write lock cancels the running holder,
-         // so a caller already inside one — an integrity rule or build-phase pass
-         // writing back through this facade — would cancel its own enclosing
-         // build and then likely stall in the phase wait below. The check is
-         // gated on `serializeBuilds` deliberately, because acquiring the lock IS
-         // the hazard: with serialisation off the build takes no lock, which
-         // makes the existing opt-out the guard's opt-out too.
-         // Detection needs async-context propagation, so it is inert until a host
-         // installs a tracker (`@hydranium/core/node` does) — see
-         // `isInsideWriteLock`.
-         if (isInsideWriteLock()) {
+      // A caller already inside the lock would cancel its own build and stall in
+      // the wait below; `allowReentrantBuilds` builds it unlocked, and without a
+      // tracker it cannot be told apart from any other caller.
+      const inside = isInsideWriteLock();
+      if (this.allowReentrantBuilds.value && (inside || !isWriteLockScopeInstalled())) {
+         await this.services.workspace.DocumentBuilder.update([documentUri], [], cancelToken);
+      } else {
+         if (inside) {
             throw new ReentrantWriteLockError(uri);
          }
          // The build runs on the lock's own token, which a later write cancels;
          // the caller's token governs only the phase wait below.
          await this.services.workspace.DocumentBuilder.scheduleUpdate([documentUri], []);
-      } else {
-         await this.services.workspace.DocumentBuilder.update([documentUri], [], cancelToken);
       }
       return this.waitForDocumentStateCanonical(uri, state ?? IntegrityService.SettledState, cancelToken);
    }
