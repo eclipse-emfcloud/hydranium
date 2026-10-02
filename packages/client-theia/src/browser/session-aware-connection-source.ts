@@ -23,6 +23,7 @@ import {
    supportsConnectionResilience,
    warnConnectionResilienceUnavailable
 } from '../common/framed-socket-write-buffer';
+import { ACKNOWLEDGEMENT_EVENT, InboundMessageSequence } from '../common/inbound-message-sequence';
 
 /**
  * Sends a message only once the server has confirmed the session, and only
@@ -84,6 +85,11 @@ export class SessionAwareConnectionSource extends WebSocketConnectionSource {
       this.socket.on(ConnectionManagementMessages.RECONNECT, (hasConnection: boolean) => {
          this.sessionResumed = hasConnection;
       });
+      this.socket.on(ACKNOWLEDGEMENT_EVENT, (sequence: unknown) => {
+         if (typeof sequence === 'number') {
+            this.framedBuffer.acknowledge(sequence);
+         }
+      });
    }
 
    /** Whether a message may go out now, as opposed to waiting in the buffer. */
@@ -92,13 +98,24 @@ export class SessionAwareConnectionSource extends WebSocketConnectionSource {
    }
 
    /**
-    * Copied from Theia apart from the `onCommit` body, because the base builds that callback inline
-    * and exposes no narrower seam. Re-diff when the supported range moves.
+    * Copied from Theia apart from the duplicate check on receipt and the `onCommit` body, because
+    * the base builds both callbacks inline and exposes no narrower seam. Re-diff when the supported
+    * range moves.
+    *
+    * Called once per session, so the receive-side state starts afresh with the server's numbering.
     */
    protected override createChannel(): AbstractChannel {
       const toDispose = new DisposableCollection();
-      const messageHandler = (data: ArrayBuffer | Uint8Array): void => {
+      const inbound = new InboundMessageSequence(sequence => this.socket.emit(ACKNOWLEDGEMENT_EVENT, sequence));
+      toDispose.push(Disposable.create(() => inbound.dispose()));
+      const messageHandler = (data: ArrayBuffer | Uint8Array, sequence?: unknown): void => {
          this.onIncomingMessageActivityEmitter.fire();
+         if (typeof sequence === 'number') {
+            this.framedBuffer.markPeerDeduplicates();
+         }
+         if (!inbound.accept(sequence, data.byteLength)) {
+            return;
+         }
          if (this.currentChannel) {
             // socket.io hands binary over as ArrayBuffer in the browser.
             const buffer = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
@@ -173,7 +190,7 @@ export function bindConnectionResilience(
       return false;
    }
    // Scopes are kept as Theia declares them: one buffer per connection source, one shared socket owner.
-   rebind(SocketWriteBuffer).toDynamicValue(() => createFramedSocketWriteBuffer(options.bufferBytes));
+   rebind(SocketWriteBuffer).toDynamicValue(() => createFramedSocketWriteBuffer(options));
    rebind(WebSocketConnectionSource).to(SessionAwareConnectionSource).inSingletonScope();
    return true;
 }

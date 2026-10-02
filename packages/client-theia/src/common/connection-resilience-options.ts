@@ -21,4 +21,10 @@ export interface ConnectionResilienceOptions {
     * trades memory for tolerance here.
     */
    readonly bufferBytes?: number;
+   /**
+    * How much each side keeps of what it sent and the peer has not acknowledged
+    * yet, in bytes. Past it the copies are discarded and a dropped connection
+    * loses them, so it bounds what a peer that never acknowledges can cost.
+    */
+   readonly unacknowledgedBytes?: number;
 }

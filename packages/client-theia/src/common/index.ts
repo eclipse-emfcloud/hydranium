@@ -11,5 +11,6 @@
 // bind for their own side, such as the buffer for each half of the socket.
 // Kept out of both tier barrels for that reason.
 export * from './framed-socket-write-buffer';
+export * from './inbound-message-sequence';
 export * from './connection-resilience-options';
 export * from './clock';

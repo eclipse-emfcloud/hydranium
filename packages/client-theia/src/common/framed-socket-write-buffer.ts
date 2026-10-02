@@ -9,6 +9,7 @@
 
 import { Emitter, type Event } from '@theia/core/lib/common/event';
 import { SocketWriteBuffer } from '@theia/core/lib/common/messaging/socket-write-buffer';
+import { type ConnectionResilienceOptions } from './connection-resilience-options';
 
 /**
  * Prefix on every connection log line, deliberately shared by the browser and the
@@ -22,7 +23,8 @@ export const CONNECTION_LOG_PREFIX = '[connection]';
  * without a connection.
  */
 export interface MessageSink {
-   send(data: Uint8Array): void;
+   /** `sequence` travels as a second socket.io argument, which a reader that does not expect it ignores. */
+   send(data: Uint8Array, sequence: number): void;
 }
 
 /**
@@ -58,6 +60,11 @@ export interface ConnectionBufferOverflow {
  * dropping something silently. The limit is settable, since the right value
  * depends on how long an outage has to survive.
  *
+ * Added here: every message sent is numbered and kept until the peer
+ * acknowledges it, and {@link flush} resends what is still unacknowledged ahead
+ * of the backlog. A socket whose far end died unnoticed still accepts writes, so
+ * a message is not delivered just because it was sent.
+ *
  * Logging goes to `console` rather than through a `Logger`. On the browser side
  * Theia's preloader builds this before any Output channel exists, so there is
  * nothing else to write to; the {@link CONNECTION_LOG_PREFIX} keeps the lines
@@ -78,10 +85,32 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
     */
    maxBytes = FramedSocketWriteBuffer.DEFAULT_MAX_BYTES;
 
+   /** Kept copies past this are discarded, so a peer that never acknowledges cannot grow them without bound. */
+   static readonly DEFAULT_MAX_UNACKNOWLEDGED_BYTES = 1024 * 1024;
+
+   /**
+    * Separate from {@link maxBytes}, which counts only what is produced while
+    * the peer is away: copies kept on a healthy connection must not use up the
+    * room an outage needs.
+    */
+   maxUnacknowledgedBytes = FramedSocketWriteBuffer.DEFAULT_MAX_UNACKNOWLEDGED_BYTES;
+
    protected pending: Uint8Array[] = [];
    protected pendingBytes = 0;
    protected overflowReported = false;
    protected readonly onOverflowEmitter = new Emitter<ConnectionBufferOverflow>();
+
+   protected nextSequence = 1;
+   /** Oldest first: {@link acknowledge} stops at the first entry the peer has not accepted. */
+   protected unacknowledged: { readonly sequence: number; readonly data: Uint8Array }[] = [];
+   protected unacknowledgedBytes = 0;
+   protected unacknowledgedOverflowReported = false;
+   /**
+    * Whether the peer drops a message it already has. One without the hardening
+    * applies a resent message a second time, so nothing is resent until the
+    * peer has shown otherwise.
+    */
+   protected peerDeduplicates = false;
 
    /** Fires once per outage when the limit is reached. */
    get onOverflow(): Event<ConnectionBufferOverflow> {
@@ -98,7 +127,7 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
     */
    sendOrQueue(socket: MessageSink | undefined, data: Uint8Array): void {
       if (socket && !this.hasBacklog) {
-         socket.send(data);
+         this.send(socket, data);
       } else {
          this.buffer(data);
       }
@@ -117,7 +146,80 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
       }
    }
 
+   /**
+    * Kept only once `send` returns: a message whose send threw stays in the
+    * backlog, and keeping it as well would send it again under a second number,
+    * which the receiver cannot recognise as a duplicate.
+    */
+   protected send(socket: MessageSink, data: Uint8Array): void {
+      const sequence = this.nextSequence++;
+      socket.send(data, sequence);
+      this.keep(sequence, data);
+   }
+
+   protected keep(sequence: number, data: Uint8Array): void {
+      if (this.unacknowledgedBytes + data.byteLength > this.maxUnacknowledgedBytes) {
+         // Said only to a peer known to acknowledge: one without the hardening never does, and
+         // nothing would be resent to it anyway.
+         if (this.peerDeduplicates && !this.unacknowledgedOverflowReported) {
+            this.unacknowledgedOverflowReported = true;
+            console.warn(
+               `${CONNECTION_LOG_PREFIX} the peer has not acknowledged ${this.unacknowledged.length} message(s), ` +
+                  `${this.unacknowledgedBytes} bytes; discarding their copies, so a connection dropped now loses them`
+            );
+         }
+         this.unacknowledged = [];
+         this.unacknowledgedBytes = 0;
+         return;
+      }
+      // Not copied: a committed write buffer hands over a fresh array and is disposed.
+      this.unacknowledged.push({ sequence, data });
+      this.unacknowledgedBytes += data.byteLength;
+   }
+
+   /**
+    * Records that the peer numbers its messages, which only a peer that also
+    * drops duplicates does, so resending to it is safe.
+    */
+   markPeerDeduplicates(): void {
+      this.peerDeduplicates = true;
+   }
+
+   /** Releases every kept message numbered up to `sequence`, which the peer has accepted. */
+   acknowledge(sequence: number): void {
+      this.peerDeduplicates = true;
+      let index = 0;
+      while (index < this.unacknowledged.length && this.unacknowledged[index].sequence <= sequence) {
+         this.unacknowledgedBytes -= this.unacknowledged[index].data.byteLength;
+         index++;
+      }
+      if (index > 0) {
+         this.unacknowledged = this.unacknowledged.slice(index);
+      }
+   }
+
+   /**
+    * Resends what the peer has not acknowledged, under the same numbers, then
+    * sends the backlog. Some of the resent messages may have arrived already;
+    * the receiver recognises them by number and drops them.
+    *
+    * Resends only to a peer known to drop duplicates, and otherwise discards the
+    * copies, leaving any message lost with the old socket lost.
+    */
    override flush(socket: MessageSink): void {
+      if (this.peerDeduplicates) {
+         for (const { sequence, data } of this.unacknowledged) {
+            socket.send(data, sequence);
+         }
+         if (this.unacknowledged.length > 0) {
+            console.info(
+               `${CONNECTION_LOG_PREFIX} resent ${this.unacknowledged.length} unacknowledged message(s), ${this.unacknowledgedBytes} bytes`
+            );
+         }
+      } else {
+         this.unacknowledged = [];
+         this.unacknowledgedBytes = 0;
+      }
       if (this.pending.length === 0) {
          return;
       }
@@ -131,7 +233,7 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
       try {
          while (index < this.pending.length) {
             const message = this.pending[index];
-            socket.send(message);
+            this.send(socket, message);
             index++;
             this.pendingBytes -= message.byteLength;
          }
@@ -153,8 +255,11 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
    }
 
    override drain(): void {
-      if (this.pending.length > 0) {
-         console.warn(`${CONNECTION_LOG_PREFIX} discarded ${this.pending.length} buffered message(s), ${this.pendingBytes} bytes`);
+      if (this.pending.length > 0 || this.unacknowledged.length > 0) {
+         console.warn(
+            `${CONNECTION_LOG_PREFIX} discarded ${this.pending.length} buffered message(s), ${this.pendingBytes} bytes, ` +
+               `and ${this.unacknowledged.length} sent but unacknowledged, ${this.unacknowledgedBytes} bytes`
+         );
       }
       this.reset();
    }
@@ -177,10 +282,16 @@ export class FramedSocketWriteBuffer extends SocketWriteBuffer {
       this.onOverflowEmitter.fire(overflow);
    }
 
+   /** Also discards the kept copies: a drain ends the session, and resending them would replay it into the next one. */
    protected reset(): void {
       this.pending = [];
       this.pendingBytes = 0;
       this.overflowReported = false;
+      this.nextSequence = 1;
+      this.unacknowledged = [];
+      this.unacknowledgedBytes = 0;
+      this.unacknowledgedOverflowReported = false;
+      this.peerDeduplicates = false;
    }
 }
 
@@ -217,11 +328,18 @@ export function warnConnectionResilienceUnavailable(tier: 'frontend' | 'backend'
    );
 }
 
-/** Builds a buffer with the given limit, or Theia's default when none is configured. */
-export function createFramedSocketWriteBuffer(maxBytes?: number): FramedSocketWriteBuffer {
+/** Builds a buffer with the configured limits, or the defaults for any not configured. */
+export function createFramedSocketWriteBuffer(options: ConnectionResilienceOptions = {}): FramedSocketWriteBuffer {
    const buffer = new FramedSocketWriteBuffer();
-   if (typeof maxBytes === 'number' && maxBytes > 0) {
-      buffer.maxBytes = maxBytes;
+   if (isPositive(options.bufferBytes)) {
+      buffer.maxBytes = options.bufferBytes;
+   }
+   if (isPositive(options.unacknowledgedBytes)) {
+      buffer.maxUnacknowledgedBytes = options.unacknowledgedBytes;
    }
    return buffer;
+}
+
+function isPositive(value: number | undefined): value is number {
+   return typeof value === 'number' && value > 0;
 }
