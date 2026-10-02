@@ -32,7 +32,6 @@ git clone https://github.com/eclipse-emfcloud/hydranium.git
 cd hydranium
 npm install
 npm run build
-npm install          # see the note below — required once, after the first build
 npm test
 ```
 
@@ -58,15 +57,6 @@ together, but a version file is a *spec* and not a guarantee — whoever edits
 it is free to widen it back below the `22.13` floor. `.nvmrc` currently reads
 `22.13.0`, and a CI step compares the two workflows' `node-version-file`
 values so they cannot drift apart.
-
-**Why `npm install` twice on a fresh clone.** `lib/` is build output and is not
-committed, so `packages/cli/lib/cli.js` does not exist when the first install
-runs — and npm silently skips a workspace `bin` symlink whose target is missing.
-The `hydranium-cli` binary is therefore absent until an install runs *after* a
-build, and until then `examples/bookstore/server`'s `generate` step fails with
-`hydranium-cli: not found`. The second install creates the link; after that the
-full gate passes. This bites only on a cold clone: once the link exists it
-survives.
 
 **Install with dev dependencies, always.** The root `postinstall` runs
 `patch-package`, which re-adds the `main` and `typings` fields that

@@ -184,14 +184,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
 
-      # Built before linking: `npm ci` skips a workspace `bin` whose target
-      # does not exist yet, and the first example to call it exits 127.
-      - name: Build the framework packages
-        run: npm run build
-
-      - name: Link the workspace bins
-        run: npm install --no-fund --no-audit
-
       - name: Build
         run: npm run build:all
 
@@ -333,28 +325,6 @@ jobs:
       # the full graph has been built.
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
-
-      # `lib/` is build output and is not committed, so `packages/cli/lib/cli.js`
-      # is absent when `npm ci` runs and npm SILENTLY skips a workspace `bin`
-      # symlink whose target is missing. The first example to invoke
-      # `hydranium-cli` in its `generate` step then dies with exit 127, naming
-      # that example rather than the link that was never made — so the failure
-      # points at the example's grammar tooling and not at the install.
-      #
-      # Building first gives the symlink a target; the second install is what
-      # creates it. It cannot be collapsed into one step: npm offers no hook
-      # between dependency installation and workspace `prepare`, which is why
-      # the two-step is permanent rather than a bug awaiting a fix.
-      # `tsc -b`, and NOT a filtered turbo run, which was tried and measured
-      # worse: the `build:all` behind this one still reported `0 cached` — the
-      # install between them changes what turbo hashes — so nothing was reused
-      # and the step itself went 12s to 31s on turbo's overhead alone. Whatever
-      # this step costs is paid twice by construction; keep it the cheap one.
-      - name: Build the framework packages
-        run: npm run build
-
-      - name: Link the workspace bins
-        run: npm install --no-fund --no-audit
 
       - name: Build
         run: npm run build:all

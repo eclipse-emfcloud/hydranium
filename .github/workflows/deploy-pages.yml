@@ -72,19 +72,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-fund --no-audit
 
-      # `lib/` is not committed, so `npm ci` finds `packages/cli/lib/cli.js`
-      # missing and SILENTLY skips the workspace `bin` symlink. The order-flow
-      # server, which this bundle depends on, invokes `hydranium-cli` in its
-      # build and dies with exit 127 — naming the example rather than the link
-      # that was never made.
-      #
-      # Building gives the symlink a target; the install after it creates it.
-      - name: Build the framework packages
-        run: npm run build
-
-      - name: Link the workspace bins
-        run: npm install --no-fund --no-audit
-
       # The example's own `build:all` rather than a build from the repository
       # root: its filter reaches exactly the dependencies this bundle needs,
       # where a root build would also build the Theia and VS Code hosts, which
