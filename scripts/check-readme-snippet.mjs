@@ -205,6 +205,7 @@ const SNIPPET_TARGETS = [
 const DISCOVERY_PATHSPECS = ['*README.md', 'docs/adopting/*.md', 'docs/concepts/*.md', 'docs/contributing/*.md'];
 
 const TSC_FLAGS = [
+   '--ignoreConfig',
    '--noEmit',
    '--strict',
    '--module',

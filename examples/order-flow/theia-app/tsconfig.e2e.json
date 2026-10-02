@@ -32,7 +32,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["node"]
   },
   "include": ["test", "playwright.config.mts", "playwright.reconnect.config.mts"]
 }

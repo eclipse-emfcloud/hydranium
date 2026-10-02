@@ -73,7 +73,7 @@
     "@hydranium/langium": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
     "rimraf": "^5.0.0",
-    "typescript": "^5.8.0",
+    "typescript": "^6.0.3",
     "vscode-jsonrpc": "9.0.1",
     "vscode-languageserver": "~10.0.1"
   },

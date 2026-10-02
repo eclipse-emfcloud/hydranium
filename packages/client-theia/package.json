@@ -90,7 +90,7 @@
     "inversify": "6.2.2",
     "reflect-metadata": "0.2.2",
     "rimraf": "^5.0.0",
-    "typescript": "^5.8.0",
+    "typescript": "^6.0.3",
     "vscode-jsonrpc": "9.0.1"
   },
   "peerDependencies": {
