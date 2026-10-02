@@ -51,7 +51,7 @@
  * Usage: node scripts/check-protected-signatures.mjs
  */
 
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
