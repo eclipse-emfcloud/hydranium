@@ -402,11 +402,6 @@ jobs:
           if node -e "
             const { lstatSync, realpathSync } = require('node:fs');
             const { resolve } = require('node:path');
-            // lstat, NEVER existsSync: the shim points into \`lib/\`, which the
-            // build two steps below has not produced yet, so at this moment a
-            // correctly restored shim is a DANGLING link and existsSync follows
-            // it and answers false. That reads as an unusable cache on every
-            // hit, and the leg would install every time while looking healthy.
             const present = path => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
             const linked = realpathSync('node_modules/@hydranium/core');
             if (linked !== resolve('packages/core')) {
@@ -426,37 +421,8 @@ jobs:
         if: steps.restored.outputs.usable != 'true'
         run: npm ci --no-fund --no-audit
 
-      # `lib/` is build output and is not committed, so `packages/cli/lib/cli.js`
-      # is absent when `npm ci` runs and npm SILENTLY skips a workspace `bin`
-      # symlink whose target is missing. The first example to invoke
-      # `hydranium-cli` in its `generate` step then dies with exit 127, naming
-      # that example rather than the link that was never made — so the failure
-      # points at the example's grammar tooling and not at the install.
-      #
-      # Building first gives the symlink a target; the second install is what
-      # creates it. It cannot be collapsed into one step: npm offers no hook
-      # between dependency installation and workspace `prepare`, which is why
-      # the two-step is permanent rather than a bug awaiting a fix.
-      # `tsc -b`, and NOT a filtered turbo run, which was tried and measured
-      # worse: the `build:all` behind this one still reported `0 cached` — the
-      # install between them changes what turbo hashes — so nothing was reused
-      # and the step itself went 12s to 31s on turbo's overhead alone. Whatever
-      # this step costs is paid twice by construction; keep it the cheap one.
-      - name: Build the framework packages
-        run: npm run build
-
-      # Skipped on a usable restore for the same reason the install above is:
-      # the shims are inside `node_modules/.bin` and came back with it. They
-      # dangle until the build above produces `lib/`, which is why this step
-      # was second in the first place, and a restored shim is in exactly that
-      # state — the check earlier asserts it EXISTS, and the build makes it
-      # resolve.
-      - name: Link the workspace bins
-        if: steps.restored.outputs.usable != 'true'
-        run: npm install --no-fund --no-audit
-
       # Saved here rather than from a post-step, so what lands under the key is
-      # a tree that installed, built and linked. `success()` is redundant
+      # a tree that installed. `success()` is redundant
       # against a failing earlier step and is stated anyway, because the
       # property it asserts — never publish a tree that did not work — is the
       # whole reason this is not `actions/cache`.
@@ -466,9 +432,7 @@ jobs:
       # would put one runner's task cache under a key every later run restores.
       # A replayed turbo cache reports tasks as cached and logs them as passing
       # without executing anything, which is a false green in the step whose
-      # entire job is verification. Nothing between the install and here writes
-      # into `node_modules` — the framework build is `tsc -b` and emits to
-      # `lib/`.
+      # entire job is verification.
       #
       # Nothing to save on a hit: the key is already occupied and a second
       # reservation of it is the `Failed to save: Unable to reserve cache` the
@@ -621,19 +585,6 @@ jobs:
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci --no-fund --no-audit
-
-      # The same two-step as the gate job, and for the same reason: `npm ci`
-      # skips a workspace `bin` symlink whose target does not exist yet, so the
-      # first example to invoke `hydranium-cli` dies with exit 127. Both steps
-      # run unconditionally here, restore or no restore — this job is ubuntu
-      # only, so the link is a symlink rather than a junction and survives the
-      # cache round trip, but `npm install` is two seconds and re-linking is
-      # cheaper than the gate job's verify-the-restore machinery.
-      - name: Build the framework packages
-        run: npm run build
-
-      - name: Link the workspace bins
-        run: npm install --no-fund --no-audit
 
       - name: Build
         run: npm run build:all

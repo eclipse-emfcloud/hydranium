@@ -78,9 +78,9 @@ constraint behind it.
 - [**Testing**](contributing/testing.md) — the test layers, which one a change
   needs, the commands, and the traps that have cost time before.
 - [**Troubleshooting the repository**](contributing/troubleshooting.md) —
-  failures that only happen while building or testing this repo: the cold-clone
-  `hydranium-cli: not found`, the vitest dep-optimizer cache, a segfaulting
-  native addon, a Playwright server that outlived its run.
+  failures that only happen while building or testing this repo: the vitest
+  dep-optimizer cache, a segfaulting native addon, a Playwright server that
+  outlived its run.
 - [**Releasing**](contributing/releasing.md) — the changesets flow.
 - [**Performance baseline**](contributing/perf-baseline.md) — how to reproduce
   the build-cost and resident-heap measurements, so a number you take is

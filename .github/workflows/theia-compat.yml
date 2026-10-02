@@ -640,10 +640,7 @@ jobs:
           NODE
 
       # `tsc -b` over `packages/*`, which is what compiles the three packages
-      # under test against the Theia typings that were just installed. The
-      # `build` / `install` two-step ci.yml needs is absent on purpose: that
-      # exists so npm makes the `hydranium-cli` workspace bin symlink before
-      # an example's `generate` invokes it, and no example is built here.
+      # under test against the Theia typings that were just installed.
       - name: Build the framework packages
         run: npm run build
 

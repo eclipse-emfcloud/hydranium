@@ -10,30 +10,6 @@ answering `false` for a node that is obviously the right type, and `Unknown
 parameter structure auto` during head initialization. Both are a duplicated
 physical copy in the install, and both are fixed by a from-scratch install.
 
-## `hydranium-cli: not found`, exit 127, during a build
-
-```text
-sh: 1: hydranium-cli: not found
-```
-
-Reported against whichever package's `generate` step runs first, and reported
-several times as npm unwinds the script chain, so the tail of the log invites
-blaming the code generator. The generator is fine.
-
-`hydranium-cli` is a workspace package whose `lib/` is generated and not
-committed. On a fresh clone the bin target does not exist when npm links
-binaries, and npm skips such a link silently rather than warning — so the
-install exits 0 with `node_modules/.bin/hydranium-cli` absent.
-
-**Remedy:** build, then install again. That second install is a documented step,
-not a workaround; see [Contributing](../../CONTRIBUTING.md).
-
-```bash
-npm install
-npm run build
-npm install
-```
-
 ## `Cannot find module …/deps_ssr/<dep>.js` — every suite in one package
 
 Every test in a single package fails on a missing module inside
