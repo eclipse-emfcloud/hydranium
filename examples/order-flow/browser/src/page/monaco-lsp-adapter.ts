@@ -613,7 +613,8 @@ interface ResolvedDocumentEdit {
  * learns about a refusal beyond the fact of it.
  */
 type EditResolution =
-   { readonly applicable: true; readonly edit: ResolvedDocumentEdit } | { readonly applicable: false; readonly reason: string };
+   | { readonly applicable: true; readonly edit: ResolvedDocumentEdit }
+   | { readonly applicable: false; readonly reason: string };
 
 /**
  * One LSP text edit as a Monaco edit operation.

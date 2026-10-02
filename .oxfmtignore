@@ -1,6 +1,6 @@
-# Prettier ignores only node_modules / .git by default (it does NOT read
-# .gitignore), so every build/generated/cache path prettier must skip is listed
-# here explicitly. Keep in sync with .gitignore.
+# Explicit formatter exclusions. The format scripts pass this file to Oxfmt
+# so the existing source coverage and generated-file exemptions stay explicit.
+# Keep in sync with .gitignore.
 
 # Build output
 **/lib
@@ -45,7 +45,7 @@ report.*.json
 # Lockfile (npm-managed formatting)
 package-lock.json
 
-# Markdown — prettier's table-padding and emphasis normalization would churn
+# Markdown — a formatter's table-padding and emphasis normalization would churn
 # prose-heavy planning/architecture docs on every edit for no correctness gain.
 #
 # So NO gate formats or checks markdown, and none is meant to: wrap, tables and

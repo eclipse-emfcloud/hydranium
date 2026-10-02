@@ -29,7 +29,7 @@ import {
    type WorkspaceProbe,
    findEslintConfig,
    findOxlintConfig,
-   findPrettierPrintWidth,
+   findFormatterPrintWidth,
    workspaceGlobCovers
 } from '../src/commands/init-workspace.js';
 
@@ -227,22 +227,24 @@ describe('detectWorkspace', () => {
    });
 });
 
-describe('findPrettierPrintWidth', () => {
+describe('findFormatterPrintWidth', () => {
    it('reads the width from package.json, the JSON configs, and a JS module alike', () => {
       // The JS module form is the one that matters: it is what most repos
       // actually have, and no JSON parser can reach it — so a detector built on
       // `readJson` alone would miss the common case and change nothing.
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ 'package.json': { prettier: { printWidth: 100 } } }))).toBe(100);
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ '.prettierrc.json': { printWidth: 90 } }))).toBe(90);
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ '.prettierrc.js': 'module.exports = { printWidth: 140 };' }))).toBe(140);
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ 'prettier.config.mjs': 'export default {\n   printWidth: 77\n};' }))).toBe(77);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ 'package.json': { prettier: { printWidth: 100 } } }))).toBe(100);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ '.prettierrc.json': { printWidth: 90 } }))).toBe(90);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ '.oxfmtrc.json': { printWidth: 140 } }))).toBe(140);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ 'oxfmt.config.mjs': 'export default { printWidth: 110 };' }))).toBe(110);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ '.prettierrc.js': 'module.exports = { printWidth: 140 };' }))).toBe(140);
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ 'prettier.config.mjs': 'export default {\n   printWidth: 77\n};' }))).toBe(77);
    });
 
    it('answers undefined rather than guessing when the repo pins no width', () => {
       // Undefined is what makes the scaffold fall back to its own budget. A
       // zero or a NaN here would wrap every emitted line.
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ 'package.json': { name: 'repo' } }))).toBeUndefined();
-      expect(findPrettierPrintWidth(ROOT, fakeProbe({ '.prettierrc.js': 'module.exports = { singleQuote: true };' }))).toBeUndefined();
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ 'package.json': { name: 'repo' } }))).toBeUndefined();
+      expect(findFormatterPrintWidth(ROOT, fakeProbe({ '.prettierrc.js': 'module.exports = { singleQuote: true };' }))).toBeUndefined();
    });
 });
 

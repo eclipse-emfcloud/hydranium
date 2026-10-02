@@ -128,7 +128,7 @@ export interface InitWorkspacePlacement {
    readonly baseTsconfig?: string;
    /** That tsconfig's `compilerOptions`, so the emitted one can omit what it would inherit unchanged. */
    readonly baseCompilerOptions?: Readonly<Record<string, JsonValue>>;
-   /** The workspace's prettier `printWidth`, so emitted sources wrap where the repo wraps. */
+   /** The workspace's formatter `printWidth`, so emitted sources wrap where the repo wraps. */
    readonly printWidth?: number;
    /** Filename of the workspace's eslint config; its presence is what makes the scaffold emit a `lint` script. */
    readonly eslintConfig?: string;
@@ -518,7 +518,7 @@ export function runInit(options: InitCommandOptions): void {
       }
       write("  .gitignore holds `syntaxes/` only — the workspace root's covers the rest.\n");
       if (detection.printWidth !== undefined) {
-         write(`  Sources wrapped at ${detection.printWidth} columns, from ${detection.rootDir}'s prettier config.\n`);
+         write(`  Sources wrapped at ${detection.printWidth} columns, from ${detection.rootDir}'s formatter config.\n`);
       }
       if (detection.oxlintConfig !== undefined || detection.eslintConfig !== undefined) {
          write(

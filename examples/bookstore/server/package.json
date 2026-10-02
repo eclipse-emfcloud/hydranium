@@ -4,16 +4,13 @@
   "private": true,
   "description": "Bookstore language server, built with the Hydranium framework.",
   "keywords": [
+    "bookstore",
     "hydranium",
     "langium",
-    "language-server",
-    "bookstore"
+    "language-server"
   ],
   "license": "UNLICENSED",
   "author": "",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "bin": {
     "bookstore": "lib/main.js",
     "bookstore-data-server": "lib/data-server-main.js"
@@ -23,6 +20,9 @@
     "src",
     "syntaxes"
   ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "build": "npm run generate && tsc",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",

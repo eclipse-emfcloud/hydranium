@@ -237,7 +237,9 @@ export interface OpenDocument {
  * proceed, which is the failure this shape exists to make unrepresentable.
  */
 export type RepairCommit<T extends TextDocument> =
-   { readonly status: 'committed'; readonly document: T } | { readonly status: 'stale' } | { readonly status: 'not-open' };
+   | { readonly status: 'committed'; readonly document: T }
+   | { readonly status: 'stale' }
+   | { readonly status: 'not-open' };
 
 /**
  * Where a URI's shared version sequence left off — written once at last-client

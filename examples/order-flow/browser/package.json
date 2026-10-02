@@ -5,12 +5,12 @@
   "private": true,
   "description": "The reference browser deployment: all three hydranium heads in one web worker, with no Node runtime and no backend. A plain page drives them over three MessagePorts — a GLSP diagram, three Monaco editors with diagnostics, highlighting, completion, hover and inbound workspace/applyEdit, light/dark theming, and a workspace that survives a reload through IndexedDB — so it is the thing an adopter copies for a browser host rather than a demonstration that one is possible.",
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "examples/order-flow/browser"
   },
-  "license": "MIT",
   "scripts": {
     "build": "npm run generate && npm run typecheck && npm run bundle",
     "build:all": "turbo run build --filter=@hydranium/example-order-flow-browser...",

@@ -4,19 +4,19 @@
   "private": true,
   "description": "Theia-extension shell for the order-flow example: mounts the `.process` GLSP diagram through @hydranium/glsp-client-theia and contributes a document-scoped properties panel into Theia's own property view, reusing the host-agnostic PropertiesForm and OrderFlowPropertiesModel.",
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "examples/order-flow/theia"
   },
-  "license": "MIT",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "files": [
     "lib",
     "src",
     "style"
   ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
     "clean": "rimraf lib tsconfig.tsbuildinfo",

@@ -1,7 +1,7 @@
 # Normalise line endings in the repository to LF, and check every text file out
 # as LF on every platform.
 #
-# `.editorconfig` and the prettier config govern what editors and formatters
+# `.editorconfig` and `.oxfmtrc.json` govern what editors and formatters
 # WRITE; neither governs what `git checkout` materialises. Without this file a
 # Windows clone with the default `core.autocrlf=true` gets CRLF working-tree
 # files, and the byte-exact comparisons in the gates then report content drift

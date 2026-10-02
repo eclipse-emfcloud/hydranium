@@ -4,19 +4,19 @@
   "private": true,
   "description": "Three-grammar order-fulfillment example: a `.domain` structural language, a `.process` behavioural one and a `.layout` layout overlay over one shared AST.",
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "examples/order-flow/server"
   },
-  "license": "MIT",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "bin": {
     "order-flow-data-server": "lib/data-server-main.js",
     "order-flow-server": "lib/main.js"
   },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "bench": "vitest bench --run",
     "build": "npm run generate && tsc",

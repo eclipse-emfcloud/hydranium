@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Root-level files whose only readers are git and the formatter. */
-const ROOT_TOOLING = new Set(['.editorconfig', '.gitattributes', '.gitignore', '.prettierignore', '.prettierrc.js']);
+const ROOT_TOOLING = new Set(['.editorconfig', '.gitattributes', '.gitignore', '.oxfmtignore', '.oxfmtrc.json']);
 
 /**
  * Paths that reach no tarball, each with the reason it cannot — the reason is
@@ -141,7 +141,7 @@ function isPublishable(paths, rules) {
 const FIXTURES = [
    {
       name: 'a workflow change plus a root dotfile publishes nothing',
-      paths: ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.prettierignore'],
+      paths: ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.oxfmtignore', '.oxfmtrc.json'],
       publishable: false
    },
    { name: 'a workflow change plus .gitignore publishes nothing', paths: ['.github/workflows/ci.yml', '.gitignore'], publishable: false },

@@ -167,7 +167,7 @@ function columnsFor(composition: InitComposition): number {
 
 /**
  * A named import on one line while it fits the column budget, else one symbol
- * per line. Emitted files are supposed to pass a prettier check as-is, and the
+ * per line. Emitted files are supposed to pass a format check as-is, and the
  * generated-module import grows by one symbol per grammar.
  */
 function importList(symbols: readonly string[], from: string, columns: number, typeOnly = false): string {
@@ -250,7 +250,7 @@ function dependencyBlock(composition: InitComposition, indent: string): string {
 // npm convention, and `npm install` rewrites `package.json` at two spaces
 // regardless — so three would not survive the adopter's first install.
 //
-// The KEY ORDER is `prettier-plugin-packagejson`'s canonical one, `private`
+// The KEY ORDER is the one Oxfmt's `sortPackageJson` canonicalises to, `private`
 // before `license` included. Any other order is rewritten by the scaffolded
 // project's own first `format` run — a diff on a file the adopter never touched
 // — and it makes a byte-compare against a formatted copy of this emission
@@ -281,16 +281,9 @@ const PACKAGE_JSON = `{
   "version": "0.0.0",
 __PRIVATE__  "description": "__NAME__ language server, built with the Hydranium framework.",
   "keywords": [
-    "hydranium",
-    "langium",
-    "language-server",
-    "__PROJECT_ID__"
-  ],
+__KEYWORDS__  ],
   "license": "UNLICENSED",
   "author": "",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "bin": {
 __BIN__  },
   "files": [
@@ -298,6 +291,9 @@ __BIN__  },
     "src",
     "syntaxes"
   ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "build": "npm run generate && tsc",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
@@ -349,7 +345,7 @@ function npmRun(composition: InitComposition): string {
  * name. Without the second key a scaffolded project has no command line that
  * reaches its own data head at all.
  *
- * Alphabetical, because `prettier-plugin-packagejson` sorts `bin` and any other
+ * Alphabetical, because Oxfmt's `sortPackageJson` sorts `bin` and any other
  * order is rewritten by the scaffolded project's first `format` run.
  */
 function binBlock(composition: InitComposition): string {
@@ -364,6 +360,11 @@ function binBlock(composition: InitComposition): string {
 function packageJson(composition: InitComposition): string {
    const { scope } = composition.packaging;
    const packageName = scope === undefined ? composition.projectId : `${scope}/${composition.projectId}`;
+   const keywords =
+      ['hydranium', 'langium', 'language-server', composition.projectId]
+         .sort()
+         .map(keyword => `    ${JSON.stringify(keyword)}`)
+         .join(',\n') + '\n';
    // Emitted only where a root lint config says the repo lints. The absence is
    // the dangerous direction: a task runner runs a script only where one is
    // declared, so a package with no `lint` is SKIPPED rather than reported, and
@@ -381,6 +382,7 @@ function packageJson(composition: InitComposition): string {
            : '';
    return project(PACKAGE_JSON, composition)
       .replace('__PACKAGE_NAME__', packageName)
+      .replace('__KEYWORDS__', keywords)
       .replace('__BIN__', binBlock(composition))
       .replace('__LINT__', lint)
       .replace('__PRIVATE__', composition.packaging.private ? '  "private": true,\n' : '')
