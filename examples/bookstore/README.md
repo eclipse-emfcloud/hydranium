@@ -85,7 +85,7 @@ the change lands in the text document, the language client receives it as a
 
 ## Why it is also a provenance target
 
-`scripts/check-init-provenance.mjs` re-derives the scaffold from the invocation
+`scripts/check-init-provenance.mts` re-derives the scaffold from the invocation
 above and compares it file by file. `order-flow` is recorded at the DEFAULT head
 set — its diagram runs the reconciling multi-document strategy, a different set
 of classes from the one `--diagram` emits — so before this example the whole

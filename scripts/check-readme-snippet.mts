@@ -44,6 +44,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+interface Fence {
+   line: number;
+   code: string;
+   preamble: string;
+   skip: string;
+}
+interface Snippet {
+   readme: string;
+   line: number;
+   preambleLineCount: number;
+   tempFileName: string;
+   contents: string;
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
@@ -235,8 +249,8 @@ const SKIP_PATTERN = /<!--\s*snippet-skip:\s*(.+?)\s*-->$/;
  * Extract all ```ts fenced blocks with their 1-based README start line and the
  * preamble that immediately precedes them, if any.
  */
-function extractTsFences(markdown) {
-   const fences = [];
+function extractTsFences(markdown: string): Fence[] {
+   const fences: Fence[] = [];
    FENCE_PATTERN.lastIndex = 0;
    for (let match = FENCE_PATTERN.exec(markdown); match !== null; match = FENCE_PATTERN.exec(markdown)) {
       const before = markdown.slice(0, match.index);
@@ -257,11 +271,11 @@ function extractTsFences(markdown) {
  * file. Without this the reported line is a temp-file line and points at nothing
  * the reader can open.
  */
-function reportAt(tscOutput, tempFileName, readme, fenceLine, preambleLineCount) {
+function reportAt(tscOutput: string, tempFileName: string, readme: string, fenceLine: number, preambleLineCount: number): string {
    // tsc reports the temp file by a path relative to ITS cwd, not ours, so the
    // leading directories have to be swallowed by the match rather than stripped.
    const pattern = new RegExp(`[^\\s(]*${tempFileName}\\((\\d+),(\\d+)\\)`, 'g');
-   return tscOutput.replaceAll(pattern, (_whole, line, column) => {
+   return tscOutput.replaceAll(pattern, (_whole: string, line: string, column: string) => {
       const codeLine = Number(line) - preambleLineCount;
       // A position inside the preamble has no README line to name.
       return codeLine < 1 ? `${readme} (snippet-preamble line ${line}, col ${column})` : `${readme}:${fenceLine + codeLine}:${column}`;
@@ -305,7 +319,7 @@ for (const file of swept) {
 }
 
 /** Compilable snippets, keyed by the host package whose `tsc` run will hold them. */
-const byHost = new Map();
+const byHost = new Map<string, Snippet[]>();
 
 SNIPPET_TARGETS.forEach((target, targetIndex) => {
    const readmePath = resolve(repoRoot, target.readme);

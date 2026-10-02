@@ -33,8 +33,8 @@
  * indistinguishable from there being nothing to find.
  *
  * Usage:
- *   node scripts/check-package-readmes.mjs
- *   node scripts/check-package-readmes.mjs --self-test    # canaries only
+ *   node scripts/check-package-readmes.mts
+ *   node scripts/check-package-readmes.mts --self-test    # canaries only
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -42,6 +42,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The fields of a package manifest this gate reads. */
+interface PackageManifest {
+   name: string;
+   private?: boolean;
+   peerDependencies?: Record<string, string>;
+}
 
 /** Workspace directories that may contain publishable packages. */
 const WORKSPACE_DIRS = ['packages', 'examples'];
@@ -66,7 +73,7 @@ const MINIMUM_BODY_BYTES = 400;
 const MINIMUM_PROSE = 120;
 
 /** Immediate subdirectories, skipping the installed tree. */
-function subdirectories(base) {
+function subdirectories(base: string): string[] {
    if (!existsSync(base)) {
       return [];
    }
@@ -83,7 +90,7 @@ function subdirectories(base) {
  * a flat scan would stop covering every package it contains while still
  * reporting a clean verdict.
  */
-function listPackageDirs(base) {
+function listPackageDirs(base: string): string[] {
    return subdirectories(base).flatMap(directory =>
       existsSync(join(directory, 'package.json'))
          ? [directory]
@@ -96,7 +103,7 @@ function listPublishedPackages() {
       listPackageDirs(join(REPO_ROOT, workspaceDir))
          .map(directory => ({
             directory,
-            manifest: JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8'))
+            manifest: JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')) as PackageManifest
          }))
          .filter(({ manifest }) => manifest.private !== true)
          .map(({ directory, manifest }) => ({
@@ -107,7 +114,7 @@ function listPublishedPackages() {
    );
 }
 
-function escapeForRegExp(text) {
+function escapeForRegExp(text: string): string {
    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -121,7 +128,7 @@ function escapeForRegExp(text) {
  * one. The name is anchored on its right so a longer sibling's line — the
  * copy-paste failure this pairs with — cannot satisfy a shorter package.
  */
-function hasInstallCommand(contents, packageName) {
+function hasInstallCommand(contents: string, packageName: string): boolean {
    const command = new RegExp(`npm install(?:\\s+-{1,2}[\\w-]+)*\\s+${escapeForRegExp(packageName)}(?![\\w./-])`);
    return command.test(contents);
 }
@@ -138,7 +145,7 @@ const VERSION_TERM = /^(?:[<>]=?|[\^~=])?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
  * the pinned transport peers all use — and the gate would be turned off rather
  * than believed.
  */
-function normalizeRange(text) {
+function normalizeRange(text: string): string {
    return text.replace(/\\\|/g, '|').replace(/\s+/g, ' ').trim();
 }
 
@@ -150,7 +157,7 @@ function normalizeRange(text) {
  * range the page is quoting. A range this rejects is treated as prose, which
  * loses coverage rather than inventing a violation.
  */
-function isVersionRange(text) {
+function isVersionRange(text: string): boolean {
    const terms = text
       .split('||')
       .map(term => term.trim())
@@ -166,7 +173,7 @@ function isVersionRange(text) {
  * longer name survives. A trailing `/` is allowed through, because
  * `@hydranium/core/node` does mention `@hydranium/core`.
  */
-function mentions(line, packageName) {
+function mentions(line: string, packageName: string): boolean {
    return new RegExp(`(?<![\\w@/-])${escapeForRegExp(packageName)}(?![\\w-])`).test(line);
 }
 
@@ -204,7 +211,7 @@ function mentions(line, packageName) {
  * range is among the ones quoted, so a sentence naming two peers with both their
  * ranges satisfies each of them.
  */
-function peerProblem(contents, peerDependencies) {
+function peerProblem(contents: string, peerDependencies: Record<string, string>): string | undefined {
    const lines = contents.split('\n');
    for (const [peer, declaredRange] of Object.entries(peerDependencies)) {
       const naming = lines.filter(line => mentions(line, peer));
@@ -232,7 +239,7 @@ function peerProblem(contents, peerDependencies) {
  * because it is the only predicate that reads the manifest, and a page with no
  * heading has nothing to disagree with yet.
  */
-function readmeProblem(contents, packageName, peerDependencies = {}) {
+function readmeProblem(contents: string, packageName: string, peerDependencies: Record<string, string> = {}): string | undefined {
    const lines = contents.split('\n');
    const headingIndex = lines.findIndex(line => /^#\s+\S/.test(line));
    if (headingIndex < 0) {
@@ -289,7 +296,7 @@ const CANARY_PEERS = {
 };
 
 /** The table row the well-formed page carries for a peer. */
-function canaryPeerRow(peer) {
+function canaryPeerRow(peer: keyof typeof CANARY_PEERS): string {
    return `| \`${peer}\` | \`${CANARY_PEERS[peer].replaceAll('|', '\\|')}\` |`;
 }
 

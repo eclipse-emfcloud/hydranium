@@ -40,6 +40,30 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+interface InertRule {
+   name: string;
+   why: string;
+   test: (path: string) => boolean;
+}
+
+interface InertPath {
+   path: string;
+   rule: InertRule;
+}
+
+interface Verdict {
+   publishable: boolean;
+   why: string;
+   reaching?: string[];
+   inert?: InertPath[];
+}
+
+/** The fields of a package manifest the self-test reads. */
+interface PackageManifest {
+   private?: boolean;
+   files?: string[];
+}
+
 /** Root-level files whose only readers are git and the formatter. */
 const ROOT_TOOLING = new Set(['.editorconfig', '.gitattributes', '.gitignore', '.oxfmtignore', '.oxfmtrc.json']);
 
@@ -49,7 +73,7 @@ const ROOT_TOOLING = new Set(['.editorconfig', '.gitattributes', '.gitignore', '
  * beside the rule rather than in prose that can drift from it. This array is
  * the whole skip list: nothing classifies anything except by consulting it.
  */
-const INERT = [
+const INERT: InertRule[] = [
    {
       name: '.github/**',
       why: 'workflow and issue-template configuration, packed by no manifest',
@@ -102,17 +126,17 @@ const INERT = [
  * self-test can run the fixtures against an emptied list and prove they still
  * discriminate.
  */
-function inertRule(path, rules = INERT) {
+function inertRule(path: string, rules: InertRule[] = INERT): InertRule | undefined {
    return rules.find(rule => rule.test(path));
 }
 
 /** Whether a pushed range can change a tarball. Empty means publish. */
-function isPublishable(paths, rules) {
+function isPublishable(paths: string[], rules?: InertRule[]): Verdict {
    if (paths.length === 0) {
       return { publishable: true, why: 'the pushed range resolved to no changed path, so nothing rules a release out' };
    }
    const classified = paths.map(path => ({ path, rule: inertRule(path, rules) }));
-   const inert = classified.filter(entry => entry.rule);
+   const inert = classified.filter((entry): entry is InertPath => entry.rule !== undefined);
    const reaching = classified.filter(entry => !entry.rule).map(entry => entry.path);
    if (reaching.length === 0) {
       return { publishable: false, why: `all ${paths.length} changed path(s) reach no tarball`, inert };
@@ -173,7 +197,7 @@ const FIXTURES = [
    { name: 'a patch mutates an installed dependency and publishes', paths: ['patches/vitest+4.1.11.patch'], publishable: true },
    { name: 'the lockfile publishes', paths: ['package-lock.json'], publishable: true },
    { name: 'a root tsconfig publishes', paths: ['tsconfig.base.json'], publishable: true },
-   { name: 'a release-script change publishes so the change is exercised', paths: ['scripts/release.mjs'], publishable: true },
+   { name: 'a release-script change publishes so the change is exercised', paths: ['scripts/release.mts'], publishable: true },
    {
       name: 'one shippable path among inert ones publishes',
       paths: ['README.md', 'docs/x.md', 'packages/core/src/index.ts'],
@@ -217,9 +241,9 @@ function selfTest() {
    let checked = 0;
    for (const name of readdirSync(resolve(repoRoot, 'packages'))) {
       const manifestPath = resolve(repoRoot, 'packages', name, 'package.json');
-      let manifest;
+      let manifest: PackageManifest;
       try {
-         manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+         manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageManifest;
       } catch {
          continue;
       }

@@ -5,7 +5,7 @@
 // `platform: 'browser'` esbuild refuses to resolve a `node:*` builtin rather
 // than shimming it, so a Node import anywhere in the head composition's graph
 // fails here instead of throwing inside a worker with no console attached. That
-// covers more than `scripts/check-neutral-bundles.mjs` does: the gate probes the
+// covers more than `scripts/check-neutral-bundles.mts` does: the gate probes the
 // framework's `.` entries, while this bundles the example's actual composition —
 // grammars, serializers, scope providers and all — which nothing else does.
 //

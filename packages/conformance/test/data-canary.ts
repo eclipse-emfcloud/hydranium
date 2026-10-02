@@ -18,7 +18,7 @@
  * green direction; a check that had degenerated into an unconditional pass is
  * green there too, and reads as coverage.
  *
- * Shaped after `scripts/check-package-readmes.mjs`: one well-formed subject
+ * Shaped after `scripts/check-package-readmes.mts`: one well-formed subject
  * that must PASS, and every must-fail canary derived from it by breaking
  * exactly ONE property. A canary that reddens has therefore isolated the
  * assertion it names rather than tripping over an unrelated gap, and the

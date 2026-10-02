@@ -110,7 +110,7 @@ jobs:
             publish "the pushed range's base ($BEFORE) does not resolve, so what changed cannot be read"
             exit 0
           fi
-          git diff --name-only "$BEFORE" "$HEAD_SHA" | node scripts/release-changed.mjs
+          git diff --name-only "$BEFORE" "$HEAD_SHA" | node scripts/release-changed.mts
 
   # The contributor gate on every platform CI covers, in this workflow: CI runs
   # on the same trigger with no dependency either way, so a red run there
@@ -346,4 +346,4 @@ jobs:
       # registry means no one has to remember to change a flag on the day it
       # stops being true. See docs/contributing/releasing.md.
       - name: Publish
-        run: node scripts/release.mjs next
+        run: node scripts/release.mts next

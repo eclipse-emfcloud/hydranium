@@ -14,7 +14,7 @@
  * builders, the snapshot and URI-policy conformance primitives, the
  * structured-write pipeline driver, and a re-export of `langium/test`.
  *
- * Neutrality is gated (`scripts/check-neutral-bundles.mjs`). The test support
+ * Neutrality is gated (`scripts/check-neutral-bundles.mts`). The test support
  * that needs a real filesystem or a Node stream transport — the scratch
  * workspace, the golden corpus, the LSP transport and its harness — lives at
  * `@hydranium/core/testing/node`, on the same rule the package surface uses:

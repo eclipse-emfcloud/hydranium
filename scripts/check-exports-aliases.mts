@@ -47,13 +47,19 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packagesRoot = resolve(repoRoot, 'packages');
 
+interface Manifest {
+   name?: string;
+   files?: string[];
+   exports?: Record<string, unknown>;
+}
+
 /** `./testing` -> `./lib/testing`. */
-function aliasFor(key) {
+function aliasFor(key: string): string {
    return `./lib/${key.slice('./'.length)}`;
 }
 
 /** Every path an `exports` value points at, flattening a conditions object. */
-function targetPaths(value) {
+function targetPaths(value: unknown): string[] {
    if (typeof value === 'string') {
       return [value];
    }
@@ -71,7 +77,7 @@ function targetPaths(value) {
  * all". A negation entry is ignored: those exclude build residue inside a
  * shipped directory, never the directory itself.
  */
-function isShipped(manifest, target) {
+function isShipped(manifest: Manifest, target: string): boolean {
    const [firstSegment] = target.replace(/^\.\//, '').split('/');
    return (manifest.files ?? []).some(entry => !entry.startsWith('!') && entry.replace(/^\.\//, '').replace(/\/$/, '') === firstSegment);
 }
@@ -83,7 +89,7 @@ function isShipped(manifest, target) {
  * put synthetic manifests through the same code the real walk uses — a second
  * implementation for the canaries would be free to agree with nothing.
  */
-function manifestProblems(manifest, packageRoot) {
+function manifestProblems(manifest: Manifest, packageRoot: string): string[] {
    if (!manifest.exports) {
       return [
          'declares no `exports` map, so every emitted module — every internal helper, every command module — is deep-importable ' +
@@ -92,7 +98,7 @@ function manifestProblems(manifest, packageRoot) {
    }
 
    const keys = Object.keys(manifest.exports);
-   const problems = [];
+   const problems: string[] = [];
 
    for (const key of keys) {
       if (key === '.' || key.startsWith('./lib/')) {
@@ -232,7 +238,7 @@ for (const packageDir of readdirSync(packagesRoot).sort()) {
    if (!existsSync(manifestPath)) {
       continue;
    }
-   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest;
    const problems = manifestProblems(manifest, packageRoot);
 
    if (problems.length === 0) {

@@ -49,6 +49,11 @@ const EXTENSIONS = ['examples/order-flow/vscode'];
 /** What `activate` is expected to export, so a truncated module is not "loaded". */
 const REQUIRED_EXPORTS = ['activate'];
 
+/** The undocumented loader hook the stub replaces. */
+interface ModuleInternals {
+   _load(this: unknown, request: string, parent: unknown, isMain: boolean): unknown;
+}
+
 /**
  * Install a `vscode` stub, since the module exists only inside the host.
  *
@@ -73,9 +78,9 @@ function stubVsCode() {
          construct: () => ({})
       });
 
-   const Module = require('node:module');
+   const Module = require('node:module') as ModuleInternals;
    const load = Module._load;
-   Module._load = function (request, parent, isMain) {
+   Module._load = function (this: unknown, request: string, parent: unknown, isMain: boolean): unknown {
       return request === 'vscode' ? stub() : load.call(this, request, parent, isMain);
    };
 }
@@ -90,7 +95,7 @@ for (const packageDir of EXTENSIONS) {
       failed = true;
       continue;
    }
-   const { main } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+   const { main } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { main?: string };
    if (!main) {
       console.error(`✗ ${packageDir} declares no "main" — the host would have nothing to load`);
       failed = true;
@@ -104,7 +109,7 @@ for (const packageDir of EXTENSIONS) {
    }
 
    try {
-      const loaded = require(entry);
+      const loaded = require(entry) as Record<string, unknown>;
       const missing = REQUIRED_EXPORTS.filter(name => typeof loaded[name] !== 'function');
       if (missing.length > 0) {
          console.error(`✗ ${packageDir} loaded but does not export ${missing.join(', ')}`);

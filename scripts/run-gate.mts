@@ -46,10 +46,10 @@
  * declared halves and nothing else. It can only do that while the assembly is
  * still written in the manifest it reads.
  *
- * Usage: node scripts/run-gate.mjs <script> [<script>...]
+ * Usage: node scripts/run-gate.mts <script> [<script>...]
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,7 +65,7 @@ const clauses = process.argv.slice(2);
  * surfaces as that clause's `signal` and this flag catches only the narrow
  * window between two clauses.
  */
-let interruptedBy;
+let interruptedBy: string | undefined;
 for (const signal of ['SIGINT', 'SIGTERM']) {
    process.on(signal, () => {
       interruptedBy = signal;
@@ -79,20 +79,20 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
  * inheriting its quoting rules.
  */
 const npmCli = process.env.npm_execpath;
-function runClause(clause) {
-   const options = { cwd: REPO_ROOT, stdio: 'inherit' };
+function runClause(clause: string): SpawnSyncReturns<string | Buffer> {
+   const options: SpawnSyncOptions = { cwd: REPO_ROOT, stdio: 'inherit' };
    return npmCli
       ? spawnSync(process.execPath, [npmCli, 'run', clause], options)
       : spawnSync('npm', ['run', clause], { ...options, shell: process.platform === 'win32' });
 }
 
 /** One blank line ahead of it, so the verdict is not read as the last clause's own output. */
-function verdict(line) {
+function verdict(line: string): void {
    console.log('');
    console.log(line);
 }
 
-function fail(line, exitCode) {
+function fail(line: string, exitCode: number | null): never {
    verdict(`✗ GATE FAILED — ${line}`);
    process.exit(exitCode);
 }

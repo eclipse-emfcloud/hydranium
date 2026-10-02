@@ -49,6 +49,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** A Theia catalogue: keys nested by `/`, with the message strings as leaves. */
+interface Catalogue {
+   [key: string]: string | Catalogue;
+}
+interface Extraction {
+   keys: string[];
+   suppressed: string[];
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 
@@ -70,7 +79,7 @@ const cliManifestPath = require.resolve('@theia/cli/package.json');
 const theiaCli = join(dirname(cliManifestPath), require(cliManifestPath).bin.theia);
 
 /** Catalogue keys, which Theia nests by `/`, flattened back to the codes they were written as. */
-function flattenKeys(node, prefix = '') {
+function flattenKeys(node: Catalogue, prefix = ''): string[] {
    return Object.entries(node).flatMap(([key, value]) => {
       const joined = prefix ? `${prefix}/${key}` : key;
       return typeof value === 'string' ? [joined] : flattenKeys(value, joined);
@@ -84,7 +93,7 @@ function flattenKeys(node, prefix = '') {
  * `suppressed` being empty is the whole verdict — the extractor writes the log
  * file only when it has something to say.
  */
-function extract(root, files) {
+function extract(root: string, files: string): Extraction {
    const workDir = mkdtempSync(join(tmpdir(), 'hydranium-nls-'));
    const output = join(workDir, 'nls.json');
    const logs = join(workDir, 'nls-extract.log');
@@ -104,7 +113,7 @@ function extract(root, files) {
          : [];
       // An absent output file means the extractor produced no catalogue at all,
       // which reads as "no keys" and must not read as "no problem".
-      const keys = existsSync(output) ? flattenKeys(JSON.parse(readFileSync(output, 'utf-8'))) : [];
+      const keys = existsSync(output) ? flattenKeys(JSON.parse(readFileSync(output, 'utf-8')) as Catalogue) : [];
       return { keys, suppressed };
    } finally {
       rmSync(workDir, { recursive: true, force: true });

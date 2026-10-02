@@ -23,7 +23,7 @@
 // Writes to `$GITHUB_STEP_SUMMARY` when set, stdout otherwise, so it is
 // runnable locally against a real CI artefact.
 //
-// Usage: node scripts/summarize-test-results.mjs [rootDir]
+// Usage: node scripts/summarize-test-results.mts [rootDir]
 
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -35,6 +35,13 @@ const searchRoot = process.argv[2] ? resolve(process.argv[2]) : repoRoot;
 /** How many of the slowest cases to name. */
 const SLOWEST = 10;
 
+interface TestCase {
+   name: string;
+   seconds: number;
+   failed: boolean;
+   skipped: boolean;
+}
+
 /**
  * Every `.xml` at or below `dir`, which is entered once a `test-results/` has
  * been found.
@@ -44,7 +51,7 @@ const SLOWEST = 10;
  * start and a shared one means the second run deletes the first's report. A
  * flat read of `test-results/` would then miss both.
  */
-function collectXml(dir, found) {
+function collectXml(dir: string, found: string[]): void {
    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) collectXml(full, found);
@@ -56,7 +63,7 @@ function collectXml(dir, found) {
  * Every XML report under a `test-results/` directory, skipping trees that
  * cannot hold one.
  */
-function findReports(dir, found = []) {
+function findReports(dir: string, found: string[] = []): string[] {
    let entries;
    try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -83,8 +90,8 @@ function findReports(dir, found = []) {
  * match inside `classname="` and report every case under its SPEC FILE instead
  * of its title — which is what happened the first time this was done by hand.
  */
-function parseCases(xml) {
-   const cases = [];
+function parseCases(xml: string): TestCase[] {
+   const cases: TestCase[] = [];
    for (const match of xml.matchAll(/<testcase\b([^>]*)\s*(\/>|>([\s\S]*?)<\/testcase>)/g)) {
       const attributes = match[1];
       const body = match[3] ?? '';
@@ -100,7 +107,7 @@ function parseCases(xml) {
    return cases;
 }
 
-function decodeXml(text) {
+function decodeXml(text: string): string {
    return text
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
@@ -111,13 +118,13 @@ function decodeXml(text) {
 }
 
 /** `packages/core` or `examples/order-flow/browser`, from the report's path. */
-function packageOf(reportPath) {
+function packageOf(reportPath: string): string {
    const parts = relative(searchRoot, reportPath).split(sep);
    return parts.slice(0, parts.indexOf('test-results')).join('/') || '(root)';
 }
 
 const reports = findReports(searchRoot);
-const lines = [];
+const lines: string[] = [];
 
 if (reports.length === 0) {
    lines.push('## Test results', '', '> **No JUnit reports were found.** Either no tier ran, or none is configured to');
@@ -125,7 +132,7 @@ if (reports.length === 0) {
 } else {
    // Keyed by package, not by report: a tier that runs its config twice emits
    // two files for one package, and a row each would read as two packages.
-   const byPackage = new Map();
+   const byPackage = new Map<string, TestCase[]>();
    for (const report of reports) {
       const name = packageOf(report);
       const cases = (byPackage.get(name) ?? []).concat(parseCases(readFileSync(report, 'utf8')));

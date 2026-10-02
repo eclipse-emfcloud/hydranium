@@ -25,7 +25,7 @@
  * **Neutral, and gate-enforced so.** Nothing here imports a host package or a
  * Node builtin, which is what lets one client tier serve a Theia frontend, a VS
  * Code extension host, a VS Code webview and a plain browser app. `npm run
- * check:neutral` bundles these modules for the browser; `scripts/check-neutral-bundles.mjs`
+ * check:neutral` bundles these modules for the browser; `scripts/check-neutral-bundles.mts`
  * carries the entries.
  *
  * The Theia-specific mounting of the same contract lives in

@@ -24,7 +24,7 @@
  * TypeScript already reports it. A package whose types come from `@types/<name>`
  * alone, such as the host-provided `vscode` module, is declared by that package.
  *
- * Usage: `check-phantom-dependencies.mjs [file...]`. Without files it checks
+ * Usage: `check-phantom-dependencies.mts [file...]`. Without files it checks
  * every tracked source file of every workspace.
  */
 import { execFileSync } from 'node:child_process';
@@ -34,8 +34,34 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
 
+type DependencyMap = Record<string, string>;
+interface Manifest {
+   name?: string;
+   workspaces?: string[];
+   dependencies?: DependencyMap;
+   peerDependencies?: DependencyMap;
+   devDependencies?: DependencyMap;
+   optionalDependencies?: DependencyMap;
+}
+type Tier = keyof typeof SOURCE_EXTENSIONS;
+interface Declarations {
+   allowed: Set<string | undefined>;
+   denied: Map<string, string>;
+}
+interface Specifier {
+   value: string;
+   start: number;
+}
+/** The fields of an oxc AST node this script reads; anything else is walked generically. */
+interface AstNode {
+   type?: unknown;
+   expression?: { value?: unknown; start: number };
+   callee?: { type?: unknown; name?: unknown };
+   arguments?: { type?: unknown; value?: unknown; start: number }[];
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const readJson = file => JSON.parse(readFileSync(file, 'utf-8'));
+const readJson = (file: string): Manifest => JSON.parse(readFileSync(file, 'utf-8')) as Manifest;
 const rootManifest = readJson(join(root, 'package.json'));
 
 /** Workspaces whose `src` runs inside a host that provides a devDependency-typed module at runtime. */
@@ -43,7 +69,7 @@ const HOST_PROVIDED = new Set(['examples/order-flow/vscode', 'examples/order-flo
 const GENERATED = /\/(generated|generated-hydranium)\//;
 const SOURCE_EXTENSIONS = { src: /\.tsx?$/, test: /\.(tsx?|mts)$/ };
 
-function workspaceDirs() {
+function workspaceDirs(): string[] {
    return (rootManifest.workspaces ?? []).flatMap(entry => {
       if (!entry.endsWith('/*')) {
          return existsSync(join(root, entry, 'package.json')) ? [entry] : [];
@@ -59,24 +85,20 @@ function workspaceDirs() {
 const workspaces = workspaceDirs().sort((left, right) => right.length - left.length);
 
 /** The workspace and tier (`src` or `test`) a repo-relative file belongs to, or `undefined`. */
-function classify(file) {
+function classify(file: string): { workspace: string; tier: Tier } | undefined {
    const workspace = workspaces.find(dir => file.startsWith(`${dir}/`));
    const tier = workspace && file.slice(workspace.length + 1).split('/')[0];
-   if (
-      !workspace ||
-      !(tier in SOURCE_EXTENSIONS) ||
-      !SOURCE_EXTENSIONS[tier].test(file) ||
-      file.endsWith('.d.ts') ||
-      GENERATED.test(file)
-   ) {
+   if (!workspace || !isTier(tier) || !SOURCE_EXTENSIONS[tier].test(file) || file.endsWith('.d.ts') || GENERATED.test(file)) {
       return undefined;
    }
    return { workspace, tier };
 }
 
-const declaredCache = new Map();
+const isTier = (value: string | undefined): value is Tier => value !== undefined && value in SOURCE_EXTENSIONS;
+
+const declaredCache = new Map<string, Declarations>();
 /** Declaration status per package name: the allowed fields, plus the fields a denial should name. */
-function declarations(workspace, tier) {
+function declarations(workspace: string, tier: Tier): Declarations {
    const key = `${workspace}:${tier}`;
    if (!declaredCache.has(key)) {
       const manifests =
@@ -85,9 +107,9 @@ function declarations(workspace, tier) {
             : [readJson(join(root, workspace, 'package.json'))];
       const allowDev = tier === 'test' || HOST_PROVIDED.has(workspace);
       const allowed = new Set(manifests.map(manifest => manifest.name));
-      const denied = new Map();
+      const denied = new Map<string, string>();
       for (const manifest of manifests) {
-         for (const field of ['dependencies', 'peerDependencies', 'devDependencies', 'optionalDependencies']) {
+         for (const field of ['dependencies', 'peerDependencies', 'devDependencies', 'optionalDependencies'] as const) {
             for (const name of Object.keys(manifest[field] ?? {})) {
                if (field === 'dependencies' || field === 'peerDependencies' || (field === 'devDependencies' && allowDev)) {
                   allowed.add(name);
@@ -99,18 +121,18 @@ function declarations(workspace, tier) {
       }
       declaredCache.set(key, { allowed, denied });
    }
-   return declaredCache.get(key);
+   return declaredCache.get(key)!;
 }
 
-const packageName = specifier =>
+const packageName = (specifier: string): string =>
    specifier
       .split('/')
       .slice(0, specifier.startsWith('@') ? 2 : 1)
       .join('/');
-const typesPackageName = name => `@types/${name.startsWith('@') ? name.slice(1).replace('/', '__') : name}`;
+const typesPackageName = (name: string): string => `@types/${name.startsWith('@') ? name.slice(1).replace('/', '__') : name}`;
 
 /** Whether `name` is installed where Node would look for it from `file`. */
-function installed(file, name) {
+function installed(file: string, name: string): boolean {
    for (let dir = dirname(join(root, file)); ; dir = dirname(dir)) {
       if (existsSync(join(dir, 'node_modules', name, 'package.json'))) {
          return true;
@@ -121,24 +143,26 @@ function installed(file, name) {
    }
 }
 
+const isAstNode = (node: unknown): node is AstNode => Boolean(node) && typeof node === 'object';
+
 /** Every module specifier in `source`, with the offset it starts at. */
-function specifiers(file, source) {
+function specifiers(file: string, source: string): Specifier[] {
    const { module, program } = parseSync(file, source);
-   const found = [
+   const found: Specifier[] = [
       ...module.staticImports.map(entry => entry.moduleRequest),
       ...module.staticExports.flatMap(entry => entry.entries.map(item => item.moduleRequest).filter(Boolean)),
       ...module.dynamicImports.map(entry => {
          const text = source.slice(entry.moduleRequest.start, entry.moduleRequest.end);
          return /^(['"])[^'"]*\1$/.test(text) ? { value: text.slice(1, -1), start: entry.moduleRequest.start } : undefined;
       })
-   ].filter(Boolean);
+   ].filter((entry): entry is Specifier => Boolean(entry));
    // `import x = require('…')` and `require('…')` are absent from the module record.
-   const visit = node => {
+   const visit = (node: unknown): void => {
       if (Array.isArray(node)) {
          node.forEach(visit);
          return;
       }
-      if (!node || typeof node !== 'object') {
+      if (!isAstNode(node)) {
          return;
       }
       if (node.type === 'TSExternalModuleReference' && typeof node.expression?.value === 'string') {
@@ -163,14 +187,14 @@ function specifiers(file, source) {
 }
 
 /** Problems in one repo-relative file, as `file:line: message` strings. */
-export function checkFile(file) {
+export function checkFile(file: string): string[] {
    const placement = classify(file);
    if (!placement) {
       return [];
    }
    const { allowed, denied } = declarations(placement.workspace, placement.tier);
    const source = readFileSync(join(root, file), 'utf-8');
-   const problems = [];
+   const problems: string[] = [];
    for (const { value, start } of specifiers(file, source)) {
       if (value.startsWith('.') || value.startsWith('/') || value.startsWith('#') || isBuiltin(value)) {
          continue;
@@ -194,7 +218,7 @@ export function checkFile(file) {
    return problems;
 }
 
-function trackedFiles() {
+function trackedFiles(): string[] {
    return execFileSync('git', ['-C', root, 'ls-files', ...workspaces.flatMap(dir => [`${dir}/src`, `${dir}/test`])], { encoding: 'utf-8' })
       .split('\n')
       .filter(Boolean);

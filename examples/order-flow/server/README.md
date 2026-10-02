@@ -98,7 +98,7 @@ Two gates keep this section honest rather than aspirational:
   scaffold — the single-grammar default, this example's own three-grammar
   invocation, and the three-head shape — so a template change shows up as a diff
   of the emitted project.
-- `scripts/check-init-provenance.mjs` re-runs the invocation above and checks
+- `scripts/check-init-provenance.mts` re-runs the invocation above and checks
   every emitted file against a manifest the Layout table below restates — that
   `langium-config.json` and `src/services.ts` are byte-for-byte the scaffold's,
   that each *adapted* file really does differ, and that nothing `init` emits is
@@ -181,7 +181,7 @@ from the scaffold.
 | `src/glsp/**` | hand-written — the `.process` diagram on the reconciling multi-document strategy, with `.process` as the primary document and `.layout` as the secondary |
 | `src/measure-memory.ts` | hand-written — the entry point the `measure-memory` script runs |
 | `src/testing/large-workspace.ts` | hand-written — the large perf fixture's generator |
-| `scripts/generate-large-workspace.mjs` | hand-written — the CLI front for that generator |
+| `scripts/generate-large-workspace.mts` | hand-written — the CLI front for that generator |
 | `syntaxes/**` | `langium generate` TextMate output, gitignored |
 | `test/*.test.ts`, `test/order-flow-harness.ts` | hand-written |
 

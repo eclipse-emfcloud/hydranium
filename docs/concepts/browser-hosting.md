@@ -14,7 +14,7 @@ capability list, and the one gap, is [at the end](#what-a-browser-host-supports)
 ## The packaging contract
 
 Every head's `.` entry is free of `node:*` and is gated that way
-(`scripts/check-neutral-bundles.mjs`). Anything Node-only lives behind a `/node`
+(`scripts/check-neutral-bundles.mts`). Anything Node-only lives behind a `/node`
 subpath — `@hydranium/core/node`, `@hydranium/glsp-server/node` — and a browser
 bundle must not import those.
 

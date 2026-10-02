@@ -150,7 +150,7 @@ const RESTRICT_HOST_FRAMEWORK = {
 const withHost = restriction => ({ ...restriction, patterns: [...(restriction.patterns ?? []), RESTRICT_HOST_FRAMEWORK] });
 
 // The THIRD place "generated code is exempt" has to be said, after
-// `.oxfmtignore` and `HEADER_EXEMPT` in `scripts/header.mjs`. All three name
+// `.oxfmtignore` and `HEADER_EXEMPT` in `scripts/header.mts`. All three name
 // `generated` AND `generated-hydranium` — the latter is `hydranium-cli` output,
 // named for the tool that owns it rather than for one artefact, kept out of
 // `generated/` because langium-cli deletes that directory outright on every run

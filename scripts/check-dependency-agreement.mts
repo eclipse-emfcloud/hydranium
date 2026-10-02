@@ -79,7 +79,7 @@
  *   than a defect. Forbidding only the unpublishable base needs no knowledge
  *   of the versioning scheme, so this pass survives cutting a stable release.
  *
- * Usage: node scripts/check-dependency-agreement.mjs
+ * Usage: node scripts/check-dependency-agreement.mts
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -89,7 +89,22 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Every block npm resolves a range from. */
-const DEPENDENCY_BLOCKS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+const DEPENDENCY_BLOCKS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+type DependencyBlock = (typeof DEPENDENCY_BLOCKS)[number];
+type DependencyBlocks = Partial<Record<DependencyBlock, Record<string, string>>>;
+interface Manifest extends DependencyBlocks {
+   name?: string;
+   version?: string;
+   workspaces?: string[];
+}
+interface Lockfile {
+   packages?: Record<string, DependencyBlocks>;
+}
+interface MirrorExemption {
+   block: DependencyBlock;
+   name: string;
+   reason: string;
+}
 
 /**
  * Mirror groups allowed to disagree, each carrying the measurement that says
@@ -104,11 +119,11 @@ const DEPENDENCY_BLOCKS = ['dependencies', 'devDependencies', 'peerDependencies'
  * Repairing a group needs the lockfile regenerated with the manifest, so an
  * entry here means the repair was deferred, never that the drift is correct.
  */
-const MIRROR_EXEMPTIONS = [];
+const MIRROR_EXEMPTIONS: MirrorExemption[] = [];
 
 /** POSIX-spelled repo-relative directory, which is how both the lock and `workspaces` spell them. */
-function workspaceDirectories(rootManifest) {
-   const expand = entry => {
+function workspaceDirectories(rootManifest: Manifest): string[] {
+   const expand = (entry: string): string[] => {
       let directories = [''];
       for (const segment of entry.split('/')) {
          directories = segment.includes('*')
@@ -125,7 +140,7 @@ function workspaceDirectories(rootManifest) {
    return (rootManifest.workspaces ?? []).flatMap(expand);
 }
 
-function readJson(...segments) {
+function readJson(...segments: string[]): unknown {
    return JSON.parse(readFileSync(join(REPO_ROOT, ...segments), 'utf-8'));
 }
 
@@ -135,8 +150,8 @@ function readJson(...segments) {
  * parsed manifest; `lockPackages` is the lock's own `packages` object, keyed the
  * same way.
  */
-export function lockDisagreements(manifests, lockPackages) {
-   const problems = [];
+export function lockDisagreements(manifests: Record<string, DependencyBlocks>, lockPackages: Record<string, DependencyBlocks>): string[] {
+   const problems: string[] = [];
    for (const [directory, manifest] of Object.entries(manifests)) {
       const where = directory === '' ? '<root>' : directory;
       const entry = lockPackages[directory];
@@ -167,20 +182,23 @@ export function lockDisagreements(manifests, lockPackages) {
  * parsed manifest. Returns both the drifts that are not exempt and the
  * exemptions that no longer name a drift.
  */
-export function mirrorDisagreements(manifests, exemptions = MIRROR_EXEMPTIONS) {
-   const groups = new Map();
+export function mirrorDisagreements(
+   manifests: Record<string, DependencyBlocks>,
+   exemptions: MirrorExemption[] = MIRROR_EXEMPTIONS
+): string[] {
+   const groups = new Map<string, { directory: string; range: string }[]>();
    for (const [directory, manifest] of Object.entries(manifests)) {
       for (const block of DEPENDENCY_BLOCKS) {
          for (const [name, range] of Object.entries(manifest[block] ?? {})) {
             const key = `${block} ${name}`;
             if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push({ directory, range });
+            groups.get(key)!.push({ directory, range });
          }
       }
    }
 
-   const drifted = new Set();
-   const problems = [];
+   const drifted = new Set<string>();
+   const problems: string[] = [];
    for (const [key, sites] of [...groups].sort()) {
       if (sites.length < 2) continue;
       if (new Set(sites.map(site => site.range)).size === 1) continue;
@@ -205,8 +223,12 @@ export function mirrorDisagreements(manifests, exemptions = MIRROR_EXEMPTIONS) {
  * `version` — read rather than spelled out, so cutting a release moves it here
  * without an edit.
  */
-export function unpublishableExamplePins(manifests, frameworkNames, baseVersion) {
-   const problems = [];
+export function unpublishableExamplePins(
+   manifests: Record<string, DependencyBlocks>,
+   frameworkNames: ReadonlySet<string | undefined>,
+   baseVersion: string | undefined
+): string[] {
+   const problems: string[] = [];
    for (const [directory, manifest] of Object.entries(manifests)) {
       for (const block of DEPENDENCY_BLOCKS) {
          for (const [name, range] of Object.entries(manifest[block] ?? {})) {
@@ -339,7 +361,7 @@ const SELF_TESTS = [
    }
 ];
 
-function runSelfTests() {
+function runSelfTests(): boolean {
    let broken = false;
    for (const probe of SELF_TESTS) {
       const problems = probe.run();
@@ -356,7 +378,7 @@ function runSelfTests() {
 let failed = runSelfTests();
 console.log('');
 
-const rootManifest = readJson('package.json');
+const rootManifest = readJson('package.json') as Manifest;
 const directories = workspaceDirectories(rootManifest);
 // The `workspaces` list is ground truth for every other coverage gate here, so
 // a list that has stopped expanding must abort rather than report agreement
@@ -366,10 +388,10 @@ if (directories.length === 0) {
    process.exit(1);
 }
 
-const manifests = { '': rootManifest };
-for (const directory of directories) manifests[directory] = readJson(directory, 'package.json');
+const manifests: Record<string, Manifest> = { '': rootManifest };
+for (const directory of directories) manifests[directory] = readJson(directory, 'package.json') as Manifest;
 
-const lockProblems = lockDisagreements(manifests, readJson('package-lock.json').packages ?? {});
+const lockProblems = lockDisagreements(manifests, (readJson('package-lock.json') as Lockfile).packages ?? {});
 if (lockProblems.length > 0) {
    failed = true;
    console.error(

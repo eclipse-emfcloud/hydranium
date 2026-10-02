@@ -29,7 +29,7 @@ const port = Number(process.env.PORT ?? 3002);
 // diagram renders unstyled and the page looks like a model defect. `.svg` earns
 // its own for the same reason one layer over: an icon served as a byte stream is
 // refused, and the tab falls back to the default globe with nothing said.
-const CONTENT_TYPES = {
+const CONTENT_TYPES: Partial<Record<string, string>> = {
    '.css': 'text/css; charset=utf-8',
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',

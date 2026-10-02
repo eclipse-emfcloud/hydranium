@@ -73,7 +73,7 @@ GLSP server init, and no peer declaration can prevent a nested copy. Add an
 This is the one head with three platform subpaths
 ([why](../../docs/concepts/head-module-maps.md#hydraniumglsp-server--graphical-head)). `.` and
 `./testing` are
-gated as browser-neutral in CI (`scripts/check-neutral-bundles.mjs`), which
+gated as browser-neutral in CI (`scripts/check-neutral-bundles.mts`), which
 depends on `.` naming only the bare `@eclipse-glsp/server` specifier: a slip back
 to a `/node` subpath in the portable tree fails that gate. `./browser` is
 browser-only rather than neutral — no portability is claimed for it. What the

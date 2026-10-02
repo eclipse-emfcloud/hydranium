@@ -67,7 +67,7 @@ and its generated AST already in place; `hydranium-cli init` scaffolds both.
 | `./testing/node`      | Test support that needs a real filesystem, a stream transport or a child process: scratch workspace, golden corpus, `makeLspHarness`, `startSpawnedServer`.                                                  | Node-only       |
 | `./testing/playwright`| Playwright fixtures for end-to-end profiling and server-log capture.                                                                                                                                        | Node-only       |
 
-The browser-neutral entries are gated in CI (`scripts/check-neutral-bundles.mjs`
+The browser-neutral entries are gated in CI (`scripts/check-neutral-bundles.mts`
 bundles them for the browser and fails on a `node:*` import, including a
 transitive one) — see [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
 Each subpath also has a `./lib/…` twin, so a consumer on

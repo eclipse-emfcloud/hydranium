@@ -399,11 +399,12 @@ surface or of any package tarball.
 
 ## Building
 
-Requires Node 22.13 or newer — the floor `engines.node` declares — and the npm
-version the root `packageManager` field names. Nothing installs that npm for
-you: npm does not act on the field, and `actions/setup-node` reads it as a
-caching hint. [`CONTRIBUTING.md`](./CONTRIBUTING.md#development-setup) has the
-one-line install, and why a fresh clone needs `npm install` twice.
+Requires Node 22.18 or newer — the floor the root `engines.node` declares,
+because the repository scripts are TypeScript that Node runs by stripping types
+— and the npm version the root `packageManager` field names. Nothing installs
+that npm for you: npm does not act on the field, and `actions/setup-node` reads
+it as a caching hint. [`CONTRIBUTING.md`](./CONTRIBUTING.md#development-setup)
+has the one-line install.
 
 ```bash
 npm ci

@@ -17,7 +17,7 @@
 // the test scaffolding in by default; adopters opt in by importing from
 // `@hydranium/protocol/testing`.
 //
-// Neutrality is gated (`scripts/check-neutral-bundles.mjs`), which is why the
+// Neutrality is gated (`scripts/check-neutral-bundles.mts`), which is why the
 // duplex transports are NOT here: a `PassThrough` pair is in their exported
 // type, so they cannot be made portable and live at `./testing/node` instead.
 // The same rule the package surface uses — the portable name is the short one.

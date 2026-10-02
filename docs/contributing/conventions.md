@@ -96,7 +96,7 @@ The failure is misleading rather than loud — it reads as a broken
 install in a package whose dependency is correctly declared, and it
 stays invisible until some consumer happens to compile under node10.
 
-`npm run check:exports` (`scripts/check-exports-aliases.mjs`) enforces
+`npm run check:exports` (`scripts/check-exports-aliases.mts`) enforces
 the pairing, including that the twins point at the *same* target — a
 twin aimed elsewhere resolves, so nothing errors and the two spellings
 of one subpath quietly deliver different modules.
@@ -211,7 +211,7 @@ lives behind a package's **`./node`** subpath and physically under
      because the esbuild probe sees an import but never a global. `src/node/`
      + `src/testing/` (+ `environment.ts` for globals) are exempt;
   -- the committed `check:neutral` esbuild probe
-     (`scripts/check-neutral-bundles.mjs`, in the root `check` script) bundles
+     (`scripts/check-neutral-bundles.mts`, in the root `check` script) bundles
      each neutral `.` for the browser and asserts zero `node:` errors —
      catching *transitive* pollution the per-file lint can't see;
   -- DOM globals are compile-banned by `lib: ["ES2022"]` (no DOM) in
@@ -1634,7 +1634,7 @@ verb the production launchers use (`startLanguageServer`, `startSocketServer`)
 rather than a `make` that would have to return a promise.
 
 `*/testing` is **browser-neutral and gated as such**
-(`scripts/check-neutral-bundles.mjs`), on the same rule the package surface
+(`scripts/check-neutral-bundles.mts`), on the same rule the package surface
 uses: the portable name is the short one. Scaffolding that needs a real
 filesystem or a Node stream transport ships from `*/testing/node`
 (`@hydranium/core/testing/node`, `@hydranium/protocol/testing/node`), so a

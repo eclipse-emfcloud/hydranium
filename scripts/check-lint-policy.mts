@@ -13,18 +13,48 @@
  * ast-grep or the phantom-dependency check. Each canary is planted at a real path, so a
  * scope glob that stops matching turns it red.
  */
-import { execFile } from 'node:child_process';
+import { type ChildProcess, type ExecFileException, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+type Tool = 'oxlint' | 'ast-grep' | 'deps';
+interface Case {
+   name: string;
+   dir: string;
+   source: string;
+   tool?: Tool;
+   rule?: string;
+   message?: string;
+   ext?: string;
+}
+interface Diagnostic {
+   code: string;
+   message: string;
+}
+type DiagnosticsFor = (file: string) => Diagnostic[];
+interface RunResult {
+   error: ExecFileException | null;
+   stdout: string;
+   stderr: string;
+}
+interface OxlintReport {
+   number_of_files: number;
+   diagnostics: { filename: string; code: string; message: string }[];
+}
+interface AstGrepMatch {
+   file: string;
+   ruleId: string;
+   message: string;
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const stamp = `__lint-policy-${process.pid}`;
-const nsImport = (name, module) => `import * as ${name} from '${module}'; void ${name};\n`;
+const nsImport = (name: string, module: string): string => `import * as ${name} from '${module}'; void ${name};\n`;
 const toast =
    "const owner = { messageService: { info(value: string | number) { return value; } } }; owner.messageService.info('Hello world');\n";
 const PHANTOM = 'phantom-dependency';
-const cases = [
+const cases: Case[] = [
    {
       name: 'unused disable directive',
       dir: 'packages/core/src',
@@ -150,9 +180,9 @@ const cases = [
    { name: 'neutral global', dir: 'packages/core/src', source: 'export const pid = process.pid;\n', rule: 'eslint(no-restricted-globals)' },
    { name: 'Node testing globals are exempt', dir: 'packages/core/src/testing/node', source: 'export const pid = process.pid;\n' }
 ];
-const files = [];
-const createdDirs = [];
-let child;
+const files: string[] = [];
+const createdDirs: string[] = [];
+let child: ChildProcess | undefined;
 function cleanup() {
    for (const file of files) {
       rmSync(join(root, file), { force: true });
@@ -166,7 +196,7 @@ function cleanup() {
       }
    }
 }
-const interrupt = signal => {
+const interrupt = (signal: NodeJS.Signals): never => {
    child?.kill(signal);
    process.exit(signal === 'SIGINT' ? 130 : 143);
 };
@@ -177,7 +207,7 @@ process.once('SIGINT', onSigint);
 process.once('SIGTERM', onSigterm);
 
 // An asynchronous child lets the signal handlers run while a tool is working.
-const run = (command, args) =>
+const run = (command: string, args: string[]): Promise<RunResult> =>
    new Promise(resolveRun => {
       child = execFile(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) =>
          resolveRun({ error, stdout, stderr })
@@ -185,7 +215,7 @@ const run = (command, args) =>
    });
 
 /** Diagnostics per planted file, as `{ code, message }`, from each enforcing tool. */
-async function oxlintDiagnostics() {
+async function oxlintDiagnostics(): Promise<DiagnosticsFor> {
    // Call the JS entry point through Node for Windows without a shell wrapper.
    const result = await run(process.execPath, [
       join(root, 'node_modules/oxlint/bin/oxlint'),
@@ -199,7 +229,7 @@ async function oxlintDiagnostics() {
    if (start < 0) {
       throw result.error ?? new Error(`Oxlint returned no diagnostic report: ${result.stdout}\n${result.stderr}`);
    }
-   const report = JSON.parse(result.stdout.slice(start));
+   const report = JSON.parse(result.stdout.slice(start)) as OxlintReport;
    if (report.number_of_files !== files.length) {
       throw new Error(`Oxlint checked ${report.number_of_files} files, expected ${files.length}.`);
    }
@@ -207,19 +237,19 @@ async function oxlintDiagnostics() {
       report.diagnostics.filter(item => item.filename.replaceAll('\\', '/') === file).map(({ code, message }) => ({ code, message }));
 }
 
-async function astGrepDiagnostics() {
+async function astGrepDiagnostics(): Promise<DiagnosticsFor> {
    const binary = join(root, 'node_modules/@ast-grep/cli', process.platform === 'win32' ? 'ast-grep.exe' : 'ast-grep');
    const result = await run(binary, ['scan', '--config', 'sgconfig.yml', '--json=compact', ...files]);
    if (!result.stdout?.startsWith('[')) {
       throw result.error ?? new Error(`ast-grep returned no JSON report: ${result.stdout}\n${result.stderr}`);
    }
-   const matches = JSON.parse(result.stdout);
+   const matches = JSON.parse(result.stdout) as AstGrepMatch[];
    return file =>
       matches.filter(item => item.file.replaceAll('\\', '/') === file).map(({ ruleId, message }) => ({ code: ruleId, message }));
 }
 
-async function phantomDiagnostics() {
-   const result = await run(process.execPath, [join(root, 'scripts/check-phantom-dependencies.mjs'), ...files]);
+async function phantomDiagnostics(): Promise<DiagnosticsFor> {
+   const result = await run(process.execPath, [join(root, 'scripts/check-phantom-dependencies.mts'), ...files]);
    const lines = `${result.stdout}\n${result.stderr}`.split('\n');
    if (!lines.some(line => line.startsWith('✓') || line.startsWith('✗'))) {
       throw result.error ?? new Error(`The phantom-dependency check printed no verdict: ${result.stdout}\n${result.stderr}`);
@@ -238,14 +268,18 @@ try {
       files.push(file);
       writeFileSync(join(root, file), test.source);
    }
-   const tools = { oxlint: await oxlintDiagnostics(), 'ast-grep': await astGrepDiagnostics(), deps: await phantomDiagnostics() };
-   const problems = [];
+   const tools: Record<Tool, DiagnosticsFor> = {
+      oxlint: await oxlintDiagnostics(),
+      'ast-grep': await astGrepDiagnostics(),
+      deps: await phantomDiagnostics()
+   };
+   const problems: string[] = [];
    for (const [index, test] of cases.entries()) {
       const diagnostics = tools[test.tool ?? 'oxlint'](files[index]);
       const found = test.rule
          ? diagnostics.some(item => item.code === test.rule)
          : test.message
-           ? diagnostics.some(item => item.message.includes(test.message))
+           ? diagnostics.some(item => item.message.includes(test.message!))
            : diagnostics.length === 0;
       if (!found) {
          problems.push(`${test.name}: expected ${test.rule ?? test.message ?? 'no diagnostics'}, got ${JSON.stringify(diagnostics)}`);
