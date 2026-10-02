@@ -4,19 +4,19 @@
   "private": true,
   "description": "Host-agnostic order-flow web client: the `.process` GLSP diagram definition (element type ids, model/view registrations, container module) plus the data head's transport port, the session over it and a document-scoped properties model, written to be mounted by the Theia, VS Code and browser shells.",
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "examples/order-flow/client"
   },
-  "license": "MIT",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "files": [
     "lib",
     "src",
     "style"
   ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
     "clean": "rimraf lib tsconfig.tsbuildinfo",

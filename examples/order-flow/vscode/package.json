@@ -8,12 +8,12 @@
     "Programming Languages"
   ],
   "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "examples/order-flow/vscode"
   },
-  "license": "MIT",
   "publisher": "eclipse-emfcloud",
   "main": "./out/extension.js",
   "scripts": {
@@ -26,6 +26,26 @@
     "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
     "watch": "tsc --watch --preserveWatchOutput",
     "watch:webview": "node esbuild.mjs --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/vscode-integration": "2.7.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@hydranium/example-order-flow-client": "0.0.0",
+    "@hydranium/example-order-flow-server": "0.0.0",
+    "@hydranium/example-order-flow-vscode-servers": "0.0.0",
+    "@hydranium/protocol": "^1.0.0-next",
+    "inversify": "^6.1.3",
+    "vscode-jsonrpc": "~9.0.1",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-messenger": "^0.4.5",
+    "vscode-messenger-common": "^0.4.5",
+    "vscode-messenger-webview": "^0.4.5"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.101.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.8.0"
   },
   "contributes": {
     "commands": [
@@ -126,30 +146,10 @@
   },
   "activationEvents": [
     "onLanguage:order-flow-domain",
-    "onLanguage:order-flow-process",
     "onLanguage:order-flow-layout",
+    "onLanguage:order-flow-process",
     "onStartupFinished"
   ],
-  "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/vscode-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
-    "@hydranium/example-order-flow-client": "0.0.0",
-    "@hydranium/example-order-flow-server": "0.0.0",
-    "@hydranium/example-order-flow-vscode-servers": "0.0.0",
-    "@hydranium/protocol": "^1.0.0-next",
-    "inversify": "^6.1.3",
-    "vscode-jsonrpc": "~9.0.1",
-    "vscode-languageclient": "^9.0.1",
-    "vscode-messenger": "^0.4.5",
-    "vscode-messenger-common": "^0.4.5",
-    "vscode-messenger-webview": "^0.4.5"
-  },
-  "devDependencies": {
-    "@types/vscode": "^1.101.0",
-    "rimraf": "^5.0.0",
-    "typescript": "^5.8.0"
-  },
   "engines": {
     "vscode": "^1.101.0"
   },

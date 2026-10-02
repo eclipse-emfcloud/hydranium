@@ -3,28 +3,38 @@
   "version": "1.0.0-next",
   "description": "Typed-RPC protocol head for the hydranium framework. Peer of @hydranium/core/lsp and @hydranium/glsp-server; built on @hydranium/core.",
   "keywords": [
+    "data-server",
     "hydranium",
     "langium",
     "language-server",
     "lsp",
-    "rpc",
-    "data-server"
+    "rpc"
   ],
   "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/data-server",
   "bugs": {
     "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "packages/data-server"
   },
-  "license": "MIT",
-  "author": {
-    "name": "Hydranium Team"
-  },
-  "sideEffects": false,
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
   "type": "module",
+  "sideEffects": false,
+  "main": "lib/index.js",
+  "browser": {
+    "./lib/default-diagnostics.js": "./lib/default-diagnostics.browser.js"
+  },
+  "types": "lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -55,16 +65,9 @@
       "default": "./lib/testing/index.js"
     }
   },
-  "main": "lib/index.js",
-  "browser": {
-    "./lib/default-diagnostics.js": "./lib/default-diagnostics.browser.js"
+  "publishConfig": {
+    "access": "public"
   },
-  "types": "lib/index.d.ts",
-  "files": [
-    "lib",
-    "src",
-    "!lib/**/*.tsbuildinfo"
-  ],
   "scripts": {
     "build": "tsc -b",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
@@ -92,9 +95,6 @@
   },
   "engines": {
     "node": ">=22.13"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "//browser": "Selects the diagnostics default per platform, the same mechanism @eclipse-glsp/server uses to swap its node build for its browser one. The Node module imports @hydranium/core/node; a browser bundler resolves the twin instead and therefore never follows that import, which is what keeps this package's `.` entry bundleable. Node ignores this field, so a Node host keeps the real implementation with no configuration. `check:neutral` is the proof it still applies — it bundles `.` for the browser and would fail on node:fs the moment the mapping stops matching.",
   "//peerDependencies": "`vscode-jsonrpc` is EXACT rather than a range, because it is one link of an atomic chain with no independently movable link: `vscode-languageserver-protocol` depends on it at exactly 9.0.1, so any other value an adopter supplies is a SECOND physical copy rather than an upgrade. This wire stack breaks on copy identity rather than on structure — `ParameterStructures.auto` is a singleton compared by `===` in connection.js, so a request type built by one copy and sent over a connection owned by the other throws `Unknown parameter structure auto`. A caret or union range was rejected because npm then resolves a `vscode-jsonrpc@8.2.0` tree SILENTLY, with no diagnostic at all, and the failure surfaces only later at server init. Exact does not fail the install either — npm downgrades an unsatisfiable peer to a warning — but it is a NAMED ERESOLVE warning printing the required version beside the found one, and a hard error for anyone installing with `--strict-peer-deps`. It does NOT prevent a NESTED copy — `@eclipse-glsp/*` carries its own exact `vscode-jsonrpc@8.2.0` dependency and root `overrides` do not ship — so a consumer of the GLSP head must pin the chain in its own manifest, and docs/adopting/requirements.md carries the block to paste.",

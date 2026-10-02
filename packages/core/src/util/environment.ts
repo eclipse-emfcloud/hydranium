@@ -44,7 +44,15 @@ export function isCaseInsensitiveFileSystem(): boolean {
 
 /** Node `process` lifecycle / error / signal events accepted by {@link onProcessEvent}. */
 export type ProcessEvent =
-   'exit' | 'beforeExit' | 'uncaughtException' | 'unhandledRejection' | 'rejectionHandled' | 'warning' | 'SIGINT' | 'SIGTERM' | 'SIGHUP';
+   | 'exit'
+   | 'beforeExit'
+   | 'uncaughtException'
+   | 'unhandledRejection'
+   | 'rejectionHandled'
+   | 'warning'
+   | 'SIGINT'
+   | 'SIGTERM'
+   | 'SIGHUP';
 
 /**
  * Register a process lifecycle handler (`'exit'`, `'unhandledRejection'`, …) if

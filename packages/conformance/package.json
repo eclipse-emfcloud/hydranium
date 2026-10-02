@@ -3,28 +3,35 @@
   "version": "1.0.0-next",
   "description": "Protocol conformance kit (TCK) for hydranium adopters. Per-head slices (/data, /lsp, /glsp) of fixture-parameterized, protocol-only smoke checks an adopter runs against its own server.",
   "keywords": [
+    "conformance",
     "hydranium",
     "langium",
     "language-server",
     "lsp",
-    "testing",
-    "conformance"
+    "testing"
   ],
   "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/conformance",
   "bugs": {
     "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-emfcloud/hydranium.git",
     "directory": "packages/conformance"
   },
-  "license": "MIT",
-  "author": {
-    "name": "Hydranium Team"
-  },
-  "sideEffects": false,
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
   "type": "module",
+  "sideEffects": false,
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -71,13 +78,9 @@
       "default": "./lib/vitest/index.js"
     }
   },
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
-  "files": [
-    "lib",
-    "src",
-    "!lib/**/*.tsbuildinfo"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
@@ -112,9 +115,6 @@
   },
   "engines": {
     "node": ">=22.13"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "//prepack": "The publish guard, and it deliberately is NOT a `prepare`: npm runs a workspace `prepare` BEFORE the root `postinstall` that applies patches/vscode-jsonrpc+9.0.1.patch, so building there fails on a cold clone and npm rolls the entire install back. `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. It FAILS rather than rebuilds, because the rebuild is exactly the part that ordering defeats. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
 }
