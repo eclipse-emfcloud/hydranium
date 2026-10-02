@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
-import { type AstNode, DocumentState } from '@hydranium/langium';
+import { type AstNode, DocumentState, URI } from '@hydranium/langium';
 import { AstDocument, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
@@ -20,7 +20,6 @@ import { ModelReadyTimeoutError } from '../src/state/model-ready-timeout-error.j
 import { ReconcilingConflictResolver } from '@hydranium/protocol';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
-import { URI } from '@hydranium/langium';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';

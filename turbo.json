@@ -8,7 +8,7 @@
   "globalDependencies": [
     "tsconfig.base.json",
     "tsconfig.json",
-    "eslint.config.js",
+    "oxlint.config.cjs",
     "package.json",
     "package-lock.json",
     "vitest.shared.ts"
@@ -59,7 +59,7 @@
     },
     "lint": {
       "dependsOn": ["build"],
-      "inputs": ["src/**/*", "test/**/*", "eslint.config.js"]
+      "inputs": ["src/**/*", "test/**/*", "oxlint.config.cjs"]
     },
     "clean": {
       "cache": false

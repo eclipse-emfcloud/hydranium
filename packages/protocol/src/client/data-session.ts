@@ -61,6 +61,7 @@ export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Par
  */
 export type DataSessionOpenArgs<
    TTransfer extends TransferElement,
+   // oxlint-disable-next-line no-unused-vars -- TServer validates its own diagnostic constraint; Oxlint does not count that use.
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = Pick<OpenModelArgs, 'uri' | 'options'>;
 

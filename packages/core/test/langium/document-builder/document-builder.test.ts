@@ -16,9 +16,9 @@ import {
    type FileSystemNode,
    type FileSystemProvider,
    type LangiumDocument,
-   OperationCancelled
+   OperationCancelled,
+   URI
 } from '@hydranium/langium';
-import { URI } from '@hydranium/langium';
 import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';

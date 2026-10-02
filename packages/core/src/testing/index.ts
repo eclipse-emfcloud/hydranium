@@ -26,6 +26,7 @@ export * from './document-uri-policy-conformance.js';
 export * from './fake-description.js';
 export * from './fake-document.js';
 export * from './fake-reflection.js';
+// oxlint-disable-next-line import/export -- misreads export * from an npm package: https://github.com/oxc-project/oxc/pull/26872
 export * from './langium-test-helpers.js';
 export * from './make-noop-language-services.js';
 export * from './make-noop-shared-services.js';

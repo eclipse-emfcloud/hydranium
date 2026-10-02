@@ -53,7 +53,7 @@
   "scripts": {
     "build": "tsc -b && node -e \"require('node:fs').chmodSync('lib/cli.js',0o755)\"",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
-    "lint": "eslint src test --max-warnings 0",
+    "lint": "oxlint --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0",
     "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",

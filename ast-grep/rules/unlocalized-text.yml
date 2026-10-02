@@ -1,0 +1,73 @@
+# A literal reaching a toast or a command label is a string no adopter can translate.
+# Each qualifier fixes a measured defect: a string counts only with three consecutive
+# letters, or `{ timeout: 5000 }` is reported; text inside `….localize(…)` is exempt, or
+# the rule reports the code it asks for; a literal inside a template is not reported a
+# second time. Only a `….messageService.…(…)` receiver is seen, so a destructured or local
+# `messageService` escapes. `src/node` is exempt because a Theia backend has no locale.
+id: unlocalized-message-service-text
+language: typescript
+severity: error
+message: User-facing text must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).
+files:
+  - packages/client-theia/src/**/*.ts
+  - packages/data-client-theia/src/**/*.ts
+  - packages/glsp-client-theia/src/**/*.ts
+ignores:
+  - packages/*/src/node/**
+rule:
+  any:
+    - kind: string
+      has: { kind: string_fragment, regex: '[A-Za-z]{3}' }
+    - kind: template_string
+  inside:
+    stopBy: end
+    kind: call_expression
+    has:
+      field: function
+      kind: member_expression
+      has:
+        field: object
+        kind: member_expression
+        has: { field: property, regex: ^messageService$ }
+  not:
+    any:
+      - inside:
+          stopBy: end
+          kind: call_expression
+          has:
+            field: function
+            kind: member_expression
+            has: { field: property, regex: ^localize$ }
+      - inside:
+          stopBy: end
+          kind: template_string
+---
+# Matches any object literal with a `label` or `category` property, not only those passed
+# to `registerCommand`.
+id: unlocalized-command-label
+language: typescript
+severity: error
+message: Command labels must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).
+files:
+  - packages/client-theia/src/**/*.ts
+  - packages/data-client-theia/src/**/*.ts
+  - packages/glsp-client-theia/src/**/*.ts
+ignores:
+  - packages/*/src/node/**
+rule:
+  any:
+    - kind: string
+      has: { kind: string_fragment, regex: '[A-Za-z]{3}' }
+    - kind: template_string
+  inside:
+    kind: pair
+    field: value
+    has: { field: key, kind: property_identifier, regex: ^(label|category)$ }
+  not:
+    inside:
+      stopBy: end
+      kind: call_expression
+      has:
+        field: function
+        kind: member_expression
+        has: { field: property, regex: ^localize$ }

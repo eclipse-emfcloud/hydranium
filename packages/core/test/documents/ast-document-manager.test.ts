@@ -10,8 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { type CanonicalUri } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
-import { type AstNode, DocumentState } from '@hydranium/langium';
-import { URI, UriUtils } from '@hydranium/langium';
+import { type AstNode, DocumentState, URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';

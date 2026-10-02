@@ -30,7 +30,7 @@
     "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm --prefix examples/bookstore/server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
-    "lint": "eslint src test --max-warnings 0",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",

@@ -16,7 +16,7 @@
     "build:all": "turbo run build --filter=@hydranium/example-order-flow-theia-app...",
     "clean": "theia clean && rimraf src-gen plugins tsconfig.tsbuildinfo test-results playwright-report",
     "link:plugin": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync('plugins',{recursive:true});const link=path.resolve('plugins/order-flow-vscode-servers');fs.rmSync(link,{force:true,recursive:true});fs.symlinkSync(path.resolve('../vscode-servers'),link,'junction')\"",
-    "lint": "eslint test --max-warnings 0",
+    "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs test --max-warnings 0",
     "rebuild": "theia rebuild:browser --cacheRoot ../../..",
     "start": "node scripts/start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --project chromium && cross-env HYDRANIUM_PLAYWRIGHT_TIER=reload playwright test --tsconfig tsconfig.e2e.json --grep-invert @restart --project chromium-reload",

@@ -23,4 +23,5 @@
  * contracts stays Langium upstream, so a rename there surfaces here rather than
  * being absorbed by a hand-maintained list.
  */
+// oxlint-disable-next-line import/export -- misreads export * from an npm package: https://github.com/oxc-project/oxc/pull/26872
 export * from '@hydranium/langium/test';

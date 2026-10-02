@@ -22,7 +22,7 @@
     "bundle:webview": "node esbuild.mjs",
     "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
     "copy:grammar": "node -e \"const fs=require('fs');fs.mkdirSync('syntaxes',{recursive:true});for(const g of ['order-flow-domain','order-flow-process','order-flow-layout'])fs.copyFileSync('../server/syntaxes/'+g+'.tmLanguage.json','syntaxes/'+g+'.tmLanguage.json')\"",
-    "lint": "eslint src --max-warnings 0",
+    "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
     "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
     "watch": "tsc --watch --preserveWatchOutput",
     "watch:webview": "node esbuild.mjs --watch"

@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
-    "lint": "eslint src test --max-warnings 0",
+    "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "watch": "tsc --watch --preserveWatchOutput"

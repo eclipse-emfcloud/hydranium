@@ -13,7 +13,7 @@
  *
  * Every other `check:` script asserts something about content. This one asserts
  * that the other tools still REACH the packages they claim to cover, which is a
- * different failure and a silent one: an `eslint` `files` glob that matches
+ * different failure and a silent one: an `oxlint` `files` glob that matches
  * nothing leaves its rules UNSET rather than passing, and `--max-warnings 0`
  * cannot tell unset from clean. A `vitest` `projects` glob that matches nothing
  * simply contributes no suites. Neither is an error anywhere.
@@ -29,19 +29,12 @@
  * and the publish flow already agree on — so a package cannot be covered here
  * and invisible there, or the reverse.
  *
- * The tools are INTERROGATED wherever they can answer, never re-implemented:
- * eslint through `calculateConfigForFile`, vitest through the config that vite's
- * own loader returns, and every file-matching question through `git ls-files`. A glob matcher
- * of our own would be a second implementation to drift from the real one — and
- * where one is unavoidable (the ignore files, which are matched by git and
- * prettier separately) it is deliberately CONSERVATIVE, asserting only what
- * cannot be intentional.
+ * Oxlint's scopes are checked with the actual executable by `check:lint-policy`.
+ * Vitest is inspected through Vite's config loader; tracked-file matching uses
+ * `git ls-files`. Ignore-file checks remain conservative because Git and the
+ * formatter apply those patterns separately.
  *
- * Seven claims, each one an enumeration that has to agree with another:
- * - eslint's `import/no-extraneous-dependencies` governs every package's `src`
- * - and every package's `test` tree, under the other option set, with a
- *   `packageDir` naming both the package and the repo root
- * - eslint's import resolver names every package's `tsconfig.json`
+ * Each claim is an enumeration that has to agree with another:
  * - the root `vitest` `projects` reaches every package's `vitest.config.ts`
  * - the root solution `tsconfig.json` references every framework package
  * - every `turbo.json` input glob matches a file, so nothing hashes empty
@@ -147,61 +140,13 @@ function listWorkspacePackages() {
 }
 
 /**
- * The phantom-dependency rule's options for a path, or `undefined` if unset.
- *
- * The probe path need not exist: flat config resolves `files` globs against the
- * path, not against the filesystem. That is deliberate — a package whose `src`
- * happens to be empty is still supposed to be governed. A path matched by the
- * top-level `ignores` has NO config at all rather than an empty one, which
- * `calculateConfigForFile` signals by returning nothing.
- */
-async function extraneousDependencyOptions(eslint, probePath) {
-   const config = await eslint.calculateConfigForFile(probePath).catch(() => undefined);
-   const entry = config?.rules?.['import/no-extraneous-dependencies'];
-   return Array.isArray(entry) ? entry[1] : undefined;
-}
-
-async function hasExtraneousDependencyRule(eslint, probePath) {
-   return (await extraneousDependencyOptions(eslint, probePath)) !== undefined;
-}
-
-/** The import resolver's `project` globs, as eslint itself resolves them. */
-async function resolverProjectGlobs(eslint, probePath) {
-   const config = await eslint.calculateConfigForFile(probePath);
-   const project = config.settings?.['import/resolver']?.typescript?.project;
-   return Array.isArray(project) ? project : [];
-}
-
-/**
  * Self-tests, run BEFORE the real assertions and fatal on failure.
  *
  * Without these a broken probe reports universal coverage and the gate passes
- * over nothing, which is the exact shape it exists to catch. Two canaries, and
- * the DISCRIMINATION one is the load-bearing half: `src` and `test` are governed
- * by the same rule under deliberately different options (`devDependencies` false
- * for shipping code, true for tests), so a probe returning a constant fails here
- * instead of reporting everything covered. The negative canary is a package-root
- * config file, which neither block claims.
+ * over nothing, which is the exact shape it exists to catch.
  */
-async function selfTest(eslint, packages) {
+async function selfTest(packages) {
    const problems = [];
-
-   const srcOptions = await extraneousDependencyOptions(eslint, join(REPO_ROOT, 'packages/core/src/__glob-probe__.ts'));
-   const testOptions = await extraneousDependencyOptions(eslint, join(REPO_ROOT, 'packages/core/test/__glob-probe__.ts'));
-   if (srcOptions?.devDependencies !== false || testOptions?.devDependencies !== true) {
-      problems.push(
-         'self-test: the phantom-dependency rule no longer distinguishes `src` (devDependencies: false) from `test` ' +
-            '(devDependencies: true). The probe has stopped discriminating, so every "covered" verdict below is worthless.'
-      );
-   }
-   const uncoveredByDesign = join(REPO_ROOT, 'packages/core/vitest.config.ts');
-   if (await hasExtraneousDependencyRule(eslint, uncoveredByDesign)) {
-      problems.push('self-test: the phantom-dependency rule reports as configured for a package-root config file, which no block claims.');
-   }
-   const coveredByDesign = join(REPO_ROOT, 'packages/core/src/__glob-probe__.ts');
-   if (!(await hasExtraneousDependencyRule(eslint, coveredByDesign))) {
-      problems.push('self-test: the phantom-dependency rule reports as absent for `packages/core/src`, where it is configured.');
-   }
 
    // A ground truth of zero is how this gate would silently cover nothing.
    const examplePackages = packages.filter(({ dir }) => repoRelative(dir).startsWith('examples/'));
@@ -465,57 +410,11 @@ function checkNeutralityEntryCoverage() {
 }
 
 async function main() {
-   const { ESLint } = await import('eslint');
-   const eslint = new ESLint({ cwd: REPO_ROOT });
    const packages = listWorkspacePackages();
 
-   const problems = await selfTest(eslint, packages);
+   const problems = await selfTest(packages);
    if (problems.length > 0) {
       report(problems);
-   }
-
-   // eslint: the phantom-dependency rule must govern every package's `src`.
-   for (const { dir, name } of packages) {
-      if (!(await hasExtraneousDependencyRule(eslint, join(dir, 'src/__glob-probe__.ts')))) {
-         problems.push(
-            `${name} (${repoRelative(dir)}/src): 'import/no-extraneous-dependencies' is not configured. ` +
-               'Widen the `files` globs in eslint.config.js — an unmatched glob leaves the rule UNSET, which `--max-warnings 0` reads as clean.'
-         );
-      }
-   }
-
-   // eslint: and every package's TEST tree, under the other option set. Asserted
-   // separately from `src` because the two are different blocks with different
-   // options, so one covering a package says nothing about the other — and the
-   // test-tree half is the one with no backstop, since the Playwright tiers that
-   // depend on it are outside `check`.
-   for (const { dir, name } of packages) {
-      if (!existsSync(join(dir, 'test'))) {
-         continue;
-      }
-      const options = await extraneousDependencyOptions(eslint, join(dir, 'test/__glob-probe__.ts'));
-      if (options === undefined) {
-         problems.push(
-            `${name} (${repoRelative(dir)}/test): 'import/no-extraneous-dependencies' is not configured, so a test importing an undeclared package is reported by nothing.`
-         );
-      } else if (!Array.isArray(options.packageDir) || options.packageDir.length < 2) {
-         problems.push(
-            `${name} (${repoRelative(dir)}/test): the rule is configured without a two-entry \`packageDir\`. It must name the package AND the repo root, or every root devDependency a test uses reads as extraneous.`
-         );
-      }
-   }
-
-   // eslint: every package with a tsconfig must be named by the resolver.
-   const projectGlobs = await resolverProjectGlobs(eslint, join(REPO_ROOT, 'packages/core/src/__glob-probe__.ts'));
-   const resolvedProjects = new Set(
-      projectGlobs.flatMap(glob => expandWorkspaceEntry(glob.replace(/\/tsconfig\.json$/, ''))).map(repoRelative)
-   );
-   for (const { dir, name } of packages) {
-      if (existsSync(join(dir, 'tsconfig.json')) && !resolvedProjects.has(repoRelative(dir))) {
-         problems.push(
-            `${name} (${repoRelative(dir)}/tsconfig.json): not reached by the import resolver's \`project\` globs in eslint.config.js.`
-         );
-      }
    }
 
    // vitest: every package with a suite config must be a root project.
@@ -556,7 +455,7 @@ async function main() {
    }
    console.log(
       `✓ all ${packages.length} workspace packages are reached by the globs that claim to cover them ` +
-         '(eslint rules + resolver, vitest projects, root tsconfig references, turbo inputs, ignore patterns, README discovery, neutrality entries)'
+         '(vitest projects, root tsconfig references, turbo inputs, ignore patterns, README discovery, neutrality entries)'
    );
 }
 

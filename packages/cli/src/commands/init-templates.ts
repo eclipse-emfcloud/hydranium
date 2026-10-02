@@ -364,11 +364,21 @@ function binBlock(composition: InitComposition): string {
 function packageJson(composition: InitComposition): string {
    const { scope } = composition.packaging;
    const packageName = scope === undefined ? composition.projectId : `${scope}/${composition.projectId}`;
-   // Emitted only where a root eslint config says the repo lints. The absence is
+   // Emitted only where a root lint config says the repo lints. The absence is
    // the dangerous direction: a task runner runs a script only where one is
    // declared, so a package with no `lint` is SKIPPED rather than reported, and
    // that reads as a clean lint. A wrong invocation is one visible line to edit.
-   const lint = composition.packaging.workspace?.eslintConfig === undefined ? '' : '    "lint": "eslint src test --max-warnings 0",\n';
+   const workspace = composition.packaging.workspace;
+   const oxlintConfig =
+      workspace?.oxlintConfig === undefined
+         ? undefined
+         : `${'../'.repeat(workspace.targetPath.split('/').length)}${workspace.oxlintConfig}`;
+   const lint =
+      workspace?.oxlintConfig !== undefined
+         ? `    "lint": "oxlint --report-unused-disable-directives --format stylish --config ${oxlintConfig} src test --max-warnings 0",\n`
+         : workspace?.eslintConfig !== undefined
+           ? '    "lint": "eslint src test --max-warnings 0",\n'
+           : '';
    return project(PACKAGE_JSON, composition)
       .replace('__PACKAGE_NAME__', packageName)
       .replace('__BIN__', binBlock(composition))

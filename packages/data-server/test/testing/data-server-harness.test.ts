@@ -25,8 +25,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { TransferDocument } from '@hydranium/protocol';
-import { createRpcProxy, type Project, type TransferDiagnostic, type TransferElement } from '@hydranium/protocol';
+import { createRpcProxy, type Project, type TransferDiagnostic, TransferDocument, type TransferElement } from '@hydranium/protocol';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
    DATA_SERVER_PROTOCOL_METHODS,

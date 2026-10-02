@@ -28,9 +28,7 @@
  * that cannot be done through the chokepoint alone.
  */
 
-/* eslint-disable @typescript-eslint/no-restricted-imports */
 import { AstUtils as DirectAstUtils, URI as DirectURI, UriUtils as DirectUriUtils } from 'langium';
-/* eslint-enable @typescript-eslint/no-restricted-imports */
 import { describe, expect, it } from 'vitest';
 import { AstUtils, URI, UriUtils } from '../src/index.js';
 

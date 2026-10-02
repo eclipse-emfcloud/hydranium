@@ -39,4 +39,5 @@ import './augmentations/synthetic.js';
 // Side-effecting runtime augmentation of the `UriUtils` namespace.
 import './augmentations/uri-utils.js';
 
+// oxlint-disable-next-line import/export -- misreads export * from an npm package: https://github.com/oxc-project/oxc/pull/26872
 export * from 'langium';

@@ -1,0 +1,32 @@
+id: test-fixture-cast-ast-node-description
+valid:
+  - 'const extended = {} as AstNodeDescription & { extra: true };'
+  - 'const description = makeFakeDescription();'
+invalid:
+  - 'const description = {} as AstNodeDescription;'
+  - 'const description = value as AstNodeDescription<Node>;'
+---
+id: test-fixture-cast-ast-node
+valid:
+  - 'const stub = {} as AstNode;'
+  - 'const node = makeFakeAstNode();'
+invalid:
+  - 'const node = {} as unknown as AstNode;'
+---
+id: test-fixture-cast-logger
+valid:
+  - 'const logger = makeNoopLogger();'
+invalid:
+  - 'const logger = {} as Logger;'
+---
+id: test-fixture-cast-shared-services
+valid:
+  - 'const shared = makeNoopSharedServices();'
+invalid:
+  - 'const shared = {} as ServerSharedServicesMinimal;'
+---
+id: test-fixture-cast-glsp-logger
+valid:
+  - 'const glspLogger = makeNoopGlspLogger();'
+invalid:
+  - 'const glspLogger = {} as GlspLogger;'

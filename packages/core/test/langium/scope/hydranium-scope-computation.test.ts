@@ -15,9 +15,9 @@ import {
    type AstNodeLocator,
    type LangiumCoreServices,
    type LangiumDocument,
-   MultiMap
+   MultiMap,
+   URI
 } from '@hydranium/langium';
-import { URI } from '@hydranium/langium';
 import { Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import type { NameProvider } from '../../../src/langium/naming/name-provider.js';

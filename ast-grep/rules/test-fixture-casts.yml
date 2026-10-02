@@ -1,0 +1,82 @@
+# A type is listed here only once no test builds it by casting an object literal, so any
+# such cast is drift. An intersection cast (`x as T & { … }`) extends a real value and is
+# not matched. `AstNode` is banned in its double-cast form only: a bare `{} as AstNode`
+# stub that reads one field remains legitimate.
+id: test-fixture-cast-ast-node-description
+language: typescript
+severity: error
+message: Build AstNodeDescription fixtures with makeFakeDescription from @hydranium/core/testing instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+files:
+  - packages/**/test/**/*.ts
+rule:
+  kind: as_expression
+  has:
+    any:
+      - kind: type_identifier
+        regex: ^AstNodeDescription$
+      - kind: generic_type
+        has: { field: name, regex: ^AstNodeDescription$ }
+---
+id: test-fixture-cast-ast-node
+language: typescript
+severity: error
+message: Build AstNode fixtures with makeFakeAstNode from @hydranium/core/testing instead of a `… as unknown as AstNode` double cast (see docs/contributing/conventions.md “Test support”).
+files:
+  - packages/**/test/**/*.ts
+rule:
+  kind: as_expression
+  all:
+    - has:
+        any:
+          - kind: type_identifier
+            regex: ^AstNode$
+          - kind: generic_type
+            has: { field: name, regex: ^AstNode$ }
+    - has:
+        kind: as_expression
+        has: { kind: predefined_type, regex: ^unknown$ }
+---
+id: test-fixture-cast-logger
+language: typescript
+severity: error
+message: Build Logger fixtures with makeNoopLogger / makeCapturingLogger from @hydranium/core/testing (or spy a real logger with vi.spyOn) instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+files:
+  - packages/**/test/**/*.ts
+rule:
+  kind: as_expression
+  has:
+    any:
+      - kind: type_identifier
+        regex: ^Logger$
+      - kind: generic_type
+        has: { field: name, regex: ^Logger$ }
+---
+id: test-fixture-cast-shared-services
+language: typescript
+severity: error
+message: Build a shared-services tree with makeNoopSharedServices from @hydranium/core/testing (overrides are loosely typed for stubs) instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+files:
+  - packages/**/test/**/*.ts
+rule:
+  kind: as_expression
+  has:
+    any:
+      - kind: type_identifier
+        regex: ^ServerSharedServicesMinimal$
+      - kind: generic_type
+        has: { field: name, regex: ^ServerSharedServicesMinimal$ }
+---
+id: test-fixture-cast-glsp-logger
+language: typescript
+severity: error
+message: Build GLSP logger fixtures with makeNoopGlspLogger / makeCapturingGlspLogger from @hydranium/glsp-server/testing instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+files:
+  - packages/**/test/**/*.ts
+rule:
+  kind: as_expression
+  has:
+    any:
+      - kind: type_identifier
+        regex: ^GlspLogger$
+      - kind: generic_type
+        has: { field: name, regex: ^GlspLogger$ }
