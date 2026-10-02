@@ -26,6 +26,7 @@ import { Container } from '@theia/core/shared/inversify';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FramedSocketWriteBuffer } from '../../src/common/framed-socket-write-buffer';
 import { SessionAwareConnectionSource } from '../../src/browser/session-aware-connection-source';
+import { ACKNOWLEDGEMENT_EVENT, InboundMessageSequence } from '../../src/common/inbound-message-sequence';
 
 /**
  * Whether this Theia injects the write buffer the reconnect hardening replaces.
@@ -66,7 +67,9 @@ class FakeSocket {
    connected = false;
    id = 'fake-socket';
    readonly sent: Uint8Array[] = [];
+   readonly sequences: number[] = [];
    readonly emitted: string[] = [];
+   readonly acknowledgements: unknown[] = [];
    protected readonly listeners = new Map<string, Set<Listener>>();
 
    on(event: string, listener: Listener): this {
@@ -84,13 +87,17 @@ class FakeSocket {
       return this;
    }
 
-   emit(event: string): this {
+   emit(event: string, ...args: unknown[]): this {
       this.emitted.push(event);
+      if (event === ACKNOWLEDGEMENT_EVENT) {
+         this.acknowledgements.push(args[0]);
+      }
       return this;
    }
 
-   send(data: Uint8Array): this {
+   send(data: Uint8Array, sequence: number): this {
       this.sent.push(data);
+      this.sequences.push(sequence);
       return this;
    }
 
@@ -227,5 +234,126 @@ describe.skipIf(!injectsWriteBuffer())('SessionAwareConnectionSource', () => {
       write(5);
 
       expect(delivered()).toEqual([]);
+   });
+
+   describe('acknowledged delivery', () => {
+      /** The socket dies without the browser noticing, then reconnects and the session resumes. */
+      function reconnect(): void {
+         fake.connected = false;
+         fake.deliver('disconnect');
+         fake.connected = true;
+         fake.deliver('connect');
+         fake.deliver(ConnectionManagementMessages.RECONNECT, true);
+      }
+
+      function received(): number[] {
+         const values: number[] = [];
+         channel.onMessage(provider => void values.push(provider().readUint8()));
+         return values;
+      }
+
+      it('resends a message the server never acknowledged once the session resumes', () => {
+         // The defect this exists for: the socket accepted the write, so the browser counted it
+         // sent, while the server never received it.
+         initialConnect();
+         fake.deliver('message', Uint8Array.of(9), 1);
+         write(1);
+
+         reconnect();
+
+         expect(delivered()).toEqual([1, 1]);
+         expect(fake.sequences).toEqual([1, 1]);
+      });
+
+      it('resends nothing to a server that does not number its messages', () => {
+         // Such a server lacks the hardening, and would apply a resent message a second time.
+         initialConnect();
+         fake.deliver('message', Uint8Array.of(9));
+         write(1);
+
+         reconnect();
+
+         expect(delivered()).toEqual([1]);
+      });
+
+      it('resends nothing the server has acknowledged', () => {
+         initialConnect();
+         write(1);
+         write(2);
+         fake.deliver(ACKNOWLEDGEMENT_EVENT, 1);
+
+         reconnect();
+
+         expect(fake.sequences).toEqual([1, 2, 2]);
+      });
+
+      it('numbers from the start again when the server refuses the session', () => {
+         initialConnect();
+         write(1);
+         fake.connected = false;
+         fake.deliver('disconnect');
+         fake.connected = true;
+         fake.deliver('connect');
+         fake.deliver(ConnectionManagementMessages.RECONNECT, false);
+         fake.deliver(ConnectionManagementMessages.INITIAL_CONNECT);
+
+         write(2);
+
+         expect(delivered()).toEqual([1, 2]);
+         expect(fake.sequences).toEqual([1, 1]);
+      });
+
+      it('delivers a message the server resent only once', () => {
+         initialConnect();
+         const values = received();
+
+         fake.deliver('message', Uint8Array.of(4), 1);
+         fake.deliver('message', Uint8Array.of(4), 1);
+         fake.deliver('message', Uint8Array.of(5), 2);
+
+         expect(values).toEqual([4, 5]);
+      });
+
+      it('delivers every message from a server that does not number them', () => {
+         initialConnect();
+         const values = received();
+
+         fake.deliver('message', Uint8Array.of(4));
+         fake.deliver('message', Uint8Array.of(4));
+
+         expect(values).toEqual([4, 4]);
+      });
+
+      it('acknowledges what it received', () => {
+         vi.useFakeTimers();
+         try {
+            initialConnect();
+            fake.deliver('message', Uint8Array.of(4), 1);
+            fake.deliver('message', Uint8Array.of(5), 2);
+            fake.deliver('message', Uint8Array.of(6), 3);
+
+            vi.advanceTimersByTime(InboundMessageSequence.ACKNOWLEDGE_DELAY_MS);
+
+            expect(fake.acknowledgements).toEqual([1, 3]);
+         } finally {
+            vi.useRealTimers();
+         }
+      });
+
+      it('starts receiving afresh in a new session', () => {
+         initialConnect();
+         fake.deliver('message', Uint8Array.of(4), 1);
+         fake.connected = false;
+         fake.deliver('disconnect');
+         fake.connected = true;
+         fake.deliver('connect');
+         fake.deliver(ConnectionManagementMessages.RECONNECT, false);
+         fake.deliver(ConnectionManagementMessages.INITIAL_CONNECT);
+         const values = received();
+
+         fake.deliver('message', Uint8Array.of(6), 1);
+
+         expect(values).toEqual([6]);
+      });
    });
 });

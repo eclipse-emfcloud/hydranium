@@ -7,6 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
+import { AbstractChannel } from '@theia/core/lib/common/message-rpc/channel';
+import { type WriteBuffer } from '@theia/core/lib/common/message-rpc/message-buffer';
+import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
 import { BackendApplicationConfigProvider } from '@theia/core/lib/node/backend-application-config-provider';
 import { SocketWriteBuffer } from '@theia/core/lib/common/messaging/socket-write-buffer';
 import { WebsocketFrontendConnectionService } from '@theia/core/lib/node/messaging/websocket-frontend-connection-service';
@@ -15,9 +19,11 @@ import { type ConnectionResilienceOptions } from '../common/connection-resilienc
 import {
    CONNECTION_LOG_PREFIX as PREFIX,
    createFramedSocketWriteBuffer,
+   FramedSocketWriteBuffer,
    supportsConnectionResilience,
    warnConnectionResilienceUnavailable
 } from '../common/framed-socket-write-buffer';
+import { ACKNOWLEDGEMENT_EVENT, InboundMessageSequence } from '../common/inbound-message-sequence';
 
 /**
  * Socket Theia hands the disconnect handler, read off the base signature rather
@@ -37,6 +43,78 @@ export type FrontendSocket = Parameters<WebsocketFrontendConnectionService['hand
  * even be using.
  */
 export type FrontendChannel = Parameters<WebsocketFrontendConnectionService['handleSocketDisconnect']>[1];
+
+/**
+ * The server end of one frontend's session, carried across the sockets the
+ * frontend reconnects on.
+ *
+ * Theia's own channel sends straight into any socket that reports itself
+ * connected. A socket whose far end died unnoticed still does, so whatever is
+ * sent until the server notices is lost. This one numbers and keeps every
+ * message through {@link FramedSocketWriteBuffer}, resends what is still
+ * unacknowledged when the frontend reconnects, and drops what it has received
+ * twice. Otherwise it behaves as Theia's.
+ */
+export class AcknowledgedSocketChannel extends AbstractChannel {
+   protected socket: FrontendSocket | undefined;
+   protected socketDisposables = new DisposableCollection();
+   protected readonly inbound = new InboundMessageSequence(sequence => this.socket?.emit(ACKNOWLEDGEMENT_EVENT, sequence));
+
+   constructor(protected readonly socketBuffer: FramedSocketWriteBuffer) {
+      super();
+      this.toDispose.push(this.inbound);
+      this.toDispose.push(Disposable.create(() => this.socketDisposables.dispose()));
+   }
+
+   /** Flushes in the same step that attaches the listeners, so nothing new can overtake the resend. */
+   connect(socket: FrontendSocket): void {
+      this.socketDisposables.dispose();
+      this.socketDisposables = new DisposableCollection();
+      this.socket = socket;
+      const errorHandler = (error: unknown): void => this.onErrorEmitter.fire(error);
+      const dataListener = (data: ArrayBuffer | Uint8Array, sequence?: unknown): void => {
+         if (typeof sequence === 'number') {
+            this.socketBuffer.markPeerDeduplicates();
+         }
+         if (!this.inbound.accept(sequence, data.byteLength)) {
+            return;
+         }
+         const buffer = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+         this.onMessageEmitter.fire(() => new Uint8ArrayReadBuffer(buffer));
+      };
+      const acknowledgementListener = (sequence: unknown): void => {
+         if (typeof sequence === 'number') {
+            this.socketBuffer.acknowledge(sequence);
+         }
+      };
+      socket.on('error', errorHandler);
+      socket.on('message', dataListener);
+      socket.on(ACKNOWLEDGEMENT_EVENT, acknowledgementListener);
+      this.socketDisposables.push(
+         Disposable.create(() => {
+            socket.off('error', errorHandler);
+            socket.off('message', dataListener);
+            socket.off(ACKNOWLEDGEMENT_EVENT, acknowledgementListener);
+         })
+      );
+      this.socketBuffer.flush(socket);
+   }
+
+   disconnect(): void {
+      this.socketDisposables.dispose();
+      this.socket = undefined;
+   }
+
+   drainBuffer(): void {
+      this.socketBuffer.drain();
+   }
+
+   getWriteBuffer(): WriteBuffer {
+      const writeBuffer = new Uint8ArrayWriteBuffer();
+      writeBuffer.onCommit(data => this.socketBuffer.sendOrQueue(this.socket?.connected ? this.socket : undefined, data));
+      return writeBuffer;
+   }
+}
 
 /**
  * Ignores a disconnect from a socket that no longer belongs to the frontend.
@@ -106,6 +184,33 @@ export class SessionBoundFrontendConnectionService extends WebsocketFrontendConn
       });
    }
 
+   /**
+    * Theia's body, building an {@link AcknowledgedSocketChannel} in place of its own channel.
+    *
+    * Handed over through a cast, because Theia types the slot as its own channel class. The cast
+    * also hides from the compiler what Theia calls on the channel, so a release that calls a member
+    * this one lacks fails at runtime: re-diff with the disconnect handler.
+    */
+   protected override createConnection(socket: FrontendSocket, frontEndId: string): FrontendChannel {
+      const channel = new AcknowledgedSocketChannel(this.createWriteBuffer()) as unknown as FrontendChannel;
+      channel.connect(socket);
+      this.connectionsByFrontend.set(frontEndId, channel);
+      return channel;
+   }
+
+   /**
+    * One buffer per session, from the container Theia resolves its own channel's buffer from.
+    * Reached through a structural view because Theia 1.70 does not declare `container`.
+    */
+   protected createWriteBuffer(): FramedSocketWriteBuffer {
+      const container = (this as unknown as { readonly container: interfaces.Container }).container;
+      const buffer = container.get<SocketWriteBuffer>(SocketWriteBuffer);
+      if (!(buffer instanceof FramedSocketWriteBuffer)) {
+         throw new Error('SessionBoundFrontendConnectionService requires FramedSocketWriteBuffer to be bound');
+      }
+      return buffer;
+   }
+
    protected override closeConnection(frontEndId: string, reason: string): void {
       console.info(`${PREFIX} closing frontend ${frontEndId}: ${reason}`);
       this.bindings.delete(frontEndId);
@@ -150,6 +255,6 @@ export function bindConnectionResilience(
    }
    bind(SessionBoundFrontendConnectionService).toSelf().inSingletonScope();
    rebind(WebsocketFrontendConnectionService).toService(SessionBoundFrontendConnectionService);
-   rebind(SocketWriteBuffer).toDynamicValue(() => createFramedSocketWriteBuffer(options.bufferBytes));
+   rebind(SocketWriteBuffer).toDynamicValue(() => createFramedSocketWriteBuffer(options));
    return true;
 }

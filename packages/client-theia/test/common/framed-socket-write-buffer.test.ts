@@ -18,9 +18,17 @@ import {
 } from '../../src/common/framed-socket-write-buffer';
 
 /** Records what reached the socket. One entry is one delivery, which is what a reader decodes. */
-function recordingSocket(): { sent: Uint8Array[]; send(data: Uint8Array): void } {
+function recordingSocket(): { sent: Uint8Array[]; sequences: number[]; send(data: Uint8Array, sequence: number): void } {
    const sent: Uint8Array[] = [];
-   return { sent, send: (data: Uint8Array) => void sent.push(data) };
+   const sequences: number[] = [];
+   return {
+      sent,
+      sequences,
+      send: (data: Uint8Array, sequence: number) => {
+         sent.push(data);
+         sequences.push(sequence);
+      }
+   };
 }
 
 const message = (...bytes: number[]): Uint8Array => Uint8Array.from(bytes);
@@ -104,7 +112,7 @@ describe('FramedSocketWriteBuffer', () => {
    });
 
    it('honours a configured limit', () => {
-      const buffer = createFramedSocketWriteBuffer(64);
+      const buffer = createFramedSocketWriteBuffer({ bufferBytes: 64 });
 
       buffer.buffer(new Uint8Array(64));
 
@@ -112,12 +120,12 @@ describe('FramedSocketWriteBuffer', () => {
    });
 
    it('falls back to the default when no limit is configured', () => {
-      expect(createFramedSocketWriteBuffer(undefined).maxBytes).toBe(FramedSocketWriteBuffer.DEFAULT_MAX_BYTES);
-      expect(createFramedSocketWriteBuffer(0).maxBytes).toBe(FramedSocketWriteBuffer.DEFAULT_MAX_BYTES);
+      expect(createFramedSocketWriteBuffer().maxBytes).toBe(FramedSocketWriteBuffer.DEFAULT_MAX_BYTES);
+      expect(createFramedSocketWriteBuffer({ bufferBytes: 0 }).maxBytes).toBe(FramedSocketWriteBuffer.DEFAULT_MAX_BYTES);
    });
 
    it('announces an overflow once, with what it was holding', () => {
-      const buffer = createFramedSocketWriteBuffer(64);
+      const buffer = createFramedSocketWriteBuffer({ bufferBytes: 64 });
       const reported: ConnectionBufferOverflow[] = [];
       buffer.onOverflow(overflow => void reported.push(overflow));
 
@@ -249,6 +257,191 @@ describe('FramedSocketWriteBuffer', () => {
          buffer.flush(reentrant);
 
          expect(sent).toEqual([1, 2, 9]);
+      });
+   });
+
+   describe('acknowledged delivery', () => {
+      it('numbers messages in the order they go out, backlog included', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const socket = recordingSocket();
+
+         buffer.sendOrQueue(socket, message(1));
+         buffer.sendOrQueue(undefined, message(2));
+         buffer.acknowledge(1);
+         buffer.flush(socket);
+         buffer.sendOrQueue(socket, message(3));
+
+         expect(socket.sequences).toEqual([1, 2, 3]);
+      });
+
+      it('resends a message sent into a socket that died unnoticed, under its own number', () => {
+         // The defect this exists for: the dead socket accepted the write, so nothing else would
+         // ever send it again.
+         const buffer = new FramedSocketWriteBuffer();
+         const dead = recordingSocket();
+         const replacement = recordingSocket();
+         buffer.markPeerDeduplicates();
+
+         buffer.sendOrQueue(dead, message(1));
+         buffer.flush(replacement);
+
+         expect(replacement.sent.map(entry => entry[0])).toEqual([1]);
+         expect(replacement.sequences).toEqual([1]);
+      });
+
+      it('resends nothing to a peer that has not shown it drops duplicates', () => {
+         // A peer without the hardening would apply the resent message a second time.
+         const buffer = new FramedSocketWriteBuffer();
+         const dead = recordingSocket();
+         const replacement = recordingSocket();
+
+         buffer.sendOrQueue(dead, message(1));
+         buffer.flush(replacement);
+         buffer.markPeerDeduplicates();
+         buffer.flush(replacement);
+
+         expect(replacement.sent).toHaveLength(0);
+      });
+
+      it('takes an acknowledgement as the peer showing it drops duplicates', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const dead = recordingSocket();
+         const replacement = recordingSocket();
+
+         buffer.sendOrQueue(dead, message(1));
+         buffer.sendOrQueue(dead, message(2));
+         buffer.acknowledge(1);
+         buffer.flush(replacement);
+
+         expect(replacement.sequences).toEqual([2]);
+      });
+
+      it('needs the peer to show it again after a drain, which ends the session', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const replacement = recordingSocket();
+         buffer.markPeerDeduplicates();
+
+         buffer.drain();
+         buffer.sendOrQueue(recordingSocket(), message(1));
+         buffer.flush(replacement);
+
+         expect(replacement.sent).toHaveLength(0);
+      });
+
+      it('resends what is unacknowledged ahead of the backlog', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const dead = recordingSocket();
+         const replacement = recordingSocket();
+         buffer.markPeerDeduplicates();
+
+         buffer.sendOrQueue(dead, message(1));
+         buffer.sendOrQueue(undefined, message(2));
+         buffer.flush(replacement);
+
+         expect(replacement.sent.map(entry => entry[0])).toEqual([1, 2]);
+         expect(replacement.sequences).toEqual([1, 2]);
+      });
+
+      it('resends nothing the peer has acknowledged', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const dead = recordingSocket();
+         const replacement = recordingSocket();
+
+         buffer.sendOrQueue(dead, message(1));
+         buffer.sendOrQueue(dead, message(2));
+         buffer.sendOrQueue(dead, message(3));
+         buffer.acknowledge(2);
+         buffer.flush(replacement);
+
+         expect(replacement.sequences).toEqual([3]);
+      });
+
+      it('keeps resending until acknowledged, across any number of reconnects', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const first = recordingSocket();
+         const second = recordingSocket();
+         buffer.markPeerDeduplicates();
+
+         buffer.sendOrQueue(recordingSocket(), message(1));
+         buffer.flush(first);
+         buffer.flush(second);
+
+         expect(second.sequences).toEqual([1]);
+      });
+
+      it('numbers from the start again after a drain, which ends the session', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         const socket = recordingSocket();
+
+         buffer.sendOrQueue(recordingSocket(), message(1));
+         buffer.drain();
+         buffer.flush(socket);
+         buffer.sendOrQueue(socket, message(2));
+
+         expect(socket.sequences).toEqual([1]);
+         expect(Array.from(socket.sent[0])).toEqual([2]);
+      });
+
+      it('does not count kept copies against the disconnected limit', () => {
+         // A large transfer on a healthy connection must leave an outage its full room.
+         const buffer = createFramedSocketWriteBuffer({ bufferBytes: 64 });
+         const socket = recordingSocket();
+
+         buffer.sendOrQueue(socket, new Uint8Array(64));
+
+         expect(() => buffer.buffer(new Uint8Array(64))).not.toThrow();
+      });
+
+      it('discards its copies once the peer leaves too much unacknowledged, and warns once', () => {
+         // A peer without the hardening never acknowledges, so the copies would otherwise grow for
+         // the whole session.
+         const buffer = new FramedSocketWriteBuffer();
+         buffer.maxUnacknowledgedBytes = 4;
+         buffer.markPeerDeduplicates();
+         const socket = recordingSocket();
+         const replacement = recordingSocket();
+
+         for (let index = 0; index < 10; index++) {
+            buffer.sendOrQueue(socket, message(index, index));
+         }
+         buffer.flush(replacement);
+
+         expect(socket.sent).toHaveLength(10);
+         expect(replacement.sent.length).toBeLessThanOrEqual(2);
+         expect(vi.mocked(console.warn)).toHaveBeenCalledTimes(1);
+         expect(vi.mocked(console.warn).mock.calls[0][0]).toMatch(/has not acknowledged/);
+      });
+
+      it('says how many sent messages a drain discards unacknowledged', () => {
+         // They are lost with the session, and nothing else reports them.
+         const buffer = new FramedSocketWriteBuffer();
+         buffer.sendOrQueue(recordingSocket(), message(1, 2));
+
+         buffer.drain();
+
+         expect(vi.mocked(console.warn).mock.calls.at(-1)?.[0]).toMatch(/1 sent but unacknowledged, 2 bytes/);
+      });
+
+      it('honours a configured limit on kept copies', () => {
+         expect(createFramedSocketWriteBuffer({ unacknowledgedBytes: 8 }).maxUnacknowledgedBytes).toBe(8);
+         expect(createFramedSocketWriteBuffer().maxUnacknowledgedBytes).toBe(FramedSocketWriteBuffer.DEFAULT_MAX_UNACKNOWLEDGED_BYTES);
+      });
+
+      it('does not keep a message whose send threw, so it is not sent under two numbers', () => {
+         const buffer = new FramedSocketWriteBuffer();
+         buffer.buffer(message(1));
+         expect(() =>
+            buffer.flush({
+               send: () => {
+                  throw new Error('transport gone');
+               }
+            })
+         ).toThrow();
+
+         const socket = recordingSocket();
+         buffer.flush(socket);
+
+         expect(socket.sent.map(entry => entry[0])).toEqual([1]);
       });
    });
 
