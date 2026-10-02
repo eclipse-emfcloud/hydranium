@@ -221,7 +221,9 @@ function namedDeclarationsOfType(
    for (const part of constituentsOf(type)) {
       found.push(...namedDeclarationsOfType(part, checker, seen, depth + 1));
    }
-   for (const argument of checker.getTypeArguments?.(type as ts.TypeReference) ?? type.aliasTypeArguments ?? []) {
+   // Both lists: `getTypeArguments` answers `[]`, not undefined, for an alias
+   // instantiation such as `Box<Hidden>`, whose arguments only the alias carries.
+   for (const argument of [...checker.getTypeArguments(type as ts.TypeReference), ...(type.aliasTypeArguments ?? [])]) {
       found.push(...namedDeclarationsOfType(argument, checker, seen, depth + 1));
    }
    return found;
@@ -425,9 +427,14 @@ function programsFor(packages: PublishedPackage[]): Map<string, ts.Program> {
 
 /**
  * Proves the check still discriminates, on a synthetic pair differing in one
- * thing: whether the type the protected member names is re-exported from the
+ * thing: whether the type the protected members name is re-exported from the
  * entry point. A gate that reports neither case is indistinguishable from a
- * clean tree, and this is the only thing that separates them.
+ * clean tree, and this is the only thing that separates them. One member names
+ * the type in its annotation and one only through an inferred alias
+ * instantiation, since the two are found by different walks.
+ *
+ * The host serves no lib files, so a case built on a lib type such as `Array`
+ * resolves to an error type and reports nothing in either variant.
  */
 function selfTest() {
    const run = (exportTheType: boolean): Finding[] => {
@@ -437,8 +444,10 @@ function selfTest() {
             [
                'export interface Kept { a: string; }',
                `${exportTheType ? 'export ' : ''}interface Hidden { b: string; }`,
+               'export type Box<T> = { value: T; };',
                'export class Base {',
                '   protected seam(): Hidden { return { b: "x" }; }',
+               '   protected wrapped() { return { value: { b: "x" } } as Box<Hidden>; }',
                '}'
             ].join('\n')
          ],
@@ -464,7 +473,8 @@ function selfTest() {
    };
 
    const hidden = run(false);
-   if (hidden.length !== 1 || hidden[0].type !== 'Hidden') {
+   const reportedMembers = hidden.map(finding => `${finding.member}:${finding.type}`).sort();
+   if (reportedMembers.join(' ') !== 'Base.seam:Hidden Base.wrapped:Hidden') {
       throw new Error(`self-test: an unexported type named by a protected member must be reported, got ${JSON.stringify(hidden)}`);
    }
    const exported = run(true);
