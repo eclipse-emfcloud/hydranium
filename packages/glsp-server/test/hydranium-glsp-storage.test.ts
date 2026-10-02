@@ -9,6 +9,7 @@
 
 import { type Marker, MarkersReason, SetMarkersAction } from '@eclipse-glsp/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import {
    type Action,
    ActionDispatcher,
@@ -31,13 +32,14 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import {
+   type AstDiagnostic,
    AstDocument,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
    type ServerSharedServices,
    UNKNOWN_CLIENT_ID
 } from '@hydranium/core';
-import { makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
+import { makeFakeAstNode, makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -77,6 +79,10 @@ class TestStorage extends HydraniumGlspStorage<TestRoot> {
 
    public callGetFileUri(action: SaveModelAction): string {
       return this.getFileUri(action);
+   }
+
+   public callIsStructurallyBroken(document: AstDocument<AstNode>): boolean {
+      return this.isStructurallyBroken(document);
    }
 
    public callToSourceModelUri(sourceUri: string): string {
@@ -613,6 +619,46 @@ describe('HydraniumGlspStorage', () => {
          state.trackSecondaryDocument('file:///a/side.x');
 
          expect(log.subscribed).toEqual([]);
+      });
+   });
+
+   describe('isStructurallyBroken', () => {
+      const parsingError: AstDiagnostic = {
+         severity: DiagnosticSeverity.Error,
+         message: 'boom',
+         range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+         data: { code: 'parsing-error' }
+      };
+
+      /** A root whose document's current parse is `parse`, or another root's when `replaced`. */
+      function parsedRoot(parse: { parserErrors?: unknown[]; lexerErrors?: unknown[] }, replaced = false): AstNode {
+         const root = makeFakeAstNode<AstNode>({ $type: 'TestRoot' });
+         const value = replaced ? makeFakeAstNode<AstNode>({ $type: 'TestRoot' }) : root;
+         Object.assign(root, {
+            $document: { parseResult: { value, parserErrors: parse.parserErrors ?? [], lexerErrors: parse.lexerErrors ?? [] } }
+         });
+         return root;
+      }
+
+      it('reads a parser error off the root before validation has filled any diagnostic', () => {
+         const { storage } = createStorage('client-structural');
+         const document = AstDocument.create('file:///a.x', 1, parsedRoot({ parserErrors: [{ message: 'boom' }] }));
+
+         expect(storage.callIsStructurallyBroken(document)).toBe(true);
+      });
+
+      it("answers the root's own clean parse over an earlier build's diagnostics", () => {
+         const { storage } = createStorage('client-structural');
+         const document = AstDocument.create('file:///a.x', 1, parsedRoot({}), [parsingError]);
+
+         expect(storage.callIsStructurallyBroken(document)).toBe(false);
+      });
+
+      it('falls back to the diagnostics for a root its document has since replaced', () => {
+         const { storage } = createStorage('client-structural');
+         const document = AstDocument.create('file:///a.x', 1, parsedRoot({}, true), [parsingError]);
+
+         expect(storage.callIsStructurallyBroken(document)).toBe(true);
       });
    });
 
