@@ -21,8 +21,15 @@ import {
    type ProfileReport
 } from '../../src/node/profile-capture.js';
 
+/**
+ * User CPU time the workload burns at least. Windows charges process CPU time per
+ * clock tick of about 15.6 ms, so a workload under a few ticks can read as zero.
+ */
+const MIN_USER_CPU_MICROS = 50_000;
+
 /** A CPU-using, allocating, event-loop-yielding block so real captures see samples, GC, and ELD. */
 async function busyWorkload(): Promise<number> {
+   const startCpu = process.cpuUsage();
    let acc = 0;
    const sink: number[][] = [];
    for (let index = 0; index < 40; index++) {
@@ -35,6 +42,11 @@ async function busyWorkload(): Promise<number> {
       }
       sink.push(arr);
       await new Promise(resolve => setTimeout(resolve, 2));
+   }
+   // Read from the counter a capture reads, so its window, which encloses this
+   // one, sees at least this much however coarse the counter is.
+   while (process.cpuUsage(startCpu).user < MIN_USER_CPU_MICROS) {
+      acc += Math.sqrt(acc + 1);
    }
    return acc;
 }
