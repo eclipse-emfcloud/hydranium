@@ -112,7 +112,7 @@
     "@playwright/test": "^1.40.0",
     "@types/diff": "^5.2.0",
     "rimraf": "^5.0.0",
-    "typescript": "^5.8.0",
+    "typescript": "^6.0.3",
     "vscode-jsonrpc": "9.0.1",
     "vscode-languageserver": "~10.0.1",
     "vscode-languageserver-protocol": "~3.18.2",

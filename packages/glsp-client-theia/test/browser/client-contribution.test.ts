@@ -11,7 +11,7 @@
 // client-theia browser barrel touches `document`. The stand-ins carry only what
 // the contribution reads, with upstream's defaults.
 vi.mock('@eclipse-glsp/theia-integration', async () => {
-   const { Deferred } = await import('@theia/core/lib/common/promise-util');
+   const { Deferred } = await import('@theia/core/lib/common/promise-util.js');
    const { DisposableCollection } = await import('@theia/core');
    return {
       BaseGLSPClientContribution: class BaseGLSPClientContribution {

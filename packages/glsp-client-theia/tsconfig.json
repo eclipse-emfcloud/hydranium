@@ -1,10 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
+  "//noUncheckedSideEffectImports": "CSS imports are bundled by webpack or esbuild; tsc cannot resolve them.",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
     "strictPropertyInitialization": false,
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    "noUncheckedSideEffectImports": false
   },
   "include": ["src"],
   "references": [{ "path": "../protocol" }, { "path": "../client-theia" }]
