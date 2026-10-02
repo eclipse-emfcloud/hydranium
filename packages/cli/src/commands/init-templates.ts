@@ -314,7 +314,7 @@ __DEPENDENCIES__
     "@types/node": "^22.0.0",
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.0.0"
   },
   "engines": {

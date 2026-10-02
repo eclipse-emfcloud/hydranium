@@ -38,7 +38,7 @@
     "@hydranium/example-order-flow-server": "0.0.0",
     "@types/node": "^22.0.0",
     "rimraf": "^5.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=22.13"

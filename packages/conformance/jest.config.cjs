@@ -14,9 +14,8 @@
  * excludes `test/jest/**`). Scoped to `test/jest` so the two runners never
  * collide.
  */
-/** @type {import('ts-jest').JestConfigWithTsJest} */
+/** @type {import('jest').Config} */
 module.exports = {
-   preset: 'ts-jest',
    testEnvironment: 'node',
    displayName: 'conformance-jest-smoke',
    roots: ['<rootDir>/test/jest'],
@@ -25,12 +24,6 @@ module.exports = {
       '^(\\.{1,2}/.*)\\.js$': '$1'
    },
    transform: {
-      '^.+\\.tsx?$': [
-         'ts-jest',
-         {
-            useESM: true,
-            tsconfig: '<rootDir>/tsconfig.test.json'
-         }
-      ]
+      '^.+\\.tsx?$': '<rootDir>/test/jest/esbuild-transform.cjs'
    }
 };

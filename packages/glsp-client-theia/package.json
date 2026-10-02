@@ -94,7 +94,7 @@
     "reflect-metadata": "0.2.2",
     "rimraf": "^5.0.0",
     "snabbdom": "3.5.1",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@eclipse-glsp/client": "^2.6.0",
