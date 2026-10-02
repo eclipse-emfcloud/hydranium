@@ -53,7 +53,7 @@ test.describe.serial('An order-flow model survives a reconnect', () => {
    /** Collected for the whole run: a reordered or missing message surfaces as an
     *  exception in the plugin host rather than as a failed edit, so a passing
     *  edit alone would not catch it. */
-   const pageErrors: { phase: string; message: string }[] = [];
+   const pageErrors: { phase: string; message: string; stack: string }[] = [];
    let phase = 'before the first test';
 
    async function setField(fieldName: string, value: string): Promise<void> {
@@ -92,7 +92,7 @@ test.describe.serial('An order-flow model survives a reconnect', () => {
 
    test.beforeAll(async ({ playwright, browser }) => {
       app = await TheiaAppLoader.load({ playwright, browser }, new TheiaWorkspace([WORKSPACE_SOURCE]));
-      app.page.on('pageerror', error => pageErrors.push({ phase, message: error.message }));
+      app.page.on('pageerror', error => pageErrors.push({ phase, message: error.message, stack: error.stack ?? '' }));
 
       await openPropertiesPanel(app);
       await selectFile(app, PROCESS_FILE);
@@ -205,10 +205,12 @@ test.describe.serial('An order-flow model survives a reconnect', () => {
       // line-indexed copy of every open document, which shows up here and
       // nowhere else. Grouped because one desynchronised document throws
       // repeatedly: the count says how loud it was, not how many faults occurred.
-      const grouped = pageErrors.reduce<Record<string, number>>((counts, error) => {
+      // The first stack of each is kept, because the message alone does not say
+      // which code threw.
+      const grouped = pageErrors.reduce<Record<string, { count: number; stack: string }>>((groups, error) => {
          const key = `[${error.phase}] ${error.message}`;
-         counts[key] = (counts[key] ?? 0) + 1;
-         return counts;
+         groups[key] = { count: (groups[key]?.count ?? 0) + 1, stack: groups[key]?.stack ?? error.stack };
+         return groups;
       }, {});
 
       expect(grouped).toEqual({});
