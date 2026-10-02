@@ -14,6 +14,10 @@
 const { transformSync } = require('esbuild');
 
 module.exports = {
+   /**
+    * @param {string} source
+    * @param {string} filename
+    */
    process(source, filename) {
       const { code, map } = transformSync(source, { loader: 'ts', format: 'esm', target: 'es2022', sourcemap: true, sourcefile: filename });
       return { code, map };

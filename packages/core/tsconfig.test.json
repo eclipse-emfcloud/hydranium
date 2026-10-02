@@ -4,6 +4,8 @@
     "rootDir": ".",
     "noEmit": true,
     "isolatedModules": true,
+    "allowJs": true,
+    "checkJs": true,
     "types": ["node"]
   },
   "include": ["src", "test"]

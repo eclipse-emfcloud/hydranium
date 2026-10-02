@@ -18,16 +18,13 @@
       "dependsOn": ["^build"],
       "inputs": [
         "src/**/*",
-        "grammar/**/*",
         "package.json",
         "tsconfig.json",
         "tsconfig.test.json",
         "langium-config.json",
-        "webpack.config.js",
         "esbuild.mjs",
         "vitest.config.ts",
-        "jest.config.cjs",
-        "language-configuration.json"
+        "jest.config.cjs"
       ],
       "outputs": [
         "lib/**",
@@ -59,7 +56,7 @@
     },
     "lint": {
       "dependsOn": ["build"],
-      "inputs": ["src/**/*", "test/**/*", "oxlint.config.cjs"]
+      "inputs": ["src/**/*", "test/**/*"]
     },
     "clean": {
       "cache": false

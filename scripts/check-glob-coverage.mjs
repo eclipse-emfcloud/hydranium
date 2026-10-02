@@ -222,14 +222,22 @@ function checkRootTsconfigReferences() {
  * workspace that way, and a stale path there serves the previous workspace while
  * every other host serves the new one.
  *
- * Only `$TURBO_ROOT$` inputs and the per-package UNION are asserted. A single
- * package-relative glob legitimately matches nothing — the root task list is a
- * union over every package shape, so `grammar/**` is empty for most — but a task
- * whose whole input set is empty is hashing nothing at all.
+ * A single package-relative glob legitimately matches nothing in one package —
+ * the root task list is a union over every package shape, so `jest.config.cjs`
+ * is empty for all but one — so per package only the UNION is asserted: a task
+ * whose whole input set is empty is hashing nothing at all. A root glob that
+ * matches in NO package is a leftover from a removed file shape, and is
+ * reported too.
  */
 function checkTurboInputs() {
    const problems = [];
    const rootTasks = readJsonWithComments(join(REPO_ROOT, 'turbo.json')).tasks ?? {};
+   /** Root `task glob` pairs no package has matched yet. */
+   const unmatchedRoot = new Set(
+      Object.entries(rootTasks).flatMap(([task, config]) =>
+         (config.inputs ?? []).filter(glob => !glob.startsWith('$TURBO_ROOT$')).map(glob => `${task} ${glob}`)
+      )
+   );
 
    for (const { dir, name } of listWorkspacePackages()) {
       const localPath = join(dir, 'turbo.json');
@@ -243,6 +251,11 @@ function checkTurboInputs() {
             continue;
          }
          const packageRelative = inputs.filter(glob => !glob.startsWith('$TURBO_ROOT$'));
+         if (localTasks[task] === undefined) {
+            for (const glob of packageRelative.filter(candidate => globMatchesAnyFile(dir, candidate))) {
+               unmatchedRoot.delete(`${task} ${glob}`);
+            }
+         }
          if (packageRelative.length > 0 && !packageRelative.some(glob => globMatchesAnyFile(dir, glob))) {
             problems.push(
                `${name}: every \`inputs\` glob of the \`${task}\` task matches no file, so turbo hashes nothing for it and will replay a cached result over changed sources.`
@@ -256,6 +269,12 @@ function checkTurboInputs() {
             }
          }
       }
+   }
+   for (const entry of unmatchedRoot) {
+      const [task, glob] = entry.split(' ');
+      problems.push(
+         `turbo.json: the \`${task}\` input \`${glob}\` matches no file in any package that runs the task, so it hashes nothing anywhere.`
+      );
    }
    return problems;
 }

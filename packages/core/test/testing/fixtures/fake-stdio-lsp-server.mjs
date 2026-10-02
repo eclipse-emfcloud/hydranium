@@ -87,6 +87,7 @@ function main() {
    setTimeout(() => process.exit(70), BACKSTOP_MS).unref();
 
    const attempts = new Map();
+   /** @type {unknown} */
    let initializeParams;
 
    const connection = createMessageConnection(new StreamMessageReader(process.stdin), new StreamMessageWriter(process.stdout));
@@ -113,13 +114,12 @@ function main() {
          case 'probe/initializeParams':
             return initializeParams ?? null;
          case 'probe/attempts':
-            return attempts.get(params[0].method) ?? 0;
-         case 'probe/publish':
-            connection.sendNotification('textDocument/publishDiagnostics', {
-               uri: params[0].uri,
-               diagnostics: [{ range: ZERO_RANGE, message: params[0].message }]
-            });
+            return attempts.get(/** @type {{ method: string }} */ (params[0]).method) ?? 0;
+         case 'probe/publish': {
+            const { uri, message } = /** @type {{ uri: string, message: string }} */ (params[0]);
+            connection.sendNotification('textDocument/publishDiagnostics', { uri, diagnostics: [{ range: ZERO_RANGE, message }] });
             return true;
+         }
          case 'ns/head/port':
             return (attempts.get(method) ?? 0) >= FIXTURE_PORT_ATTEMPTS ? FIXTURE_PORT : undefined;
          case 'shutdown':
