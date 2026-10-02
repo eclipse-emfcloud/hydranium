@@ -32,7 +32,7 @@
 // half is reported per entry from the tsconfigs (`domBannedFor`) rather than
 // claimed for all of them.
 
-import { build } from 'esbuild';
+import { build, type BuildFailure } from 'esbuild';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { builtinModules } from 'node:module';
@@ -47,7 +47,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * `packages/core`), so counting segments would name the example DIRECTORY and
  * read a tsconfig that governs nothing.
  */
-function packageOf(entry) {
+function packageOf(entry: string): string {
    const segments = entry.split('/');
    return segments.slice(0, segments.indexOf('lib')).join('/');
 }
@@ -60,8 +60,8 @@ function packageOf(entry) {
  * naming DOM would otherwise be reported as banned, which is the direction that
  * lies.
  */
-function domBannedFor(pkg) {
-   const tsconfig = JSON.parse(readFileSync(resolve(repoRoot, pkg, 'tsconfig.json'), 'utf8'));
+function domBannedFor(pkg: string): boolean {
+   const tsconfig = JSON.parse(readFileSync(resolve(repoRoot, pkg, 'tsconfig.json'), 'utf8')) as { compilerOptions?: { lib?: string[] } };
    const lib = tsconfig.compilerOptions?.lib;
    return lib === undefined || !lib.some(entry => /^dom(\.|$)/i.test(entry));
 }
@@ -271,7 +271,7 @@ const NODE_BUILTINS = new Set(builtinModules);
  * bare specifier means esbuild never looks inside it — so it resolves fine at
  * bundle time and fails in a browser at runtime, which is the worse order.
  */
-function isNodeOnlySpecifier(specifier) {
+function isNodeOnlySpecifier(specifier: string): boolean {
    return NODE_BUILTINS.has(specifier) || specifier === 'node' || specifier.endsWith('/node') || specifier.includes('/node/');
 }
 
@@ -296,7 +296,7 @@ const ALLOWED_NODE_SPECIFIERS = [{ specifier: 'path', importer: 'packages/core/l
  * be compared against a relative allowlist entry, match nothing, and report the
  * one deliberate bare `'path'` import as a violation.
  */
-function repoRelative(absolutePath) {
+function repoRelative(absolutePath: string): string {
    return relative(repoRoot, absolutePath).split(sep).join('/');
 }
 
@@ -306,7 +306,7 @@ function repoRelative(absolutePath) {
  * offending one — the deliberate bare `'path'` would otherwise appear in the
  * failure text and read as the thing to fix.
  */
-function offendingImporters(specifier, importers) {
+function offendingImporters(specifier: string, importers: Set<string>): string[] {
    return [...importers].filter(
       importer => !ALLOWED_NODE_SPECIFIERS.some(allowed => allowed.specifier === specifier && allowed.importer === importer)
    );
@@ -333,9 +333,10 @@ function offendingImporters(specifier, importers) {
  * of every gated entry. Hence `isNodeOnlySpecifier`: judge the specifier by name
  * when its contents are not being read.
  */
-async function neutralityFailures(entry, resolvePackages) {
-   const shouldResolve = path => path.startsWith('@hydranium/') || resolvePackages.some(pkg => path === pkg || path.startsWith(pkg + '/'));
-   const externalised = new Map();
+async function neutralityFailures(entry: string, resolvePackages: string[]): Promise<string[]> {
+   const shouldResolve = (path: string): boolean =>
+      path.startsWith('@hydranium/') || resolvePackages.some(pkg => path === pkg || path.startsWith(pkg + '/'));
+   const externalised = new Map<string, Set<string>>();
    const result = await build({
       entryPoints: [resolve(repoRoot, entry)],
       bundle: true,
@@ -367,7 +368,7 @@ async function neutralityFailures(entry, resolvePackages) {
                      return undefined; // resolve it (exercise its browser field)
                   }
                   if (isNodeOnlySpecifier(args.path)) {
-                     const importers = externalised.get(args.path) ?? new Set();
+                     const importers = externalised.get(args.path) ?? new Set<string>();
                      importers.add(repoRelative(args.importer));
                      externalised.set(args.path, importers);
                   }
@@ -376,7 +377,7 @@ async function neutralityFailures(entry, resolvePackages) {
             }
          }
       ]
-   }).catch(error => ({ errors: error.errors ?? [{ text: String(error) }] }));
+   }).catch((error: Partial<BuildFailure>) => ({ errors: error.errors ?? [{ text: String(error) }] }));
 
    const failures = (result.errors ?? []).filter(error => /node:/.test(error.text)).map(error => error.text);
    for (const [specifier, importers] of externalised) {

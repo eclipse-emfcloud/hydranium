@@ -17,7 +17,7 @@
 // refuses to resolve a `node:*` builtin instead of shimming it, so a Node import
 // reaching the webview graph — directly or transitively — fails the build here
 // rather than throwing inside the sandbox on the first message. That is the same
-// property `scripts/check-neutral-bundles.mjs` provides for the head packages,
+// property `scripts/check-neutral-bundles.mts` provides for the head packages,
 // obtained for free because this entry is genuinely bundled rather than merely
 // probed. The webview's own risk on top of that is the vscode-jsonrpc
 // entrypoint: `/browser` installs a runtime abstraction layer, the package root

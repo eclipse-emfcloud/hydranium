@@ -47,7 +47,7 @@
  * It SELF-TESTS, because a comparison that has stopped discriminating reports
  * universal agreement and reads exactly like a clean repository.
  *
- * Usage: node scripts/check-gate-targets.mjs
+ * Usage: node scripts/check-gate-targets.mts
  */
 
 import { readFileSync } from 'node:fs';
@@ -72,7 +72,7 @@ const EXCLUDED = {
 };
 
 /** The targets one `turbo run ...` script names, in order. */
-function turboTargetsOf(script, scriptName) {
+function turboTargetsOf(script: string, scriptName: string): string[] {
    const match = /^turbo run (.+)$/.exec(script.trim());
    if (!match) {
       throw new Error(`\`${scriptName}\` is no longer a bare \`turbo run\` invocation, so its targets cannot be read: ${script}`);
@@ -91,8 +91,8 @@ function turboTargetsOf(script, scriptName) {
  * Pure, and separated from the manifest it is normally fed, so the self-test
  * below can drive it with inputs that must fail.
  */
-function disagreements(full, platform, excluded) {
-   const problems = [];
+function disagreements(full: string[], platform: string[], excluded: Record<string, string>): string[] {
+   const problems: string[] = [];
    const fullSet = new Set(full);
    const platformSet = new Set(platform);
 
@@ -131,8 +131,8 @@ function disagreements(full, platform, excluded) {
  * with everything would pass the real check silently, which is the one failure
  * a comparison cannot report about itself.
  */
-function selfTest() {
-   const cases = [
+function selfTest(): void {
+   const cases: { why: string; full: string[]; platform: string[]; excluded: Record<string, string>; expectProblem: boolean }[] = [
       { why: 'a target in neither the subset nor the exemptions', full: ['a', 'b'], platform: ['a'], excluded: {}, expectProblem: true },
       {
          why: 'an exemption for a target that no longer exists',
@@ -170,11 +170,11 @@ function selfTest() {
  * written in the manifest, in a form this can read back — a clause list that
  * moved into the runner would sit where nothing compares it against the halves.
  */
-function gateClausesOf(script, scriptName) {
-   const match = /^node scripts\/run-gate\.mjs\s+(.+)$/.exec(script.trim());
+function gateClausesOf(script: string, scriptName: string): string[] {
+   const match = /^node scripts\/run-gate\.mts\s+(.+)$/.exec(script.trim());
    if (!match) {
       throw new Error(
-         `\`${scriptName}\` is no longer \`node scripts/run-gate.mjs <script>...\`, so the halves it assembles cannot be read: ${script}`
+         `\`${scriptName}\` is no longer \`node scripts/run-gate.mts <script>...\`, so the halves it assembles cannot be read: ${script}`
       );
    }
    const named = match[1].trim().split(/\s+/);
@@ -186,7 +186,7 @@ function gateClausesOf(script, scriptName) {
 }
 
 /** The script names one `&&` chain of `npm run` clauses invokes, in order. */
-function clausesOf(script, scriptName) {
+function clausesOf(script: string, scriptName: string): string[] {
    return script.split('&&').map(clause => {
       const match = /^\s*npm run (?:--if-present )?([\w:-]+)\s*$/.exec(clause);
       if (!match) {
@@ -206,8 +206,8 @@ function clausesOf(script, scriptName) {
  * — cheap, but it means the two lists disagree about what the clause is for,
  * and the next reader cannot tell which spelling was intended.
  */
-function tailDisagreements(rest, once, platform) {
-   const problems = [];
+function tailDisagreements(rest: string[], once: string[], platform: string[]): string[] {
+   const problems: string[] = [];
    const expected = ['check:rest:once', 'check:rest:platform'];
    if (rest.join(' ') !== expected.join(' ')) {
       problems.push(
@@ -227,7 +227,7 @@ function tailDisagreements(rest, once, platform) {
 
 selfTest();
 
-const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 const full = turboTargetsOf(manifest.scripts['check:turbo'], 'check:turbo');
 const platform = turboTargetsOf(manifest.scripts['check:turbo:platform'], 'check:turbo:platform');
 const tailOnce = clausesOf(manifest.scripts['check:rest:once'], 'check:rest:once');

@@ -10,7 +10,7 @@ number is **derived**, never written down.
 Each release is `1.0.0-next.<n>`, where `n` counts the commits since the
 last release tag. `1.0.0-next` is the **base**, committed in the root
 manifest and in all ten package manifests; `.<n>` is appended by
-`scripts/release.mjs` in the runner's tree and is never committed.
+`scripts/release.mts` in the runner's tree and is never committed.
 
 Three properties follow, and each is load-bearing:
 
@@ -48,7 +48,7 @@ a long-lived token for that one call.
 After the first stable release, `latest` belongs to the stable line and
 the rolling line moves to `next`.
 
-`scripts/release.mjs` **derives** which of the two applies by asking the
+`scripts/release.mts` **derives** which of the two applies by asking the
 registry whether any non-prerelease version exists, rather than reading
 a flag someone has to remember to flip on the day it stops being true.
 
@@ -67,7 +67,7 @@ a flag someone has to remember to flip on the day it stops being true.
 3. Pins the toolchain to the `packageManager` version.
 4. Preflights the publish environment (see below).
 5. Installs and builds the same commit.
-6. Runs `node scripts/release.mjs next`.
+6. Runs `node scripts/release.mts next`.
 
 Before merging a package or export change, also run the opt-in packed
 consumer smoke locally:
@@ -184,14 +184,14 @@ new package rather than assuming it.
 Three things in one commit, and the second is the one that bites:
 
 1. Set the base to `1.0.0` and publish with
-   `node scripts/release.mjs latest`.
+   `node scripts/release.mts latest`.
 2. **Move the base on to `1.1.0-next`.** `git describe` now finds
    `v1.0.0`, so the counter resets — with the base still at
    `1.0.0-next`, the next nightly computes `1.0.0-next.1`, which sorts
    *below* the release just cut and is probably already published.
 3. Tag `v1.0.0`.
 
-`scripts/release.mjs` guards this from both sides: `next` refuses a base
+`scripts/release.mts` guards this from both sides: `next` refuses a base
 that is not a `-next` version, and `latest` refuses one that is. Each
 catches the other's forgotten half.
 
@@ -220,7 +220,7 @@ derived copy:
 
 ```bash
 npm run build                                  # see the warning below
-node scripts/check-init-provenance.mjs --write
+node scripts/check-init-provenance.mts --write
 ```
 
 **Build first, or this silently does the wrong thing.** The script

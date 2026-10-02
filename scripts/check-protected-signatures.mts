@@ -48,7 +48,7 @@
  * It SELF-TESTS, because a reachability check that has stopped discriminating
  * reports a clean subclass API and reads exactly like a clean repository.
  *
- * Usage: node scripts/check-protected-signatures.mjs
+ * Usage: node scripts/check-protected-signatures.mts
  */
 
 import ts from 'typescript-api';
@@ -59,8 +59,36 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 
+type NamedTypeDeclaration = ts.InterfaceDeclaration | ts.TypeAliasDeclaration | ts.ClassDeclaration | ts.EnumDeclaration;
+
+/** The fields of a package manifest this gate reads. */
+interface PackageManifest {
+   name: string;
+   exports?: unknown;
+   types?: unknown;
+}
+
+interface PublishedPackage {
+   directory: string;
+   name: string;
+   entries: string[];
+}
+
+/** A report label and the annotation in that slot, `undefined` when the slot is inferred. */
+type SignatureSlot = [label: string, typeNode: ts.TypeNode | undefined];
+
+interface Finding {
+   package: string;
+   member: string;
+   slot: string;
+   type: string;
+   declaredIn: string;
+   line: number;
+   file: string;
+}
+
 /** Declaration kinds an adopter has to name. A type literal is written inline and is not one. */
-function isNamedTypeDeclaration(node) {
+function isNamedTypeDeclaration(node: ts.Node): node is NamedTypeDeclaration {
    return ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isClassDeclaration(node) || ts.isEnumDeclaration(node);
 }
 
@@ -71,10 +99,10 @@ function isNamedTypeDeclaration(node) {
  * reachable, and one reachable from no entry is not however exported its own
  * file leaves it.
  */
-function entryPointsOf(packageDir) {
-   const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
-   const entries = new Set();
-   const collect = node => {
+function entryPointsOf(packageDir: string): { name: string; entries: string[] } {
+   const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as PackageManifest;
+   const entries = new Set<string>();
+   const collect = (node: unknown): void => {
       if (typeof node === 'string') {
          if (node.endsWith('.d.ts')) {
             const source = join(
@@ -101,7 +129,7 @@ function entryPointsOf(packageDir) {
 }
 
 /** Workspace packages that publish at least one typed entry point. */
-function publishedPackages() {
+function publishedPackages(): PublishedPackage[] {
    return readdirSync(PACKAGES_DIR)
       .map(entry => join(PACKAGES_DIR, entry))
       .filter(directory => existsSync(join(directory, 'package.json')))
@@ -110,8 +138,11 @@ function publishedPackages() {
 }
 
 /** Build a context that can answer which package owns a file and where its source lives. */
-function locator(packages) {
-   const owningPackage = file => {
+function locator(packages: PublishedPackage[]): {
+   owningPackage: (file: string) => PublishedPackage | undefined;
+   keyOf: (declaration: ts.NamedDeclaration) => string;
+} {
+   const owningPackage = (file: string): PublishedPackage | undefined => {
       for (const pkg of packages) {
          if (file.startsWith(join(pkg.directory, 'src') + sep) || file.startsWith(join(pkg.directory, 'lib') + sep)) {
             return pkg;
@@ -126,7 +157,7 @@ function locator(packages) {
     * on one key or a type exported from its own package reads as unreachable
     * everywhere it is consumed.
     */
-   const toSource = file => {
+   const toSource = (file: string): string => {
       const owner = owningPackage(file);
       if (!owner || !file.startsWith(join(owner.directory, 'lib') + sep)) {
          return file;
@@ -135,7 +166,8 @@ function locator(packages) {
       return existsSync(candidate) ? candidate : file;
    };
 
-   const keyOf = declaration => `${toSource(declaration.getSourceFile().fileName)}#${declaration.name?.getText?.() ?? '(anonymous)'}`;
+   const keyOf = (declaration: ts.NamedDeclaration): string =>
+      `${toSource(declaration.getSourceFile().fileName)}#${declaration.name?.getText?.() ?? '(anonymous)'}`;
    return { owningPackage, keyOf };
 }
 
@@ -143,9 +175,9 @@ function locator(packages) {
  * Every type reference in a signature, including the ones nested in generic
  * arguments, unions and `typeof` queries.
  */
-function typeReferencesIn(node) {
-   const found = [];
-   const visit = child => {
+function typeReferencesIn(node: ts.Node): (ts.EntityName | ts.Expression)[] {
+   const found: (ts.EntityName | ts.Expression)[] = [];
+   const visit = (child: ts.Node): void => {
       if (ts.isTypeReferenceNode(child)) {
          found.push(child.typeName);
       } else if (ts.isTypeQueryNode(child)) {
@@ -162,17 +194,23 @@ function typeReferencesIn(node) {
 }
 
 /** Named declarations inside an inferred type, walking unions, aliases and type arguments. */
-function namedDeclarationsOfType(type, checker, seen = new Set(), depth = 0) {
+function namedDeclarationsOfType(
+   type: ts.Type | undefined,
+   checker: ts.TypeChecker,
+   seen = new Set<number>(),
+   depth = 0
+): NamedTypeDeclaration[] {
    if (!type || depth > 4) {
       return [];
    }
-   if (type.id !== undefined) {
-      if (seen.has(type.id)) {
+   const id = typeIdOf(type);
+   if (id !== undefined) {
+      if (seen.has(id)) {
          return [];
       }
-      seen.add(type.id);
+      seen.add(id);
    }
-   const found = [];
+   const found: NamedTypeDeclaration[] = [];
    for (const symbol of [type.aliasSymbol, type.getSymbol()]) {
       if (!symbol) {
          continue;
@@ -180,17 +218,30 @@ function namedDeclarationsOfType(type, checker, seen = new Set(), depth = 0) {
       const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
       found.push(...(target.getDeclarations() ?? []).filter(isNamedTypeDeclaration));
    }
-   for (const part of type.types ?? []) {
+   for (const part of constituentsOf(type)) {
       found.push(...namedDeclarationsOfType(part, checker, seen, depth + 1));
    }
-   for (const argument of checker.getTypeArguments?.(type) ?? type.aliasTypeArguments ?? []) {
+   for (const argument of checker.getTypeArguments?.(type as ts.TypeReference) ?? type.aliasTypeArguments ?? []) {
       found.push(...namedDeclarationsOfType(argument, checker, seen, depth + 1));
    }
    return found;
 }
 
+/** The checker's internal type id, which the public `ts.Type` does not declare. */
+function typeIdOf(type: ts.Type): number | undefined {
+   return 'id' in type && typeof type.id === 'number' ? type.id : undefined;
+}
+
+/** The `types` of a union, intersection or template literal: the kinds that carry one. */
+function constituentsOf(type: ts.Type): readonly ts.Type[] {
+   if (type.isUnionOrIntersection()) {
+      return type.types;
+   }
+   return type.flags & ts.TypeFlags.TemplateLiteral ? (type as ts.TemplateLiteralType).types : [];
+}
+
 /** Whether a member is reachable by a subclass. */
-function isSubclassVisible(member) {
+function isSubclassVisible(member: ts.ClassElement): boolean {
    const modifiers = ts.canHaveModifiers(member) ? (ts.getModifiers(member) ?? []) : [];
    if (modifiers.some(modifier => modifier.kind === ts.SyntaxKind.PrivateKeyword)) {
       return false;
@@ -202,8 +253,8 @@ function isSubclassVisible(member) {
  * The signature slots of one member, each labelled for the report. A slot with
  * no annotation carries `undefined` and is checked against its inferred type.
  */
-function signatureSlotsOf(member, source) {
-   const slots = [];
+function signatureSlotsOf(member: ts.ClassElement, source: ts.SourceFile): SignatureSlot[] {
+   const slots: SignatureSlot[] = [];
    if (
       ts.isMethodDeclaration(member) ||
       ts.isConstructorDeclaration(member) ||
@@ -225,11 +276,15 @@ function signatureSlotsOf(member, source) {
 }
 
 /** Declarations an adopter can name, keyed by source file and name. */
-function reachableDeclarations(programs, packages, keyOf) {
-   const reachable = new Set();
-   const missing = [];
+function reachableDeclarations(
+   programs: Map<string, ts.Program>,
+   packages: PublishedPackage[],
+   keyOf: (declaration: ts.NamedDeclaration) => string
+): { reachable: Set<string>; missing: string[] } {
+   const reachable = new Set<string>();
+   const missing: string[] = [];
    for (const pkg of packages) {
-      const program = programs.get(pkg.directory);
+      const program = programs.get(pkg.directory)!;
       const checker = program.getTypeChecker();
       for (const entry of pkg.entries) {
          const source = program.getSourceFile(entry);
@@ -253,13 +308,22 @@ function reachableDeclarations(programs, packages, keyOf) {
 }
 
 /** Findings for one workspace: a subclass-visible member naming a type no entry point exports. */
-function findUnnameableTypes(programs, packages) {
+function findUnnameableTypes(programs: Map<string, ts.Program>, packages: PublishedPackage[]): { findings: Finding[]; missing: string[] } {
    const { owningPackage, keyOf } = locator(packages);
    const { reachable, missing } = reachableDeclarations(programs, packages, keyOf);
-   const findings = [];
-   const seen = new Set();
+   const findings: Finding[] = [];
+   const seen = new Set<string>();
 
-   const record = (pkg, source, className, memberName, slot, typeName, declaration, at) => {
+   const record = (
+      pkg: PublishedPackage,
+      source: ts.SourceFile,
+      className: string,
+      memberName: string,
+      slot: string,
+      typeName: string,
+      declaration: NamedTypeDeclaration,
+      at: ts.Node
+   ): void => {
       if (!owningPackage(declaration.getSourceFile().fileName) || reachable.has(keyOf(declaration))) {
          return;
       }
@@ -273,21 +337,21 @@ function findUnnameableTypes(programs, packages) {
          member: `${className}.${memberName}`,
          slot,
          type: typeName,
-         declaredIn: owningPackage(declaration.getSourceFile().fileName).name,
+         declaredIn: owningPackage(declaration.getSourceFile().fileName)!.name,
          line: source.getLineAndCharacterOfPosition(at.getStart(source)).line + 1,
          file: relative(REPO_ROOT, source.fileName)
       });
    };
 
    for (const pkg of packages) {
-      const program = programs.get(pkg.directory);
+      const program = programs.get(pkg.directory)!;
       const checker = program.getTypeChecker();
       const sourceRoot = join(pkg.directory, 'src') + sep;
       for (const source of program.getSourceFiles()) {
          if (source.isDeclarationFile || !source.fileName.startsWith(sourceRoot)) {
             continue;
          }
-         const visitClass = declaration => {
+         const visitClass = (declaration: ts.ClassDeclaration): void => {
             if (!reachable.has(keyOf(declaration))) {
                return;
             }
@@ -320,12 +384,12 @@ function findUnnameableTypes(programs, packages) {
                   const inferred = ts.isMethodDeclaration(member) ? signature && checker.getReturnTypeOfSignature(signature) : memberType;
                   for (const named of namedDeclarationsOfType(inferred, checker)) {
                      const label = `${slot} (inferred)`;
-                     record(pkg, source, className, memberName, label, named.name?.getText() ?? '(anonymous)', named, member.name);
+                     record(pkg, source, className, memberName, label, named.name?.getText() ?? '(anonymous)', named, member.name!);
                   }
                }
             }
          };
-         const visit = node => {
+         const visit = (node: ts.Node): void => {
             if (ts.isClassDeclaration(node)) {
                visitClass(node);
             }
@@ -338,8 +402,8 @@ function findUnnameableTypes(programs, packages) {
 }
 
 /** One program per package, over the sources its own tsconfig names. */
-function programsFor(packages) {
-   const programs = new Map();
+function programsFor(packages: PublishedPackage[]): Map<string, ts.Program> {
+   const programs = new Map<string, ts.Program>();
    for (const pkg of packages) {
       const configPath = join(pkg.directory, 'tsconfig.json');
       const raw = ts.readConfigFile(configPath, ts.sys.readFile);
@@ -366,7 +430,7 @@ function programsFor(packages) {
  * clean tree, and this is the only thing that separates them.
  */
 function selfTest() {
-   const run = exportTheType => {
+   const run = (exportTheType: boolean): Finding[] => {
       const sources = new Map([
          [
             '/probe/src/internal.ts',

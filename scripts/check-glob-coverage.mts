@@ -42,7 +42,7 @@
  * - the neutrality gate's hand-maintained entry list still accounts for every
  *   public `exports` subpath, gated or excluded by name
  *
- * Usage: node scripts/check-glob-coverage.mjs
+ * Usage: node scripts/check-glob-coverage.mts
  */
 
 import { spawnSync } from 'node:child_process';
@@ -52,8 +52,33 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+interface PackageManifest {
+   name: string;
+   workspaces?: string[];
+   scripts?: Record<string, string>;
+   exports?: Record<string, string | { default?: string }>;
+}
+
+interface WorkspacePackage {
+   dir: string;
+   name: string;
+}
+
+interface TurboTaskConfig {
+   inputs?: string[];
+}
+
+interface TurboJson {
+   tasks?: Record<string, TurboTaskConfig>;
+}
+
+/** The slice of a vitest config read here; vite's own `UserConfig` does not declare `test`. */
+interface VitestUserConfig {
+   test?: { projects?: string[] };
+}
+
 /** POSIX-spelled repo-relative path, which is what every glob here is written in. */
-function repoRelative(absolutePath) {
+function repoRelative(absolutePath: string): string {
    return relative(REPO_ROOT, absolutePath).split('\\').join('/');
 }
 
@@ -64,7 +89,7 @@ function repoRelative(absolutePath) {
  * naming a directory with no `package.json` is a problem for npm, not for this
  * gate, so it is dropped rather than reported here.
  */
-function expandWorkspaceEntry(entry) {
+function expandWorkspaceEntry(entry: string): string[] {
    const segments = entry.split('/');
    let directories = [REPO_ROOT];
    for (const segment of segments) {
@@ -82,7 +107,7 @@ function expandWorkspaceEntry(entry) {
 }
 
 /** Directories a `*`-globbed path names, without requiring a `package.json`. */
-function expandGlobToDirectories(base, pattern) {
+function expandGlobToDirectories(base: string, pattern: string): string[] {
    let directories = [base];
    for (const segment of pattern.split('/').filter(Boolean)) {
       directories = segment.includes('*')
@@ -99,7 +124,7 @@ function expandGlobToDirectories(base, pattern) {
 }
 
 /** One path segment against a glob segment, where `*` is any run of non-separator. */
-function segmentMatches(glob, segment) {
+function segmentMatches(glob: string, segment: string): boolean {
    const source = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
    return new RegExp(`^${source}$`).test(segment);
 }
@@ -117,12 +142,12 @@ function segmentMatches(glob, segment) {
  * globber does with the same string, and it reported a live task as hashing
  * nothing. With the magic, `**` spans zero or more components as turbo means it.
  */
-function globMatchesAnyFile(base, glob) {
+function globMatchesAnyFile(base: string, glob: string): boolean {
    return trackedFiles([`:(glob)${glob}`], base).length > 0;
 }
 
 /** Tracked files matching any pathspec, repo-relative (or relative to `cwd`). */
-function trackedFiles(pathspecs, cwd = REPO_ROOT) {
+function trackedFiles(pathspecs: string[], cwd = REPO_ROOT): string[] {
    const result = spawnSync('git', ['-C', cwd, 'ls-files', ...pathspecs], { encoding: 'utf-8' });
    if (result.status !== 0) {
       throw new Error(`git ls-files failed for ${pathspecs.join(' ')}: ${result.stderr}`);
@@ -131,11 +156,11 @@ function trackedFiles(pathspecs, cwd = REPO_ROOT) {
 }
 
 /** Every workspace package, as `{ dir, name }`, from the root manifest. */
-function listWorkspacePackages() {
-   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8'));
+function listWorkspacePackages(): WorkspacePackage[] {
+   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8')) as PackageManifest;
    return (manifest.workspaces ?? []).flatMap(expandWorkspaceEntry).map(directory => ({
       dir: directory,
-      name: JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')).name
+      name: (JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')) as PackageManifest).name
    }));
 }
 
@@ -145,8 +170,8 @@ function listWorkspacePackages() {
  * Without these a broken probe reports universal coverage and the gate passes
  * over nothing, which is the exact shape it exists to catch.
  */
-async function selfTest(packages) {
-   const problems = [];
+async function selfTest(packages: WorkspacePackage[]): Promise<string[]> {
+   const problems: string[] = [];
 
    // A ground truth of zero is how this gate would silently cover nothing.
    const examplePackages = packages.filter(({ dir }) => repoRelative(dir).startsWith('examples/'));
@@ -159,14 +184,14 @@ async function selfTest(packages) {
    // universal coverage. Asserted by discrimination rather than by count: one
    // entry that must appear only in the gated list and one only in the excluded
    // list. If either moves, update the probe here — not the claim.
-   const source = readFileSync(join(REPO_ROOT, 'scripts/check-neutral-bundles.mjs'), 'utf-8');
+   const source = readFileSync(join(REPO_ROOT, 'scripts/check-neutral-bundles.mts'), 'utf-8');
    const gated = neutralityEntries(source, 'TARGETS');
    const excluded = neutralityEntries(source, 'NOT_GATED');
    const gatedOnly = 'packages/core/lib/index.js';
    const excludedOnly = 'packages/langium/lib/test.js';
    if (!gated?.has(gatedOnly) || gated?.has(excludedOnly) || !excluded?.has(excludedOnly) || excluded?.has(gatedOnly)) {
       problems.push(
-         'self-test: the TARGETS / NOT_GATED probe no longer separates the two arrays in check-neutral-bundles.mjs, ' +
+         'self-test: the TARGETS / NOT_GATED probe no longer separates the two arrays in check-neutral-bundles.mts, ' +
             'so every "accounted for" verdict from it is worthless.'
       );
    }
@@ -175,7 +200,7 @@ async function selfTest(packages) {
 }
 
 /** Strip `//` line comments so `JSON.parse` accepts a tsc/turbo config. */
-function readJsonWithComments(absolutePath) {
+function readJsonWithComments(absolutePath: string): unknown {
    return JSON.parse(
       readFileSync(absolutePath, 'utf-8')
          .split('\n')
@@ -195,7 +220,11 @@ function readJsonWithComments(absolutePath) {
  */
 function checkRootTsconfigReferences() {
    const problems = [];
-   const referenced = new Set(readJsonWithComments(join(REPO_ROOT, 'tsconfig.json')).references?.map(entry => entry.path) ?? []);
+   const referenced = new Set(
+      (readJsonWithComments(join(REPO_ROOT, 'tsconfig.json')) as { references?: { path: string }[] }).references?.map(
+         entry => entry.path
+      ) ?? []
+   );
    for (const directory of expandWorkspaceEntry('packages/*')) {
       const relativeDir = repoRelative(directory);
       if (existsSync(join(directory, 'tsconfig.json')) && !referenced.has(relativeDir)) {
@@ -231,7 +260,7 @@ function checkRootTsconfigReferences() {
  */
 function checkTurboInputs() {
    const problems = [];
-   const rootTasks = readJsonWithComments(join(REPO_ROOT, 'turbo.json')).tasks ?? {};
+   const rootTasks = (readJsonWithComments(join(REPO_ROOT, 'turbo.json')) as TurboJson).tasks ?? {};
    /** Root `task glob` pairs no package has matched yet. */
    const unmatchedRoot = new Set(
       Object.entries(rootTasks).flatMap(([task, config]) =>
@@ -241,8 +270,11 @@ function checkTurboInputs() {
 
    for (const { dir, name } of listWorkspacePackages()) {
       const localPath = join(dir, 'turbo.json');
-      const localTasks = existsSync(localPath) ? (readJsonWithComments(localPath).tasks ?? {}) : {};
-      const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).scripts ?? {};
+      const localTasks: Partial<Record<string, TurboTaskConfig>> = existsSync(localPath)
+         ? ((readJsonWithComments(localPath) as TurboJson).tasks ?? {})
+         : {};
+      const scripts: Partial<Record<string, string>> =
+         (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')) as PackageManifest).scripts ?? {};
 
       for (const [task, rootConfig] of Object.entries(rootTasks)) {
          const config = localTasks[task] ?? rootConfig;
@@ -332,10 +364,10 @@ function checkIgnorePatterns() {
  */
 function checkSnippetDiscovery() {
    const problems = [];
-   const source = readFileSync(join(REPO_ROOT, 'scripts/check-readme-snippet.mjs'), 'utf-8');
+   const source = readFileSync(join(REPO_ROOT, 'scripts/check-readme-snippet.mts'), 'utf-8');
    const declared = /const DISCOVERY_PATHSPECS = \[([^\]]*)\]/.exec(source);
    if (declared === null) {
-      return ['scripts/check-readme-snippet.mjs: could not read DISCOVERY_PATHSPECS, so its coverage cannot be checked.'];
+      return ['scripts/check-readme-snippet.mts: could not read DISCOVERY_PATHSPECS, so its coverage cannot be checked.'];
    }
    const pathspecs = [...declared[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
    const reached = new Set(trackedFiles(pathspecs));
@@ -345,7 +377,7 @@ function checkSnippetDiscovery() {
          continue;
       }
       problems.push(
-         `${readme}: tracked README not reached by check-readme-snippet.mjs's DISCOVERY_PATHSPECS, so a fence added to it would be ungated.`
+         `${readme}: tracked README not reached by check-readme-snippet.mts's DISCOVERY_PATHSPECS, so a fence added to it would be ungated.`
       );
    }
    return problems;
@@ -355,13 +387,13 @@ function checkSnippetDiscovery() {
  * The `entry:` paths of one named array literal in a sibling gate's source.
  *
  * Read textually, and for the same reason `checkSnippetDiscovery` reads its
- * target textually: importing `check-neutral-bundles.mjs` would EXECUTE it —
+ * target textually: importing `check-neutral-bundles.mts` would EXECUTE it —
  * esbuild over every gated entry, which needs a build and takes seconds. The
  * failure direction is safe: a regex that stops matching some elements makes
  * them read as unaccounted for, so the claim below over-reports and fails loud
  * rather than reporting universal coverage.
  */
-function neutralityEntries(source, arrayName) {
+function neutralityEntries(source: string, arrayName: string): Set<string> | undefined {
    const start = source.indexOf(`const ${arrayName} = [`);
    if (start === -1) {
       return undefined;
@@ -392,21 +424,21 @@ function neutralityEntries(source, arrayName) {
  * inventory with no decision in it.
  */
 function checkNeutralityEntryCoverage() {
-   const source = readFileSync(join(REPO_ROOT, 'scripts/check-neutral-bundles.mjs'), 'utf-8');
+   const source = readFileSync(join(REPO_ROOT, 'scripts/check-neutral-bundles.mts'), 'utf-8');
    const gated = neutralityEntries(source, 'TARGETS');
    const excluded = neutralityEntries(source, 'NOT_GATED');
    if (gated === undefined || excluded === undefined) {
-      return ['scripts/check-neutral-bundles.mjs: could not read its TARGETS / NOT_GATED arrays, so their coverage cannot be checked.'];
+      return ['scripts/check-neutral-bundles.mts: could not read its TARGETS / NOT_GATED arrays, so their coverage cannot be checked.'];
    }
    if (gated.size === 0 || excluded.size === 0) {
       return [
-         'scripts/check-neutral-bundles.mjs: TARGETS or NOT_GATED read as empty, so every "accounted for" verdict below would be vacuous.'
+         'scripts/check-neutral-bundles.mts: TARGETS or NOT_GATED read as empty, so every "accounted for" verdict below would be vacuous.'
       ];
    }
 
    const problems = [];
    for (const directory of expandWorkspaceEntry('packages/*')) {
-      const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8'));
+      const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')) as PackageManifest;
       for (const [key, value] of Object.entries(manifest.exports ?? {})) {
          if (key.startsWith('./lib/') || /(^|\/)node$/.test(key)) {
             continue;
@@ -420,7 +452,7 @@ function checkNeutralityEntryCoverage() {
          if (!gated.has(entry) && !excluded.has(entry)) {
             problems.push(
                `${manifest.name}: the \`${key}\` export (\`${entry}\`) is in neither TARGETS nor NOT_GATED in ` +
-                  'scripts/check-neutral-bundles.mjs, so it is ungated for browser-neutrality with no recorded reason.'
+                  'scripts/check-neutral-bundles.mts, so it is ungated for browser-neutrality with no recorded reason.'
             );
          }
       }
@@ -438,17 +470,12 @@ async function main() {
 
    // vitest: every package with a suite config must be a root project.
    //
-   // Loaded through vite rather than by `await import`, and that is a floor
-   // constraint rather than a preference: the config is TypeScript, and Node
-   // strips types unflagged only from 22.18, where `engines.node` declares
-   // 22.13 — so a direct import throws ERR_UNKNOWN_FILE_EXTENSION on the
-   // oldest version this repo supports, which is exactly what `.nvmrc` pins CI
-   // to. `loadConfigFromFile` bundles the config with esbuild first, so it is
-   // version-independent, and it keeps this reading the tool's own answer
-   // rather than a second parser of ours.
+   // Loaded through vite rather than by `await import`, so this reads the
+   // config the way vitest itself resolves it rather than through a second
+   // loader of ours.
    const { loadConfigFromFile } = await import('vite');
    const loadedVitestConfig = await loadConfigFromFile({ command: 'serve', mode: 'test' }, join(REPO_ROOT, 'vitest.config.ts'));
-   const projectPatterns = loadedVitestConfig?.config?.test?.projects ?? [];
+   const projectPatterns = (loadedVitestConfig?.config as VitestUserConfig | undefined)?.test?.projects ?? [];
    const discovered = new Set(
       projectPatterns.flatMap(pattern => expandWorkspaceEntry(pattern.replace(/\/vitest\.config\.ts$/, ''))).map(repoRelative)
    );
@@ -478,7 +505,7 @@ async function main() {
    );
 }
 
-function report(problems) {
+function report(problems: string[]): void {
    console.error('✗ a glob no longer covers the packages it claims to:\n');
    for (const problem of problems) {
       console.error(`  - ${problem}`);

@@ -30,8 +30,8 @@ const outputFile = resolve(packageRoot, 'src/generated/workspace-seed.ts');
 const MODEL_EXTENSIONS = ['.domain', '.process', '.layout'];
 
 /** Every model file under `directory`, as paths relative to the workspace root. */
-function collectModelFiles(directory) {
-   const found = [];
+function collectModelFiles(directory: string): string[] {
+   const found: string[] = [];
    for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolute = join(directory, entry.name);
       if (entry.isDirectory()) {

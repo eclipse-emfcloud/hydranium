@@ -74,7 +74,7 @@
  * and it reports a `//` sitting inside a string or a template literal. Both
  * directions were live in this repo.
  *
- * Usage: node scripts/check-link-tags.mjs
+ * Usage: node scripts/check-link-tags.mts
  */
 
 import { execFileSync } from 'node:child_process';
@@ -106,12 +106,12 @@ const LINK_TAG = /\{@link\s+\S/;
  * re-scan, and every comment after that point is lost with no error. Measured
  * on this repo: the scanner form found one of the three live occurrences.
  */
-function commentRanges(sourceFile, text) {
-   const byPosition = new Map();
-   const record = ranges => {
+function commentRanges(sourceFile: ts.SourceFile, text: string): ts.CommentRange[] {
+   const byPosition = new Map<string, ts.CommentRange>();
+   const record = (ranges: ts.CommentRange[] | undefined): void => {
       for (const range of ranges ?? []) byPosition.set(`${range.pos}:${range.end}`, range);
    };
-   const walk = node => {
+   const walk = (node: ts.Node): void => {
       record(ts.getLeadingCommentRanges(text, node.getFullStart()));
       record(ts.getTrailingCommentRanges(text, node.getEnd()));
       for (const child of node.getChildren(sourceFile)) walk(child);
@@ -126,7 +126,7 @@ function commentRanges(sourceFile, text) {
  * would have to be excluded from the real scan by a rule that could itself stop
  * matching, which is the failure this gate is guarding against one level up.
  */
-export function linkTagsInLineComments(fileName, text) {
+export function linkTagsInLineComments(fileName: string, text: string): { line: number; comment: string }[] {
    if (!text.includes('{@link')) return [];
    const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
    const hits = [];
@@ -193,7 +193,7 @@ const EXAMPLES_TREE = 'examples';
 const PRIVATE_TREE = 'internal';
 
 /** Where the pointer rules apply. */
-function isPointerScoped(file) {
+function isPointerScoped(file: string): boolean {
    const [topLevel] = file.split('/');
    return topLevel !== EXAMPLES_TREE && topLevel !== PRIVATE_TREE;
 }
@@ -205,7 +205,7 @@ function isPointerScoped(file) {
  * same in a JSDoc block, and the block form is where the framework's
  * load-bearing prose lives.
  */
-export function pointersInComments(fileName, text) {
+export function pointersInComments(fileName: string, text: string): { ruleId: string; remedy: string; line: number; matches: string[] }[] {
    if (!isPointerScoped(fileName)) return [];
    const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
    const hits = [];

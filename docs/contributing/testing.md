@@ -38,7 +38,7 @@ Cross-cutting techniques layered on top:
 - **`testTimeout` is 20s under `CI` and 5s locally**, set once in `vitest.shared.ts`. The asymmetry is deliberate: a shared CI executor runs the same suite several times slower than a developer machine under equal parallel load, and a slow test is cheapest to find where it is being written. **It does not protect a SYNCHRONOUS test.** The timeout is an event-loop timer, so a test body that blocks — anything built on `spawnSync` or `execFileSync` — runs to completion however long it takes, and no timeout of any value will interrupt it. Make a test async if you want the timeout to mean anything for it.
 
 - **Under `CI`, vitest also writes `test-results/junit.xml` per package**, uploaded by the workflow on `always()`. Its per-`testcase` `time` attribute is the only place a single test's cost is recorded: the console reporter totals a package and names no test, so without it "which test is closest to the timeout" can only be answered by one going red.
-- **One construction verb — `make`.** Doubles are `makeStub<Service>()`, harnesses `make<Subject>Harness()`, builders/fixtures `make<Thing>()`. The one exception is `startSpawnedServer`, which owns a child process, so it takes the `start` verb the production launchers use and can fail rather than merely construct. Reusable scaffolding ships from a package's `*/testing` subpath (`@hydranium/core/testing`, …); most are browser-neutral and gated as such, and a few are deliberately excluded from that gate on their merits — `scripts/check-neutral-bundles.mjs` names each exclusion beside its reason, and being named there is what separates a considered exclusion from an oversight. Anything needing a real filesystem or a Node stream transport ships from `*/testing/node` instead.
+- **One construction verb — `make`.** Doubles are `makeStub<Service>()`, harnesses `make<Subject>Harness()`, builders/fixtures `make<Thing>()`. The one exception is `startSpawnedServer`, which owns a child process, so it takes the `start` verb the production launchers use and can fail rather than merely construct. Reusable scaffolding ships from a package's `*/testing` subpath (`@hydranium/core/testing`, …); most are browser-neutral and gated as such, and a few are deliberately excluded from that gate on their merits — `scripts/check-neutral-bundles.mts` names each exclusion beside its reason, and being named there is what separates a considered exclusion from an oversight. Anything needing a real filesystem or a Node stream transport ships from `*/testing/node` instead.
 - **No fixed sleeps.** Await asynchrony with `waitFor` / `tick`, never a hand-rolled `setTimeout`.
 
 Full detail: **Test support** in [`conventions.md`](conventions.md).
@@ -138,7 +138,7 @@ fresh npm install. Set `HYDRANIUM_KEEP_PACKED_CONSUMER=1` to inspect the
 disposable project after a failure.
 
 The package-file assertion has a deliberate negative control. After a build,
-run `node scripts/check-packed-consumer.mjs --negative-missing-package-file`;
+run `node scripts/check-packed-consumer.mts --negative-missing-package-file`;
 it must fail with `consumer package @hydranium/core is missing or installed
 through a symlink`. This confirms the check reaches the install-shape assertion
 rather than merely completing the consumer smoke.

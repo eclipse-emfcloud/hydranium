@@ -40,19 +40,24 @@ const consumer = join(scratch, 'consumer');
 const packageDirs = ['langium', 'protocol', 'core', 'data-server', 'glsp-server'];
 const env = { ...process.env, npm_config_workspaces: 'false' };
 
+interface InstalledManifest {
+   name?: string;
+   version?: string;
+}
+
 /** Run a consumer step, naming the phase in the error so a failure says where it happened. */
-function run(label, program, args, cwd) {
+function run(label: string, program: string, args: string[], cwd: string): void {
    const result = spawnSync(program, args, { cwd, env, stdio: 'inherit' });
    if (result.error) throw new Error(`${label} failed: ${result.error.message}`);
    if (result.status !== 0) throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
-function packageName(directory) {
-   return JSON.parse(readFileSync(join(root, 'packages', directory, 'package.json'), 'utf8')).name;
+function packageName(directory: string): string {
+   return (JSON.parse(readFileSync(join(root, 'packages', directory, 'package.json'), 'utf8')) as { name: string }).name;
 }
 
-function publishedBaseline(override) {
-   const version =
+function publishedBaseline(override: string | undefined): string {
+   const version: string | undefined =
       override || JSON.parse(execFileSync('npm', ['view', '@hydranium/core', 'dist-tags.latest', '--json'], { encoding: 'utf8' }));
    if (!version || !/-next\./.test(version)) {
       const source = override ? 'HYDRANIUM_UPGRADE_FROM' : 'dist-tag latest';
@@ -62,14 +67,14 @@ function publishedBaseline(override) {
 }
 
 /** Pack every framework package into `tarballs`, answering name → `file:` specifier. */
-function packCandidates() {
-   const candidates = new Map();
+function packCandidates(): Map<string, string> {
+   const candidates = new Map<string, string>();
    for (const directory of packageDirs) {
       const output = execFileSync('npm', ['pack', '--json', '--pack-destination', tarballs], {
          cwd: join(root, 'packages', directory),
          encoding: 'utf8'
       });
-      const filename = JSON.parse(output)[0]?.filename;
+      const filename = (JSON.parse(output) as { filename?: string }[])[0]?.filename;
       if (!filename) throw new Error(`npm pack produced no tarball for ${directory}`);
       candidates.set(packageName(directory), `file:${join(tarballs, filename)}`);
    }
@@ -77,10 +82,10 @@ function packCandidates() {
 }
 
 /** Write the consumer project: the bookstore server's source and dependencies, with `packages` pinned. */
-function writeConsumer(packages) {
-   const sourcePackage = JSON.parse(readFileSync(join(example, 'package.json'), 'utf8'));
-   const rootPackage = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-   const dependencies = { ...sourcePackage.dependencies, 'vscode-jsonrpc': '9.0.1' };
+function writeConsumer(packages: Map<string, string>): void {
+   const sourcePackage = JSON.parse(readFileSync(join(example, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+   const rootPackage = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { overrides?: unknown };
+   const dependencies: Record<string, string> = { ...sourcePackage.dependencies, 'vscode-jsonrpc': '9.0.1' };
    for (const [name, dependencySpec] of packages) dependencies[name] = dependencySpec;
    writeFileSync(
       join(consumer, 'package.json'),
@@ -104,7 +109,7 @@ function writeConsumer(packages) {
    cpSync(join(root, 'scripts/fixtures/packed-consumer/smoke.mjs'), join(consumer, 'smoke.mjs'));
    mkdirSync(join(consumer, 'patches'));
    cpSync(join(root, 'patches/vscode-jsonrpc+9.0.1.patch'), join(consumer, 'patches/vscode-jsonrpc+9.0.1.patch'));
-   const base = JSON.parse(readFileSync(join(root, 'tsconfig.base.json'), 'utf8'));
+   const base = JSON.parse(readFileSync(join(root, 'tsconfig.base.json'), 'utf8')) as { compilerOptions?: Record<string, unknown> };
    writeFileSync(
       join(consumer, 'tsconfig.json'),
       `${JSON.stringify(
@@ -131,9 +136,9 @@ function writeConsumer(packages) {
 }
 
 /** Point the consumer's framework dependencies at `packages`, leaving the rest as written. */
-function repointConsumer(packages) {
+function repointConsumer(packages: Map<string, string>): void {
    const manifestPath = join(consumer, 'package.json');
-   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies: Record<string, string> };
    for (const [name, dependencySpec] of packages) manifest.dependencies[name] = dependencySpec;
    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
@@ -143,13 +148,15 @@ function repointConsumer(packages) {
  * came from where its specifier says: a `file:` tarball, or exactly the
  * published version from the registry.
  */
-function assertInstalledFrom(packages) {
-   const lock = JSON.parse(readFileSync(join(consumer, 'package-lock.json'), 'utf8'));
+function assertInstalledFrom(packages: Map<string, string>): void {
+   const lock = JSON.parse(readFileSync(join(consumer, 'package-lock.json'), 'utf8')) as {
+      packages?: Record<string, { resolved?: string }>;
+   };
    for (const [name, dependencySpec] of packages) {
       const installedDir = join(consumer, 'node_modules', name);
       const manifest = join(installedDir, 'package.json');
       const resolved = String(lock.packages?.[`node_modules/${name}`]?.resolved);
-      const installed = existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : undefined;
+      const installed = existsSync(manifest) ? (JSON.parse(readFileSync(manifest, 'utf8')) as InstalledManifest) : undefined;
       if (!installed || lstatSync(installedDir).isSymbolicLink() || installed.name !== name) {
          throw new Error(`consumer package ${name} is missing or installed through a symlink`);
       }
@@ -162,13 +169,13 @@ function assertInstalledFrom(packages) {
 }
 
 /** Assert the wire stack resolved to the pinned versions, and to one physical copy each. */
-function assertSingleCopies() {
+function assertSingleCopies(): void {
    for (const [name, version] of [
       ['langium', '4.3.1'],
       ['vscode-jsonrpc', '9.0.1'],
       ['vscode-languageserver-protocol', '3.18.2']
    ]) {
-      const installed = JSON.parse(readFileSync(join(consumer, 'node_modules', name, 'package.json'), 'utf8'));
+      const installed = JSON.parse(readFileSync(join(consumer, 'node_modules', name, 'package.json'), 'utf8')) as InstalledManifest;
       if (installed.version !== version) throw new Error(`${name} resolved to ${installed.version}, expected ${version}`);
    }
    const physical = execFileSync('npm', ['ls', 'langium', 'vscode-jsonrpc', '--all', '--parseable'], {
@@ -197,7 +204,7 @@ try {
       process.stdout.write(`Upgrading from ${published} (set HYDRANIUM_UPGRADE_FROM to repeat this run).\n`);
    }
    const candidates = publishedPrerelease ? undefined : packCandidates();
-   const first = new Map(packageDirs.map(directory => [packageName(directory), published ?? candidates.get(packageName(directory))]));
+   const first = new Map(packageDirs.map(directory => [packageName(directory), published ?? candidates!.get(packageName(directory))!]));
 
    writeConsumer(first);
    run(published ? `Prerelease resolution (${published})` : 'Candidate resolution', 'npm', install, consumer);
@@ -210,9 +217,9 @@ try {
    assertInstalledFrom(first);
 
    if (upgradeFromPublished) {
-      repointConsumer(candidates);
+      repointConsumer(candidates!);
       run('Candidate migration to tarballs', 'npm', install, consumer);
-      assertInstalledFrom(candidates);
+      assertInstalledFrom(candidates!);
    }
 
    assertSingleCopies();

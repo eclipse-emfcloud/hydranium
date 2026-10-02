@@ -23,9 +23,9 @@
  * writes that line themselves.
  *
  * Usage:
- *   node scripts/header.mjs <file> [<file>...]
- *   node scripts/header.mjs --check <file>...     # exit 1 if any file lacks the header
- *   node scripts/header.mjs --check-all           # same, over every source file
+ *   node scripts/header.mts <file> [<file>...]
+ *   node scripts/header.mts --check <file>...     # exit 1 if any file lacks the header
+ *   node scripts/header.mts --check-all           # same, over every source file
  */
 
 import { execFileSync } from 'node:child_process';
@@ -76,7 +76,7 @@ const SHEBANG_RE = /^#![^\n]*\r?\n/;
  * the file for the interpreter to find it. Returns the shebang (including its
  * newline, or `''` when absent) and the remaining source.
  */
-function splitShebang(src) {
+function splitShebang(src: string): { shebang: string; body: string } {
    const match = src.match(SHEBANG_RE);
    if (match === null) {
       return { shebang: '', body: src };
@@ -88,7 +88,7 @@ function splitShebang(src) {
  * Parse the leading block comment (if any) from `src`. Returns the comment
  * lines and the rest of the file.
  */
-function splitLeadingBlockComment(src) {
+function splitLeadingBlockComment(src: string): { commentLines: string[]; rest: string } {
    if (!src.startsWith('/*')) {
       return { commentLines: [], rest: src };
    }
@@ -106,7 +106,7 @@ function splitLeadingBlockComment(src) {
 /**
  * Extract every copyright line from a list of comment lines, preserving order.
  */
-function extractCopyrights(commentLines) {
+function extractCopyrights(commentLines: string[]): string[] {
    return commentLines.filter(line => COPYRIGHT_RE.test(line)).map(line => line.replace(/^\s*\*\s*/, ' * '));
 }
 
@@ -115,7 +115,7 @@ function extractCopyrights(commentLines) {
  * `* Copyright (c) ...` lines (already prefixed with ` * `), kept verbatim and
  * in order. Only a file with none of them gets {@link DEFAULT_COPYRIGHT}.
  */
-function buildHeader(copyrights) {
+function buildHeader(copyrights: string[]): string {
    const lines = [HEADER_TOP];
    if (copyrights.length === 0) {
       lines.push(` * ${DEFAULT_COPYRIGHT}`);
@@ -134,7 +134,7 @@ function buildHeader(copyrights) {
  * code — the convention every source file in the repo already follows. A
  * shebang, when present, is re-emitted above the header.
  */
-function applyHeader(file) {
+function applyHeader(file: string): boolean {
    const src = readFileSync(file, 'utf-8');
    const { shebang, body: afterShebang } = splitShebang(src);
    const { commentLines, rest } = splitLeadingBlockComment(afterShebang.replace(/^\r?\n+/, ''));
@@ -152,13 +152,13 @@ function applyHeader(file) {
 /**
  * Check whether a file already contains the SPDX line.
  */
-function hasHeader(file) {
+function hasHeader(file: string): boolean {
    const src = readFileSync(file, 'utf-8');
    return src.includes(SPDX_LINE);
 }
 
 /** File types that carry the license header. */
-const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.cjs', '.js', '.css'];
+const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs', '.cjs', '.js', '.css'];
 
 /**
  * Paths deliberately exempt from `--check-all`. Each is generated or
@@ -214,7 +214,7 @@ function main() {
    const files = checkAll ? listCoveredFiles() : args.filter(arg => arg !== '--check');
 
    if (files.length === 0) {
-      console.error('Usage: node scripts/header.mjs [--check | --check-all] <file>...');
+      console.error('Usage: node scripts/header.mts [--check | --check-all] <file>...');
       process.exit(2);
    }
 
@@ -247,7 +247,7 @@ function main() {
          console.log(`✓ all ${files.length} source files carry the ${SPDX_LINE} header`);
       } else {
          console.error(`\n${missing} of ${files.length} source files lack the header.`);
-         console.error('Run `node scripts/header.mjs <file>...` to add it.');
+         console.error('Run `node scripts/header.mts <file>...` to add it.');
       }
    }
    process.exit(exitCode);

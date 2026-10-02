@@ -71,7 +71,7 @@ launchers live in `@hydranium/core/node`, not here.
 | `./node`    | `nodeDataServerDiagnostics()`, the runtime-backed half of the diagnostics seam.                                 | Node-only                         |
 | `./testing` | `makeDataServerHarness` — a real server driven in-process over a duplex connection pair.                        | Node-only (`vscode-jsonrpc/node`) |
 
-`.` is gated as browser-neutral in CI (`scripts/check-neutral-bundles.mjs`). It
+`.` is gated as browser-neutral in CI (`scripts/check-neutral-bundles.mts`). It
 stays that way through a `browser` field in `package.json` that swaps the
 diagnostics default for a browser twin, so a bundler never follows the
 `@hydranium/core/node` import a Node host resolves — see [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).

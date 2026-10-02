@@ -10,8 +10,8 @@
 // The release driver: stamps a version across the publishable packages and
 // publishes them in lockstep.
 //
-//   node scripts/release.mjs next   [--dry-run]
-//   node scripts/release.mjs latest [--dry-run]
+//   node scripts/release.mts next   [--dry-run]
+//   node scripts/release.mts latest [--dry-run]
 //
 // `next` derives a rolling prerelease from the committed base — `1.0.0-next`
 // plus the number of commits since the last release tag — and is what every
@@ -30,6 +30,23 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+type DependencyBlock = 'dependencies' | 'devDependencies' | 'peerDependencies';
+/** The fields of a `package.json` this script reads or rewrites. */
+interface Manifest extends Partial<Record<DependencyBlock, Record<string, string>>> {
+   name: string;
+   version: string;
+   private?: boolean;
+}
+interface WorkspacePackage {
+   file: string;
+   dir: string;
+   manifest: Manifest;
+}
+interface Workspace {
+   packages: WorkspacePackage[];
+   names: Set<string>;
+}
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
@@ -63,7 +80,7 @@ const REPORT_BACKOFF_MS = 4_000;
  * publish: `npm view` returned 404 for packages `npm dist-tag ls` reported as
  * live.
  */
-function publishedTag(name, distTag) {
+function publishedTag(name: string, distTag: string): string | undefined {
    let output;
    try {
       output = execFileSync('npm', ['dist-tag', 'ls', name], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -83,24 +100,24 @@ function publishedTag(name, distTag) {
 }
 
 /** Blocks the thread. The script is synchronous throughout; a timer would not run. */
-function sleepSync(ms) {
+function sleepSync(ms: number): void {
    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** A version on the rolling line, as opposed to a stable one. */
-function isNextVersion(version) {
+function isNextVersion(version: string): boolean {
    return version.endsWith('-next');
 }
 
 // stderr is captured rather than inherited so a probing call that is EXPECTED
 // to fail — `describe` against a repository with no release tag — does not
 // print git's own `fatal:` ahead of the message that explains it.
-function git(args) {
+function git(args: string[]): string {
    return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function readManifest(file) {
-   return JSON.parse(readFileSync(file, 'utf-8'));
+function readManifest(file: string): Manifest {
+   return JSON.parse(readFileSync(file, 'utf-8')) as Manifest;
 }
 
 /**
@@ -110,7 +127,7 @@ function readManifest(file) {
  * example that peers on a framework package still has to resolve, so its ranges
  * move with the rest.
  */
-function loadWorkspace() {
+function loadWorkspace(): Workspace {
    const packages = readdirSync(PACKAGES_DIR)
       .map(entry => join(PACKAGES_DIR, entry, 'package.json'))
       .filter(file => {
@@ -127,7 +144,7 @@ function loadWorkspace() {
 }
 
 /** The base version every publishable package is expected to agree on. */
-function readBaseVersion(packages) {
+function readBaseVersion(packages: WorkspacePackage[]): string {
    const bases = new Set(packages.map(pkg => pkg.manifest.version));
    if (bases.size !== 1) {
       throw new Error(
@@ -145,7 +162,7 @@ function readBaseVersion(packages) {
  * repository with none cannot place the counter at all, so both fail loudly
  * here rather than producing a plausible wrong number.
  */
-function deriveRollingVersion(base) {
+function deriveRollingVersion(base: string): { version: string; lastTag: string; count: number } {
    let lastTag;
    try {
       lastTag = git(['describe', '--tags', '--abbrev=0', '--match', RELEASE_TAG_GLOB]);
@@ -179,7 +196,7 @@ function deriveRollingVersion(base) {
  * fails with a 404 naming a first-party package, which reads as a broken
  * lockfile rather than as a dry run that mutated the tree.
  */
-function stamp(workspace, version, dryRun) {
+function stamp(workspace: Workspace, version: string, dryRun: boolean): void {
    if (dryRun) {
       console.log(`[dry-run] would stamp ${workspace.packages.length} manifests to ${version}`);
       console.log('[dry-run] the pack below therefore reports the committed base, not that version');
@@ -187,10 +204,11 @@ function stamp(workspace, version, dryRun) {
    }
    for (const pkg of workspace.packages) {
       pkg.manifest.version = version;
-      for (const block of ['dependencies', 'devDependencies', 'peerDependencies']) {
-         for (const name of Object.keys(pkg.manifest[block] ?? {})) {
+      for (const block of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
+         const ranges = pkg.manifest[block] ?? {};
+         for (const name of Object.keys(ranges)) {
             if (workspace.names.has(name)) {
-               pkg.manifest[block][name] = version;
+               ranges[name] = version;
             }
          }
       }
@@ -211,24 +229,27 @@ function stamp(workspace, version, dryRun) {
  * A package that does not exist yet has no stable release, which is the
  * bootstrap case and not an error.
  */
-function hasStableRelease(name) {
+function hasStableRelease(name: string): boolean {
    let output;
    try {
       output = execFileSync('npm', ['view', name, 'versions', '--json'], {
          encoding: 'utf-8',
          stdio: ['ignore', 'pipe', 'pipe']
       });
-   } catch (error) {
-      if (String(error.stderr ?? '').includes('E404')) {
+   } catch (error: unknown) {
+      const stderr = error instanceof Error && 'stderr' in error ? error.stderr : undefined;
+      if (String(stderr ?? '').includes('E404')) {
          return false;
       }
-      throw new Error(`Could not read the published versions of ${name}: ${error.stderr ?? error.message}`);
+      throw new Error(
+         `Could not read the published versions of ${name}: ${stderr ?? (error instanceof Error ? error.message : String(error))}`
+      );
    }
-   const versions = JSON.parse(output);
+   const versions = JSON.parse(output) as string | string[];
    return (Array.isArray(versions) ? versions : [versions]).some(version => !version.includes('-'));
 }
 
-function publishablePackages(workspace) {
+function publishablePackages(workspace: Workspace): WorkspacePackage[] {
    return workspace.packages.filter(pkg => pkg.manifest.private !== true);
 }
 
@@ -244,7 +265,7 @@ function publishablePackages(workspace) {
  * reject a re-run, and the version cannot be advanced without a new commit,
  * because it is derived from the commit count rather than stored.
  */
-function publish(pkg, distTag, dryRun) {
+function publish(pkg: WorkspacePackage, distTag: string, dryRun: boolean): 'skipped' | 'published' {
    const args = ['publish', '--tag', distTag];
    if (dryRun) {
       args.push('--dry-run');
@@ -284,10 +305,10 @@ function publish(pkg, distTag, dryRun) {
  * the rest for free. The budget is short deliberately: it buys a tidier report,
  * never a verdict, so there is nothing to be gained by waiting longer.
  */
-function reportPublished(packages, version, distTag) {
+function reportPublished(packages: WorkspacePackage[], version: string, distTag: string): void {
    // Holds the last version seen, not just the name: the report has to tell a
    // tag serving the PREVIOUS version apart from one it could not read.
-   const pending = new Map(packages.map(pkg => [pkg.manifest.name, undefined]));
+   const pending = new Map<string, string | undefined>(packages.map(pkg => [pkg.manifest.name, undefined]));
    for (let round = 0; round < REPORT_ROUNDS && pending.size > 0; round++) {
       if (round > 0) {
          sleepSync(REPORT_BACKOFF_MS * round);
@@ -313,7 +334,7 @@ function reportPublished(packages, version, distTag) {
    );
 }
 
-function releaseNext(workspace, dryRun) {
+function releaseNext(workspace: Workspace, dryRun: boolean): void {
    const base = readBaseVersion(workspace.packages);
    if (!isNextVersion(base)) {
       throw new Error(
@@ -337,7 +358,7 @@ function releaseNext(workspace, dryRun) {
    }
 }
 
-function releaseLatest(workspace, dryRun) {
+function releaseLatest(workspace: Workspace, dryRun: boolean): void {
    const base = readBaseVersion(workspace.packages);
    if (isNextVersion(base)) {
       throw new Error(
@@ -364,7 +385,7 @@ function main() {
    const dryRun = args.includes('--dry-run');
    const mode = args.find(arg => !arg.startsWith('--'));
    if (mode !== 'next' && mode !== 'latest') {
-      console.error('Usage: node scripts/release.mjs <next|latest> [--dry-run]');
+      console.error('Usage: node scripts/release.mts <next|latest> [--dry-run]');
       process.exit(1);
    }
 

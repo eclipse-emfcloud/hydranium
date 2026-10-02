@@ -1,0 +1,17 @@
+{
+  "//": "The repository scripts, which Node runs as TypeScript by stripping types and never compiles. `erasableSyntaxOnly` rejects what stripping cannot handle (enums, namespaces, parameter properties), and `verbatimModuleSyntax` requires `import type` for a type-only import, which stripping would otherwise leave as a runtime import of a name that does not exist.",
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["scripts/*.mts", "examples/*/*/scripts/*.mts"]
+}

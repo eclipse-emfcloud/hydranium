@@ -87,7 +87,7 @@ export class OrderFlowProcessDiagramEditorProvider extends GlspEditorProvider {
     *   build time, which the bundler cannot know.
     *
     * `'unsafe-eval'` is deliberately NOT granted, unlike GLSP's own example.
-    * Nothing in the bundle needs it — `scripts/check-webview-csp.mjs` proves that
+    * Nothing in the bundle needs it — `scripts/check-webview-csp.mts` proves that
     * against the built artefact rather than by inspection — and granting it
     * "because the upstream example does" is how a webview ends up permanently
     * looser than it has to be.

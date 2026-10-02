@@ -52,8 +52,8 @@
  * hand-written additions — an adapted provenance target pins nothing.
  *
  * Usage:
- *   node scripts/check-init-provenance.mjs            # verify; exit 1 on drift
- *   node scripts/check-init-provenance.mjs --write     # re-derive the `identical` files
+ *   node scripts/check-init-provenance.mts            # verify; exit 1 on drift
+ *   node scripts/check-init-provenance.mts --write     # re-derive the `identical` files
  *
  * `--write` exists because nothing else in the repo writes an example back, so
  * every template change was re-synced by hand — and a hand re-sync is what makes
@@ -77,18 +77,82 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** 8-line SPDX block plus the blank line after it, which the scaffold does not emit. */
 const HEADER_LINES = 9;
 
+/** The slice of `packages/cli/lib/commands/init.js` this gate drives; its own types live in a build this script cannot assume. */
+interface InitModule {
+   resolveInitPackaging(targetDir: string, options: { monorepo?: boolean; public?: boolean; scope?: string }): unknown;
+   resolveInitComposition(name: string, grammars?: readonly { name: string }[], heads?: readonly string[], packaging?: unknown): unknown;
+   planInitFiles(composition: unknown): InitFile[];
+}
+
+interface InitFile {
+   path: string;
+   content: string;
+}
+
+interface Invocation {
+   name: string;
+   grammars: { name: string }[];
+   heads?: string[];
+   monorepo?: boolean;
+   public?: boolean;
+   scope?: string;
+}
+
+interface EntryBase {
+   reason?: string;
+   exempt?: string[];
+}
+
+type ManifestEntry = (EntryBase & { verdict: 'identical' | 'adapted' | 'dropped' }) | (EntryBase & { verdict: 'replaced'; by: string });
+
+type Manifest = Record<string, ManifestEntry>;
+
+interface ScaffoldTarget {
+   label: string;
+   dir: string;
+   invocation: Invocation;
+   manifest: Manifest;
+}
+
+interface ProvenanceTarget extends ScaffoldTarget {
+   table: string;
+}
+
+/** `content` and `drifted` are absent only when a side failed to parse, which always leaves a problem. */
+interface OverlayResult {
+   content?: string;
+   problems: string[];
+   drifted?: string[];
+}
+
+interface Problem {
+   text: string;
+   writable?: boolean;
+}
+
+type PinRule = 'exact' | 'tilde' | 'minor' | 'admits';
+
+type PinSource = { file: string; path: string[]; rule: PinRule; unpinned?: undefined } | { unpinned: string };
+
+type Version = [number, number, number];
+
+interface PinVerdict {
+   agrees?: boolean;
+   why?: string;
+}
+
 /**
  * Split a leading `#!` shebang off its file, since it stays ahead of the header.
  *
  * The `bin` entries the scaffold emits carry one, and it has to be the very
- * first line for the interpreter to find it — so `scripts/header.mjs` writes the
+ * first line for the interpreter to find it — so `scripts/header.mts` writes the
  * SPDX block BELOW it. Everything here that reasons about "line 1 is the header"
  * therefore has to reason about line 2 as well: a shebang-first file otherwise
  * fails the `startsWith('/****')` test, the header is not stripped, and every
  * comparison on that file misaligns by nine lines while the content is in fact
  * identical.
  */
-function splitShebang(text) {
+function splitShebang(text: string): { shebang: string; body: string } {
    const match = /^#![^\n]*\n/.exec(text);
    return match === null ? { shebang: '', body: text } : { shebang: match[0], body: text.slice(match[0].length) };
 }
@@ -103,7 +167,7 @@ function splitShebang(text) {
  * `order-flow-domain` and `.domain` on its own, which is what the example
  * actually has — and the same holds for `Layout`/`.layout`.
  */
-const ORDER_FLOW_INVOCATION = {
+const ORDER_FLOW_INVOCATION: Invocation = {
    name: 'OrderFlow',
    grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }],
    // The example IS a workspace member, so the recorded invocation says so. This
@@ -127,7 +191,7 @@ const ORDER_FLOW_INVOCATION = {
  * the VERDICT was right and nothing reads the sentence beside it. When a verdict
  * flips, re-read the diff rather than the reason.
  */
-const ORDER_FLOW_MANIFEST = {
+const ORDER_FLOW_MANIFEST: Manifest = {
    // `--monorepo` derives the `--prefix` in the regen command. Everything else
    // that differs is either example-specific or a consequence of the hand-added
    // GLSP head, and there is a lot of it: the descriptive `example-` package
@@ -241,7 +305,7 @@ const ORDER_FLOW_MANIFEST = {
  * `"private": true` is likewise not a field: the scaffold emits it unless
  * `--public` asks otherwise, so the example carries it by derivation.
  */
-const BOOKSTORE_INVOCATION = {
+const BOOKSTORE_INVOCATION: Invocation = {
    name: 'Bookstore',
    grammars: [{ name: 'Bookstore' }],
    heads: ['lsp', 'data', 'glsp'],
@@ -256,7 +320,7 @@ const BOOKSTORE_INVOCATION = {
  * `init` invocation plus its grammar, so any second `adapted` line here is a
  * reason to reconsider the addition, not a line to add.
  */
-const BOOKSTORE_MANIFEST = {
+const BOOKSTORE_MANIFEST: Manifest = {
    // The ONE thing an in-repo example cannot take verbatim: sibling examples are
    // `@hydranium/example-<example>-<host>` and the scaffold emits a bare project
    // id, which no detection can supply because it encodes a convention rather
@@ -330,7 +394,7 @@ const BOOKSTORE_MANIFEST = {
  * Naming it per target rather than deriving it from `dir` is what keeps the
  * failure message from pointing at a file with no table in it.
  */
-const TARGETS = [
+const TARGETS: ProvenanceTarget[] = [
    {
       label: 'order-flow',
       dir: 'examples/order-flow/server',
@@ -368,16 +432,18 @@ const TARGETS = [
  * stringifies to a form the pretty-printed emission does not contain, so it
  * fails loudly instead of matching a fragment of something else.
  */
-function overlayExemptedFields(scaffoldContent, exampleContent, fields) {
-   let scaffold;
-   let example;
+function overlayExemptedFields(scaffoldContent: string, exampleContent: string, fields: string[]): OverlayResult {
+   let scaffold: Record<string, unknown>;
+   let example: Record<string, unknown>;
    try {
       scaffold = JSON.parse(scaffoldContent);
       example = JSON.parse(exampleContent);
-   } catch (error) {
-      return { problems: [`carries an exemption list, which only a JSON file can: ${error.message}`] };
+   } catch (error: unknown) {
+      return {
+         problems: [`carries an exemption list, which only a JSON file can: ${error instanceof Error ? error.message : String(error)}`]
+      };
    }
-   const problems = [];
+   const problems: string[] = [];
    let content = scaffoldContent;
    for (const field of fields) {
       if (scaffold[field] === undefined) {
@@ -427,10 +493,10 @@ function overlayExemptedFields(scaffoldContent, exampleContent, fields) {
  * synthesised: the examples do not share one copyright line, so generating it
  * would silently rewrite attribution. A file that carries no header keeps none.
  */
-function writeTarget(init, target) {
+function writeTarget(init: InitModule, target: ScaffoldTarget): string[] {
    const exampleDir = join(REPO_ROOT, target.dir);
    const { files } = deriveScaffold(init, target);
-   const written = [];
+   const written: string[] = [];
    for (const file of files) {
       const entry = target.manifest[file.path];
       const exempt = entry?.verdict === 'adapted' ? entry.exempt : undefined;
@@ -447,7 +513,7 @@ function writeTarget(init, target) {
          if (overlay === undefined || overlay.problems.length > 0) {
             continue;
          }
-         content = overlay.content;
+         content = overlay.content!;
       }
       // The shebang comes off the CONTENT and goes back above the header, which
       // is the order the interpreter and a licence sweep both require; writing
@@ -469,7 +535,7 @@ function writeTarget(init, target) {
  * would make this gate report content drift on essentially every file while the
  * content is in fact identical.
  */
-function readExample(exampleDir, relativePath) {
+function readExample(exampleDir: string, relativePath: string): string | undefined {
    const absolute = join(exampleDir, relativePath);
    if (!existsSync(absolute)) {
       return undefined;
@@ -479,7 +545,7 @@ function readExample(exampleDir, relativePath) {
    return shebang + (lines[0]?.startsWith('/****') ? lines.slice(HEADER_LINES) : lines).join('\n');
 }
 
-function checkEntry(exampleDir, file, entry, problems) {
+function checkEntry(exampleDir: string, file: InitFile, entry: ManifestEntry, problems: Problem[]): void {
    const { path, content } = file;
    const example = readExample(exampleDir, path);
    if (entry.exempt !== undefined && entry.verdict !== 'adapted') {
@@ -511,8 +577,8 @@ function checkEntry(exampleDir, file, entry, problems) {
          }
          const overlay = overlayExemptedFields(content, example, entry.exempt);
          overlay.problems.forEach(problem => problems.push({ text: `${path}: ${problem}` }));
-         if (overlay.problems.length === 0 && overlay.drifted.length > 0) {
-            const where = overlay.drifted.map(field => `'${field}'`).join(', ');
+         if (overlay.problems.length === 0 && overlay.drifted!.length > 0) {
+            const where = overlay.drifted!.map(field => `'${field}'`).join(', ');
             problems.push({
                text: `${path}: the manifest exempts ${entry.exempt.join(', ')}, but it also differs from the scaffold in ${where}. Either re-derive it, or widen the exemption and record what the example now owns.`,
                writable: true
@@ -533,7 +599,8 @@ function checkEntry(exampleDir, file, entry, problems) {
          }
          return;
       default:
-         problems.push({ text: `${path}: unknown verdict '${entry.verdict}' in the manifest.` });
+         // Unreachable by type; kept for an entry the type does not describe.
+         problems.push({ text: `${path}: unknown verdict '${(entry as ManifestEntry).verdict}' in the manifest.` });
    }
 }
 
@@ -548,7 +615,7 @@ function checkEntry(exampleDir, file, entry, problems) {
  * call dropped would be compared against an unscoped scaffold and reported as a
  * package-name adaptation nobody made.
  */
-function deriveScaffold(init, target) {
+function deriveScaffold(init: InitModule, target: ScaffoldTarget): { files: InitFile[] } {
    const { invocation } = target;
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, target.dir), {
       monorepo: invocation.monorepo,
@@ -561,12 +628,12 @@ function deriveScaffold(init, target) {
 }
 
 /** Re-derive one target's scaffold and compare it against the manifest. Returns the problems found. */
-function checkTarget(init, target) {
+function checkTarget(init: InitModule, target: ScaffoldTarget): { problems: Problem[]; count: number } {
    const exampleDir = join(REPO_ROOT, target.dir);
    const { manifest } = target;
    const { files } = deriveScaffold(init, target);
 
-   const problems = [];
+   const problems: Problem[] = [];
    const emitted = new Set(files.map(file => file.path));
    for (const path of Object.keys(manifest)) {
       if (!emitted.has(path)) {
@@ -574,7 +641,7 @@ function checkTarget(init, target) {
       }
    }
    for (const file of files) {
-      const entry = manifest[file.path];
+      const entry: ManifestEntry | undefined = manifest[file.path];
       if (!entry) {
          problems.push({
             text: `${file.path}: emitted by init but absent from the manifest. Decide what the example does with it and record the verdict.`
@@ -624,7 +691,7 @@ function checkTarget(init, target) {
  * a table that silently stops covering a new template literal is the exact
  * failure this exists to prevent, one level up.
  */
-const SCAFFOLD_PIN_SOURCES = {
+const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    langium: { file: 'package.json', path: ['overrides', 'langium'], rule: 'exact' },
    // The chain moves as one, but `langium-cli` ships its own patch line against
    // a given langium minor, so the minor is the part that has to agree.
@@ -648,19 +715,19 @@ const SCAFFOLD_PIN_SOURCES = {
 };
 
 /** Strip a range operator, then keep `major.minor`. */
-function majorMinor(version) {
+function majorMinor(version: string): string {
    const parts = version.replace(/^[~^><= ]+/, '').split('.');
    return `${parts[0]}.${parts[1]}`;
 }
 
 /** `[major, minor, patch]` for a bare `x.y.z`, or `undefined` for anything else. */
-function parseVersion(text) {
+function parseVersion(text: string): Version | undefined {
    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(text.trim());
    return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
 /** Lexicographic compare of two `[major, minor, patch]` triples. */
-function compareVersions(left, right) {
+function compareVersions(left: Version, right: Version): number {
    for (let i = 0; i < 3; i++) {
       if (left[i] !== right[i]) {
          return left[i] < right[i] ? -1 : 1;
@@ -690,7 +757,7 @@ function compareVersions(left, right) {
  * precedence is where a hand-rolled comparison silently disagrees with npm's,
  * and the scaffold emits none.
  */
-function admits(range, version) {
+function admits(range: string, version: string): PinVerdict {
    const target = parseVersion(version);
    if (target === undefined) {
       return { why: `'${version}' is not a bare major.minor.patch version, so no range can be checked against it` };
@@ -710,7 +777,7 @@ function admits(range, version) {
    // treats a zero major as unstable, so the width depends on the floor rather
    // than on the operator alone.
    const caretWidens = operator[0] === '^' && floor[0] > 0;
-   const ceiling = caretWidens ? [floor[0] + 1, 0, 0] : [floor[0], floor[1] + 1, 0];
+   const ceiling: Version = caretWidens ? [floor[0] + 1, 0, 0] : [floor[0], floor[1] + 1, 0];
    const zeroMinorCaret = operator[0] === '^' && floor[0] === 0 && floor[1] === 0;
    return { agrees: compareVersions(target, zeroMinorCaret ? [0, 0, floor[2] + 1] : ceiling) < 0 };
 }
@@ -722,7 +789,7 @@ function admits(range, version) {
  * fail for a THIRD reason — the range is a form the gate does not decide — and
  * a boolean cannot carry that apart from disagreement.
  */
-function pinAgrees(rule, pin, declared) {
+function pinAgrees(rule: PinRule, pin: string, declared: string): PinVerdict {
    switch (rule) {
       case 'exact':
          return { agrees: pin === declared };
@@ -738,14 +805,17 @@ function pinAgrees(rule, pin, declared) {
 }
 
 /** The version each pin source currently declares, keyed by the dependency the scaffold emits. */
-function readPinSources() {
-   const resolved = {};
+function readPinSources(): Record<string, string | undefined> {
+   const resolved: Record<string, string | undefined> = {};
    for (const [dependency, source] of Object.entries(SCAFFOLD_PIN_SOURCES)) {
       if (source.unpinned !== undefined) {
          continue;
       }
       const manifest = JSON.parse(readFileSync(join(REPO_ROOT, source.file), 'utf-8'));
-      resolved[dependency] = source.path.reduce((value, key) => (value === undefined ? undefined : value[key]), manifest);
+      resolved[dependency] = source.path.reduce<unknown>(
+         (value, key) => (value === undefined ? undefined : (value as Record<string, unknown>)[key]),
+         manifest
+      ) as string | undefined;
    }
    return resolved;
 }
@@ -756,13 +826,13 @@ function readPinSources() {
  * Pure over both inputs so the self-test can drive it with a fabricated
  * emission; the real call reads one from `init` and the other from disk.
  */
-function comparePins(emitted, sources) {
-   const problems = [];
+function comparePins(emitted: Record<string, string | undefined>, sources: Record<string, string | undefined>): string[] {
+   const problems: string[] = [];
    for (const [dependency, pin] of Object.entries(emitted)) {
       if (dependency.startsWith('@hydranium/')) {
          continue;
       }
-      const source = SCAFFOLD_PIN_SOURCES[dependency];
+      const source: PinSource | undefined = SCAFFOLD_PIN_SOURCES[dependency];
       if (source === undefined) {
          problems.push(
             `${dependency}: the scaffold pins '${pin}' but nothing records where that version comes from. Add it to SCAFFOLD_PIN_SOURCES, or record why it is unpinned.`
@@ -777,7 +847,8 @@ function comparePins(emitted, sources) {
          problems.push(`${dependency}: its recorded source ${source.file} no longer declares ${source.path.join('.')}.`);
          continue;
       }
-      const { agrees, why } = pinAgrees(source.rule, pin, declared);
+      // Only the self-test's spreads of `sources` carry an undefined pin, and on those keys `declared` is undefined too.
+      const { agrees, why } = pinAgrees(source.rule, pin as string, declared);
       if (why !== undefined) {
          problems.push(`${dependency}: the scaffold pins '${pin}' and ${source.file} declares '${declared}', but ${why}.`);
       } else if (!agrees) {
@@ -797,13 +868,13 @@ function comparePins(emitted, sources) {
 }
 
 /** Every version the scaffold emits, at the head set that carries all of them. */
-function emittedPins(init) {
+function emittedPins(init: InitModule): Record<string, string> {
    const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp']);
    const content = init.planInitFiles(composition).find(file => file.path === 'package.json')?.content;
    if (content === undefined) {
       throw new Error('the scaffold emitted no package.json, so its pins cannot be checked');
    }
-   const manifest = JSON.parse(content);
+   const manifest = JSON.parse(content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
    return { ...manifest.dependencies, ...manifest.devDependencies };
 }
 
@@ -824,8 +895,8 @@ function emittedPins(init) {
  * refuse to decide, and the agreeing case below proving it does not just report
  * everything.
  */
-function selfTestPinComparison(sources) {
-   const failures = [];
+function selfTestPinComparison(sources: Record<string, string | undefined>): string[] {
+   const failures: string[] = [];
    const drifted = { langium: '9.9.9' };
    if (!comparePins(drifted, sources).some(problem => problem.startsWith('langium:'))) {
       failures.push('a langium pin drifted to 9.9.9 was not reported — the comparison no longer discriminates');
@@ -885,7 +956,7 @@ function selfTestPinComparison(sources) {
  * produce the same symptom on a real target — a `bin` entry graded as drifted —
  * and only the round trip distinguishes which half is wrong.
  */
-function selfTestWriteRestriction(init) {
+function selfTestWriteRestriction(init: InitModule): string[] {
    const relativeDir = join('node_modules', '.init-provenance-selftest');
    const dir = join(REPO_ROOT, relativeDir);
    const SENTINEL = '// SELF-TEST SENTINEL — must survive on an `adapted` entry.\n';
@@ -910,15 +981,15 @@ function selfTestWriteRestriction(init) {
    writeFileSync(join(dir, shebangPath), paddedHeader + SENTINEL);
    writeFileSync(join(dir, adaptedPath), JSON_SENTINEL);
 
-   const manifest = {
+   const manifest: Manifest = {
       [identicalPath.split('\\').join('/')]: { verdict: 'identical' },
       [headeredPath.split('\\').join('/')]: { verdict: 'identical' },
       [shebangPath.split('\\').join('/')]: { verdict: 'identical' },
       [adaptedPath]: { verdict: 'adapted' }
    };
-   const target = { label: 'self-test', dir: relativeDir, invocation: BOOKSTORE_INVOCATION, manifest };
+   const target: ScaffoldTarget = { label: 'self-test', dir: relativeDir, invocation: BOOKSTORE_INVOCATION, manifest };
 
-   const failures = [];
+   const failures: string[] = [];
    try {
       const written = writeTarget(init, target).sort();
       const expected = [headeredPath, identicalPath, shebangPath].map(path => path.split('\\').join('/')).sort();
@@ -950,7 +1021,7 @@ function selfTestWriteRestriction(init) {
       if (!rewritten.includes(adaptedPath)) {
          failures.push("an exempted 'adapted' entry was skipped — the exemption cannot re-derive the file it narrows");
       }
-      const exempted = JSON.parse(readFileSync(join(dir, adaptedPath), 'utf-8'));
+      const exempted = JSON.parse(readFileSync(join(dir, adaptedPath), 'utf-8')) as { name?: string; scripts?: unknown };
       if (exempted.name !== 'self-test-sentinel') {
          failures.push(`the exempted field was overwritten with '${exempted.name}' — the write does not carry it over`);
       }
@@ -975,11 +1046,11 @@ function selfTestWriteRestriction(init) {
  */
 function selfTestFieldExemption() {
    const scaffold = '{\n  "name": "scaffolded",\n  "license": "UNLICENSED"\n}\n';
-   const failures = [];
+   const failures: string[] = [];
 
    const drifted = '{\n  "name": "adopted",\n  "license": "MIT"\n}\n';
    const reported = overlayExemptedFields(scaffold, drifted, ['name']);
-   if (!reported.drifted.includes('license')) {
+   if (!reported.drifted!.includes('license')) {
       failures.push('a field outside the exemption differed and was not reported — the exemption still waives the file');
    }
    if (reported.content === drifted) {
@@ -987,9 +1058,9 @@ function selfTestFieldExemption() {
    }
    const agreeing = '{\n  "name": "adopted",\n  "license": "UNLICENSED"\n}\n';
    const clean = overlayExemptedFields(scaffold, agreeing, ['name']);
-   if (clean.problems.length > 0 || clean.drifted.length > 0 || clean.content !== agreeing) {
+   if (clean.problems.length > 0 || clean.drifted!.length > 0 || clean.content !== agreeing) {
       failures.push(
-         `an example differing only in its exempted field was reported anyway: ${[...clean.problems, ...clean.drifted].join('; ')}`
+         `an example differing only in its exempted field was reported anyway: ${[...clean.problems, ...clean.drifted!].join('; ')}`
       );
    }
    const stale = overlayExemptedFields(scaffold, scaffold, ['name']);
@@ -1008,7 +1079,7 @@ async function main() {
    // path as a URL whose scheme is the drive letter, and refuses `d:` outright.
    // A POSIX path happens to parse as a path-only URL, so this works unconverted
    // on one platform and throws on the other before the script does anything.
-   const init = await import(pathToFileURL(join(REPO_ROOT, 'packages/cli/lib/commands/init.js')).href);
+   const init = (await import(pathToFileURL(join(REPO_ROOT, 'packages/cli/lib/commands/init.js')).href)) as InitModule;
    const write = process.argv.slice(2).includes('--write');
 
    // Ahead of the write self-test, which exercises the same overlay through a
@@ -1091,7 +1162,7 @@ async function main() {
             console.error(`  - ${problem.text}`);
          }
          console.error(
-            `\nThe manifest in scripts/check-init-provenance.mjs is what this gate reads. The prose table in ${target.table} is not, so it takes a hand edit to keep it true.`
+            `\nThe manifest in scripts/check-init-provenance.mts is what this gate reads. The prose table in ${target.table} is not, so it takes a hand edit to keep it true.`
          );
          // Pointed at only for the problems it can actually fix, and flagged at
          // the push site rather than sniffed out of the message: an 'adapted'
@@ -1099,7 +1170,7 @@ async function main() {
          // has to carry over, so matching on the text would offer the write for
          // the blanket exemption it must never be offered for.
          if (problems.some(problem => problem.writable)) {
-            console.error('Where a file only drifted from the scaffold, `node scripts/check-init-provenance.mjs --write` re-derives it.');
+            console.error('Where a file only drifted from the scaffold, `node scripts/check-init-provenance.mts --write` re-derives it.');
          }
          console.error('');
       } else {
@@ -1111,7 +1182,7 @@ async function main() {
    }
 }
 
-main().catch(error => {
+main().catch((error: unknown) => {
    console.error(error);
    process.exit(2);
 });

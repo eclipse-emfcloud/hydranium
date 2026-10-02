@@ -219,9 +219,9 @@ jobs:
             echo "  release.yml: ${release_gate:-<no Full gate step>}" >&2
             exit 1
           fi
-          publish_job=$(job_of 'run: node scripts/release.mjs next')
+          publish_job=$(job_of 'run: node scripts/release.mts next')
           if [ -z "$publish_job" ]; then
-            echo "release.yml no longer invokes scripts/release.mjs, so this check cannot" >&2
+            echo "release.yml no longer invokes scripts/release.mts, so this check cannot" >&2
             echo "locate the publish step it is asserting against." >&2
             exit 1
           fi
@@ -481,7 +481,7 @@ jobs:
       # nothing but its own parsing.
       - name: Summarize test results
         if: always()
-        run: node scripts/summarize-test-results.mjs
+        run: node scripts/summarize-test-results.mts
 
       # `always()`, because a report is worth most for the run that FAILED, and
       # a step conditioned on success uploads only the ones nobody needs to
@@ -638,7 +638,7 @@ jobs:
       # the e2e durations, and the gate job's is the unit tiers.
       - name: Summarize test results
         if: always()
-        run: node scripts/summarize-test-results.mjs
+        run: node scripts/summarize-test-results.mts
 
       - name: Upload test reports
         if: always()

@@ -72,7 +72,7 @@ const tier = process.env.HYDRANIUM_PLAYWRIGHT_TIER ?? 'e2e';
 
 const RELOAD_SPEC = /order-flow-reload\.spec\.mts$/;
 
-/** The default must match `scripts/start.mjs`. */
+/** The default must match `scripts/start.mts`. */
 const PORT = Number(process.env.THEIA_PORT ?? 3001);
 
 export default defineConfig({

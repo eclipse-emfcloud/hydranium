@@ -34,11 +34,23 @@ const PACKAGE_ROOT = path.resolve(HERE, '..');
 /** Default output: the gitignored sibling of the committed sample workspace. */
 const DEFAULT_ROOT = path.resolve(PACKAGE_ROOT, '../workspace-large');
 
-const NUMERIC_FLAGS = ['projects', 'entities', 'processes', 'seed'];
+const NUMERIC_FLAGS = ['projects', 'entities', 'processes', 'seed'] as const;
+type NumericFlag = (typeof NUMERIC_FLAGS)[number];
 
-function usage() {
+/** Mirrors `LargeWorkspaceOptions`, which lives in build output this script cannot import types from. */
+interface GeneratorOptions {
+   root?: string;
+   projects?: number;
+   entities?: number;
+   processes?: number;
+   seed?: number;
+}
+
+const isNumericFlag = (name: string): name is NumericFlag => NUMERIC_FLAGS.some(flag => flag === name);
+
+function usage(): string {
    return [
-      'Usage: node scripts/generate-large-workspace.mjs [options]',
+      'Usage: node scripts/generate-large-workspace.mts [options]',
       '',
       '  --projects <n>    generated projects (folders), each with its own descriptor',
       '  --entities <n>    member .domain files per project',
@@ -49,8 +61,8 @@ function usage() {
 }
 
 /** Parse argv into generator options, or exit 1 naming what was wrong. */
-function parseArgs(argv) {
-   const options = {};
+function parseArgs(argv: string[]): GeneratorOptions & { root: string } {
+   const options: GeneratorOptions = {};
    for (let index = 0; index < argv.length; index++) {
       const flag = argv[index];
       if (flag === '--help' || flag === '-h') {
@@ -67,7 +79,7 @@ function parseArgs(argv) {
       }
       if (name === 'out') {
          options.root = path.resolve(process.cwd(), value);
-      } else if (NUMERIC_FLAGS.includes(name)) {
+      } else if (isNumericFlag(name)) {
          const parsed = Number(value);
          if (!Number.isInteger(parsed)) {
             fail(`--${name} must be an integer, got ${value}`);
@@ -78,10 +90,10 @@ function parseArgs(argv) {
       }
    }
    options.root ??= DEFAULT_ROOT;
-   return options;
+   return options as GeneratorOptions & { root: string };
 }
 
-function fail(message) {
+function fail(message: string): never {
    process.stderr.write(`${message}\n\n${usage()}\n`);
    process.exit(1);
 }
@@ -94,7 +106,7 @@ function fail(message) {
 async function loadGenerator() {
    try {
       return await import('../lib/testing/large-workspace.js');
-   } catch (error) {
+   } catch (error: unknown) {
       if (error instanceof Error && 'code' in error && error.code === 'ERR_MODULE_NOT_FOUND') {
          process.stderr.write('The example is not built. Run "npm run build" at the repo root first.\n');
          process.exit(1);

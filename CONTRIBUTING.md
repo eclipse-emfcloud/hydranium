@@ -35,7 +35,7 @@ npm run build
 npm test
 ```
 
-Node 22.13 or newer is required, and npm 11.15.0 — the version the root
+Node 22.18 or newer is required, and npm 11.15.0 — the version the root
 `packageManager` field names. **Nothing selects that version for you.** npm
 does not act on `packageManager` on its own; Corepack would, but only once it
 has been switched on explicitly (`corepack enable`), and `actions/setup-node`
@@ -54,8 +54,8 @@ checks the running Node against `engines.node` rather than trusting the
 version the runner resolved: both workflows ask `actions/setup-node` for
 `node-version-file: .nvmrc`, so one edit moves CI and a local `nvm use`
 together, but a version file is a *spec* and not a guarantee — whoever edits
-it is free to widen it back below the `22.13` floor. `.nvmrc` currently reads
-`22.13.0`, and a CI step compares the two workflows' `node-version-file`
+it is free to widen it back below the `22.18` floor. `.nvmrc` currently reads
+`22.18.0`, and a CI step compares the two workflows' `node-version-file`
 values so they cannot drift apart.
 
 **Install with dev dependencies, always.** The root `postinstall` runs
@@ -107,7 +107,7 @@ rules only; `oxlint.config.cjs` scopes the architecture rules to their
 packages. Two checks cover what Oxlint has no native rule for:
 
 - `npm run check:phantom-deps` requires every import to be declared in its
-  workspace's manifest (`scripts/check-phantom-dependencies.mjs`).
+  workspace's manifest (`scripts/check-phantom-dependencies.mts`).
 - `npm run check:ast-grep` runs the localization and test-fixture bans in
   `ast-grep/rules`, after the rule tests in `ast-grep/tests`.
 
@@ -149,7 +149,7 @@ mutation and perf audits, see [`docs/contributing/testing.md`](docs/contributing
 - TypeScript strict mode.
 - Oxlint + Oxfmt — run `npm run lint` and `npm run format` before committing.
 - Headers — every source file carries the standardised license header (see any
-  existing file for the pattern). Run `node scripts/header.mjs <file>` to
+  existing file for the pattern). Run `node scripts/header.mts <file>` to
   apply it to a new file. `npm run check:headers` (part of `npm run check`)
   fails if any source file is missing it, new and uncommitted files included.
 

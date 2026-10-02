@@ -24,16 +24,16 @@
  *
  * Private packages (the examples) are skipped — nothing is distributed.
  *
- * Like its sibling {@link file://./check-package-readmes.mjs}, this gate
+ * Like its sibling {@link file://./check-package-readmes.mts}, this gate
  * SELF-TESTS against canaries that must fail. A comparison that has stopped
  * discriminating — narrowed to a prefix, made whitespace-insensitive, reduced to
  * a length — reports universal coverage, which is indistinguishable from there
  * being nothing to find.
  *
  * Usage:
- *   node scripts/check-licenses.mjs            # verify; exit 1 on drift
- *   node scripts/check-licenses.mjs --write    # (re)create the copies
- *   node scripts/check-licenses.mjs --self-test  # canaries only
+ *   node scripts/check-licenses.mts            # verify; exit 1 on drift
+ *   node scripts/check-licenses.mts --write    # (re)create the copies
+ *   node scripts/check-licenses.mts --self-test  # canaries only
  */
 
 import { copyFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -43,11 +43,16 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_LICENSE = join(REPO_ROOT, 'LICENSE');
 
+interface PackageManifest {
+   name: string;
+   private?: boolean;
+}
+
 /** Workspace directories that may contain publishable packages. */
 const WORKSPACE_DIRS = ['packages', 'examples'];
 
 /** Immediate subdirectories, skipping the installed tree. */
-function subdirectories(base) {
+function subdirectories(base: string): string[] {
    if (!existsSync(base)) {
       return [];
    }
@@ -65,7 +70,7 @@ function subdirectories(base) {
  * reporting a clean verdict. One level only — deeper is a fixture tree or build
  * output, never a workspace member.
  */
-function listPackageDirs(base) {
+function listPackageDirs(base: string): string[] {
    return subdirectories(base).flatMap(directory =>
       existsSync(join(directory, 'package.json'))
          ? [directory]
@@ -82,7 +87,7 @@ function listPublishedPackages() {
       listPackageDirs(join(REPO_ROOT, workspaceDir))
          .map(directory => ({
             directory,
-            manifest: JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8'))
+            manifest: JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')) as PackageManifest
          }))
          .filter(({ manifest }) => manifest.private !== true)
          .map(({ directory, manifest }) => ({ directory, name: manifest.name }))
@@ -97,7 +102,7 @@ function listPublishedPackages() {
  * variant. Takes the contents rather than a path so the canaries exercise the
  * same predicate the real scan does.
  */
-function licenseProblem(contents, expected) {
+function licenseProblem(contents: string | undefined, expected: string): string | undefined {
    if (contents === undefined) {
       return 'missing LICENSE';
    }
@@ -197,7 +202,7 @@ function main() {
 
    if (problems.length > 0) {
       problems.forEach(problem => console.error(problem));
-      console.error('\nRun `node scripts/check-licenses.mjs --write` to sync them.');
+      console.error('\nRun `node scripts/check-licenses.mts --write` to sync them.');
       process.exit(1);
    }
 
