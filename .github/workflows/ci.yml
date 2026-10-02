@@ -417,6 +417,30 @@ jobs:
           echo "usable=$usable" >> "$GITHUB_OUTPUT"
           echo "- node_modules cache: hit, restored tree usable: \`$usable\`" >> "$GITHUB_STEP_SUMMARY"
 
+      # On a cold runner the native builds `npm ci` starts in parallel each
+      # fetch Node's headers into the same directory at once, and on Windows
+      # that race costs the install minutes. Headers already in place end it.
+      - name: Restore node-gyp headers
+        id: node-gyp-headers
+        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/node-gyp/Cache
+          key: node-gyp-headers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}
+
+      # After the toolchain pin, which is what puts npm, and the node-gyp it
+      # bundles, under `npm root -g`.
+      - name: Install node-gyp headers
+        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
+        run: node "$(npm root -g)/npm/node_modules/node-gyp/bin/node-gyp.js" install
+
+      - name: Save node-gyp headers
+        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/node-gyp/Cache
+          key: ${{ steps.node-gyp-headers.outputs.cache-primary-key }}
+
       - name: Install dependencies
         if: steps.restored.outputs.usable != 'true'
         run: npm ci --no-fund --no-audit
