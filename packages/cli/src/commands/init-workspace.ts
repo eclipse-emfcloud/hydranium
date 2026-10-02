@@ -186,7 +186,7 @@ export interface WorkspaceDetection {
    readonly baseTsconfig?: string;
    /** That tsconfig's `compilerOptions`, so the emitted one can drop what it inherits. */
    readonly baseCompilerOptions?: Readonly<Record<string, JsonValue>>;
-   /** The root prettier config's `printWidth`, so emitted sources wrap where the repo wraps. */
+   /** The root formatter config's `printWidth`, so emitted sources wrap where the repo wraps. */
    readonly printWidth?: number;
    /** Filename of the root eslint config, when there is one. Absent means the repo does not lint. */
    readonly eslintConfig?: string;
@@ -341,7 +341,7 @@ export function findBaseTsconfig(
 }
 
 /**
- * The repo's prettier `printWidth`, so the emitted sources wrap where the repo
+ * The repo's formatter `printWidth`, so the emitted sources wrap where the repo
  * wraps instead of at the scaffold's own default.
  *
  * **Why this is worth detecting at all.** There is no width that is stable for
@@ -362,19 +362,21 @@ export function findBaseTsconfig(
  * adopter's formatter rewraps on first commit. So a heuristic that is usually
  * right strictly improves on no detection, and can break nothing.
  */
-export function findPrettierPrintWidth(rootDir: string, probe: WorkspaceProbe): number | undefined {
+export function findFormatterPrintWidth(rootDir: string, probe: WorkspaceProbe): number | undefined {
    const manifest = probe.readJson(path.join(rootDir, 'package.json'));
    if (isJsonObject(manifest) && isJsonObject(manifest.prettier) && typeof manifest.prettier.printWidth === 'number') {
       return manifest.prettier.printWidth;
    }
    const present = probe.listFiles(rootDir);
-   for (const file of present.filter(name => name === '.prettierrc' || name === '.prettierrc.json')) {
+   for (const file of present.filter(name => name === '.oxfmtrc.json' || name === '.prettierrc' || name === '.prettierrc.json')) {
       const parsed = probe.readJson(path.join(rootDir, file));
       if (isJsonObject(parsed) && typeof parsed.printWidth === 'number') {
          return parsed.printWidth;
       }
    }
-   for (const file of present.filter(name => /^(\.prettierrc\.[cm]?[jt]s|prettier\.config\.[cm]?[jt]s)$/.test(name))) {
+   for (const file of present.filter(name =>
+      /^(\.prettierrc\.[cm]?[jt]s|prettier\.config\.[cm]?[jt]s|oxfmt\.config\.[cm]?[jt]s)$/.test(name)
+   )) {
       const width = /\bprintWidth\s*:\s*(\d+)/.exec(probe.readText(path.join(rootDir, file)) ?? '');
       if (width) {
          return Number(width[1]);
@@ -443,7 +445,7 @@ export function detectWorkspace(targetDir: string, probe: WorkspaceProbe): Works
       scope: inferPackageScope(rootDir, workspaces, probe),
       baseTsconfig: base && posixRelative(absoluteTarget, path.join(rootDir, base.file)),
       baseCompilerOptions: base?.compilerOptions,
-      printWidth: findPrettierPrintWidth(rootDir, probe),
+      printWidth: findFormatterPrintWidth(rootDir, probe),
       eslintConfig: findEslintConfig(rootDir, probe),
       oxlintConfig: findOxlintConfig(rootDir, probe)
    };

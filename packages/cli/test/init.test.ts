@@ -422,7 +422,7 @@ describe('planInitFiles', () => {
    });
 
    /**
-    * The key order `prettier-plugin-packagejson` canonicalises to, rendered WITH
+    * The key order Oxfmt's `sortPackageJson` canonicalises to, rendered WITH
     * `private` — the substitution that actually moves a key position.
     *
     * Any other order is rewritten by the scaffolded project's own first `format`
@@ -445,11 +445,11 @@ describe('planInitFiles', () => {
          'keywords',
          'license',
          'author',
+         'bin',
+         'files',
          'type',
          'main',
          'types',
-         'bin',
-         'files',
          'scripts',
          'dependencies',
          'devDependencies',

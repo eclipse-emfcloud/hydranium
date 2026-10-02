@@ -120,7 +120,7 @@ reason:
 | everything else | identical | including `vitest.config.ts`, deliberately NOT switched to the repo's shared helper: this is the only target pinning the scaffold's own self-contained config |
 
 The `lint` script and the 140-column wrapping used to be adaptations too. `init`
-now reads the workspace root's eslint config and prettier `printWidth`, so both
+now reads the workspace root's lint config and formatter `printWidth`, so both
 are emitted — which is what a provenance target is for: the manifest shrinking
 is the gate reporting a template gain rather than drift.
 

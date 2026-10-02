@@ -14,9 +14,6 @@ package.json
   ],
   "license": "UNLICENSED",
   "author": "",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
   "bin": {
     "order-flow": "lib/main.js",
     "order-flow-data-server": "lib/data-server-main.js"
@@ -26,6 +23,9 @@ package.json
     "src",
     "syntaxes"
   ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
     "build": "npm run generate && tsc",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",

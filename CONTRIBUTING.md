@@ -126,6 +126,13 @@ paths and runs the enforcing tool on each. The Oxc and ast-grep VS Code
 extensions in `.vscode/extensions.json` show both kinds of finding in the
 editor.
 
+## Formatting
+
+Run `npm run format` to format source and configuration files with Oxfmt,
+or `npm run format:check` to check them. Settings are in `.oxfmtrc.json`;
+`.oxfmtignore` excludes generated files, build output, lockfiles, and Markdown.
+For editor formatting, use the Oxc extension with this repository configuration.
+
 ## The gate
 
 `npm run check` is a chain of clauses, not a single command: `turbo run build
@@ -150,7 +157,7 @@ mutation and perf audits, see [`docs/contributing/testing.md`](docs/contributing
 ## Code style
 
 - TypeScript strict mode.
-- ESLint + Prettier — run `npm run lint` and `npm run format` before committing.
+- Oxlint + Oxfmt — run `npm run lint` and `npm run format` before committing.
 - Headers — every source file carries the standardised license header (see any
   existing file for the pattern). Run `node scripts/header.mjs <file>` to
   apply it to a new file. `npm run check:headers` (part of `npm run check`)

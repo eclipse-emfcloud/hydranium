@@ -267,14 +267,14 @@ function checkTurboInputs() {
  * output that a clean checkout has not produced yet. What is never intentional is
  * a wildcard segment that can match no directory at all, which is what a renamed
  * or re-nested tree leaves behind: `examples/*-theia-app/plugins` went inert that
- * way, and prettier does not read `.gitignore`, so nothing else would have said
+ * way, and the formatter uses its explicit ignore file, so nothing else would have said
  * so. Asserted only up to the last wildcard segment, which is why a pattern
  * naming a not-yet-created leaf (`…/workspace/.vscode/settings.json`) still
  * passes.
  */
 function checkIgnorePatterns() {
    const problems = [];
-   for (const file of ['.gitignore', '.prettierignore']) {
+   for (const file of ['.gitignore', '.oxfmtignore']) {
       const lines = readFileSync(join(REPO_ROOT, file), 'utf-8')
          .split('\n')
          .map(line => line.trim())

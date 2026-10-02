@@ -354,7 +354,7 @@ const TARGETS = [
  *
  * The overlay is what `--write` lays down; the field list is what the check
  * reports. **The remainder is compared per FIELD and not over the bytes**, which
- * an exempted `package.json` cannot be: prettier's packagejson plugin
+ * an exempted `package.json` cannot be: Oxfmt's `sortPackageJson`
  * canonicalises key order in this repo, so a byte-compare against the template's
  * emission order is unsatisfiable on a file both tools own. Key order is left to
  * the tool that enforces it and everything else stays here — a value that

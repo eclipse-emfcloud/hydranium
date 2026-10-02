@@ -178,12 +178,11 @@ const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.cjs', '.js', '.css'];
  *   prompts before taking anything unexpected with it.
  * - `esbuild.mjs` — Theia app scaffolding; deleting it and re-running
  *   `theia build` regenerates it.
- * - `.prettierrc.js` — formatter config, never published.
  *
  * `.langium` grammars are absent from {@link HEADER_EXTENSIONS} for the same
  * reason: they carry no header today.
  */
-const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-hydranium\//, /(^|\/)esbuild\.mjs$/, /(^|\/)\.prettierrc\.js$/];
+const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-hydranium\//, /(^|\/)esbuild\.mjs$/];
 
 /**
  * Every source file the header gate covers: tracked files plus new untracked

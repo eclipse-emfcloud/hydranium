@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "jsxSingleQuote": true,
+  "arrowParens": "avoid",
+  "trailingComma": "none",
+  "endOfLine": "lf",
+  "printWidth": 140,
+  "tabWidth": 3,
+  "sortPackageJson": true,
+  "overrides": [
+    {
+      "files": ["*.json", "*.yml", "*.yaml"],
+      "options": {
+        "printWidth": 100,
+        "tabWidth": 2
+      }
+    }
+  ]
+}
