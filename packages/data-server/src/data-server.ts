@@ -28,18 +28,19 @@ import {
    type FindNextNameArgs,
    type LatencyCollector,
    type LatencyReport,
+   NO_MATCHING_VERSION,
    type OpenModelArgs,
    type Project,
    type ReferenceCandidate,
    type ReferenceContext,
    type ReferenceRequest,
    type ReferenceTarget,
+   type SnapshotVersion,
    type Tracer,
    type TransferDiagnostic,
    TransferDocument,
    type TransferElement,
    UNKNOWN_CLIENT_ID,
-   asSnapshotVersion,
    textHash
 } from '@hydranium/protocol';
 import {
@@ -65,7 +66,7 @@ import {
    type TransferUpdateDocumentArgs,
    type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
-import { REVERT_ON_CLOSE_CLIENT_ID } from '@hydranium/core';
+import { REVERT_ON_CLOSE_CLIENT_ID, snapshotVersion } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 
 /**
@@ -363,6 +364,13 @@ export interface DataServerUriWatchRecord {
    readonly watchers: Set<string>;
    /** Digest of the last emitted state, or of the state a first watch found; see {@link DataServer.dispatchPhaseEvent} for why it de-duplicates, {@link DataServer.computeDocumentFingerprint} for its inputs. */
    fingerprint?: string;
+   /**
+    * The version {@link DataServerUriWatchRecord.fingerprint} was taken at; an
+    * event goes out when either moves. Not {@link DataServerUriWatchRecord.sentVersion}:
+    * a first watch sets this and sends nothing, so the next event at its
+    * version still carries the manager's attribution.
+    */
+   fingerprintVersion?: SnapshotVersion;
    /** Set by {@link DataServer.subscribeToTextDocumentCloses}; the next phase event broadcasts even without a watcher. */
    revertPending?: boolean;
    /**
@@ -693,25 +701,15 @@ export class DataServer<
     * fails, `rollback` undoes the open this call made before the failure is
     * rethrown: the caller sees no open, so nothing on its side would ever close
     * it.
-    *
-    * Versioned with the store's shared version rather than the snapshot's own:
-    * the built document's `textDocument.version` lags the store's whenever the
-    * store assigned the version, and the store's is what a write's `basedOn` is
-    * compared against, so reporting the snapshot's would make the caller's
-    * first based-on write conflict with itself.
     */
    protected async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      let document: TransferDocument<TTransfer, TDiagnostic>;
       try {
-         document = await this.getModelDocument({ uri });
+         return await this.getModelDocument({ uri });
       } catch (error: unknown) {
          // The open's failure is the one the caller needs, not the cleanup's.
          await rollback?.().catch(() => undefined);
          throw error;
       }
-      // Stamped again with the version, in one step: a write landing after the
-      // read would otherwise pair its version with the read's text hash.
-      return this.withServerState({ ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) });
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
@@ -782,6 +780,7 @@ export class DataServer<
          const document = this.services.workspace.LangiumDocuments.getDocument(UriUtils.toUri(uri));
          if (document) {
             record.fingerprint = this.computeDocumentFingerprint(document);
+            record.fingerprintVersion = snapshotVersion(document, this.services.workspace.TextDocuments.get(uri));
          }
       }
    }
@@ -813,6 +812,7 @@ export class DataServer<
       }
       if (record.revertPending) {
          record.fingerprint = undefined;
+         record.fingerprintVersion = undefined;
       } else {
          this.uriWatchRecords.delete(uri);
       }
@@ -1155,7 +1155,11 @@ export class DataServer<
          // override `envelope`.
          return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
-      return this.withServerState(this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>);
+      const encoded = this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>;
+      return this.withServerState({
+         ...encoded,
+         version: snapshotVersion(document, this.services.workspace.TextDocuments.get(encoded.uri))
+      });
    }
 
    /**
@@ -1163,9 +1167,18 @@ export class DataServer<
     * store's current `dirty` and `textHash` stamped on it by
     * {@link withServerState}. Every document a request answers with goes
     * through here, so none goes out without the stamp.
+    *
+    * The version is decided again here, in the step that reads the hash: one
+    * decided when the snapshot was taken pairs with a hash of text a write
+    * applied since.
     */
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      return this.withServerState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
+      const encoded = this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>;
+      const built = this.modelService.getDocument(encoded.uri);
+      const version = built
+         ? snapshotVersion(built, this.services.workspace.TextDocuments.get(encoded.uri), astDocument.root)
+         : encoded.version;
+      return this.withServerState({ ...encoded, version });
    }
 
    /**
@@ -1285,7 +1298,7 @@ export class DataServer<
    protected dispatchDirtyEvent(event: DocumentDirtyChangedEvent): void {
       const uri = this.canonicalKey(event.uri);
       if (this.uriWatchRecords.get(uri)?.watchers.size) {
-         this.clientProxy.onDocumentDirtyChanged({ uri, dirty: event.dirty });
+         this.clientProxy.onDocumentDirtyChanged({ uri, dirty: event.dirty, version: event.version });
       }
    }
 
@@ -1362,6 +1375,7 @@ export class DataServer<
          const record = this.uriWatchRecords.get(uri);
          if (record) {
             record.fingerprint = undefined;
+            record.fingerprintVersion = undefined;
             record.revertPending = undefined;
             record.sentVersion = undefined;
             this.pruneUriWatchRecord(uri);
@@ -1404,7 +1418,9 @@ export class DataServer<
     * {@link subscribeToTextDocumentCloses}).
     *
     * An event for a rebuild with no observable change since the last emit is
-    * suppressed against the URI's fingerprint. Such rebuilds are routine: a
+    * suppressed against the URI's fingerprint and the version it was taken at;
+    * a new version with the same fingerprint goes out marked `modelUnchanged`,
+    * so a watcher still learns the version. Such rebuilds are routine: a
     * second client attaching to an open document makes
     * `HydraniumTextDocuments.refreshContent` fire `onDidChangeContent` purely
     * to re-trigger the build, and Langium rebuilds a document when a
@@ -1444,15 +1460,20 @@ export class DataServer<
          this.pruneUriWatchRecord(uri);
       }
       const fingerprint = this.computeDocumentFingerprint(document);
-      if (record.fingerprint === fingerprint) {
+      const stamped = snapshotVersion(document, this.services.workspace.TextDocuments.get(uri));
+      const modelUnchanged = record.fingerprint === fingerprint;
+      // A version no write matches tells a watcher nothing the next build will
+      // not, so with an unchanged model it is no change either.
+      if (modelUnchanged && (record.fingerprintVersion === stamped || stamped === NO_MATCHING_VERSION)) {
          // A rebuild that produced no observable change since the last emit —
          // suppressed so RPC subscribers don't see a no-op broadcast. Logged at
          // debug so a *needed* re-broadcast wrongly suppressed by this dedup
          // (the failure mode the fingerprint strategy must avoid) is visible.
-         this.tracer.withUri(uri).debug(`Suppress onDocumentUpdated v${document.textDocument.version}: fingerprint unchanged`);
+         this.tracer.withUri(uri).debug(`Suppress onDocumentUpdated v${stamped}: fingerprint and version unchanged`);
          return;
       }
       record.fingerprint = fingerprint;
+      record.fingerprintVersion = stamped;
       // The manager's attribution, so this head names the same client as the
       // in-process heads do for one build, except for a version this head
       // already sent; see `DataServerUriWatchRecord.sentVersion`.
@@ -1465,7 +1486,8 @@ export class DataServer<
       const event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri),
          sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,
-         reason
+         reason,
+         ...(modelUnchanged ? { modelUnchanged: true as const } : {})
       };
       this.tracer
          .withUri(uri)

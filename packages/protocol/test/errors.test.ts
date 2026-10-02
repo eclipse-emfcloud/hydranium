@@ -32,10 +32,11 @@ import {
    isSessionClosedError
 } from '../src/errors';
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
+import { asSnapshotVersion } from '../src/model-service/based-on';
 
 describe('ConflictError', () => {
    it('exposes uri / expectedVersion / actualVersion via getters backed by the data payload', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(error.uri).toBe('file:///A.fake');
       expect(error.expectedVersion).toBe(3);
       expect(error.actualVersion).toBe(5);
@@ -46,13 +47,13 @@ describe('ConflictError', () => {
       // then assigns the prettified values back — throwing on an accessor and
       // replacing the real failure with a TypeError. The two reads below ARE
       // that branch's condition.
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect('expected' in error).toBe(false);
       expect('actual' in error).toBe(false);
    });
 
    it('carries the typed data payload on the JSON-RPC error envelope', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       // `toMatchObject`, not `toEqual`: `data` also carries the message identity,
       // and asserting the payload EXACTLY would make every future envelope field
       // a test change. The identity's own assertion is the next case.
@@ -60,7 +61,7 @@ describe('ConflictError', () => {
    });
 
    it('carries the message identity beside the typed payload, so a translating host can render it', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(hasMessageIdentity(error.data)).toBe(true);
       expect(resolvedFromResponseError(error)?.code).toBe(STALE_BASED_UPDATE.code);
       // The uri only: the versions stay in `data`, so no translation can put
@@ -69,23 +70,23 @@ describe('ConflictError', () => {
    });
 
    it('sets the application-specific JSON-RPC code', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(error.code).toBe(CONFLICT_ERROR_CODE);
    });
 
    it('builds a message that names the URI and words the versions', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(error.message).toContain('file:///A.fake');
       expect(error.message).not.toMatch(/\d/);
    });
 
    it('has name "ConflictError" so direct-throw detection works without instanceof', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(error.name).toBe('ConflictError');
    });
 
    it('is a ResponseError subclass — survives JSON-RPC reconstruction', () => {
-      const error = new ConflictError('file:///A.fake', 3, 5);
+      const error = new ConflictError('file:///A.fake', asSnapshotVersion(3), 5);
       expect(error).toBeInstanceOf(ResponseError);
    });
 });
@@ -163,7 +164,7 @@ describe('client session errors', () => {
          expect(entry.guard(entry.make())).toBe(true);
          // What a client holds after an RPC: a plain ResponseError with the code.
          expect(entry.guard(new ResponseError(entry.code, 'transport-wrapped', entry.data))).toBe(true);
-         expect(entry.guard(new ConflictError('file:///a.x', 1, 2))).toBe(false);
+         expect(entry.guard(new ConflictError('file:///a.x', asSnapshotVersion(1), 2))).toBe(false);
          for (const other of cases.filter(candidate => candidate !== entry)) {
             expect(entry.guard(other.make())).toBe(false);
          }
@@ -218,7 +219,7 @@ describe('ReservedClientIdError', () => {
 
 describe('isConflictError', () => {
    it('returns true for a ConflictError instance (direct throw)', () => {
-      expect(isConflictError(new ConflictError('file:///A.fake', 3, 5))).toBe(true);
+      expect(isConflictError(new ConflictError('file:///A.fake', asSnapshotVersion(3), 5))).toBe(true);
    });
 
    it('returns true for any Error whose name is "ConflictError"', () => {

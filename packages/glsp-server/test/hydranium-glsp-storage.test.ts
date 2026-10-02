@@ -288,7 +288,7 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
 class PolicyStorage extends HydraniumGlspStorage<TestRoot> {
    /** Deliver a dirty flip of `uri`, as the text store does. */
    dirtyChanged(uri: string, dirty: boolean): void {
-      this.handleDirtyChanged({ uri: asCanonicalUri(uri), dirty });
+      this.handleDirtyChanged({ uri: asCanonicalUri(uri), dirty, version: 1 });
    }
 }
 

@@ -24,6 +24,16 @@ declare const snapshotMarker: unique symbol;
 export type SnapshotVersion = number & { readonly [snapshotMarker]: true };
 
 /**
+ * The version of the text the server holds for a document when it is read:
+ * the store's counter, which moves whenever that text changes.
+ *
+ * A plain number, so a write refuses it as `basedOn`: it can name text the
+ * caller does not have, and a write based on it would then pass the gate with
+ * older content.
+ */
+export type TextVersion = number;
+
+/**
  * What a write declares it was based on: a version from a snapshot read, or
  * `'anything'`.
  *

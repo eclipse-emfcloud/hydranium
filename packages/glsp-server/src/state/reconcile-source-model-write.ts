@@ -60,7 +60,9 @@ export async function reconcileSourceModelWrite<TModel extends object>(
             await hooks.persist(outcome.merged, 'anything');
             return;
          case 'no-op':
-            hooks.logger.debug(`updateSourceModel no-op (v${err.expectedVersion} → v${err.actualVersion}); already in sync`);
+            hooks.logger.debug(
+               `updateSourceModel no-op (v${err.expectedVersion} → v${err.actualVersion}); the diagram is behind, its update catches it up`
+            );
             return;
          case 'conflict':
             hooks.logger.warn(

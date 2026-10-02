@@ -11,6 +11,7 @@ import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
 import type { TransferDocument } from '../transfer-document';
+import type { TextVersion } from '../model-service/based-on';
 
 /**
  * Why an update event fired. Subscribers filter on reason for behaviour
@@ -62,6 +63,13 @@ export interface TransferDocumentUpdatedEvent<
     */
    sourceClientId: string;
    reason: TransferDocumentUpdateReason;
+   /**
+    * Set when `document` carries the root and diagnostics of the last event
+    * sent for its URI at a new version: the text changed, the model did not. A
+    * client holding that root can take the new version, `dirty` and `textHash`
+    * without reading the root again. Absent, the model may have changed.
+    */
+   modelUnchanged?: true;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentUpdated`. */
@@ -114,6 +122,13 @@ export interface TransferDocumentDirtyChangedEvent {
    /** Canonical URI, keyed as the subscription is. */
    readonly uri: string;
    readonly dirty: boolean;
+   /**
+    * The version of the text the answer was decided on. It is sent before that
+    * text is built, so when it is ahead of the version of the document a client
+    * holds, the client holds an older model: an update at this version or a
+    * later one follows.
+    */
+   readonly version: TextVersion;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentDirtyChanged`. */

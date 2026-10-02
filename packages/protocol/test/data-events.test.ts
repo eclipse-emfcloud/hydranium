@@ -153,9 +153,9 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       const flips: string[] = [];
       events.onDidChangeDocumentDirty(event => flips.push(`${event.uri} ${event.dirty}`));
 
-      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: true });
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: true, version: 1 });
       events.dispose();
-      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: false });
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: false, version: 1 });
 
       expect(flips).toEqual(['file:///widgets/gauge.widget true']);
    });

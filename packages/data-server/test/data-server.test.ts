@@ -873,14 +873,14 @@ describe('DataServer', () => {
             await openAs(proxy, bundle, 'editor-1');
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'editor-1' });
 
-            bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
+            const edited = bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
             bundle.textDocuments.applyContentChange(URI_B, 'name:edited', 'other');
             bundle.textDocuments.updateDiskBaseline(URI_A, 'name:edited');
 
             await waitFor(() => dirtyChanges.length === 2);
             expect(dirtyChanges).toEqual([
-               { uri: URI_A, dirty: true },
-               { uri: URI_A, dirty: false }
+               { uri: URI_A, dirty: true, version: edited },
+               { uri: URI_A, dirty: false, version: edited }
             ]);
          } finally {
             pair.dispose();

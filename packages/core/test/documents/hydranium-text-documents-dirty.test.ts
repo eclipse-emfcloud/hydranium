@@ -12,7 +12,7 @@
  * state read from it. The store is real; the disk behind it is a map.
  */
 
-import { makeFakeClock, type FakeClock } from '@hydranium/protocol/testing';
+import { makeFakeClock, waitFor, type FakeClock } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -41,12 +41,36 @@ interface DirtyRig {
    readonly files: Map<string, string>;
    /** Every dirty flip, as `uri dirty`, in delivery order. */
    readonly flips: string[];
+   /** The version of each flip in {@link flips}. */
+   readonly flipVersions: number[];
+   /** Write-lock sections run to their end, a revert's included. */
+   readonly locksReleased: number;
+   /** Make the next revert rebuilds throw. */
+   failBuilds(): void;
 }
 
 function makeRig(revertGraceMs = 0): DirtyRig {
    const clock = makeFakeClock();
    const uriPolicy = new DefaultDocumentUriPolicy();
    const files = new Map<string, string>([[FILE, DISK]]);
+   let locksReleased = 0;
+   let buildsFail = false;
+   const write = async (action: (token: unknown) => unknown): Promise<unknown> => {
+      try {
+         return await action(undefined);
+      } finally {
+         locksReleased++;
+      }
+   };
+   // As the Parsed-phase listener: the rebuilt text reaches the sequence.
+   const update = async (changed: URI[]): Promise<void> => {
+      if (buildsFail) {
+         throw new Error('build failed');
+      }
+      for (const uri of changed) {
+         docs.reconcileExternalContent(uri.toString(), files.get(uri.toString()) ?? '');
+      }
+   };
    const services = {
       Clock: clock,
       Tracer: { for: () => makeNoopTracer() },
@@ -54,8 +78,8 @@ function makeRig(revertGraceMs = 0): DirtyRig {
          DocumentUriPolicy: uriPolicy,
          FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } }),
          WorkspaceManager: { ready: Promise.resolve() },
-         WorkspaceLock: { write: async (action: (token: unknown) => unknown) => action(undefined) },
-         DocumentBuilder: { markNextReason: () => undefined, update: async () => undefined },
+         WorkspaceLock: { write },
+         DocumentBuilder: { markNextReason: () => undefined, update },
          FileSystemProvider: {
             exists: async (uri: URI) => files.has(uri.toString()),
             readFile: async (uri: URI) => {
@@ -70,8 +94,24 @@ function makeRig(revertGraceMs = 0): DirtyRig {
    } as unknown as ServerSharedServices;
    const docs = new EditorSavingTextDocuments(services, { revertGraceMs });
    const flips: string[] = [];
-   docs.onDidChangeDirty((event: DocumentDirtyChangedEvent) => flips.push(`${event.uri} ${event.dirty}`));
-   return { docs, clock, files, flips };
+   const flipVersions: number[] = [];
+   docs.onDidChangeDirty((event: DocumentDirtyChangedEvent) => {
+      flips.push(`${event.uri} ${event.dirty}`);
+      flipVersions.push(event.version);
+   });
+   return {
+      docs,
+      clock,
+      files,
+      flips,
+      flipVersions,
+      get locksReleased() {
+         return locksReleased;
+      },
+      failBuilds: () => {
+         buildsFail = true;
+      }
+   };
 }
 
 function open(docs: HydraniumTextDocuments<TextDocument>, clientId: string, text = DISK): void {
@@ -174,15 +214,58 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
       expect(flips).toEqual([`${FILE} true`]);
    });
 
-   it('turns clean when the last close releases a dirty document', () => {
-      const { docs, flips } = makeRig();
-      open(docs, 'form');
-      docs.applyContentChange(FILE, EDITED, 'form');
+   it("turns clean at the reverted text's version once the revert of a dirty document has run", async () => {
+      const rig = makeRig();
+      open(rig.docs, 'form');
+      rig.docs.applyContentChange(FILE, EDITED, 'form');
 
-      docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      rig.docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      expect(rig.docs.isDirty(FILE)).toBe(false);
+      expect(rig.flips).toEqual([`${FILE} true`]);
+      await waitFor(() => rig.flips.length === 2);
 
-      expect(docs.isDirty(FILE)).toBe(false);
-      expect(flips).toEqual([`${FILE} true`, `${FILE} false`]);
+      expect(rig.flips[1]).toBe(`${FILE} false`);
+      expect(rig.flipVersions).toEqual([2, 3]);
+      expect(rig.docs.version(FILE)).toBe(3);
+   });
+
+   it('keeps the version in the clean flip when the file already holds the released text', async () => {
+      const rig = makeRig();
+      open(rig.docs, 'form');
+      rig.docs.applyContentChange(FILE, EDITED, 'form');
+      rig.files.set(FILE, EDITED);
+
+      rig.docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      await waitFor(() => rig.flips.length === 2);
+
+      expect(rig.flipVersions).toEqual([2, 2]);
+   });
+
+   it('turns clean once for a released dirty document reopened before its revert', async () => {
+      const rig = makeRig();
+      open(rig.docs, 'form');
+      rig.docs.applyContentChange(FILE, EDITED, 'form');
+
+      rig.docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      open(rig.docs, 'other');
+      expect(rig.flips).toEqual([`${FILE} true`, `${FILE} false`]);
+      await waitFor(() => rig.locksReleased === 1);
+
+      expect(rig.flips).toEqual([`${FILE} true`, `${FILE} false`]);
+      expect(rig.flipVersions).toEqual([2, 3]);
+   });
+
+   it('turns clean when the revert of a dirty document fails', async () => {
+      const rig = makeRig();
+      open(rig.docs, 'form');
+      rig.docs.applyContentChange(FILE, EDITED, 'form');
+      rig.failBuilds();
+
+      rig.docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      await waitFor(() => rig.flips.length === 2);
+
+      expect(rig.flips[1]).toBe(`${FILE} false`);
+      expect(rig.flipVersions).toEqual([2, 2]);
    });
 
    it('stays dirty while a lost client waits out the grace, and turns clean when the grace releases it', async () => {
@@ -195,6 +278,7 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
       await clock.advance(1_000);
 
       expect(docs.isDirty(FILE)).toBe(false);
+      await waitFor(() => flips.length === 2);
       expect(flips).toEqual([`${FILE} true`, `${FILE} false`]);
    });
 

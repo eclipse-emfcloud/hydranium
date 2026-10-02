@@ -206,13 +206,13 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    /**
     * What a secondary write declares it was based on. Default: the version the
     * secondary had when the source root was last read
-    * ({@link AbstractHydraniumGlspState.snapshotVersionOf}), so a foreign edit
+    * ({@link AbstractHydraniumGlspState.basedOnOf}), so a foreign edit
     * to it since is reported as a conflict and reconciled rather than
     * overwritten; `'anything'` for a secondary with no recorded version.
     * Return `'anything'` to force secondary writes.
     */
    protected secondaryBasedOn(uri: string): BasedOn {
-      return this.snapshotVersionOf(uri) ?? 'anything';
+      return this.basedOnOf(uri) ?? 'anything';
    }
 
    /**

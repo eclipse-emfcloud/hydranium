@@ -14,6 +14,7 @@
 
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
+import type { DataClientProtocol } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,10 +45,15 @@ afterEach(() => {
    scratch = undefined;
 });
 
-async function boot(): Promise<{ head: Harness; uri: string; newUri: string; path: string }> {
+async function boot(
+   client?: Partial<DataClientProtocol<DomainModel>>
+): Promise<{ head: Harness; uri: string; newUri: string; path: string }> {
    scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN));
    const shared = scratch.harness.shared;
-   head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({ server: channel => new DataServer<DomainModel>(channel, shared) });
+   head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
+      server: channel => new DataServer<DomainModel>(channel, shared),
+      client
+   });
    return { head, uri: scratch.workspace.uri(FILE), newUri: scratch.workspace.uri(NEW_FILE), path: scratch.workspace.resolve(FILE) };
 }
 
@@ -66,26 +72,36 @@ describe('dirty state over the data head', () => {
       await waitFor(() => dirtyChanges.length === 2);
       expect([opened.dirty, updated.dirty, saved.dirty]).toEqual([false, true, false]);
       expect(dirtyChanges).toEqual([
-         { uri, dirty: true },
-         { uri, dirty: false }
+         { uri, dirty: true, version: updated.version },
+         { uri, dirty: false, version: saved.version }
       ]);
       expect(readFileSync(path, 'utf8')).toBe(EDITED);
    });
 
-   it('sends a watcher the clean state of a dirty document its last close reverts', async () => {
-      const { head, uri } = await boot();
-      const { proxy, dirtyChanges } = head;
+   it('sends a watcher the reverted document, then its clean state at that version, when its last close reverts it', async () => {
+      const received: string[] = [];
+      const { head, uri } = await boot({
+         onDocumentUpdated: event => {
+            received.push(`update ${event.document.version}`);
+         },
+         onDocumentDirtyChanged: event => {
+            received.push(`dirty ${event.dirty} ${event.version}`);
+         }
+      });
+      const { proxy } = head;
       await proxy.createSession({ clientId: 'form' });
       await proxy.createSession({ clientId: 'tree' });
       await proxy.watchModelDocument({ uri, clientId: 'tree' });
       await proxy.openModelDocument({ uri, clientId: 'form' });
-      await proxy.updateModelDocument({ uri, clientId: 'form', model: EDITED, basedOn: 'anything' });
-      await waitFor(() => dirtyChanges.length === 1);
+      const updated = await proxy.updateModelDocument({ uri, clientId: 'form', model: EDITED, basedOn: 'anything' });
+      await waitFor(() => received.includes(`dirty true ${updated.version}`) && received.includes(`update ${updated.version}`));
+      received.length = 0;
 
       await proxy.closeModelDocument({ uri, clientId: 'form' });
 
-      await waitFor(() => dirtyChanges.length === 2);
-      expect(dirtyChanges[1]).toEqual({ uri, dirty: false });
+      const reverted = updated.version + 1;
+      await waitFor(() => received.some(entry => entry.startsWith('dirty')));
+      expect(received).toEqual([`update ${reverted}`, `dirty false ${reverted}`]);
    });
 
    it('answers a created document dirty until its first save', async () => {
