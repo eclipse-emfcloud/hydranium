@@ -182,6 +182,34 @@ describe('RpcConnection reconnect', () => {
       }
    });
 
+   it('lands a call that raced a drop on the fresh generation, reporting nothing', async () => {
+      const test = harness();
+      try {
+         const pending = test.rpc.connected();
+         // Dropped while its transport is still opening, as a server restart
+         // during a connect does.
+         test.port.fireDispose();
+
+         expect(await (await pending).ping({ value: 'x' })).toBe('generation-2');
+         expect(test.port.reported).toEqual([]);
+      } finally {
+         test.dispose();
+      }
+   });
+
+   it('rejects a call that raced its own dispose, reporting nothing', async () => {
+      const test = harness();
+      try {
+         const pending = test.rpc.connected();
+         test.rpc.dispose();
+
+         await expect(pending).rejects.toThrow(/disposed/);
+         expect(test.port.reported).toEqual([]);
+      } finally {
+         test.dispose();
+      }
+   });
+
    it('binds the client methods once per generation, not cumulatively', async () => {
       const test = harness();
       try {

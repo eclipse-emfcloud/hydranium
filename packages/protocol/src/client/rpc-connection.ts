@@ -141,6 +141,11 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
          generation.ready = this.awaitReady(generation);
       }
       await generation.ready;
+      // Dropped while it opened: its transport is gone, so the call goes to the
+      // next generation, or rejects once this connection is disposed.
+      if (this.generation !== generation) {
+         return this.connected();
+      }
       return generation.server;
    }
 
@@ -219,9 +224,18 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
    protected async awaitReady(generation: RpcConnectionGeneration<TServer>): Promise<void> {
       try {
          await generation.connection;
+         // Dropped meanwhile: writing the request would hit a closed transport.
+         if (this.generation !== generation) {
+            return;
+         }
          await generation.server.waitForReady();
          this.lifecycle.onReady?.();
       } catch (error: unknown) {
+         // A dropped generation's request fails with its transport, which says
+         // nothing about whether the server is ready.
+         if (this.generation !== generation) {
+            return;
+         }
          this.lifecycle.onFailed?.(error);
          // Drop the generation so the next request retries rather than
          // re-awaiting a settled rejection forever.
