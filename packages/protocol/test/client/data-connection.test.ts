@@ -210,7 +210,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          record('update', args);
          await behaviour.updateGate;
          if (behaviour.refuseUpdates === 'conflict') {
-            throw new ConflictError(args.uri, 0, 1);
+            throw new ConflictError(args.uri, asSnapshotVersion(0), 1);
          }
          if (behaviour.refuseUpdates === 'error') {
             throw new Error('update refused');
@@ -300,7 +300,8 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
          port.fireDispose();
          pairs.at(-1)?.dispose();
       },
-      notifyDirty: (uri, dirty) => pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDirtyChanged`, { uri, dirty }),
+      notifyDirty: (uri, dirty) =>
+         pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDirtyChanged`, { uri, dirty, version: 1 }),
       notifyUpdated: (uri, text, sourceClientId, reason = 'changed') =>
          pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentUpdated`, {
             document: document(uri, 1, undefined, text),

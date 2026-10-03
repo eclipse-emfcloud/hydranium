@@ -44,7 +44,7 @@ import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode, type ParseResult } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import {
-   AstDocument,
+   type AstDocument,
    type AstDocumentSavedEvent,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
@@ -596,7 +596,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     */
    protected currentPrimaryDocument(): AstDocument<AstNode> | undefined {
       const document = this.sharedServices.model.ModelService.getDocument(this.state.sourceUri);
-      return document ? AstDocument.from(document) : undefined;
+      return document ? this.sharedServices.workspace.AstDocumentManager.toAstDocument(document) : undefined;
    }
 
    /**

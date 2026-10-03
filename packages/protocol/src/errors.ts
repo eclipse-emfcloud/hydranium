@@ -9,6 +9,7 @@
 
 import { ResponseError } from 'vscode-jsonrpc';
 import { defineMessage, type HydraniumMessageData, messageData } from './messages/primitives';
+import type { SnapshotVersion, TextVersion } from './model-service/based-on';
 
 /*
  * Every error here is a typed error: a caller reacts to it, so it has a class,
@@ -76,9 +77,9 @@ export const CONFLICT_ERROR_CODE = HYDRANIUM_ERROR_CODES.conflict;
 export interface ConflictErrorData extends HydraniumMessageData {
    readonly uri: string;
    /** The based-on version the caller authored against. */
-   readonly expectedVersion: number;
+   readonly expectedVersion: SnapshotVersion;
    /** The server's current text-document version at the time of the throw. */
-   readonly actualVersion: number;
+   readonly actualVersion: TextVersion;
 }
 
 /**
@@ -111,7 +112,7 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * No auto-retry or auto-merge ships by default.
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
-   constructor(uri: string, expectedVersion: number, actualVersion: number) {
+   constructor(uri: string, expectedVersion: SnapshotVersion, actualVersion: TextVersion) {
       // The identity rides alongside the typed payload rather than replacing
       // it: `isConflictError`'s name check is surface an adopter may bind, so
       // adding the identity widens the payload rather than reshaping it.
@@ -143,12 +144,12 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
     * vitest's formatter then ASSIGNS to them, which throws on an accessor and
     * replaces the real failure with a `TypeError`.
     */
-   get expectedVersion(): number {
+   get expectedVersion(): SnapshotVersion {
       return this.data!.expectedVersion;
    }
 
    /** The server's version at the time of the throw. Not `actual` — see {@link expectedVersion}. */
-   get actualVersion(): number {
+   get actualVersion(): TextVersion {
       return this.data!.actualVersion;
    }
 }

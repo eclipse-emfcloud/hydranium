@@ -501,15 +501,23 @@ reads or writes the file:
 - an integrity repair written to a file some client holds takes the repair.
 
 A document released after its last close is not dirty, and a dirty one
-announces the change. `TextDocuments.onDidChangeDirty` fires on each change of
+announces the change once its revert to disk has run, at the reverted text's
+version; a first open before the revert announces it instead, when it opens
+clean. `TextDocuments.onDidChangeDirty` fires on each change of
 the answer, and `updateDiskBaseline(uri, text)` records a write your own code
 made; a save your code announces through `notifyDidSaveTextDocument` with its
 text moves the baseline too.
 
 Over the data head, every transfer document the head sends that it holds
 carries the current answer as `dirty`, and a watcher is sent
-`onDocumentDirtyChanged({ uri, dirty })` on each change;
-`DataEvents.onDidChangeDocumentDirty` fans it out. After a reconnect, a
+`onDocumentDirtyChanged({ uri, dirty, version })` on each change;
+`DataEvents.onDidChangeDocumentDirty` fans it out. The `version` is the
+`TextVersion` of the text the answer was decided on. A flip is sent when the
+text changes, before the build that follows, so it can be ahead of the version
+of the document a client holds: the client then holds an older model, and an
+update at that version or a later one follows, since the head sends a watcher
+every new version, marked `modelUnchanged` when only the text moved. A write
+based on the older version conflicts rather than overwriting the newer text. After a reconnect, a
 `DataSession` reads each document it restores once its watch is in place, and
 tells the connection's client the answer where it differs from the last one
 the client was told since its open, so a flip while the connection was down

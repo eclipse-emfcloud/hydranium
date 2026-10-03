@@ -330,7 +330,11 @@ function buildConflictBundle(currentVersion = 1): {
    const bundle = makeTestServices<FakeRoot>({
       serialize: (_uri, root) => `name:${(root as unknown as FakeRoot).name}`,
       seedDocuments: [
-         { uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: currentVersion } }
+         {
+            uri: URI_A,
+            root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }),
+            options: { version: currentVersion, text: `v${currentVersion}` }
+         }
       ]
    });
    const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1', `v${currentVersion}`);

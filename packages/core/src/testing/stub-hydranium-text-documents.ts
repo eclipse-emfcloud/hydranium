@@ -176,7 +176,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          } else {
             dirty.delete(uri);
          }
-         dirtyChanged.fire({ uri: key(uri), dirty: now });
+         dirtyChanged.fire({ uri: key(uri), dirty: now, version: held?.version ?? 0 });
       }
    };
 

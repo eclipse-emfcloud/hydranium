@@ -246,7 +246,7 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
          const conflicted = args.updates.find(update => update.uri === harness.conflictOn && update.basedOn !== 'anything');
          if (conflicted) {
             harness.conflictOn = undefined;
-            throw new ConflictError(conflicted.uri, 1, 2);
+            throw new ConflictError(conflicted.uri, asSnapshotVersion(1), 2);
          }
          return args.updates.map(update => ({ root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri) }));
       }
@@ -300,12 +300,12 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(DIAGRAM_URI)).toBe(3);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(7);
+         expect(state.basedOnOf(DIAGRAM_URI)).toBe(3);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(7);
          // `undefined`, not 0 — 0 is a real version meaning "present, never
          // edited", so collapsing them would let a caller gate against a
          // document it never read.
-         expect(state.snapshotVersionOf(OTHER_URI)).toBeUndefined();
+         expect(state.basedOnOf(OTHER_URI)).toBeUndefined();
       });
 
       it('records the store version of a document the store holds ahead of the build with the same text', () => {
@@ -320,11 +320,11 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(DIAGRAM_URI)).toBe(1);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(1);
+         expect(state.basedOnOf(DIAGRAM_URI)).toBe(1);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(1);
       });
 
-      it('records the built version of a document whose store text the build has not parsed', () => {
+      it('records a version no write matches for a document whose store text the build has not parsed', () => {
          // The store's version names text the state never read, so a write
          // gated on it would overwrite that text.
          const harness = makeHarness();
@@ -335,7 +335,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(0);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
       });
 
       it('records a version no write matches when the store has moved past the text the build parsed', () => {
@@ -349,7 +349,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
       });
 
       it('records a version no write matches for a built document without a syntax tree sharing the store’s object', () => {
@@ -363,7 +363,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
       });
 
       it('records the store version when the store holds the text the build parsed, as one object', () => {
@@ -375,7 +375,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(2);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(2);
       });
 
       it('refreshes secondary versions on setSourceRoot, so the next command is not gated on a stale number', () => {
@@ -385,12 +385,12 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
          state.trackSecondaryDocument(SEMANTIC_URI);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(7);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(7);
 
          // The write that lands advances the secondary too.
          seed(harness, SEMANTIC_URI, 'semantic', 8);
          state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(8);
+         expect(state.basedOnOf(SEMANTIC_URI)).toBe(8);
       });
 
       it('drops the whole set on untrack', () => {
@@ -402,7 +402,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          state.trackSecondaryDocument(SEMANTIC_URI);
          state.untrackSecondaryDocuments();
          expect(state.secondaryUris).toEqual([]);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBeUndefined();
+         expect(state.basedOnOf(SEMANTIC_URI)).toBeUndefined();
       });
    });
 

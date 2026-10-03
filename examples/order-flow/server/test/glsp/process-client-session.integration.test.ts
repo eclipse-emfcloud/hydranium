@@ -208,11 +208,11 @@ describe('order-flow .process diagram as a client session', () => {
       const diagram = await startDiagram(WORKSPACE_FILES.fulfillmentProcess);
       const layoutBefore = diagram.text(diagram.layoutUri)!;
       expect(layoutBefore).toContain('node Pay at 40, 100 size 160, 60');
-      const capturedLayoutVersion = diagram.harness.state.snapshotVersionOf(diagram.layoutUri);
+      const capturedLayoutVersion = diagram.harness.state.basedOnOf(diagram.layoutUri);
 
       await diagram.foreignWrite(diagram.layoutUri, layoutBefore.replace('node Pay at 40, 100', 'node Pay at 41, 101'));
       // The gate is armed: the diagram still holds the layout version it read.
-      expect(diagram.harness.state.snapshotVersionOf(diagram.layoutUri)).toBe(capturedLayoutVersion);
+      expect(diagram.harness.state.basedOnOf(diagram.layoutUri)).toBe(capturedLayoutVersion);
 
       diagram.harness.dispatch(
          ChangeBoundsOperation.create([

@@ -137,7 +137,7 @@ function createState(harness: Harness): TestReconcilingState {
                harness.updateCalls.push(args);
                if (harness.throwConflictOnNextUpdate) {
                   harness.throwConflictOnNextUpdate = false;
-                  throw new ConflictError(args.uri, 1, 2);
+                  throw new ConflictError(args.uri, asSnapshotVersion(1), 2);
                }
                return { root: harness.nextUpdatedRoot };
             },

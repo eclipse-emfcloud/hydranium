@@ -747,7 +747,7 @@ export class DataSession<
          const current = await server.getModelDocument({ uri }).catch(() => undefined);
          if (current?.dirty !== undefined) {
             try {
-               this.host.restoreDirty?.({ uri: current.uri, dirty: current.dirty });
+               this.host.restoreDirty?.({ uri: current.uri, dirty: current.dirty, version: current.version });
             } catch {
                // The client's listener failed, not the restore: the server
                // has the document open and watched, so it stays restored.

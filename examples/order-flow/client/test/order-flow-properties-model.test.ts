@@ -160,6 +160,12 @@ async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promis
    await writeAsThirdParty(server, THIRD_PARTY, uri, root);
 }
 
+/** Write `text` as a third party, ungated: a change the transfer model cannot express. */
+async function thirdPartyText(uri: string, text: string): Promise<void> {
+   const server = await session!.connected();
+   await writeAsThirdParty(server, THIRD_PARTY, uri, text);
+}
+
 describe('order-flow properties model', () => {
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-props-' });
@@ -364,6 +370,24 @@ describe('order-flow properties model', () => {
          message: 'the model never picked up the third-party rename'
       });
       expect(changes).toBeGreaterThan(0);
+   });
+
+   it("takes a third party's comment-only edit's version without re-rendering", async () => {
+      const model = followingModel();
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      await model.open(uri);
+      const opened = model.version;
+
+      let changes = 0;
+      model.onDidChange(() => {
+         changes++;
+      });
+
+      const text = sharedServices!.workspace.TextDocuments.get(uri)!.getText();
+      await thirdPartyText(uri, `${text}\n// a comment\n`);
+
+      await waitFor(() => model.version !== opened, { message: 'the model never took the new version' });
+      expect({ changes, dirty: model.dirty }).toEqual({ changes: 0, dirty: true });
    });
 
    it('clears its fields when the open document is deleted', async () => {

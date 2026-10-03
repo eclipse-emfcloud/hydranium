@@ -361,7 +361,12 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    }
 
    /** Follow a server push for the open document. */
-   protected handleDocumentUpdated(event: { document: TransferDocument<TTransfer>; sourceClientId: string; reason: string }): void {
+   protected handleDocumentUpdated(event: {
+      document: TransferDocument<TTransfer>;
+      sourceClientId: string;
+      reason: string;
+      modelUnchanged?: true;
+   }): void {
       if (this.disposed || !this.snapshot || event.document.uri !== this.snapshot.uri) {
          return;
       }
@@ -373,6 +378,13 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
       // ordered connection delivers echoes in send order, so a stale one cannot
       // overtake a newer snapshot.
       if (this.session.isOwnEcho(event.sourceClientId)) {
+         return;
+      }
+      if (event.modelUnchanged) {
+         // The whole document, root included, so the new version is never
+         // paired with a root it does not belong to; only the render is skipped.
+         this.snapshot = event.document;
+         this.setDirty(event.document.dirty);
          return;
       }
       this.adopt(event.document);

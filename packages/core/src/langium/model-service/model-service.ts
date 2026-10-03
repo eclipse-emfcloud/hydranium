@@ -692,7 +692,7 @@ export class DefaultModelService<
       if (!document) {
          return undefined;
       }
-      const envelope = AstDocument.from<TAst, TDiagnostic>(document);
+      const envelope = this.services.workspace.AstDocumentManager.toAstDocument(document) as AstDocument<TAst, TDiagnostic>;
       return document.state >= DocumentState.Validated ? envelope : this.withoutDiagnostics(envelope);
    }
 
@@ -1037,15 +1037,15 @@ export class DefaultModelService<
 
    /**
     * Build an {@link AstDocument} envelope from the current
-    * {@link LangiumDocument} state via the shared {@link AstDocument.from}
-    * projection. Returns an empty envelope (built via
+    * {@link LangiumDocument} state via `AstDocumentManager.toAstDocument`,
+    * the projection events use too. Returns an empty envelope (built via
     * {@link AstDocument.create}) when the document is absent from the
     * registry — adopters that prefer to throw override on their subclass.
     */
    protected toAstDocument(uri: URI): AstDocument<TAst, TDiagnostic> {
       const document = this.services.workspace.LangiumDocuments.getDocument(uri);
       return document
-         ? AstDocument.from<TAst, TDiagnostic>(document)
+         ? (this.services.workspace.AstDocumentManager.toAstDocument(document) as AstDocument<TAst, TDiagnostic>)
          : AstDocument.create<TAst, TDiagnostic>(uri.toString(), 0, undefined as unknown as TAst, []);
    }
 

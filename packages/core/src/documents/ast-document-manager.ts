@@ -15,7 +15,8 @@ import {
    type TransferUpdatedEvent,
    type OpenModelArgs,
    asSnapshotVersion,
-   type SnapshotVersion
+   type SnapshotVersion,
+   type TextVersion
 } from '@hydranium/protocol';
 import {
    type AstNode,
@@ -85,7 +86,7 @@ import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { type ServerSharedServices } from '../langium/module.js';
 import { type HydraniumDocumentBuilder, labelPhaseListener } from '../langium/document-builder/index.js';
 import { UNKNOWN_CLIENT_ID } from './client-ids.js';
-import { type HydraniumTextDocuments } from './hydranium-text-documents.js';
+import { type HydraniumTextDocuments, snapshotVersion } from './hydranium-text-documents.js';
 import { type SelfSaveRegistry } from './self-save-registry.js';
 import { type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
 
@@ -111,9 +112,9 @@ export interface AstDocument<TAst extends AstNode, TDiagnostic extends AstDiagno
    diagnostics: TDiagnostic[];
    uri: string;
    /**
-    * Text-document version this snapshot was taken at — read from
-    * `LangiumDocument.textDocument.version`. Symmetric with
-    * `TransferDocument.version` on the wire side: an in-process caller that
+    * The version of the text `root` was parsed from, or `NO_MATCHING_VERSION`
+    * once the store holds other text: see {@link snapshotVersion}. Symmetric
+    * with `TransferDocument.version` on the wire side: an in-process caller that
     * holds an `AstDocument` and mutates it sends this straight back as the
     * `basedOn` of its session's write, and the conflict gate arms on it.
     */
@@ -134,36 +135,6 @@ export namespace AstDocument {
       diagnostics: TDiagnostic[] = []
    ): AstDocument<TAst, TDiagnostic> {
       return { uri, version: asSnapshotVersion(version), root, diagnostics };
-   }
-
-   /**
-    * Project a {@link LangiumDocument} into its {@link AstDocument}
-    * envelope — the single place that reads `root` / `diagnostics` /
-    * `version` / `uri` off a built document. Both the event path
-    * ({@link AstDocumentManager.onUpdate} / `onSave`) and the read path
-    * (`ModelService`'s snapshot accessors) go through here so the
-    * field mapping lives once.
-    *
-    * The emitted `uri` is always the document's own `textDocument.uri` — the
-    * canonical document-identity form (see {@link DocumentUriPolicy}). Events
-    * carry that identity, not the subscriber's (possibly non-canonical) URI:
-    * a subscriber already knows the URI it subscribed with, so the useful
-    * thing to surface is the canonical one every other layer keys by.
-    *
-    * Narrowing `TDiagnostic` below the constraint asserts that the validators
-    * in play produce that shape, and nothing here checks it: the build fills the
-    * array, so a document carrying a diagnostic from elsewhere — a lexer error,
-    * another validator — satisfies the declared type and not the narrowed one.
-    */
-   export function from<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
-      document: LangiumDocument
-   ): AstDocument<TAst, TDiagnostic> {
-      return create<TAst, TDiagnostic>(
-         document.textDocument.uri,
-         document.textDocument.version,
-         document.parseResult.value as TAst,
-         (document.diagnostics ?? []) as TDiagnostic[]
-      );
    }
 }
 
@@ -222,7 +193,7 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
    isOpen(uri: string): boolean;
 
    /** Apply `text` as `clientId`'s edit. Resolves to the resulting text-document version. */
-   update(uri: string, text: string, clientId: string): Promise<number>;
+   update(uri: string, text: string, clientId: string): Promise<TextVersion>;
    /**
     * Write the document's current text to disk through `FileSystemTaskQueue`.
     * The text is taken when this is called, so saves of one file land in the
@@ -235,6 +206,17 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
    onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
 
    getDocument(uri: string): LangiumDocument | undefined;
+
+   /**
+    * `document` as the envelope every event and snapshot read hands out, its
+    * `version` decided by {@link snapshotVersion} against the text store.
+    *
+    * The `uri` is the document's own canonical one, not a subscriber's
+    * spelling, so it matches the key every other layer uses. The diagnostics
+    * are asserted to be `TDiagnostic` unchecked: a lexer error or another
+    * validator's diagnostic satisfies the declared type and not a narrower one.
+    */
+   toAstDocument(document: LangiumDocument): AstDocument<TAst, TDiagnostic>;
 
    /** Client id that authored the document's current version, or `undefined` for a framework-internal build. */
    getAuthor(document: LangiumDocument): string | undefined;
@@ -608,7 +590,7 @@ export class DefaultAstDocumentManager<
     * correlate the change against subsequent build events can. Throws if the
     * document isn't open.
     */
-   async update(uri: string, text: string, clientId: string): Promise<number> {
+   async update(uri: string, text: string, clientId: string): Promise<TextVersion> {
       if (!this.isOpen(uri)) {
          throw new Error(`Document ${uri} hasn't been opened for updating yet`);
       }
@@ -729,11 +711,16 @@ export class DefaultAstDocumentManager<
    }
 
    /**
-    * Hook for subclasses that want to re-shape the emitted document (e.g. inject
-    * a custom-typed `diagnostics` field). The default delegates to
-    * {@link AstDocument.from}, the shared LangiumDocument→envelope projection.
+    * Events and the model service's snapshot reads both come through here, so
+    * an override that re-shapes the document re-shapes both.
     */
-   protected toAstDocument(document: LangiumDocument): AstDocument<TAst, TDiagnostic> {
-      return AstDocument.from<TAst, TDiagnostic>(document);
+   toAstDocument(document: LangiumDocument): AstDocument<TAst, TDiagnostic> {
+      const uri = document.textDocument.uri;
+      return AstDocument.create<TAst, TDiagnostic>(
+         uri,
+         snapshotVersion(document, this.textDocuments.get(uri)),
+         document.parseResult.value as TAst,
+         (document.diagnostics ?? []) as TDiagnostic[]
+      );
    }
 }

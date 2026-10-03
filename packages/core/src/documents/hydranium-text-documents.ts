@@ -20,7 +20,7 @@
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
-import { type URI, UriUtils } from '@hydranium/langium';
+import { type AstNode, type LangiumDocument, type URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
    type ApplyWorkspaceEditResult,
@@ -50,8 +50,12 @@ import {
    type CanonicalUri,
    type LanguageClientUri,
    asLanguageClientUri,
+   asSnapshotVersion,
    DisposableCollection,
+   NO_MATCHING_VERSION,
+   type SnapshotVersion,
    type Stopwatch,
+   type TextVersion,
    textHash,
    type Tracer
 } from '@hydranium/protocol';
@@ -122,11 +126,49 @@ export interface LastOpenClosedEvent {
    readonly uri: CanonicalUri;
 }
 
+/**
+ * The version a write based on `root` has to name: that of `stored`, the
+ * store's text document, while it holds the text `root` was parsed from, else
+ * `NO_MATCHING_VERSION`, so the write conflicts instead of overwriting text
+ * the root never saw.
+ *
+ * Decided by text: `document.textDocument` is the store's own object on the
+ * LSP path, updated in place, so its version is already the new text's while
+ * the root is still the previous build's.
+ */
+export function snapshotVersion(
+   document: LangiumDocument,
+   stored: Pick<TextDocument, 'version' | 'getText'> | undefined,
+   root?: AstNode
+): SnapshotVersion {
+   const current = root === undefined || root === document.parseResult.value;
+   if (stored === undefined) {
+      return current ? asSnapshotVersion(document.textDocument.version) : NO_MATCHING_VERSION;
+   }
+   const parsed = (root ?? document.parseResult.value).$cstNode?.root.fullText;
+   if (parsed !== undefined) {
+      return parsed === stored.getText() ? asSnapshotVersion(stored.version) : NO_MATCHING_VERSION;
+   }
+   // Without a syntax tree the document's own text stands in for the root's,
+   // which says nothing once that object is the store's.
+   if (!current || document.textDocument === stored) {
+      return NO_MATCHING_VERSION;
+   }
+   const same = stored.version === document.textDocument.version || stored.getText() === document.textDocument.getText();
+   return same ? asSnapshotVersion(stored.version) : NO_MATCHING_VERSION;
+}
+
 /** Delivered by {@link HydraniumTextDocuments.onDidChangeDirty}. */
 export interface DocumentDirtyChangedEvent {
    readonly uri: CanonicalUri;
    /** The new answer of {@link HydraniumTextDocuments.isDirty}. */
    readonly dirty: boolean;
+   /**
+    * The store's version of the text the answer was decided on. The answer
+    * changes with the text, before any build, so it can name text whose model
+    * has not been sent yet.
+    */
+   readonly version: TextVersion;
 }
 
 /**
@@ -388,6 +430,13 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * workspace size, not by activity.
     */
    protected readonly __versionSequences = new Map<CanonicalUri, VersionSequence>();
+
+   /**
+    * Released documents last announced dirty. Their clean flip waits for the
+    * revert, so it carries the reverted text's version rather than the
+    * released one's; a first open before the revert answers instead.
+    */
+   protected readonly __releasedDirty = new Set<CanonicalUri>();
 
    /**
     * Texts pushed to the LSP textual language client via
@@ -694,7 +743,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * Returns the resulting shared version. Throws when the document is not
     * open — callers (`AstDocumentManager.update`) open first.
     */
-   applyContentChange(uri: DocumentUri, text: string, clientId: string): number {
+   applyContentChange(uri: DocumentUri, text: string, clientId: string): TextVersion {
       const key = this.documentKey(uri);
       let document = this.__syncedDocuments.get(key);
       if (document === undefined) {
@@ -835,14 +884,13 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          version: syncedDocument.version,
          contentHash: textHash(syncedDocument.getText())
       });
-      const wasDirty = this.__documents.get(uri)?.dirty === true;
+      if (this.__documents.get(uri)?.dirty === true) {
+         this.__releasedDirty.add(uri);
+      }
       this.__syncedDocuments.delete(uri);
       // One delete clears every per-URI axis (version history + any staged
       // pending content) so a future open with the same URI starts fresh.
       this.__documents.delete(uri);
-      if (wasDirty) {
-         this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty: false }));
-      }
       this.lastOpenClosedEmitter.fire(Object.freeze({ uri }));
    }
 
@@ -867,6 +915,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * document meanwhile would have its text rebuilt over, or the document
     * removed. A document some client has open again, or that waits out a new
     * grace, is left to that client.
+    *
+    * A document released dirty is announced clean once this settles, whether
+    * the rebuild ran or failed, so a watcher is never left holding it dirty.
     */
    protected async revertToDisk(uri: CanonicalUri): Promise<void> {
       const workspace = this.services.workspace;
@@ -906,6 +957,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          }
          const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
          this.tracer.with(uri).error(`Revert on last close dropped. ${detail}`);
+      } finally {
+         if (this.__releasedDirty.delete(uri)) {
+            this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty: false, version: this.version(uri) }));
+         }
       }
    }
 
@@ -1056,6 +1111,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          // it from the file, and an editor opened its buffer from there. An
          // editor that opens a buffer it never saved is taken as clean.
          record.diskBaseline = td.text;
+         if (this.__releasedDirty.delete(uri)) {
+            record.dirty = true;
+         }
          this.refreshDirty(uri);
          if (clientId === LANGUAGE_CLIENT_ID) {
             // Baseline the shadow to what Monaco just opened so the next outbound
@@ -1221,7 +1279,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * optimistic-concurrency token (based-on gates): version unchanged ⇔
     * content unchanged.
     */
-   version(uri: DocumentUri): number {
+   version(uri: DocumentUri): TextVersion {
       return this.get(uri)?.version ?? this.__versionSequences.get(this.documentKey(uri))?.version ?? 0;
    }
 
@@ -1421,7 +1479,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       return this.__documents.get(this.documentKey(uri))?.dirty ?? false;
    }
 
-   /** Fires each time the answer of {@link isDirty} changes, the release of a dirty document included. */
+   /**
+    * Fires each time the answer of {@link isDirty} changes. A dirty document's
+    * release fires once its revert has run, at the reverted text's version,
+    * though {@link isDirty} answers clean from the release on.
+    */
    get onDidChangeDirty(): Event<DocumentDirtyChangedEvent> {
       return this.dirtyChangedEmitter.event;
    }
@@ -1472,7 +1534,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       const dirty = document.getText() !== record.diskBaseline;
       if (dirty !== (record.dirty ?? false)) {
          record.dirty = dirty;
-         this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty }));
+         this.dirtyChangedEmitter.fire(Object.freeze({ uri, dirty, version: document.version }));
       }
    }
 

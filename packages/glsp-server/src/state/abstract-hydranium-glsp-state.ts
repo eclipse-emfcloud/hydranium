@@ -18,7 +18,8 @@ import {
    type NameProvider,
    type ReferenceCandidateProvider,
    type ServerLanguageServices,
-   type ServerSharedServices
+   type ServerSharedServices,
+   snapshotVersion
 } from '@hydranium/core';
 import {
    type BasedOn,
@@ -27,7 +28,6 @@ import {
    type Logger,
    type Tracer,
    asSnapshotVersion,
-   NO_MATCHING_VERSION,
    TIMED_OUT
 } from '@hydranium/protocol';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
@@ -328,7 +328,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * identified once the operation names the node. What the framework supplies
     * is the part an adopter cannot reconstruct after the fact — the version each
     * document was at BEFORE the command mutated anything (see
-    * {@link snapshotVersionOf}). Idempotent; registering the primary is ignored,
+    * {@link basedOnOf}). Idempotent; registering the primary is ignored,
     * since {@link version} already tracks it. Registering a URI not already in
     * the set fires {@link onSecondaryUrisChanged}.
     */
@@ -384,15 +384,15 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Snapshot version for `uri` — {@link basedOn} for the primary, the version
-    * taken at {@link trackSecondaryDocument} (refreshed by {@link setSourceRoot})
-    * for a secondary, `undefined` for anything untracked.
+    * The version a write of `uri` is based on: {@link basedOn} for the primary,
+    * the version taken at {@link trackSecondaryDocument} (refreshed by
+    * {@link setSourceRoot}) for a secondary, `undefined` for anything untracked.
     *
     * `undefined` rather than v0 for an untracked URI deliberately: `0` is a real
     * version meaning "present but never edited", so collapsing the two would let
     * a caller gate a write against a document this state never read.
     */
-   snapshotVersionOf(uri: string): SnapshotVersion | undefined {
+   basedOnOf(uri: string): SnapshotVersion | undefined {
       if (uri === this._sourceUri) {
          return this._basedOn;
       }
@@ -400,45 +400,24 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Read a document's version out of the live store and mark it as a snapshot,
-    * through the model service's canonicalizing gateway so a URI spelled through
-    * a symlink still resolves to the document keyed by its real path rather than
-    * stranding at `0` (which would silently weaken the conflict gate).
+    * The version a write based on the document's current root names, decided by
+    * `snapshotVersion`, through the model service's canonicalizing gateway so a
+    * URI spelled through a symlink still resolves to the document keyed by its
+    * real path rather than stranding at `0` (which would silently weaken the
+    * conflict gate).
     *
-    * **Call this only at the point the source root is read.** It is the one
-    * place the framework turns a live version into a snapshot one, and the value
-    * is true only because that is where it is called. Called at write time it
-    * answers with the version the write is about to be compared against, so the
-    * gate passes unconditionally.
+    * **Call this only at the point the source root is read.** Called at write
+    * time it answers with the version the write is about to be compared
+    * against, so the gate passes unconditionally.
     *
     * Falls back to v0 for a URI neither store knows, matching what
     * {@link version} reports for a document that was never opened.
-    *
-    * **The version of the text store, which the gate compares against.**
-    * When the store holds the text the root was parsed from, that is its
-    * version, even while the built document still carries an older number.
-    * When the store holds other text, `NO_MATCHING_VERSION`, so the write
-    * conflicts instead of overwriting text the root never saw: the
-    * reconciling states reconcile it, `FullTextHydraniumGlspState` throws the
-    * `ConflictError`. When the root keeps no syntax tree to read its text
-    * from, the built document's text stands in for it, unless the built
-    * document IS the store's, whose text says nothing about what was parsed;
-    * that also gets `NO_MATCHING_VERSION`.
     */
    protected readSnapshotVersion(uri: string): SnapshotVersion {
       const document = this.sharedServices.model.ModelService.getDocument(uri);
       const stored = document && this.sharedServices.workspace.TextDocuments.get(uri);
       if (stored) {
-         const parsed = document.parseResult.value.$cstNode?.root.fullText;
-         if (parsed !== undefined) {
-            return parsed === stored.getText() ? asSnapshotVersion(stored.version) : NO_MATCHING_VERSION;
-         }
-         if (document.textDocument === stored) {
-            return NO_MATCHING_VERSION;
-         }
-         if (stored.version !== document.textDocument.version && stored.getText() === document.textDocument.getText()) {
-            return asSnapshotVersion(stored.version);
-         }
+         return snapshotVersion(document, stored);
       }
       return this.sharedServices.model.ModelService.snapshot(uri)?.version ?? asSnapshotVersion(0);
    }
