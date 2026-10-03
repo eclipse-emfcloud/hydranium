@@ -12,10 +12,17 @@ import {
    AstUtils,
    DefaultLangiumDocumentFactory,
    type LangiumDocument,
+   type Mutable,
    type ParseResult,
    type URI
 } from '@hydranium/langium';
+import { type CancellationToken } from 'vscode-languageserver-protocol';
+import { type TextDocument } from 'vscode-languageserver-textdocument';
+import { STALE_VERSION } from '@hydranium/protocol';
+import { type ModelLedger } from '../../documents/model-ledger.js';
+import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
+import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type Serializer } from '../serialization/serializer.js';
 
 /** Structural view of the per-language serializer slot on the resolved services. */
@@ -57,6 +64,16 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
     */
    declare protected readonly serviceRegistry: ExtendedServiceRegistry;
 
+   /** Resolved per call: the sync service reaches the registry, which is built with this factory. */
+   protected readonly versionSyncService: () => VersionSyncService;
+   protected readonly modelLedger: () => ModelLedger;
+
+   constructor(services: ServerSharedServicesMinimal) {
+      super(services);
+      this.versionSyncService = () => services.workspace.VersionSyncService;
+      this.modelLedger = () => services.workspace.ModelLedger;
+   }
+
    /**
     * Parse `text` for `uri` under the grammar `languageId` names, instead of
     * the one `uri` routes to.
@@ -93,6 +110,72 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       }
       const parseResult: ParseResult<T> = { value: model, parserErrors: [], lexerErrors: [] };
       return this.createLangiumDocument<T>(parseResult, uri, undefined, text);
+   }
+
+   protected override createLangiumDocument<T extends AstNode = AstNode>(
+      parseResult: ParseResult<T>,
+      uri: URI,
+      textDocument?: TextDocument,
+      text?: string
+   ): LangiumDocument<T> {
+      const document = super.createLangiumDocument(parseResult, uri, textDocument, text);
+      // Without `textDocument` Langium creates one at version 0 on first read,
+      // which needs a language for `uri` that a folder URI does not have.
+      const parsed = parseResult.value.$cstNode?.root.fullText ?? text ?? textDocument?.getText();
+      this.versionSyncService().modelProduced(document, { version: this.versionOfParsedText(uri, parsed, textDocument?.version ?? 0) });
+      return document;
+   }
+
+   /**
+    * The version is read before the parse, for the same reason as in
+    * {@link update}: the text document is the store's, which an edit updates
+    * in place while the parse runs.
+    */
+   protected override async createAsync<T extends AstNode = AstNode>(
+      uri: URI,
+      content: string | TextDocument,
+      cancelToken: CancellationToken
+   ): Promise<LangiumDocument<T>> {
+      const version = typeof content === 'string' ? undefined : content.version;
+      const document = await super.createAsync<T>(uri, content, cancelToken);
+      if (version !== undefined) {
+         this.versionSyncService().modelProduced(document, { version });
+      }
+      return document;
+   }
+
+   /**
+    * The store's version is read before Langium's `update`, which reads the
+    * store's text before its first await: read after, it can belong to an
+    * edit that arrived while the parse ran.
+    *
+    * Reconciled with the store here rather than in a `Parsed` listener, which
+    * a cancel skips, leaving the root on the version of its earlier text.
+    */
+   override async update<T extends AstNode = AstNode>(
+      document: Mutable<LangiumDocument<T>>,
+      cancellationToken: CancellationToken
+   ): Promise<LangiumDocument<T>> {
+      const stored = this.textDocuments?.get(document.uri.toString())?.version;
+      const updated = await super.update(document, cancellationToken);
+      const version =
+         stored ??
+         this.versionOfParsedText(
+            updated.uri,
+            this.modelLedger().textOf(updated.parseResult.value) ?? updated.textDocument.getText(),
+            updated.textDocument.version
+         );
+      this.versionSyncService().modelProduced(updated, { version });
+      return updated;
+   }
+
+   /**
+    * `version`, or {@link STALE_VERSION} when the store holds `uri` open with
+    * other text than `parsed`: text read from the file while an open landed.
+    */
+   protected versionOfParsedText(uri: URI, parsed: string | undefined, version: number): number {
+      const open = this.textDocuments?.get(uri.toString());
+      return open !== undefined && parsed !== undefined && open.getText() !== parsed ? STALE_VERSION : version;
    }
 
    /**

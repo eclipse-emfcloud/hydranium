@@ -41,6 +41,8 @@ import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { DefaultCstResidencyService } from '../../../src/langium/residency/cst-residency-service.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
+import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 
 const DOC_URI = 'file:///a.x';
 const IDLE_MS = 1000;
@@ -80,7 +82,11 @@ function makeComposition(): Composition {
             resetToState: noop,
             markNextReason: noop
          },
-         WorkspaceLock: { write: (callback: (token: unknown) => unknown) => callback(undefined) },
+         WorkspaceLock: {
+            write: (callback: (token: unknown) => unknown) => callback(undefined),
+            read: async (callback: () => unknown) => callback()
+         },
+         ModelLedger: new DefaultModelLedger(),
          WorkspaceManager: { ready: Promise.resolve(), workspaceInitialized: Promise.resolve() },
          SelfSaveRegistry: { isRegistered: () => false },
          FileSystemProvider: { exists: async () => true },
@@ -95,6 +101,7 @@ function makeComposition(): Composition {
       }
    });
 
+   services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
    const docs = new HydraniumTextDocuments<TextDocument>(services);
    // The store is itself a workspace service — close the self-reference so the
    // residency service reads the SAME real instance.

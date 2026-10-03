@@ -22,6 +22,7 @@ import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
+import { makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
 
 const URI = 'file:///a.x';
 
@@ -91,8 +92,10 @@ function makeSharedServices(
       Tracer: { for: () => logger },
       workspace: {
          // Minimum stubs required by notifyDidClose / notifyDidOpen reaching into the workspace tree.
-         LangiumDocuments: { getDocument: () => undefined },
-         DocumentBuilder: { update: () => undefined, resetToState: () => undefined },
+         LangiumDocuments: makeStubLangiumDocuments(),
+         DocumentBuilder: makeStubDocumentBuilder(),
+         // The revert's fallback build is not under test here.
+         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
          WorkspaceManager: { workspaceInitialized: Promise.resolve() },
          // The store always resolves keys through the canonicalizer; the framework
          // default (syntactic normalize) is what production binds absent a stronger identity.
@@ -917,7 +920,7 @@ describe('HydraniumTextDocuments.commitRepair', () => {
    }
 
    it('commits a repair as a new version authored by the integrity id, without a change event', () => {
-      // A new version is what a based-on gate and an echo filter key on; a
+      // A new version is what a base-version gate and an echo filter key on; a
       // repair under the old version is invisible to both. No change event,
       // because the repair rides the build under way.
       const { docs } = makeDocs();
@@ -1413,7 +1416,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
    // that advances exactly when the synced content changes — and never resets
    // while the server lives. Client-declared version ids (Monaco's model
    // versions) only feed the per-client staleness guard; they never leak into
-   // the shared sequence. This is what makes a based-on optimistic gate
+   // the shared sequence. This is what makes a base-version optimistic gate
    // sound: version unchanged ⇔ content unchanged.
 
    it('accepts a language-client edit whose version id lags the shared sequence', () => {
@@ -1465,7 +1468,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
 
    it('resumes the same version when the document reopens with identical content', () => {
       // Close/reopen with unchanged content is NOT an observable change: the
-      // sequence continues where it left off, so a watcher's based-on
+      // sequence continues where it left off, so a watcher's base-version
       // pointer from before the close stays valid (no false conflict).
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'x\n');
@@ -1554,12 +1557,11 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
       expect(docs.version(URI)).toBe(1);
    });
 
-   it('reconcileExternalContent is a no-op for an open document', () => {
-      // While open, the store's own content is authoritative — external
-      // transitions for open documents never reach the Langium factory.
+   it('reconcileExternalContent answers an open document’s version only for the text it holds', () => {
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'x\n');
       expect(docs.reconcileExternalContent(URI, 'other\n')).toBeUndefined();
+      expect(docs.reconcileExternalContent(URI, 'x\n')).toBe(1);
       expect(docs.version(URI)).toBe(1);
    });
 
@@ -1624,12 +1626,12 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
       expect(docs.version(URI)).toBe(4);
    });
 
-   it('reconcileExternalContent ignores URIs the store never tracked', () => {
-      // Workspace-wide builds pass every document through the reconcile
-      // listener; untracked URIs must exit on a map lookup, not a hash.
+   it('reconcileExternalContent starts a sequence at 0 for a URI the store never tracked, and steps it on changed content', () => {
       const { docs } = makeDocs();
-      expect(docs.reconcileExternalContent('file:///x.other', 'x\n')).toBeUndefined();
-      expect(docs.version('file:///x.other')).toBe(0);
+      expect(docs.reconcileExternalContent('file:///x.other', 'x\n')).toBe(0);
+      expect(docs.reconcileExternalContent('file:///x.other', 'x\n')).toBe(0);
+      expect(docs.reconcileExternalContent('file:///x.other', 'y\n')).toBe(1);
+      expect(docs.version('file:///x.other')).toBe(1);
    });
 });
 
@@ -1716,7 +1718,7 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
       // Byte-identical to the authored text: the echo told us the client caught
       // up, and told us nothing else.
       expect(docs.get(URI)?.getText()).toBe(TWO_NODES);
-      // No version minted, so an optimistic based-on holder is not
+      // No version minted, so an optimistic base-version holder is not
       // false-conflicted by the client agreeing with us.
       expect(docs.version(URI)).toBe(2);
       expect(fires).toHaveLength(0);
@@ -2008,8 +2010,10 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
          Logger: { for: () => logger },
          Tracer: { for: () => logger },
          workspace: {
-            LangiumDocuments: { getDocument: () => undefined },
-            DocumentBuilder: { update: () => undefined, resetToState: () => undefined },
+            LangiumDocuments: makeStubLangiumDocuments(),
+            DocumentBuilder: makeStubDocumentBuilder(),
+            // The revert's fallback build is not under test here.
+            VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
             WorkspaceManager: { workspaceInitialized: Promise.resolve() },
             DocumentUriPolicy: linkAware
          }
@@ -2054,8 +2058,10 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
          Logger: { for: () => logger },
          Tracer: { for: () => logger },
          workspace: {
-            LangiumDocuments: { getDocument: () => undefined },
-            DocumentBuilder: { update: () => undefined, resetToState: () => undefined },
+            LangiumDocuments: makeStubLangiumDocuments(),
+            DocumentBuilder: makeStubDocumentBuilder(),
+            // The revert's fallback build is not under test here.
+            VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
             WorkspaceManager: { workspaceInitialized: Promise.resolve() },
             DocumentUriPolicy: linkAware
          }

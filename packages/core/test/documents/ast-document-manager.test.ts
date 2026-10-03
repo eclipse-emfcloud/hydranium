@@ -16,8 +16,8 @@ import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../..
 import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { type FileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
-import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CancellationToken } from 'vscode-languageserver';
 import { makeFakeAstNode, makeFakeDocument, makeTestServices } from '../../src/testing/index.js';
 
@@ -43,6 +43,8 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
    manager: DefaultAstDocumentManager<FakeRoot>;
    textDocuments: HydraniumTextDocuments;
    builder: ReturnType<typeof makeTestServices<FakeRoot>>['documentBuilder'];
+   sync: DefaultVersionSyncService;
+   services: ServerSharedServices;
    documents: ReturnType<typeof makeTestServices<FakeRoot>>['documents'];
    fileSystem: ReturnType<typeof makeTestServices<FakeRoot>>['fileSystem'];
    queue: FileSystemTaskQueue;
@@ -57,15 +59,29 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
    } as ServerSharedServices;
+   const sync = new DefaultVersionSyncService(services);
+   services.workspace.VersionSyncService = sync;
    const manager = new DefaultAstDocumentManager<FakeRoot>(services, opts.managerOptions);
    return {
       manager,
       textDocuments,
       builder: bundle.documentBuilder,
+      sync,
+      services,
       documents: bundle.documents,
       fileSystem: bundle.fileSystem,
       queue: services.workspace.FileSystemTaskQueue
    };
+}
+
+/** Record every `syncTo` request `sync` receives, answering each as already synced. */
+function recordSyncRequests(sync: DefaultVersionSyncService): Array<{ uri: string; version: number }> {
+   const asked: Array<{ uri: string; version: number }> = [];
+   sync.syncTo = (uri, version) => {
+      asked.push({ uri: uri.toString(), version });
+      return undefined;
+   };
+   return asked;
 }
 
 /** Open `uri` at `version` so the real text store records `clientId` as the version author. */
@@ -575,6 +591,30 @@ describe('AstDocumentManager open / close lifecycle', () => {
 
       expect(changeFires).toHaveLength(1);
    });
+
+   it.each([
+      ['other text, one past the built root', 'other\n', 0, 1],
+      ['the built root’s text, at its version', undefined, 0, 0],
+      ['other text over an unrecorded root, at the declared version', 'other\n', undefined, 3]
+   ])('open() of %s asks the builder to sync the root to the opened version', async (_case, text, recorded, opened) => {
+      const { manager, sync, services } = makeManagerHarness();
+      const built = manager.getDocument(URI_A)!;
+      const ledger = services.workspace.ModelLedger;
+      if (recorded !== undefined) {
+         ledger.record(built.parseResult.value, recorded);
+      }
+      const asked = recordSyncRequests(sync);
+
+      await manager.open({
+         uri: URI_A,
+         clientId: 'c1',
+         languageId: 'plaintext',
+         version: 3,
+         text: text ?? ledger.textOf(built.parseResult.value) ?? built.textDocument.getText()
+      });
+
+      expect(asked).toEqual([{ uri: URI_A, version: opened }]);
+   });
 });
 
 describe('AstDocumentManager update', () => {
@@ -591,60 +631,6 @@ describe('AstDocumentManager update', () => {
       await manager.open({ uri: URI_B, clientId: 'c1', languageId: 'plaintext', version: 0 });
       const applied = await manager.update(URI_B, 'new-text', 'c1');
       expect(applied).toBe(1);
-   });
-});
-
-describe('AstDocumentManager external content reconciliation', () => {
-   it('re-stamps a rebuilt closed document with the stepped sequence version', () => {
-      // Close-revert: edits are discarded, the text store rebuilds from
-      // disk, and the factory creates a fresh text document at its own version.
-      // The Parsed-phase reconcile must step the persisted sequence (content
-      // changed while closed) and re-stamp the rebuilt document so the revert
-      // broadcast carries the continued sequence, not the factory version.
-      const { textDocuments, builder } = makeManagerHarness();
-      open(textDocuments, URI_A, 1, 'author-1');
-      textDocuments.notifyDidChangeTextDocument(
-         { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'edited\n' }] },
-         'author-1'
-      );
-      textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: URI_A } }, 'author-1');
-      // The rebuild reads the pre-edit disk content into a factory-fresh doc.
-      const doc = makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), {
-         textDocument: TextDocument.create(URI_A, 'plaintext', 0, '')
-      });
-      builder.firePhase(DocumentState.Parsed, doc);
-      expect(doc.textDocument.version).toBe(3);
-      expect(textDocuments.version(URI_A)).toBe(3);
-   });
-
-   it('re-stamps an unchanged rebuilt closed document without stepping the sequence', () => {
-      // A close WITHOUT discarded edits: the rebuild carries identical content,
-      // so the sequence stays put — but the factory document still gets the
-      // sequence version instead of its own zero.
-      const { textDocuments, builder } = makeManagerHarness();
-      open(textDocuments, URI_A, 1, 'author-1');
-      textDocuments.notifyDidChangeTextDocument(
-         { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'saved\n' }] },
-         'author-1'
-      );
-      textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: URI_A } }, 'author-1');
-      const doc = makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), {
-         textDocument: TextDocument.create(URI_A, 'plaintext', 0, 'saved\n')
-      });
-      builder.firePhase(DocumentState.Parsed, doc);
-      expect(doc.textDocument.version).toBe(2);
-      expect(textDocuments.version(URI_A)).toBe(2);
-   });
-
-   it('leaves a never-tracked document untouched at the Parsed transition', () => {
-      // Workspace-init builds pass every document through the listener; a URI
-      // the store never tracked must keep the factory version.
-      const { builder } = makeManagerHarness();
-      const doc = makeFakeDocument<FakeRoot>(URI_B, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'b' }), {
-         textDocument: TextDocument.create(URI_B, 'plaintext', 0, 'x\n')
-      });
-      builder.firePhase(DocumentState.Parsed, doc);
-      expect(doc.textDocument.version).toBe(0);
    });
 });
 

@@ -30,10 +30,10 @@ import {
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { asSnapshotVersion, isConflictError, type TransferElement } from '@hydranium/protocol';
+import { asModelVersion, isConflictError, type TransferElement } from '@hydranium/protocol';
 import { type CancellationToken } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 import { isDomainModel, isEntity } from '../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
@@ -154,8 +154,8 @@ describe('ClientSession writes', () => {
       const { harness, uri } = await boot();
       const session = harness.shared.model.ModelService.createSession('form');
 
-      await expect(session.update({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
-      await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await expect(session.update({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await expect(session.save({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
 
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
       expect(harness.shared.workspace.TextDocuments.isOpen(uri)).toBe(false);
@@ -169,7 +169,7 @@ describe('ClientSession writes', () => {
       models.onModelSaved(uri, event => savedBy.push(event.sourceClientId));
 
       await session.open(uri);
-      await session.save({ uri, model: EDITED, basedOn: 'anything' });
+      await session.save({ uri, model: EDITED, baseVersion: 'any' });
 
       expect(readFileSync(path(FILE), 'utf8')).toBe(EDITED);
       expect(savedBy.map(source => session.isOwnEcho(source))).toEqual([true]);
@@ -186,7 +186,7 @@ describe('ClientSession writes', () => {
       const session = models.createSession('form');
       await session.open(uri);
 
-      const write = session.update({ uri, model: EDITED, basedOn: 'anything' });
+      const write = session.update({ uri, model: EDITED, baseVersion: 'any' });
       await session.close(uri);
 
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
@@ -200,7 +200,7 @@ describe('ClientSession writes', () => {
       const session = harness.shared.model.ModelService.createSession('form');
       await session.open(uri);
 
-      const write = session.update({ uri, model: EDITED, basedOn: 'anything' });
+      const write = session.update({ uri, model: EDITED, baseVersion: 'any' });
       session.dispose();
 
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
@@ -214,7 +214,7 @@ describe('ClientSession writes', () => {
       const session = harness.shared.model.ModelService.createSession('form');
       await session.open(uri);
 
-      const write = session.save({ uri, model: EDITED, basedOn: 'anything' });
+      const write = session.save({ uri, model: EDITED, baseVersion: 'any' });
       session.dispose();
 
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
@@ -238,7 +238,7 @@ describe('ClientSession writes', () => {
          }
       });
 
-      await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await expect(session.save({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
 
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
       expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
@@ -256,7 +256,7 @@ describe('ClientSession writes', () => {
          }
       });
 
-      await expect(session.save({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await expect(session.save({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
 
       expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
    });
@@ -293,8 +293,8 @@ describe('ClientSession.updateAll', () => {
 
       const documents = await session.updateAll({
          updates: [
-            { uri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(uri)) },
-            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(otherUri)) }
+            { uri, model: EDITED, baseVersion: asModelVersion(textDocuments.version(uri)) },
+            { uri: otherUri, model: EDITED, baseVersion: asModelVersion(textDocuments.version(otherUri)) }
          ]
       });
 
@@ -318,8 +318,8 @@ describe('ClientSession.updateAll', () => {
 
       const write = session.updateAll({
          updates: [
-            { uri, model: EDITED, basedOn: asSnapshotVersion(before) },
-            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(textDocuments.version(otherUri) + 5) }
+            { uri, model: EDITED, baseVersion: asModelVersion(before) },
+            { uri: otherUri, model: EDITED, baseVersion: asModelVersion(textDocuments.version(otherUri) + 5) }
          ]
       });
 
@@ -342,12 +342,12 @@ describe('ClientSession.updateAll', () => {
       const otherBefore = textDocuments.version(otherUri);
       const bystander = models.createSession('bystander');
       await bystander.open(otherUri);
-      interveneWhileSerialising(harness, OTHER_FILE, () => bystander.update({ uri: otherUri, model: `${CLEAN}\n`, basedOn: 'anything' }));
+      interveneWhileSerialising(harness, OTHER_FILE, () => bystander.update({ uri: otherUri, model: `${CLEAN}\n`, baseVersion: 'any' }));
 
       const write = session.updateAll({
          updates: [
-            { uri, model: EDITED, basedOn: asSnapshotVersion(before) },
-            { uri: otherUri, model: EDITED, basedOn: asSnapshotVersion(otherBefore) }
+            { uri, model: EDITED, baseVersion: asModelVersion(before) },
+            { uri: otherUri, model: EDITED, baseVersion: asModelVersion(otherBefore) }
          ]
       });
 
@@ -371,8 +371,8 @@ describe('ClientSession.updateAll', () => {
 
       const write = session.updateAll({
          updates: [
-            { uri, model: EDITED, basedOn: 'anything' },
-            { uri: otherUri, model: EDITED, basedOn: 'anything' }
+            { uri, model: EDITED, baseVersion: 'any' },
+            { uri: otherUri, model: EDITED, baseVersion: 'any' }
          ]
       });
 
@@ -390,8 +390,8 @@ describe('ClientSession.updateAll', () => {
       await expect(
          session.updateAll({
             updates: [
-               { uri, model: EDITED, basedOn: 'anything' },
-               { uri, model: `${EDITED}\n`, basedOn: 'anything' }
+               { uri, model: EDITED, baseVersion: 'any' },
+               { uri, model: `${EDITED}\n`, baseVersion: 'any' }
             ]
          })
       ).rejects.toThrow(/more than once/);
@@ -508,8 +508,8 @@ describe('ClientSession open and close', () => {
       const calls: Array<[string, () => unknown]> = [
          ['open', () => session.open(uri)],
          ['create', () => session.create(uri, CLEAN)],
-         ['update', () => session.update({ uri, model: EDITED, basedOn: 'anything' })],
-         ['save', () => session.save({ uri, model: EDITED, basedOn: 'anything' })],
+         ['update', () => session.update({ uri, model: EDITED, baseVersion: 'any' })],
+         ['save', () => session.save({ uri, model: EDITED, baseVersion: 'any' })],
          ['close', () => session.close(uri)],
          ['withOpen', () => session.withOpen(uri, () => undefined)],
          ['isOwnEcho', () => session.isOwnEcho(session.clientId)]
@@ -590,8 +590,24 @@ describe('ClientSession.create', () => {
       expect(harness.shared.workspace.TextDocuments.get(newUri)?.getText()).toBe(CLEAN);
       expect(existsSync(path(NEW_FILE))).toBe(false);
 
-      await session.save({ uri: newUri, model: CLEAN, basedOn: 'anything' });
+      await session.save({ uri: newUri, model: CLEAN, baseVersion: 'any' });
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(CLEAN);
+   });
+
+   it('resolves with the version it created the document at, not one a write made before it resolved', async () => {
+      const { harness, newUri } = await boot();
+      const store = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      let createdAt: number | undefined;
+      const listener = store.onDidOpen(event => {
+         createdAt = event.document.version;
+         queueMicrotask(() => void harness.shared.workspace.AstDocumentManager.update(newUri, EDITED, 'other'));
+      });
+      onTestFinished(() => listener.dispose());
+
+      const version = await session.create(newUri, CLEAN);
+
+      expect({ version, later: store.version(newUri) > version }).toEqual({ version: createdAt, later: true });
    });
 
    it('refuses a URI that exists on disk', async () => {
@@ -637,7 +653,7 @@ describe('ClientSession.create under RealpathDocumentUriPolicy', () => {
       const registered = await scratch.harness.shared.workspace.LangiumDocuments.getOrCreateDocument(URI.parse(newUri));
       expect(registered.textDocument.getText()).toBe(CLEAN);
 
-      await session.save({ uri: newUri, model: EDITED, basedOn: 'anything' });
+      await session.save({ uri: newUri, model: EDITED, baseVersion: 'any' });
       expect(readFileSync(scratch.workspace.resolve(NEW_FILE), 'utf8')).toBe(EDITED);
       expect(await builtFields()).toEqual(['Solo.a', 'Solo.b']);
    });
@@ -728,7 +744,7 @@ describe('deletion closes a session open', () => {
 
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
       expect(session.openOptions(uri)).toBeUndefined();
-      await expect(session.update({ uri, model: EDITED, basedOn: 'anything' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await expect(session.update({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
    });
 });
 
@@ -831,7 +847,7 @@ describe('ClientSessionFactory', () => {
       const session = scratch.harness.shared.model.ModelService.createSession('form') as CountingSession;
       await session.open(uri);
 
-      await session.save({ uri, model: EDITED, basedOn: 'anything' });
+      await session.save({ uri, model: EDITED, baseVersion: 'any' });
 
       expect(session.updates).toBe(1);
       expect(readFileSync(scratch.workspace.resolve(FILE), 'utf8')).toBe(EDITED);

@@ -133,7 +133,7 @@ function uriOf(relativePath: string): string {
 
 async function currentRoot(uri: string): Promise<OrderFlowTransferRoot> {
    const server = await session!.connected();
-   return TransferDocument.assertLoaded(await server.getModelDocument({ uri })).root;
+   return TransferDocument.assertLoaded(await server.getModelDocument({ uri })).model.root;
 }
 
 describe('order-flow data head over a structured-clone hop', () => {
@@ -208,7 +208,7 @@ describe('order-flow data head over a structured-clone hop', () => {
 
       const server = await session!.connected();
       const reread = await server.getModelDocument({ uri });
-      expect((reread.root as ProcessModel).name).toBe('Fulfilment');
+      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment');
    });
 
    it('delivers a server-initiated notification back across the hop', async () => {
@@ -242,7 +242,7 @@ describe('order-flow data head over a structured-clone hop', () => {
 
          expect(await pinned.setField('name', 'Fulfilment')).toEqual({ status: 'merged' });
 
-         const reread = (await server.getModelDocument({ uri })).root as ProcessModel;
+         const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
          expect(reread.name).toBe('Fulfilment');
          expect(reread.subject).toBe('LineItem');
       } finally {

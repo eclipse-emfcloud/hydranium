@@ -171,6 +171,9 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       this.bypassNonLanguageClientChanges = options.bypassNonLanguageClientChanges ?? true;
       this.willSaveGateMs = options.willSaveGateMs ?? 1000;
       this.textDocuments.onDidSaveInLanguageClient(event => this.editorSaves.get(event.uri)?.());
+      services.workspace.VersionSyncService.registerDeferredBuilds(
+         uri => this.pendingChanged.has(uri.toString()) || this.pendingDeleted.has(uri.toString())
+      );
       // A change still debounced for a document the store has released would
       // build it once more after the store's own revert: from the provider
       // again, or, for a document the revert removed, by reading a file that

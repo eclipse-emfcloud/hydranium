@@ -12,16 +12,16 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-gl
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import { AstDocument, type ClientSession, type ServerSharedServices } from '@hydranium/core';
+import { AstDocument, type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import {
-   type BasedOn,
-   asSnapshotVersion,
+   type BaseVersion,
+   asModelVersion,
    ConflictError,
-   NO_MATCHING_VERSION,
    type ConflictResolver,
    type ReconcileOutcome,
    ReconcilingConflictResolver,
-   type TransferElement
+   type TransferElement,
+   UNRECORDED_VERSION
 } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -67,7 +67,7 @@ function toSnapshot(uri: string, document: FakeDocument | undefined): AstDocumen
 interface UpdateEntry {
    uri: string;
    model: unknown;
-   basedOn: BasedOn;
+   baseVersion: BaseVersion;
 }
 
 interface Harness {
@@ -87,8 +87,6 @@ interface Harness {
    readonly validated: Map<string, TestRoot>;
    /** The text store's documents; the stub parser turns a text into a root labelled with it. */
    readonly store: Map<string, { version: number; text: string }>;
-   /** Store documents that are also a built document's text document, by URI. */
-   readonly sharedTextDocuments: Map<string, { version: number; getText(): string }>;
    resolve: (
       base: TestComposite,
       ours: TestComposite,
@@ -96,33 +94,25 @@ interface Harness {
    ) => Promise<ReconcileOutcome<TestComposite>>;
 }
 
-/** A built document whose text is `label`, and the store holding the same text at the same version. */
+/** The ledger every test's services share; a root is recorded once, so they never collide. */
+const ledger = new DefaultModelLedger();
+
+/** A built document parsed from `label` at `version`, and the store holding the same text at the same version. */
 function seed(harness: Harness, uri: string, label: string, version: number): void {
+   const root = makeRoot(label);
+   ledger.record(root, version);
    harness.documents.set(uri, {
       uri: { toString: () => uri },
       state: DocumentState.Validated,
-      parseResult: { value: makeRoot(label) },
+      parseResult: { value: root },
       textDocument: { version, getText: () => label }
    });
    harness.store.set(uri, { version, text: label });
 }
 
-/**
- * A built document parsed from `label` at v1 whose text document is the
- * store's own object, as a rebuilt document's is.
- */
-function seedSharingStore(harness: Harness, uri: string, label: string): void {
-   harness.store.set(uri, { version: 1, text: label });
-   const root = makeRoot(label);
-   (root as { $cstNode?: unknown }).$cstNode = { root: { fullText: label } };
-   const textDocument = {
-      get version(): number {
-         return harness.store.get(uri)!.version;
-      },
-      getText: () => harness.store.get(uri)!.text
-   };
-   harness.sharedTextDocuments.set(uri, textDocument);
-   harness.documents.set(uri, { uri: { toString: () => uri }, state: DocumentState.Validated, parseResult: { value: root }, textDocument });
+/** The built root {@link seed} registered for `uri`, or an unrecorded one when none was seeded. */
+function builtRoot(harness: Harness, uri: string): TestRoot {
+   return (harness.documents.get(uri)?.parseResult.value as TestRoot | undefined) ?? makeRoot('diagram');
 }
 
 @injectable()
@@ -132,11 +122,19 @@ class TestMultiState extends ReconcilingMultiDocumentGlspState<TestRoot, TestPri
    }
 }
 
+/** Creates every secondary it writes. */
+@injectable()
+class CreatingSecondaryState extends TestMultiState {
+   protected override openForWrite(session: ClientSession<AstNode>, uri: string): Promise<void> {
+      return uri === this.sourceUri ? session.open(uri) : this.createSecondaryDocument(session, uri, 'created');
+   }
+}
+
 /** Forces secondary writes through the hook. */
 @injectable()
 class ForcedSecondaryState extends TestMultiState {
-   protected override secondaryBasedOn(): BasedOn {
-      return 'anything';
+   protected override secondaryBaseVersion(): BaseVersion {
+      return 'any';
    }
 }
 
@@ -152,7 +150,6 @@ function makeHarness(): Harness {
       nextUpdatedRoot: makeRoot('updated'),
       validated: new Map(),
       store: new Map(),
-      sharedTextDocuments: new Map(),
       resolve: async (_base, ours) => ({ status: 'merged', merged: ours })
    };
 }
@@ -171,14 +168,16 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
       ServiceRegistry: makeStubServiceRegistry([{ languageId: 'test', fileExtensions: ['.diagram', '.semantic'] }]),
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: {
+         ModelLedger: ledger,
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
          },
          TextDocuments: {
             get(uri: string): { version: number; getText(): string } | undefined {
                const stored = harness.store.get(uri);
-               return harness.sharedTextDocuments.get(uri) ?? (stored && { version: stored.version, getText: () => stored.text });
-            }
+               return stored && { version: stored.version, getText: () => stored.text };
+            },
+            version: (uri: string): number => harness.store.get(uri)?.version ?? 0
          },
          LangiumDocumentFactory: {
             fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
@@ -192,7 +191,7 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
          },
          ModelService: {
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
-            waitForDocumentState: () => Promise.resolve(),
+            ensureDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
             async validated(uri: string): Promise<{ root: TestRoot }> {
                const root = harness.validated.get(uri);
@@ -235,6 +234,13 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
       async open(uri: string): Promise<void> {
          harness.sessionCalls.push(`open ${uri}`);
       },
+      async create(uri: string, text: string): Promise<number> {
+         harness.sessionCalls.push(`create ${uri}`);
+         harness.store.set(uri, { version: 5, text });
+         // Another client's write, landing before the creator resumes.
+         queueMicrotask(() => harness.store.set(uri, { version: 6, text: 'theirs' }));
+         return 5;
+      },
       async updateAll(args: { updates: UpdateEntry[] }): Promise<{ root: TestRoot }[]> {
          harness.sessionCalls.push('updateAll');
          harness.updateAllCalls.push(args.updates);
@@ -243,10 +249,10 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
          if (failure) {
             throw failure;
          }
-         const conflicted = args.updates.find(update => update.uri === harness.conflictOn && update.basedOn !== 'anything');
+         const conflicted = args.updates.find(update => update.uri === harness.conflictOn && update.baseVersion !== 'any');
          if (conflicted) {
             harness.conflictOn = undefined;
-            throw new ConflictError(conflicted.uri, 1, 2);
+            throw new ConflictError(conflicted.uri, asModelVersion(1), 2);
          }
          return args.updates.map(update => ({ root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri) }));
       }
@@ -261,7 +267,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 3);
          seed(harness, SEMANTIC_URI, 'semantic', 7);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          expect(state.sourceModel).toEqual({
@@ -276,7 +282,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          expect(state.sourceModel.secondaries).toEqual({});
@@ -287,95 +293,88 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(DIAGRAM_URI);
          expect(state.secondaryUris).toEqual([]);
       });
 
-      it('records a based-on version per document, and distinguishes untracked from v0', () => {
+      it('records a base version per document, and distinguishes untracked from v0', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 3);
          seed(harness, SEMANTIC_URI, 'semantic', 7);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(DIAGRAM_URI)).toBe(3);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(7);
+         expect(state.baseVersionOf(DIAGRAM_URI)).toBe(3);
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(7);
          // `undefined`, not 0 — 0 is a real version meaning "present, never
          // edited", so collapsing them would let a caller gate against a
          // document it never read.
-         expect(state.snapshotVersionOf(OTHER_URI)).toBeUndefined();
+         expect(state.baseVersionOf(OTHER_URI)).toBeUndefined();
       });
 
-      it('records the store version of a document the store holds ahead of the build with the same text', () => {
-         // An editor opening a document gives it a new version before the
-         // rebuild re-stamps the built one; the gate compares against the store.
-         const harness = makeHarness();
-         seed(harness, DIAGRAM_URI, 'diagram', 0);
-         seed(harness, SEMANTIC_URI, 'semantic', 0);
-         harness.store.set(DIAGRAM_URI, { version: 1, text: 'diagram' });
-         harness.store.set(SEMANTIC_URI, { version: 1, text: 'semantic' });
-         const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
-         state.trackSecondaryDocument(SEMANTIC_URI);
-
-         expect(state.snapshotVersionOf(DIAGRAM_URI)).toBe(1);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(1);
-      });
-
-      it('records the built version of a document whose store text the build has not parsed', () => {
-         // The store's version names text the state never read, so a write
-         // gated on it would overwrite that text.
-         const harness = makeHarness();
-         seed(harness, DIAGRAM_URI, 'diagram', 0);
-         seed(harness, SEMANTIC_URI, 'semantic', 0);
-         harness.store.set(SEMANTIC_URI, { version: 1, text: 'semantic, edited' });
-         const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
-         state.trackSecondaryDocument(SEMANTIC_URI);
-
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(0);
-      });
-
-      it('records a version no write matches when the store has moved past the text the build parsed', () => {
-         // The built document reads its text and version off the store's own
-         // object, so only the syntax tree still says what was parsed.
+      it('records the version the built root was parsed from once the store has moved on', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
-         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
+         seed(harness, SEMANTIC_URI, 'semantic', 1);
          harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic, typed' });
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(1);
       });
 
-      it('records a version no write matches for a built document without a syntax tree sharing the store’s object', () => {
-         // Its text is the store's, so it cannot say what was parsed.
+      it('records a version no write matches for a built root no version was recorded for', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
-         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
-         delete (harness.documents.get(SEMANTIC_URI)!.parseResult.value as { $cstNode?: unknown }).$cstNode;
-         harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic, typed' });
+         seed(harness, SEMANTIC_URI, 'semantic', 1);
+         harness.documents.get(SEMANTIC_URI)!.parseResult.value = makeRoot('semantic');
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(NO_MATCHING_VERSION);
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(UNRECORDED_VERSION);
       });
 
-      it('records the store version when the store holds the text the build parsed, as one object', () => {
+      it('records a version no write matches for a secondary the builder has not parsed yet', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
-         seedSharingStore(harness, SEMANTIC_URI, 'semantic');
-         harness.store.set(SEMANTIC_URI, { version: 2, text: 'semantic' });
+         seed(harness, SEMANTIC_URI, 'semantic', 0);
+         const placeholder = harness.documents.get(SEMANTIC_URI)!;
+         placeholder.state = DocumentState.Changed;
+         placeholder.parseResult.value = makeFakeAstNode({ $type: 'INVALID' });
+         ledger.record(placeholder.parseResult.value, 0);
+         ledger.markPlaceholder(placeholder.parseResult.value);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(2);
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(UNRECORDED_VERSION);
+      });
+
+      it('records the version of the root a secondary keeps while it is rebuilt', () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seed(harness, SEMANTIC_URI, 'semantic', 4);
+         harness.documents.get(SEMANTIC_URI)!.state = DocumentState.Changed;
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(4);
+      });
+
+      it('records a version no write matches for a secondary with no built document', () => {
+         // The store counts a file it has not built yet at v0 too.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(UNRECORDED_VERSION);
       });
 
       it('refreshes secondary versions on setSourceRoot, so the next command is not gated on a stale number', () => {
@@ -383,14 +382,14 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 7);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(7);
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(7);
 
          // The write that lands advances the secondary too.
          seed(harness, SEMANTIC_URI, 'semantic', 8);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBe(8);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBe(8);
       });
 
       it('drops the whole set on untrack', () => {
@@ -398,11 +397,11 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
          state.untrackSecondaryDocuments();
          expect(state.secondaryUris).toEqual([]);
-         expect(state.snapshotVersionOf(SEMANTIC_URI)).toBeUndefined();
+         expect(state.baseVersionOf(SEMANTIC_URI)).toBeUndefined();
       });
    });
 
@@ -414,7 +413,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
@@ -422,14 +421,14 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'edited' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'edited-semantic' } as TestPrimary }
             },
-            asSnapshotVersion(4)
+            asModelVersion(4)
          );
 
          expect(harness.updateAllCalls).toEqual([
             [
-               { uri: DIAGRAM_URI, model: { $type: 'TestRoot', label: 'edited' }, basedOn: 4 },
+               { uri: DIAGRAM_URI, model: { $type: 'TestRoot', label: 'edited' }, baseVersion: 4 },
                // The version the secondary had when the root was read.
-               { uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'edited-semantic' }, basedOn: 9 }
+               { uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'edited-semantic' }, baseVersion: 9 }
             ]
          ]);
       });
@@ -441,7 +440,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
@@ -449,10 +448,49 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'diagram' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
-            asSnapshotVersion(4)
+            asModelVersion(4)
          );
 
          expect(harness.sessionCalls).toEqual([`open ${SEMANTIC_URI}`, 'updateAll']);
+      });
+
+      it('gates a secondary created for the write on the version it was created at', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         const state = createState(harness, CreatingSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'diagram' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+            },
+            asModelVersion(4)
+         );
+
+         expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll']);
+         expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual([5]);
+      });
+
+      it('keeps the primary based on the root it holds when a secondary-only write follows a foreign build of the primary', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         seed(harness, SEMANTIC_URI, 'semantic', 9);
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+         seed(harness, DIAGRAM_URI, 'diagram, edited elsewhere', 5);
+
+         await state.updateSourceModel(
+            {
+               primary: { $type: 'TestRoot', label: 'diagram' },
+               secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+            },
+            asModelVersion(4)
+         );
+
+         expect(state.baseVersion).toBe(4);
       });
 
       it('leaves an unchanged document out of the set and keeps the captured root', async () => {
@@ -470,28 +508,28 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'diagram' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
-            asSnapshotVersion(4)
+            asModelVersion(4)
          );
 
          expect(harness.updateAllCalls.map(call => call.map(update => update.uri))).toEqual([[SEMANTIC_URI]]);
          expect(state.sourceRoot).toBe(captured);
       });
 
-      it('defaults basedOn to the state snapshot version when the caller passes none', async () => {
+      it('defaults baseVersion to the state model version when the caller passes none', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
 
          await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'edited' }, secondaries: {} });
 
-         // v4 and not `'anything'`: the parameter is optional only because GLSP's
+         // v4 and not `'any'`: the parameter is optional only because GLSP's
          // one-argument `JsonModelState.updateSourceModel` has to stay satisfiable,
          // so the default is what decides whether an ungated write is the easy one.
-         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual([asSnapshotVersion(4)]);
+         expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual([asModelVersion(4)]);
       });
 
-      it('forces every document of the set when the write is based on anything', async () => {
+      it('forces every document of the set when the write is based on any version', async () => {
          // An undo or redo replaying a patch, or a merged retry: the decision to
          // win covers the whole set, or the secondary's stale gate would refuse
          // what the reconcile already accepted.
@@ -499,7 +537,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
@@ -507,18 +545,18 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'edited' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
-            'anything'
+            'any'
          );
 
-         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual(['anything', 'anything']);
+         expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual(['any', 'any']);
       });
 
-      it('forces a secondary when secondaryBasedOn returns anything', async () => {
+      it('forces a secondary when secondaryBaseVersion returns anything', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          seed(harness, SEMANTIC_URI, 'semantic', 9);
          const state = createState(harness, ForcedSecondaryState);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
@@ -526,10 +564,10 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'edited' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
-            asSnapshotVersion(4)
+            asModelVersion(4)
          );
 
-         expect(harness.updateAllCalls.flat().map(update => update.basedOn)).toEqual([4, 'anything']);
+         expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual([4, 'any']);
       });
 
       it('captures the primary root the write returned', async () => {
@@ -537,22 +575,22 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          harness.nextUpdatedRoot = makeRoot('written');
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
 
-         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1));
+         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1));
          expect(state.sourceRoot.label).toBe('written');
       });
 
       it('reconciles a conflict on a SECONDARY through the shared orchestration', async () => {
          // A gated secondary is reconciled like the primary: a merged outcome
-         // re-writes the whole set based on anything.
+         // re-writes the whole set based on `'any'`.
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          harness.validated.set(DIAGRAM_URI, makeRoot('theirs'));
          harness.conflictOn = SEMANTIC_URI;
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await state.updateSourceModel(
@@ -560,12 +598,12 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'edited' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
             },
-            asSnapshotVersion(1)
+            asModelVersion(1)
          );
 
-         expect(harness.updateAllCalls.map(call => call.map(update => update.basedOn))).toEqual([
+         expect(harness.updateAllCalls.map(call => call.map(update => update.baseVersion))).toEqual([
             [1, 1],
-            ['anything', 'anything']
+            ['any', 'any']
          ]);
       });
 
@@ -579,9 +617,9 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             theirs: { primary: { $type: 'TestRoot', label: 'theirs' }, secondaries: {} }
          });
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
 
-         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'edited' }, secondaries: {} }, asSnapshotVersion(1));
+         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'edited' }, secondaries: {} }, asModelVersion(1));
 
          expect(harness.updateAllCalls).toHaveLength(1);
          expect(harness.warns.some(msg => msg.includes('dropping the diagram edit'))).toBe(true);
@@ -594,7 +632,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          harness.failNextWrite = new Error('disk full');
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
 
          await expect(
@@ -603,7 +641,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                   primary: { $type: 'TestRoot', label: 'x' },
                   secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
                },
-               asSnapshotVersion(1)
+               asModelVersion(1)
             )
          ).rejects.toThrow('disk full');
          expect(harness.updateAllCalls).toHaveLength(1);
@@ -613,11 +651,11 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.modelSession = undefined;
 
          await expect(
-            state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1))
+            state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1))
          ).rejects.toThrow(/No client session/);
       });
    });
@@ -634,9 +672,9 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             return { status: 'merged', merged: ours };
          };
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
 
-         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1));
+         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1));
          expect(refetched).toBeUndefined();
       });
 
@@ -647,9 +685,9 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          const built = harness.documents.get(SEMANTIC_URI)!.parseResult.value as TestRoot;
          (built as { label: string }).label = 'semantic, edited';
          harness.validated.set(DIAGRAM_URI, makeRoot('diagram'));
@@ -662,12 +700,12 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                primary: { $type: 'TestRoot', label: 'diagram' },
                secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'semantic, edited' } as TestPrimary }
             },
-            asSnapshotVersion(1)
+            asModelVersion(1)
          );
 
          expect(harness.updateAllCalls).toEqual([
-            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, basedOn: 1 }],
-            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, basedOn: 'anything' }]
+            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, baseVersion: 1 }],
+            [{ uri: SEMANTIC_URI, model: { $type: 'TestRoot', label: 'semantic, edited' }, baseVersion: 1 }]
          ]);
       });
 
@@ -688,11 +726,11 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             return { status: 'merged', merged: ours };
          };
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
          state.trackSecondaryDocument(OTHER_URI);
 
-         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asSnapshotVersion(1));
+         await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1));
 
          expect(refetched?.primary).toEqual({ $type: 'TestRoot', label: 'theirs-primary' });
          expect(refetched?.secondaries).toEqual({ [SEMANTIC_URI]: { $type: 'TestRoot', label: 'theirs-semantic' } });
@@ -705,10 +743,10 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
          const state = createState(harness);
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
          state.trackSecondaryDocument(SEMANTIC_URI);
          // Re-capture now that the secondary is registered.
-         state.setSourceRoot(DIAGRAM_URI, makeRoot('diagram'));
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
 
          expect(state.exposedBase).toEqual({
             primary: { $type: 'TestRoot', label: 'diagram' },

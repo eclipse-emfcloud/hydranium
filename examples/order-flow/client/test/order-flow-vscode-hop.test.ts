@@ -235,7 +235,7 @@ describe('order-flow properties panel data path (socket → relay → messenger 
 
       // Re-read from the server, so this is the document and not the local copy.
       const server = await session!.connected();
-      const reread = (await server.getModelDocument({ uri })).root as ProcessModel;
+      const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       expect(reread.name).toBe('Fulfilment');
 
       // Both directions really used the messenger, rather than some path that
@@ -255,7 +255,7 @@ describe('order-flow properties panel data path (socket → relay → messenger 
       await model!.open(uri);
 
       const server = await session!.connected();
-      const foreign = (await server.getModelDocument({ uri })).root as ProcessModel;
+      const foreign = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, name: 'RenamedByOther' });
 
       // A server-initiated notification, which crosses framing and the clone hop

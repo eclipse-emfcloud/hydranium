@@ -17,7 +17,7 @@
 
 import assert from 'node:assert/strict';
 import {
-   asSnapshotVersion,
+   asModelVersion,
    FRAMEWORK_CLIENT_IDS,
    isConflictError,
    isDocumentNotOpenError,
@@ -168,7 +168,7 @@ async function seed<TTransfer extends TransferElement, TDiagnostic extends Trans
 ): Promise<string> {
    const clientId = await startSession(driver, label);
    await openOrCreate(driver, clientId, model);
-   await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' });
+   await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' });
    return clientId;
 }
 
@@ -394,7 +394,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // a shaped-but-contentless envelope for a document it did parse
                // would pass. `$type` is the one field every TransferElement
                // carries, so it is assertable with no fixture knowledge.
-               const { root } = TransferDocument.assertLoaded(document);
+               const { model: snapshot } = TransferDocument.assertLoaded(document);
+               const { root } = snapshot;
                assert.ok(
                   typeof root.$type === 'string' && root.$type.length > 0,
                   `getModelDocument(valid) returned a root with no $type: ${JSON.stringify(root)}`
@@ -402,10 +403,11 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // `version` is the conflict token every later update gates on, so
                // an envelope that omits it is unusable however good the root is.
                assert.ok(
-                  Number.isInteger(document.version),
-                  `getModelDocument(valid) returned a non-integer version: ${String(document.version)}`
+                  Number.isInteger(snapshot.version),
+                  `getModelDocument(valid) returned a non-integer version: ${String(snapshot.version)}`
                );
-               assert.deepStrictEqual(document.diagnostics, []);
+               assert.strictEqual(typeof snapshot.hash, 'string', 'getModelDocument(valid) returned a model with no hash');
+               assert.deepStrictEqual(snapshot.diagnostics, []);
             } finally {
                driver.dispose();
             }
@@ -424,7 +426,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // Safe despite `includeDiagnostics` waiting rather than forcing a build: the
                // update above has already driven this document through validation.
                const document = await driver.proxy.getModelDocument({ uri: model.uri, includeDiagnostics: true });
-               assert.ok(document.diagnostics.length >= 1, 'getModelDocument(invalid) reported no diagnostics');
+               assert.ok((document.model?.diagnostics?.length ?? 0) >= 1, 'getModelDocument(invalid) reported no diagnostics');
             } finally {
                driver.dispose();
             }
@@ -447,7 +449,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // without `params` is the half-state that renders a translated
                // template with its placeholders left standing, and it is
                // reachable only by overriding `toTransferDiagnostic`.
-               const halfIdentities = document.diagnostics.filter(
+               const halfIdentities = (document.model?.diagnostics ?? []).filter(
                   diagnostic =>
                      typeof diagnostic.code === 'string' && diagnostic.code.startsWith('hydranium/') && diagnostic.params === undefined
                );
@@ -470,7 +472,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                await seed(driver, model);
                const clientId = await startSession(driver, 'conformance-session');
-               const write = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
+               const write = { uri: model.uri, clientId, model: model.text, baseVersion: 'any' } as const;
 
                const unopened = await rejectionOf(driver.proxy.updateModelDocument(write));
                assert.ok(isDocumentNotOpenError(unopened), `a session wrote a document it never opened: ${String(unopened)}`);
@@ -494,7 +496,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                await seed(driver, model);
                const clientId = await startSession(driver, 'conformance-session');
-               const save = { uri: model.uri, clientId, model: model.text, basedOn: 'anything' } as const;
+               const save = { uri: model.uri, clientId, model: model.text, baseVersion: 'any' } as const;
 
                const unopened = await rejectionOf(driver.proxy.saveModelDocument(save));
                assert.ok(isDocumentNotOpenError(unopened), `a session saved a document it never opened: ${String(unopened)}`);
@@ -523,7 +525,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const open = await rejectionOf(driver.proxy.openModelDocument({ uri: model.uri, clientId }));
                assert.ok(isSessionClosedError(open), `a document opened under an unregistered id: ${String(open)}`);
                const write = await rejectionOf(
-                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                );
                assert.ok(isSessionClosedError(write), `a document was written under an unregistered id: ${String(write)}`);
             } finally {
@@ -553,7 +555,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        // server has seen the close; so retried, within a bound.
                        await registerWithin(sibling, clientId, 2_000);
                        const write = await rejectionOf(
-                          sibling.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+                          sibling.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                        );
                        assert.ok(isDocumentNotOpenError(write), `a document stayed open after its connection ended: ${String(write)}`);
                        await sibling.proxy.closeSession({ clientId });
@@ -585,7 +587,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // inherited the ended session's open would write without opening.
                await driver.proxy.createSession({ clientId });
                const write = await rejectionOf(
-                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' })
+                  driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                );
                assert.ok(isDocumentNotOpenError(write), `a document stayed open after its session ended: ${String(write)}`);
                await driver.proxy.closeSession({ clientId });
@@ -606,9 +608,9 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const createdUri = siblingOf(model.uri, 'conformance-created-');
 
                const created = await driver.proxy.createModelDocument({ uri: createdUri, clientId, text: model.text });
-               TransferDocument.assertLoaded(created);
+               const { model: createdModel } = TransferDocument.assertLoaded(created);
                // Written without an open: only the create can have opened it.
-               await driver.proxy.updateModelDocument({ uri: createdUri, clientId, model: model.text, basedOn: created.version });
+               await driver.proxy.updateModelDocument({ uri: createdUri, clientId, model: model.text, baseVersion: createdModel.version });
 
                const existing = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
                assert.ok(existing !== undefined, `createModelDocument accepted ${model.uri}, which already exists`);
@@ -633,12 +635,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // answer waited for this write's validation, only that it
                // carries diagnostics at all.
                const firstText = resolveDeferred(valid.text);
-               await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: firstText, basedOn: 'anything' });
+               await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: firstText, baseVersion: 'any' });
                // The answer alone, with no read after it: a caller that shows
                // the problems of what it wrote should not need a second
                // request, and a read could find a later write's state.
-               const answer = await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, basedOn: 'anything' });
-               assert.ok(answer.diagnostics.length >= 1, 'writing the invalid model answered with no diagnostics');
+               const answer = await driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' });
+               assert.ok((answer.model?.diagnostics?.length ?? 0) >= 1, 'writing the invalid model answered with no diagnostics');
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -655,19 +657,19 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const uri = siblingOf(model.uri, 'conformance-unsaved-');
                const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
-               // Served before the close, so an envelope without a root after
+               // Served before the close, so an envelope without a model after
                // it is the close's doing and not the head's answer for every
                // created document.
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
                await driver.proxy.closeSession({ clientId });
                // It has no file to go back to, so no text is left to serve, and
                // the protocol answers a URI with no document with an envelope
-               // that has no root, not with a refusal.
+               // that has no model, not with a refusal.
                await readUntil(
                   driver,
                   uri,
                   document => document !== undefined && !TransferDocument.isLoaded(document),
-                  `${uri}, created and never saved, was not answered with an envelope without a root after its last close`
+                  `${uri}, created and never saved, was not answered with an envelope without a model after its last close`
                );
             } finally {
                driver.dispose();
@@ -687,12 +689,20 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
 
-               const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, basedOn: 'anything' });
-               assert.strictEqual(saved.dirty, false, `the save of ${uri} answered dirty: ${String(saved.dirty)}, not false`);
-               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: unsaved, basedOn: 'anything' });
-               assert.strictEqual(edited.dirty, true, `an unsaved write of ${uri} answered dirty: ${String(edited.dirty)}, not true`);
-               const resaved = await driver.proxy.saveModelDocument({ uri, clientId, model: unsaved, basedOn: 'anything' });
-               assert.strictEqual(resaved.dirty, false, `the second save of ${uri} answered dirty: ${String(resaved.dirty)}, not false`);
+               const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, baseVersion: 'any' });
+               assert.strictEqual(saved.text?.dirty, false, `the save of ${uri} answered dirty: ${String(saved.text?.dirty)}, not false`);
+               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: unsaved, baseVersion: 'any' });
+               assert.strictEqual(
+                  edited.text?.dirty,
+                  true,
+                  `an unsaved write of ${uri} answered dirty: ${String(edited.text?.dirty)}, not true`
+               );
+               const resaved = await driver.proxy.saveModelDocument({ uri, clientId, model: unsaved, baseVersion: 'any' });
+               assert.strictEqual(
+                  resaved.text?.dirty,
+                  false,
+                  `the second save of ${uri} answered dirty: ${String(resaved.text?.dirty)}, not false`
+               );
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -711,24 +721,28 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const uri = siblingOf(model.uri, `conformance-hashed-${globalThis.crypto.randomUUID()}-`);
                const clientId = await startSession(driver, 'conformance-session');
                const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
-               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: other, basedOn: 'anything' });
+               const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: other, baseVersion: 'any' });
                // Back to the first text at a later version: the hash follows
                // the text, which is what a client compares across a revert.
-               const restored = await driver.proxy.updateModelDocument({ uri, clientId, model: model.text, basedOn: 'anything' });
+               const restored = await driver.proxy.updateModelDocument({ uri, clientId, model: model.text, baseVersion: 'any' });
 
-               assert.strictEqual(typeof created.textHash, 'string', `the create of ${uri} answered with no textHash`);
-               assert.notStrictEqual(edited.textHash, created.textHash, `${uri} hashed a different text alike: ${String(edited.textHash)}`);
+               assert.strictEqual(typeof created.text?.hash, 'string', `the create of ${uri} answered with no text hash`);
+               assert.notStrictEqual(
+                  edited.text?.hash,
+                  created.text?.hash,
+                  `${uri} hashed a different text alike: ${String(edited.text?.hash)}`
+               );
                assert.strictEqual(
-                  restored.textHash,
-                  created.textHash,
-                  `${uri} hashed its first text again as ${String(restored.textHash)}`
+                  restored.text?.hash,
+                  created.text?.hash,
+                  `${uri} hashed its first text again as ${String(restored.text?.hash)}`
                );
                const read = await driver.proxy.getModelDocument({ uri });
-               assert.strictEqual(read.textHash, restored.textHash, `a read of ${uri} hashed its text as ${String(read.textHash)}`);
+               assert.strictEqual(read.text?.hash, restored.text?.hash, `a read of ${uri} hashed its text as ${String(read.text?.hash)}`);
                const absent = await driver.proxy.getModelDocument({
                   uri: siblingOf(model.uri, `conformance-absent-${globalThis.crypto.randomUUID()}-`)
                });
-               assert.strictEqual(absent.textHash, undefined, `an envelope with no document carried textHash ${String(absent.textHash)}`);
+               assert.strictEqual(absent.text, undefined, `an envelope with no document carried text ${JSON.stringify(absent.text)}`);
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -817,10 +831,13 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        uri: model.uri,
                        clientId: seeder,
                        model: resolveDeferred(edit.to),
-                       basedOn: 'anything'
+                       baseVersion: 'any'
                     });
                     const document = await driver.proxy.getModelDocument({ uri: model.uri });
-                    assert.ok(edit.expect(document.root), 'edit.expect(root) was false — the edit was not reflected by a follow-up get');
+                    assert.ok(
+                       edit.expect(document.model?.root),
+                       'edit.expect(root) was false — the edit was not reflected by a follow-up get'
+                    );
                  } finally {
                     driver.dispose();
                  }
@@ -829,7 +846,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       });
 
       checks.push({
-         title: `updateModelDocument arms the conflict gate on a based-on snapshot version ${tag}`,
+         title: `updateModelDocument arms the conflict gate on a base version ${tag}`,
          skipReason: edit ? undefined : editSkipReason,
          body: edit
             ? async () => {
@@ -846,7 +863,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        uri: model.uri,
                        clientId: seeder,
                        model: resolveDeferred(edit.to),
-                       basedOn: 'anything'
+                       baseVersion: 'any'
                     });
 
                     let rejection: unknown;
@@ -855,14 +872,14 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           uri: model.uri,
                           clientId: author,
                           model: model.text,
-                          basedOn: stale.version
+                          baseVersion: TransferDocument.assertLoaded(stale).model.version
                        })
                        .catch((error: unknown) => {
                           rejection = error;
                        });
                     assert.ok(
                        isConflictError(rejection),
-                       `a write based on the superseded v${stale.version} was not refused: ${String(rejection)}`
+                       `a write based on the superseded v${String(stale.model?.version)} was not refused: ${String(rejection)}`
                     );
 
                     // The other half, and it is not optional: a head that refused
@@ -873,7 +890,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        uri: model.uri,
                        clientId: author,
                        model: resolveDeferred(edit.to),
-                       basedOn: fresh.version
+                       baseVersion: TransferDocument.assertLoaded(fresh).model.version
                     });
                  } finally {
                     driver.dispose();
@@ -896,23 +913,26 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     // Created with the edit, so that going back to the created
                     // text instead of the saved one shows.
                     await driver.proxy.createModelDocument({ uri, clientId: writer, text: edited });
-                    const saved = await driver.proxy.saveModelDocument({ uri, clientId: writer, model: model.text, basedOn: 'anything' });
-                    assert.ok(!edit.expect(saved.root), 'edit.expect holds of the valid text, so this check cannot tell the edit apart');
+                    const saved = await driver.proxy.saveModelDocument({ uri, clientId: writer, model: model.text, baseVersion: 'any' });
+                    assert.ok(
+                       !edit.expect(saved.model?.root),
+                       'edit.expect holds of the valid text, so this check cannot tell the edit apart'
+                    );
                     const reader = await openAs(driver, uri, 'conformance-reader');
-                    await driver.proxy.updateModelDocument({ uri, clientId: writer, model: edited, basedOn: 'anything' });
+                    await driver.proxy.updateModelDocument({ uri, clientId: writer, model: edited, baseVersion: 'any' });
 
                     // Not the last close: the reader still shows the writer's
                     // text. Read at once, so a head that reverts after answering
                     // could still pass this half.
                     await driver.proxy.closeSession({ clientId: writer });
                     const held = await driver.proxy.getModelDocument({ uri });
-                    assert.ok(edit.expect(held.root), `closing one of two sessions dropped the unsaved text of ${uri}`);
+                    assert.ok(edit.expect(held.model?.root), `closing one of two sessions dropped the unsaved text of ${uri}`);
 
                     await driver.proxy.closeSession({ clientId: reader });
                     await readUntil(
                        driver,
                        uri,
-                       document => document?.root !== undefined && !edit.expect(document.root),
+                       document => document?.model !== undefined && !edit.expect(document.model.root),
                        `${uri} did not go back to the text its save wrote after its last close`
                     );
                  } finally {
@@ -945,8 +965,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        await seed(driver, model);
                        await seed(driver, other);
                        const clientId = await startSession(driver, 'conformance-session');
-                       const first = await driver.proxy.openModelDocument({ uri: model.uri, clientId });
-                       const second = await driver.proxy.openModelDocument({ uri: other.uri, clientId });
+                       const { model: first } = TransferDocument.assertLoaded(
+                          await driver.proxy.openModelDocument({ uri: model.uri, clientId })
+                       );
+                       const { model: second } = TransferDocument.assertLoaded(
+                          await driver.proxy.openModelDocument({ uri: other.uri, clientId })
+                       );
                        const edited = resolveDeferred(edit.to);
 
                        // The stale member comes LAST, so a head that checks and
@@ -955,24 +979,24 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           driver.proxy.updateModelDocuments({
                              clientId,
                              updates: [
-                                { uri: model.uri, model: edited, basedOn: first.version },
-                                { uri: other.uri, model: other.text, basedOn: asSnapshotVersion(second.version + 1) }
+                                { uri: model.uri, model: edited, baseVersion: first.version },
+                                { uri: other.uri, model: other.text, baseVersion: asModelVersion(second.version + 1) }
                              ]
                           })
                        );
                        assert.ok(isConflictError(stale), `a set with a stale member was not refused: ${String(stale)}`);
                        const untouched = await driver.proxy.getModelDocument({ uri: model.uri });
-                       assert.strictEqual(untouched.version, first.version, 'a refused set applied its first document');
+                       assert.strictEqual(untouched.model?.version, first.version, 'a refused set applied its first document');
 
                        await driver.proxy.updateModelDocuments({
                           clientId,
                           updates: [
-                             { uri: model.uri, model: edited, basedOn: first.version },
-                             { uri: other.uri, model: other.text, basedOn: second.version }
+                             { uri: model.uri, model: edited, baseVersion: first.version },
+                             { uri: other.uri, model: other.text, baseVersion: second.version }
                           ]
                        });
                        const applied = await driver.proxy.getModelDocument({ uri: model.uri });
-                       assert.ok(edit.expect(applied.root), 'edit.expect(root) was false — a current set was not applied');
+                       assert.ok(edit.expect(applied.model?.root), 'edit.expect(root) was false — a current set was not applied');
                        await driver.proxy.closeSession({ clientId });
                     } finally {
                        driver.dispose();
@@ -1005,7 +1029,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           uri: model.uri,
                           clientId: author,
                           model: resolveDeferred(edit.to),
-                          basedOn: 'anything'
+                          baseVersion: 'any'
                        });
 
                        await waitFor(() => driver.builds.slice(before).some(event => event.uris.includes(other.uri)), {
@@ -1059,11 +1083,11 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           uri: model.uri,
                           clientId: author,
                           model: resolveDeferred(breakingEdit),
-                          basedOn: 'anything'
+                          baseVersion: 'any'
                        });
 
                        const written = (): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> | undefined =>
-                          eventsFor(model.uri, before).find(event => event.document.version === answer.version);
+                          eventsFor(model.uri, before).find(event => event.document.model?.version === answer.model?.version);
                        await waitFor(() => written() !== undefined && eventsFor(other.uri, before).length > 0, {
                           message: `no onDocumentUpdated event for both ${model.uri} and its dependent ${other.uri} after the breaking edit`
                        });
@@ -1111,7 +1135,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        uri: model.uri,
                        clientId: author,
                        model: resolveDeferred(edit.to),
-                       basedOn: 'anything'
+                       baseVersion: 'any'
                     });
                     await waitFor(() => driver.events.some(event => event.sourceClientId === author), {
                        message: `no onDocumentUpdated event for ${model.uri} after the post-subscription update`

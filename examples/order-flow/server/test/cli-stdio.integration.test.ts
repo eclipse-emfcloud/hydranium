@@ -88,7 +88,7 @@ function serverSpawn(): { serverCommand: string; serverArgs: readonly string[]; 
 }
 
 /** Run `query` and parse the single JSON line it writes. */
-async function query(relativePath: string): Promise<Record<string, unknown>> {
+async function query(relativePath: string): Promise<{ uri: unknown; model: { root: unknown; diagnostics?: unknown } }> {
    const lines: string[] = [];
    await runQuery({ ...serverSpawn(), uri: uriOf(relativePath), write: line => lines.push(line) });
    expect(lines).toHaveLength(1);
@@ -106,7 +106,7 @@ describe('hydranium-cli over a real stdio data-server', () => {
          const envelope = await query(WORKSPACE_FILES.auditLeak);
 
          expect(envelope.uri).toBe(uriOf(WORKSPACE_FILES.auditLeak));
-         const diagnostics = envelope.diagnostics as ReadonlyArray<{ message: string }>;
+         const diagnostics = envelope.model.diagnostics as ReadonlyArray<{ message: string }>;
          expect(diagnostics.map(diagnostic => diagnostic.message).join('\n')).toContain('AuditStamp');
       },
       SPAWN_TIMEOUT_MS
@@ -120,10 +120,10 @@ describe('hydranium-cli over a real stdio data-server', () => {
          // from one that always answers with the only language it has.
          const envelope = await query(WORKSPACE_FILES.fulfillmentProcess);
 
-         const root = envelope.root as { $type: string };
+         const root = envelope.model.root as { $type: string };
          expect(root.$type).toBe('ProcessModel');
          // The clean file: whatever else it carries, not the visibility error.
-         const diagnostics = (envelope.diagnostics ?? []) as ReadonlyArray<{ message: string }>;
+         const diagnostics = (envelope.model.diagnostics ?? []) as ReadonlyArray<{ message: string }>;
          expect(diagnostics.map(diagnostic => diagnostic.message).join('\n')).not.toContain('AuditStamp');
       },
       SPAWN_TIMEOUT_MS

@@ -120,7 +120,7 @@ describe('revert grace', () => {
       const textDocuments = services.shared.workspace.TextDocuments;
       const lost = models.createSession('form');
       await lost.open(uri);
-      const written = await lost.update({ uri, model: EDITED, basedOn: 'anything' });
+      const written = await lost.update({ uri, model: EDITED, baseVersion: 'any' });
 
       lost.dispose('lost');
       const back = models.createSession('form', lost.clientId);
@@ -138,7 +138,7 @@ describe('revert grace', () => {
       const textDocuments = services.shared.workspace.TextDocuments;
       const lost = models.createSession('form');
       await lost.open(uri);
-      const written = await lost.update({ uri, model: EDITED, basedOn: 'anything' });
+      const written = await lost.update({ uri, model: EDITED, baseVersion: 'any' });
 
       lost.dispose('lost');
       const other = models.createSession('form');
@@ -172,7 +172,7 @@ describe('revert grace', () => {
       });
 
       try {
-         await lost.update({ uri, model: duplicated, basedOn: 'anything' });
+         await lost.update({ uri, model: duplicated, baseVersion: 'any' });
          await services.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, URI.parse(uri));
       } finally {
          listener.dispose();
@@ -186,6 +186,61 @@ describe('revert grace', () => {
       const built = (): string | undefined =>
          services.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))?.textDocument.getText();
       await waitFor(() => built() === onDisk, { timeoutMs: GRACE_MS + 2000 });
+   });
+});
+
+describe('revert racing a re-open', () => {
+   /** Settles with what `read` resolves to, or with `'timed out'` after `ms`. */
+   function within<T>(read: Promise<T>, ms = 1000): Promise<T | 'timed out'> {
+      return Promise.race([read, new Promise<'timed out'>(resolve => setTimeout(() => resolve('timed out'), ms))]);
+   }
+
+   it('stamps the revert of a document re-opened while the revert read its file with the open version', async () => {
+      const { services, uri } = await boot();
+      const models = services.shared.model.ModelService;
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const provider = services.shared.workspace.FileSystemProvider;
+      const closing = models.createSession('form');
+      await closing.open(uri);
+      const edited = await closing.update({ uri, model: EDITED, baseVersion: 'any' });
+      await closing.update({ uri, model: CLEAN, baseVersion: edited.version });
+      // Holds the revert build's parse of the file, its second read: the
+      // project manager reads the file first, as a project descriptor.
+      const readFile = provider.readFile.bind(provider);
+      let release: (() => void) | undefined;
+      let reads = 0;
+      provider.readFile = async target => {
+         if (target.toString() === uri && ++reads === 2) {
+            await new Promise<void>(resolve => (release = resolve));
+         }
+         return readFile(target);
+      };
+
+      try {
+         closing.dispose();
+         await waitFor(() => release !== undefined, { timeoutMs: 2000 });
+         await models.createSession('form').open(uri);
+         release?.();
+         const settled = await within(models.settled(uri));
+
+         expect(settled === 'timed out' ? settled : settled.version).toBe(textDocuments.version(uri));
+      } finally {
+         provider.readFile = readFile;
+         release?.();
+      }
+   });
+
+   it('builds a document a session opens onto staged text that differs from its build', async () => {
+      const { services, uri } = await boot();
+      const models = services.shared.model.ModelService;
+      const textDocuments = services.shared.workspace.TextDocuments;
+      textDocuments.stagePendingContent(uri, EDITED);
+
+      await models.createSession('form').open(uri);
+      const settled = await within(models.settled(uri));
+
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+      expect(settled === 'timed out' ? settled : settled.root.$cstNode?.root.fullText).toBe(EDITED);
    });
 });
 
@@ -215,7 +270,7 @@ describe('revert grace over the data head', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
       head = connect(services);
@@ -235,7 +290,7 @@ describe('revert grace over the data head', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
       expect(textDocuments.isRevertPending(uri)).toBe(true);
@@ -255,7 +310,7 @@ describe('revert grace over the data head', () => {
       const reverts = (): number => observer.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID).length;
       await head.proxy.createSession({ clientId: 'form#lost' });
       await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
-      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, basedOn: 'anything' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
       await outlastRevert(GRACE_MS / 2);
@@ -276,13 +331,13 @@ describe('revert grace over the data head', () => {
       const reverts = (): number => watcher.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID).length;
       await head.proxy.createSession({ clientId: 'form#lost' });
       const onDisk = await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
-      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, basedOn: 'anything' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
       await other.proxy.createSession({ clientId: 'tree#other' });
       const opened = await other.proxy.openModelDocument({ uri, clientId: 'tree#other' });
 
-      expect(opened.root).toEqual(onDisk.root);
+      expect(opened.model?.root).toEqual(onDisk.model?.root);
       expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
       expect(textDocuments.isRevertPending(uri)).toBe(false);
       await waitFor(() => built() === CLEAN && reverts() > 0, { timeoutMs: 2000 });
@@ -294,14 +349,14 @@ describe('revert grace over the data head', () => {
       const observer = connect(services);
       await head.proxy.createSession({ clientId: 'form#lost' });
       await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
-      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, basedOn: 'anything' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
       await observer.proxy.createSession({ clientId: 'form#lost' });
       await observer.proxy.openModelDocument({ uri, clientId: 'form#lost' });
       // A build the reopen's write drives, which a revert mark left behind
       // by the close would take for the revert.
-      await observer.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: CLEAN, basedOn: 'anything' });
+      await observer.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: CLEAN, baseVersion: 'any' });
       await outlastRevert();
 
       expect(observer.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID)).toEqual([]);
@@ -312,7 +367,7 @@ describe('revert grace over the data head', () => {
       const head = connect(services);
       await head.proxy.createSession({ clientId: 'form#closing' });
       await head.proxy.openModelDocument({ uri, clientId: 'form#closing' });
-      await head.proxy.updateModelDocument({ uri, clientId: 'form#closing', model: EDITED, basedOn: 'anything' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#closing', model: EDITED, baseVersion: 'any' });
 
       await head.proxy.closeSession({ clientId: 'form#closing' });
 

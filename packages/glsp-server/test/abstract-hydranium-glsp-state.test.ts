@@ -12,12 +12,12 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } f
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { AstDocument, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
+import { AstDocument, DefaultModelLedger, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { ModelReadyTimeoutError } from '../src/state/model-ready-timeout-error.js';
-import { ReconcilingConflictResolver } from '@hydranium/protocol';
+import { ReconcilingConflictResolver, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 
@@ -61,8 +61,10 @@ interface StateHarness {
    readonly documentLookups: (string | undefined)[];
    /** Fake clock bound on the `Clock` slot — tests advance it to fire the ready-timeout. */
    readonly clock: FakeClock;
-   /** Promise the stubbed `waitForDocumentState` returns. Tests reassign per case. */
-   waitForDocumentStatePromise: () => Promise<void>;
+   /** The text store's version, by URI; `0` when absent. */
+   readonly textVersions: Map<string, number>;
+   /** Promise the stubbed `ensureDocumentState` returns. Tests reassign per case. */
+   ensureDocumentStatePromise: () => Promise<void>;
 }
 
 @injectable()
@@ -91,7 +93,8 @@ function makeHarness(): StateHarness {
       documents: new Map(),
       documentLookups: [],
       clock: makeFakeClock(),
-      waitForDocumentStatePromise: () => new Promise(() => undefined)
+      textVersions: new Map(),
+      ensureDocumentStatePromise: () => new Promise(() => undefined)
    };
 }
 
@@ -140,7 +143,8 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
          }
       },
       workspace: {
-         TextDocuments: { get: () => undefined },
+         ModelLedger: ledger,
+         TextDocuments: { get: () => undefined, version: (uri: string) => harness.textVersions.get(uri) ?? 0 },
          LangiumDocuments: {
             getDocument(uri: { toString(): string }): FakeDocument | undefined {
                return harness.documents.get(uri.toString());
@@ -160,8 +164,8 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
       model: {
          ModelService: {
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
-            waitForDocumentState(_uri: string, _state: DocumentState): Promise<void> {
-               return harness.waitForDocumentStatePromise();
+            ensureDocumentState(_uri: string, _state: DocumentState): Promise<void> {
+               return harness.ensureDocumentStatePromise();
             },
             getDocument(uri: string): FakeDocument | undefined {
                harness.documentLookups.push(uri);
@@ -193,6 +197,16 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
 
 function makeRoot(label = 'r1'): TestRoot {
    return makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label });
+}
+
+/** The ledger every test's services share; a root is recorded once, so they never collide. */
+const ledger = new DefaultModelLedger();
+
+/** A built root parsed from the text at `version`. */
+function parsedAt(version: number): TestRoot {
+   const root = makeRoot();
+   ledger.record(root, version);
+   return root;
 }
 
 /** A root node carrying a `$document`, so `AstUtils` can route it. */
@@ -277,44 +291,32 @@ describe('AbstractHydraniumGlspState', () => {
          expect(state.get<string>(SOURCE_URI_ARG)).toBe('file:///x.a');
       });
 
-      it('captures the text-document version from LangiumDocuments at setSourceRoot time', () => {
+      it('captures the version the root it is given was parsed from, not the registry root', () => {
          const harness = makeHarness();
          const { state } = createState(harness);
          harness.documents.set('file:///a.a', {
             uri: { toString: () => 'file:///a.a' },
             state: DocumentState.Validated,
-            parseResult: { value: makeRoot() },
-            textDocument: { version: 7 }
+            parseResult: { value: parsedAt(8) },
+            textDocument: { version: 8 }
          });
-         state.setSourceRoot('file:///a.a', makeRoot());
+         state.setSourceRoot('file:///a.a', parsedAt(7));
          expect(state.version).toBe(7);
       });
 
-      it('falls back to version 0 when the document is not in the LangiumDocuments registry', () => {
+      it('records a version no write matches for a root no version was recorded for', () => {
          const harness = makeHarness();
          const { state } = createState(harness);
          state.setSourceRoot('file:///not-yet-registered.a', makeRoot());
-         expect(state.version).toBe(0);
+         expect(state.version).toBe(UNRECORDED_VERSION);
       });
 
       it('refreshes captured version when setSourceRoot is invoked again after a rebuild', () => {
          const harness = makeHarness();
          const { state } = createState(harness);
-         harness.documents.set('file:///a.a', {
-            uri: { toString: () => 'file:///a.a' },
-            state: DocumentState.Validated,
-            parseResult: { value: makeRoot() },
-            textDocument: { version: 3 }
-         });
-         state.setSourceRoot('file:///a.a', makeRoot());
+         state.setSourceRoot('file:///a.a', parsedAt(3));
          expect(state.version).toBe(3);
-         harness.documents.set('file:///a.a', {
-            uri: { toString: () => 'file:///a.a' },
-            state: DocumentState.Validated,
-            parseResult: { value: makeRoot() },
-            textDocument: { version: 4 }
-         });
-         state.setSourceRoot('file:///a.a', makeRoot());
+         state.setSourceRoot('file:///a.a', parsedAt(4));
          expect(state.version).toBe(4);
       });
    });
@@ -367,9 +369,9 @@ describe('AbstractHydraniumGlspState', () => {
    });
 
    describe('ready()', () => {
-      it('logs a "Wait for state ..." line and resolves when waitForDocumentState resolves', async () => {
+      it('logs a "Wait for state ..." line and resolves when ensureDocumentState resolves', async () => {
          const harness = makeHarness();
-         harness.waitForDocumentStatePromise = () => Promise.resolve();
+         harness.ensureDocumentStatePromise = () => Promise.resolve();
          const { state } = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot());
          await state.ready(DocumentState.Validated);
@@ -378,7 +380,7 @@ describe('AbstractHydraniumGlspState', () => {
 
       it('runs onReadyRefreshed after the wait — sees the refreshed root', async () => {
          const harness = makeHarness();
-         harness.waitForDocumentStatePromise = () => Promise.resolve();
+         harness.ensureDocumentStatePromise = () => Promise.resolve();
          const { state } = createState(harness);
          const r1 = makeRoot('r1');
          state.setSourceRoot('file:///a.a', r1);
@@ -394,7 +396,7 @@ describe('AbstractHydraniumGlspState', () => {
 
       it('throws ModelReadyTimeoutError when the wait exceeds readyTimeoutMs and the doc has not caught up', async () => {
          const harness = makeHarness();
-         harness.waitForDocumentStatePromise = () => new Promise(() => undefined);
+         harness.ensureDocumentStatePromise = () => new Promise(() => undefined);
          const { state } = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot());
          state.setReadyTimeoutMs(10);
@@ -410,7 +412,7 @@ describe('AbstractHydraniumGlspState', () => {
 
       it('reports the workspace-relative path and build-status snapshot in the timeout diagnostic', async () => {
          const harness = makeHarness();
-         harness.waitForDocumentStatePromise = () => new Promise(() => undefined);
+         harness.ensureDocumentStatePromise = () => new Promise(() => undefined);
          const { state } = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot());
          state.setReadyTimeoutMs(10);
@@ -426,7 +428,7 @@ describe('AbstractHydraniumGlspState', () => {
 
       it('resolves with a warn when timeout fires but the document already reached the target state (build-phase race)', async () => {
          const harness = makeHarness();
-         harness.waitForDocumentStatePromise = () => new Promise(() => undefined);
+         harness.ensureDocumentStatePromise = () => new Promise(() => undefined);
          const { state } = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot());
          state.setReadyTimeoutMs(10);
@@ -439,6 +441,26 @@ describe('AbstractHydraniumGlspState', () => {
          harness.clock.advance(10);
          await expect(pending).resolves.toBeUndefined();
          expect(harness.logger.warns.some(msg => msg.includes('Missed') && msg.includes('Validated'))).toBe(true);
+      });
+
+      it('names a root behind its text as the cause when the timeout fires at the target state', async () => {
+         const harness = makeHarness();
+         harness.ensureDocumentStatePromise = () => new Promise(() => undefined);
+         const { state } = createState(harness);
+         state.setSourceRoot('file:///a.a', parsedAt(3));
+         state.setReadyTimeoutMs(10);
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: parsedAt(3) }
+         });
+         harness.textVersions.set('file:///a.a', 4);
+         const pending = state.ready(DocumentState.Validated);
+         harness.clock.advance(10);
+         await expect(pending).resolves.toBeUndefined();
+         expect(harness.logger.warns).toEqual([
+            "No build caught the root up after 10ms: the document is at state 'Validated', but its root was parsed from v3 and the text is at v4."
+         ]);
       });
    });
 

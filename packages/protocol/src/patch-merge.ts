@@ -52,8 +52,9 @@ export function augmentWithTestOps(base: object, userPatch: ReadonlyArray<JsonPa
 
 /**
  * Outcome of {@link reconcileByPatchReplay}. The caller persists `merged` and
- * takes it as the new base, drops + surfaces the `theirs` root on `conflict`, and
- * decides its own fallback (e.g. force-retry) on `no-op` / `unavailable`.
+ * takes it as the new base, drops + surfaces the `theirs` root on `conflict`,
+ * catches up with the server on `no-op`, and decides its own fallback (e.g.
+ * force-retry) on `unavailable`.
  */
 export type ReconcileOutcome<T> =
    | {
@@ -68,9 +69,10 @@ export type ReconcileOutcome<T> =
      }
    | {
         /**
-         * The user's root already equalled the base, so the version gate
-         * fired on drift that changed nothing. No refetch was performed and
-         * there is nothing to persist — retrying the same write reproduces it.
+         * The user's root equalled the base, so the gate fired on another writer's
+         * change and the caller is behind the server (`ConflictError.actualVersion`).
+         * Nothing was refetched. Catch up from the update at that version or a later
+         * one, or refetch; forcing the write overwrites the other writer's change.
          */
         status: 'no-op';
      }
@@ -98,8 +100,8 @@ export type ReconcileOutcome<T> =
  * (`base → ours`), refetch the server's current root (theirs), and replay the
  * intent on top under strict, {@link augmentWithTestOps}-guarded `applyPatch`.
  *
- * - `no-op` — the user's root equals the base, so the gate fired on a
- *   benign version drift; nothing to replay (refetch is skipped).
+ * - `no-op` — the user's root equals the base: nothing to replay, and no
+ *   refetch; the caller's document is behind the server's.
  * - `unavailable` — the refetch produced nothing; caller falls back.
  * - `merged` — the foreign writer touched only paths the user did not; the
  *   merged root carries both intents.
@@ -187,8 +189,8 @@ export interface ConflictResolver {
    /**
     * Reconcile the user's `base → ours` intent against the current
     * server state (theirs, from `refetch`), returning a {@link ReconcileOutcome} the caller
-    * acts on (persist `merged`, drop on `conflict`, fall back on `no-op` /
-    * `unavailable`).
+    * acts on (persist `merged`, drop on `conflict`, catch up on `no-op`, fall
+    * back on `unavailable`).
     */
    resolve<T extends object>(base: T, ours: T, refetch: () => Promise<T | undefined>): Promise<ReconcileOutcome<T>>;
 }

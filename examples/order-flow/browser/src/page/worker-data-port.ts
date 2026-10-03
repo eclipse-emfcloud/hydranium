@@ -14,7 +14,7 @@ import { createMessageConnection, Emitter, type MessageConnection } from 'vscode
  * The host half of the data head for a page talking to a worker.
  *
  * This is the whole of what a browser host has to write to reach the data head
- * — everything above it (the open/watch order, `basedOn` conflict handling,
+ * — everything above it (the open/watch order, `baseVersion` conflict handling,
  * echo filtering by `sourceClientId`) is host-invariant and already in
  * `DataConnection` and `DataSession`.
  *

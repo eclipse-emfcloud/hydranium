@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { CanonicalUri } from '@hydranium/protocol';
+import { type CanonicalUri, textHash } from '@hydranium/protocol';
 import type { ApplyWorkspaceEditResult } from 'vscode-languageserver';
 import { Disposable, Emitter } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -36,7 +36,7 @@ export interface StubTextDocumentEntry {
  * `isOpenInAnyClient` / `isOpenInClient` / `isRevertPending` /
  * `openDocuments`), the push channel
  * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
- * the save / close notifications, the dirty state (`isDirty` /
+ * the save / close notifications, the dirty state (`isDirty` / `textState` /
  * `onDidChangeDirty` / `updateDiskBaseline`, against a baseline {@link seedOpen}
  * sets and a save that carries its text moves), and the client-session table
  * (`registerSession` / `closeSession` / `onDidCloseSession`), which is a real
@@ -88,6 +88,7 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'onDidCloseSession'
    | 'onDidCloseLastOpen'
    | 'isDirty'
+   | 'textState'
    | 'onDidChangeDirty'
    | 'updateDiskBaseline'
 > {
@@ -176,7 +177,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          } else {
             dirty.delete(uri);
          }
-         dirtyChanged.fire({ uri: key(uri), dirty: now });
+         dirtyChanged.fire({ uri: key(uri), text: { version: held?.version ?? 0, hash: textHash(held?.text ?? ''), dirty: now } });
       }
    };
 
@@ -199,6 +200,10 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       },
       version(uri) {
          return docs.get(uri)?.version ?? 0;
+      },
+      textState(uri) {
+         const held = docs.get(uri);
+         return held && { version: held.version, hash: textHash(held.text), dirty: dirty.has(uri) };
       },
       notifyDidChangeTextDocument(event, clientId = LANGUAGE_CLIENT_ID) {
          const existing = docs.get(event.textDocument.uri);

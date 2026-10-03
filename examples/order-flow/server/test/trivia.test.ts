@@ -975,7 +975,7 @@ describe('trivia preservation', () => {
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
-      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, basedOn: 'anything' }));
+      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, baseVersion: 'any' }));
 
       const after = harness.shared.workspace.TextDocuments.get(uri)?.getText();
       expect(after).toContain('// The behavioural half of `orders`. `for');
@@ -1004,7 +1004,7 @@ describe('trivia preservation', () => {
       expect((before!.parseResult.value as ProcessModel).nodes[0]).toHaveProperty('_effectSummary');
       const transfer = harness.shared.model.TransferEncoder.toTransfer(before!.parseResult.value, 'grammar');
       (transfer as unknown as { nodes: Array<{ name: string }> }).nodes[0].name = 'Settle';
-      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, basedOn: 'anything' }));
+      await asFormEditor(harness, uri, session => session.update({ uri, model: transfer, baseVersion: 'any' }));
 
       expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toContain('   // about Pay\n   task Settle');
    });
@@ -1019,7 +1019,7 @@ describe('trivia preservation', () => {
       const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, URI.parse(uri));
       const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
 
-      await asFormEditor(harness, uri, session => session.save({ uri, model: transfer, basedOn: 'anything' }));
+      await asFormEditor(harness, uri, session => session.save({ uri, model: transfer, baseVersion: 'any' }));
 
       expect(readFileSync(workspace.resolve('orders/cold.process'), 'utf8')).toBe(source);
    });

@@ -83,7 +83,7 @@ function eventTypeAssertions(port: DataPort): void {
    // it, so there is no parameter to omit and narrow by.
    const connection = new DataConnectionWithEvents<Root, RichServer>(port);
    connection.events.onDidUpdateDocument(event => {
-      const ruleId: string | undefined = event.document.diagnostics[0]?.ruleId;
+      const ruleId: string | undefined = event.document.model?.diagnostics?.[0]?.ruleId;
       void ruleId;
    });
    connection.events.onDidChangeProjects(event => {

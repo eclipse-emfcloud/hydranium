@@ -10,13 +10,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
    type CanonicalUri,
-   asSnapshotVersion,
+   asModelVersion,
    ConflictError,
    DefaultTracer,
    isConflictError,
    Logger,
    NoopLogger,
-   type TransferElement
+   type TransferElement,
+   UNRECORDED_VERSION
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
@@ -144,7 +145,7 @@ function buildService(
 // (which reads from `services.ServiceRegistry`, absent from the test
 // bundle) — the slow-warn test only needs the update path to run, not
 // to actually serialise.
-const updateArgs = { uri: URI_A, model: 'name: a\n', basedOn: 'anything' as const };
+const updateArgs = { uri: URI_A, model: 'name: a\n', baseVersion: 'any' as const };
 
 describe('ModelService readiness gate', () => {
    /**
@@ -317,7 +318,7 @@ describe('ModelService update profiling', () => {
  * Bundle suited to the conflict-gating tests below: the document is
  * seeded into both LangiumDocuments (so `waitForDocumentState` can read
  * a fake document back) and TextDocuments (so `version(uri)` returns a
- * meaningful current version to compare against the caller's based-on
+ * meaningful current version to compare against the caller's base
  * version), open for the session `editor-1`. The service keeps the default
  * `rebuild`: the gate sits ahead of the build pipeline, so no delayed rebuild
  * is needed.
@@ -330,7 +331,11 @@ function buildConflictBundle(currentVersion = 1): {
    const bundle = makeTestServices<FakeRoot>({
       serialize: (_uri, root) => `name:${(root as unknown as FakeRoot).name}`,
       seedDocuments: [
-         { uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: currentVersion } }
+         {
+            uri: URI_A,
+            root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }),
+            options: { version: currentVersion, text: `v${currentVersion}` }
+         }
       ]
    });
    const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1', `v${currentVersion}`);
@@ -346,9 +351,9 @@ function buildConflictBundle(currentVersion = 1): {
 }
 
 describe('ModelService conflict gating', () => {
-   it('throws ConflictError when args.basedOn is stale relative to the current text-document version', async () => {
+   it('throws ConflictError when args.baseVersion is stale relative to the current text-document version', async () => {
       const { session } = buildConflictBundle(3);
-      const staleArgs = { uri: URI_A, model: 'name:newer\n', basedOn: asSnapshotVersion(2) };
+      const staleArgs = { uri: URI_A, model: 'name:newer\n', baseVersion: asModelVersion(2) };
       let captured: unknown;
       try {
          await session.update(staleArgs);
@@ -358,7 +363,7 @@ describe('ModelService conflict gating', () => {
       expect(isConflictError(captured)).toBe(true);
       const err = captured as ConflictError;
       expect(err.uri).toBe(URI_A);
-      expect(err.expectedVersion).toBe(2);
+      expect(err.baseVersion).toBe(2);
       expect(err.actualVersion).toBe(3);
    });
 
@@ -366,38 +371,35 @@ describe('ModelService conflict gating', () => {
       const { bundle, session } = buildConflictBundle(3);
       const coldUri = 'file:///never-seen.fake';
 
-      await expect(session.update({ uri: coldUri, model: 'name:cold\n', basedOn: 'anything' })).rejects.toBeInstanceOf(
-         DocumentNotOpenError
-      );
+      await expect(session.update({ uri: coldUri, model: 'name:cold\n', baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
 
       expect(bundle.textDocuments.get(coldUri)).toBeUndefined();
       expect(bundle.astDocumentManager.isOpen(coldUri)).toBe(false);
    });
 
-   it("does not gate when args.basedOn is 'anything'", async () => {
+   it("does not gate when args.baseVersion is 'any'", async () => {
       const { bundle, session } = buildConflictBundle(3);
-      await session.update({ uri: URI_A, model: 'name:newer\n', basedOn: 'anything' });
+      await session.update({ uri: URI_A, model: 'name:newer\n', baseVersion: 'any' });
       // The update applied — text-document changes recorded.
       expect(bundle.textDocuments.changes.find(change => change.text === 'name:newer\n')).toBeDefined();
    });
 
-   it('proceeds when args.basedOn matches the current text-document version, returning the post-build AST envelope', async () => {
+   it('proceeds when args.baseVersion matches the current text-document version, returning the post-build AST envelope', async () => {
       const { bundle, session } = buildConflictBundle(3);
-      const doc = await session.update({ uri: URI_A, model: 'name:matched\n', basedOn: asSnapshotVersion(3) });
+      const doc = await session.update({ uri: URI_A, model: 'name:matched\n', baseVersion: asModelVersion(3) });
       // Text-document store records the bumped version (3 → 4) — the stub
-      // `AstDocumentManager.update` increments by one. The returned AST
-      // envelope's `version` mirrors the underlying `LangiumDocument.textDocument.version`;
-      // the stub fixture's Langium doc is not advanced by text-document changes,
-      // so we assert on the wire-side counter via `TextDocuments.version`.
+      // `AstDocumentManager.update` increments by one. The stub fixture's Langium
+      // doc is not rebuilt by text-document changes, so the returned envelope's
+      // `version` says nothing here; assert on `TextDocuments.version` instead.
       expect(bundle.textDocuments.changes.find(change => change.text === 'name:matched\n')).toBeDefined();
       expect(bundle.textDocuments.version(URI_A)).toBe(4);
       expect(doc.uri).toBe(URI_A);
       expect(typeof doc.version).toBe('number');
    });
 
-   it('save() gates on the same based-on version (delegates to update)', async () => {
+   it('save() gates on the same base version (delegates to update)', async () => {
       const { session } = buildConflictBundle(3);
-      await expect(session.save({ uri: URI_A, model: 'name:newer\n', basedOn: asSnapshotVersion(1) })).rejects.toBeInstanceOf(
+      await expect(session.save({ uri: URI_A, model: 'name:newer\n', baseVersion: asModelVersion(1) })).rejects.toBeInstanceOf(
          ConflictError
       );
    });
@@ -411,8 +413,8 @@ describe('ModelService conflict gating under concurrency', () => {
       const { bundle, service, session } = buildConflictBundle(3);
       const other = openSession(service, bundle.textDocuments, 'editor-2');
       const results = await Promise.allSettled([
-         session.update({ uri: URI_A, model: 'name:first\n', basedOn: asSnapshotVersion(3) }),
-         other.update({ uri: URI_A, model: 'name:second\n', basedOn: asSnapshotVersion(3) })
+         session.update({ uri: URI_A, model: 'name:first\n', baseVersion: asModelVersion(3) }),
+         other.update({ uri: URI_A, model: 'name:second\n', baseVersion: asModelVersion(3) })
       ]);
       expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
       expect(appliedTexts(bundle)).toEqual(['name:first\n']);
@@ -422,8 +424,8 @@ describe('ModelService conflict gating under concurrency', () => {
 describe('ModelService AST envelopes', () => {
    it('waitForDocumentState returns an AstDocument that carries the text-document version', async () => {
       const { bundle, service } = buildConflictBundle(7);
-      // Stub LangiumDocuments resolves the URI through `getDocument`; the
-      // seed at v7 surfaces as the envelope's `version` field.
+      // The root as a factory parse of the seed at v7 would record it.
+      bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(URI_A))!.parseResult.value, 7);
       const doc = await service.waitForDocumentState(URI_A, DocumentState.Validated);
       expect(doc.version).toBe(7);
       void bundle; // bundle currently unused beyond seeding
@@ -462,10 +464,10 @@ describe('ModelService diagnostics per read', () => {
 
       const document = await bundle.modelService.settled(URI_A);
 
-      expect(document.diagnostics).toEqual([]);
+      expect(document.diagnostics).toBeUndefined();
    });
 
-   it('validated() reports them, so the empty array above is the read and not the fixture', async () => {
+   it('validated() reports them, so the absence above is the read and not the fixture', async () => {
       // Without this, the assertion above is equally satisfied by diagnostics
       // that never arrived — the same observation for the opposite reason.
       const bundle = validatedBundle();
@@ -473,6 +475,14 @@ describe('ModelService diagnostics per read', () => {
       const document = await bundle.modelService.validated(URI_A);
 
       expect(document.diagnostics).toHaveLength(1);
+   });
+
+   it('a wait for Linked reports none on a document validated before', async () => {
+      const bundle = validatedBundle();
+
+      const document = await bundle.modelService.waitForDocumentState(URI_A, DocumentState.Linked);
+
+      expect('diagnostics' in document).toBe(false);
    });
 
    it('snapshot() reports them for a validated document', () => {
@@ -501,7 +511,8 @@ describe('ModelService diagnostics per read', () => {
          ]
       });
 
-      expect(bundle.modelService.snapshot(URI_A)?.diagnostics).toEqual([]);
+      const snapshot = bundle.modelService.snapshot(URI_A);
+      expect(snapshot && 'diagnostics' in snapshot).toBe(false);
    });
 });
 
@@ -542,6 +553,7 @@ describe('ModelService symlink / canonical-URI divergence', () => {
          documentUriPolicy: linkAware,
          seedDocuments: [{ uri: REAL_URI, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 7 } }]
       });
+      bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(REAL_URI))!.parseResult.value, 7);
       const service = new DefaultModelService<FakeRoot>(bundle.services);
       const doc = await service.waitForDocumentState(LINK_URI, DocumentState.Validated);
       expect(doc.version).toBe(7);
@@ -624,6 +636,30 @@ describe('ModelService write-lock reentrancy detection', () => {
       // have cancelled the enclosing one.
       expect(bundle.documentBuilder.updateCalls).toEqual([]);
    });
+
+   it.each(['update', 'updateAll'] as const)(
+      'refuses a session %s from inside a write-lock holder before applying its text',
+      async method => {
+         setWriteLockScope(nodeWriteLockScope);
+         const bundle = makeTestServices<FakeRoot>();
+         const session = openSession(bundle.modelService, bundle.textDocuments, 'client-1');
+         const args = { uri: URI_A, model: 'name: b\n', baseVersion: 'any' as const };
+
+         let rejection: unknown;
+         await bundle.services.workspace.WorkspaceLock.write(async () => {
+            const writing = method === 'update' ? session.update(args) : session.updateAll({ updates: [args] });
+            rejection = await writing.then(
+               () => undefined,
+               (err: unknown) => err
+            );
+         });
+
+         expect({ refused: rejection instanceof ReentrantWriteLockError, text: bundle.textDocuments.get(URI_A)?.getText() }).toEqual({
+            refused: true,
+            text: 'name: a\n'
+         });
+      }
+   );
 
    it('allows the same rebuild from outside a write-lock holder', async () => {
       // The control that makes the rejection above meaningful: without it, a
@@ -737,7 +773,7 @@ describe('ModelService update supersession', () => {
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }), options: { version: 1 } }],
          modelService: services => new DefaultModelService<FakeRoot>(services)
       });
-      // Current text-doc version = 1, matching `args.basedOn` at v1 so the
+      // Current text-doc version = 1, matching `args.baseVersion` at v1 so the
       // conflict gate stays inert; `AstDocumentManager.update` then bumps
       // to v2, making `appliedVersion = 2`.
       const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1', 'v1');
@@ -751,7 +787,7 @@ describe('ModelService update supersession', () => {
       const previous = Logger.getLevel();
       Logger.setLevel('debug');
       try {
-         await session.update({ uri: URI_A, model: 'a', basedOn: asSnapshotVersion(1) });
+         await session.update({ uri: URI_A, model: 'a', baseVersion: asModelVersion(1) });
          const ready = supersessionLines(lines);
          expect(ready).toHaveLength(1);
          expect(ready[0].message).toMatch(/Update to v\d+ ready$/);
@@ -769,7 +805,7 @@ describe('ModelService update supersession', () => {
          // Hold the NEXT waitUntil — update #1's rebuild — so a concurrent
          // writer can overtake the version before update #1 settles.
          const gate = bundle.documentBuilder.gateNextWaitUntil();
-         const inFlight = session.update({ uri: URI_A, model: 'a', basedOn: asSnapshotVersion(1) });
+         const inFlight = session.update({ uri: URI_A, model: 'a', baseVersion: asModelVersion(1) });
          // Spin the microtask queue until update #1 has driven its await chain
          // (apply text → rebuild's DocumentBuilder.update → Logger.time)
          // all the way to the gated `waitUntil`. A fixed tick count is fragile —
@@ -831,7 +867,7 @@ describe('ModelService rebuild and save', () => {
       const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
       // Pass `model` as a string to bypass the rewrite + serialize path; no
       // `version` so the conflict gate is inert (covered elsewhere).
-      await session.save({ uri: URI_A, model: 'name: saved\n', basedOn: 'anything' });
+      await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: 'any' });
       // update applied the new text...
       const change = bundle.textDocuments.changes.find(entry => entry.text === 'name: saved\n');
       expect(change).toBeDefined();
@@ -921,6 +957,27 @@ describe('ModelService settleSave', () => {
       await settling;
 
       expect(lines.some(line => line.level === 'warn' && line.message.includes(`exceeded ${SETTLE_BOUND_MS}ms`))).toBe(true);
+   });
+
+   it('requests a sync build for a model behind its text', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service } = buildSettling(clock);
+      bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
+      bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(URI_A))!.parseResult.value, 0);
+      const asked: Array<{ uri: string; version: number }> = [];
+      bundle.services.workspace.VersionSyncService.syncTo = (uri, version) => {
+         asked.push({ uri: uri.toString(), version });
+         // Given up, so the settle returns without a parse to wait for.
+         return Promise.resolve(false);
+      };
+
+      const settling = service.settle(URI_A);
+      // A wait that requests nothing ends only at the bound.
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await settling;
+
+      expect(asked).toEqual([{ uri: URI_A, version: 1 }]);
    });
 
    it('logs a wait that fails inside the bound apart from the timeout, and returns', async () => {
@@ -1134,13 +1191,13 @@ describe('ModelService modelToText serialize gating', () => {
       const { session, order } = buildRecordingService();
       // No `version` → conflict gate inert; the structured root drives the
       // `serialize(uri, rewriteModel(model))` branch of `modelToText`.
-      await session.update({ uri: URI_A, model: { $type: 'FakeRoot', name: 'x' }, basedOn: 'anything' });
+      await session.update({ uri: URI_A, model: { $type: 'FakeRoot', name: 'x' }, baseVersion: 'any' });
       expect(order).toEqual(['serialize']);
    });
 
    it('bypasses serialize for a pre-serialised string payload', async () => {
       const { session, order } = buildRecordingService();
-      await session.update({ uri: URI_A, model: 'name: x\n', basedOn: 'anything' });
+      await session.update({ uri: URI_A, model: 'name: x\n', baseVersion: 'any' });
       expect(order).toEqual([]);
    });
 
@@ -1152,8 +1209,8 @@ describe('ModelService modelToText serialize gating', () => {
       const unopened = 'file:///never-opened.fake';
       const write =
          method === 'update'
-            ? session.update({ uri: unopened, model, basedOn: 'anything' })
-            : session.updateAll({ updates: [{ uri: unopened, model, basedOn: 'anything' }] });
+            ? session.update({ uri: unopened, model, baseVersion: 'any' })
+            : session.updateAll({ updates: [{ uri: unopened, model, baseVersion: 'any' }] });
 
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
       expect(order).toEqual([]);
@@ -1252,21 +1309,11 @@ describe('ModelService update stopwatch allocation', () => {
    });
 });
 
-/**
- * Pins the empty `{ uri, version: 0, root, diagnostics }` envelope
- * `toAstDocument` returns when the document is absent from the registry.
- * Every field is asserted — uri echoed, version 0, diagnostics empty — so an
- * envelope that degraded to all-undefined would not pass as merely empty.
- */
 describe('ModelService toAstDocument absent-document envelope', () => {
-   it('returns an empty envelope carrying the uri and version 0 when the document is absent', async () => {
-      // No seedDocuments → LangiumDocuments.getDocument returns undefined →
-      // the absent-document branch of `toAstDocument` builds the empty envelope.
+   it('returns an envelope carrying the uri, a version no write matches, and no diagnostics', async () => {
+      // No seedDocuments → LangiumDocuments.getDocument returns undefined.
       const bundle = makeTestServices<FakeRoot>();
       const doc = await bundle.modelService.waitForDocumentState(URI_A, DocumentState.Validated);
-      expect(doc.uri).toBe(URI_A);
-      expect(doc.version).toBe(0);
-      expect(doc.root).toBeUndefined();
-      expect(doc.diagnostics).toEqual([]);
+      expect(doc).toStrictEqual({ uri: URI_A, version: UNRECORDED_VERSION, root: undefined });
    });
 });

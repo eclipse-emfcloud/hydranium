@@ -129,6 +129,8 @@ interface ServicesStubOptions {
    mtimeMs?: (uri: URI) => Promise<number | undefined>;
    /** Records each `TextDocuments.reloadDiskBaseline` call. */
    reloadedBaselines?: string[];
+   /** Receives each check the handler registers through `VersionSyncService.registerDeferredBuilds`. */
+   deferredBuilds?: Array<(uri: URI) => boolean>;
 }
 
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
@@ -163,6 +165,12 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          DocumentBuilder: {
             scheduleUpdate: async (_changed: URI[], _deleted: URI[], reason?: string) => {
                scheduledReasons?.push(reason);
+            }
+         },
+         VersionSyncService: {
+            registerDeferredBuilds: (isDeferred: (uri: URI) => boolean) => {
+               opts.deferredBuilds?.push(isDeferred);
+               return { dispose: () => undefined };
             }
          },
          TextDocuments: {
@@ -241,6 +249,19 @@ describe('HydraniumDocumentUpdateHandler — debounce on', () => {
       clock.advance(50);
 
       expect(handler.dispatchCalls.map(call => call.changed.map(uri => uri.toString()))).toEqual([['file:///b.a']]);
+   });
+
+   it('reports a pending change as a deferred build to the builder until it flushes', () => {
+      const clock = makeFakeClock();
+      const deferredBuilds: Array<(uri: URI) => boolean> = [];
+      const handler = new CapturingHandler(makeServicesStub({ clock, deferredBuilds }), { debounceMs: 50 });
+      const deferred = (uri: string): boolean => deferredBuilds.some(isDeferred => isDeferred(URI.parse(uri)));
+      handler.triggerChange('file:///a.a');
+
+      const pending = { changed: deferred('file:///a.a'), other: deferred('file:///b.a') };
+      clock.advance(50);
+
+      expect({ pending, flushed: deferred('file:///a.a') }).toEqual({ pending: { changed: true, other: false }, flushed: false });
    });
 
    it('drops the reason of a pending change it drops, when no other change is pending', () => {

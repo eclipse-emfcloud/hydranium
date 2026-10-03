@@ -12,6 +12,8 @@ import type { LangiumSharedCoreServices } from '@hydranium/langium';
 import type { ServerLocale } from '../locale/server-locale.js';
 import type { MessageRenderer } from '../messages/renderer.js';
 import type { SelfSaveRegistry } from '../documents/self-save-registry.js';
+import type { ModelLedger } from '../documents/model-ledger.js';
+import type { VersionSyncService } from '../documents/version-sync-service.js';
 import type { WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import type { HydraniumDocumentRegistry } from './workspace/langium-documents.js';
 import type { BuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
@@ -35,8 +37,8 @@ import type { AdditionalDocumentContribution } from './workspace/additional-docu
  * an {@link ExtendedServiceRegistry}, and on `workspace` a writable file-system
  * provider plus {@link HydraniumWorkspaceManager}, {@link ProjectManager},
  * {@link SelfSaveRegistry}, {@link BuildPipelineIntegration},
- * {@link BuildPhasePassService}, {@link CstResidencyService} and
- * {@link DocumentUriPolicy}.
+ * {@link BuildPhasePassService}, {@link CstResidencyService},
+ * {@link DocumentUriPolicy}, {@link ModelLedger} and {@link VersionSyncService}.
  *
  * Declared structurally (interface extends + intersection on nested slots)
  * so the full `ServerSharedServices` and any consumer-extended variant
@@ -98,6 +100,8 @@ export interface ServerSharedServicesMinimal<TProject extends Project = Project>
       BuildPhasePassService: BuildPhasePassService;
       CstResidencyService: CstResidencyService;
       DocumentUriPolicy: DocumentUriPolicy;
+      ModelLedger: ModelLedger;
+      VersionSyncService: VersionSyncService;
    };
 }
 

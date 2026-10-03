@@ -190,15 +190,15 @@ any other string, because its transfer form *is* its reference text.
 `setField` sends the **whole root**, because `TransferUpdateDocumentArgs.model` is the
 document root and there is no path-scoped variant — the encoder is AST→transfer
 only and the parser is the decoder. So a field edit is read-modify-write, and
-what keeps it from clobbering a concurrent writer is `basedOn` plus
-`reconcileByPatchReplay`. A host renders each outcome differently, which is why
+what keeps it from clobbering a concurrent writer is `baseVersion` plus
+`reconcileWrite`, the same loop the GLSP state writes through. A host renders each outcome differently, which is why
 `setField` returns a status rather than `void`:
 
 | Outcome | Meaning |
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
-| `merged` | Raced a foreign edit to a *different* field; both intents survive. |
-| `conflict` | Raced a foreign edit to the *same* field; the write was dropped and the panel now shows the server's value. |
+| `merged` | Raced foreign edits to *different* fields; both intents survive. |
+| `conflict` | Raced a foreign edit to the *same* field, or kept racing foreign edits; the write was dropped and the panel now shows the server's value. |
 | `unchanged` | The value already matched; nothing was sent. |
 | `unavailable` | The document could not be refetched to reconcile against. |
 

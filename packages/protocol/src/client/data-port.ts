@@ -27,7 +27,7 @@ import type { RpcConnectionLifecycle } from './rpc-connection';
  * `DataServerProtocol` surface, so wrapping it would re-derive the framework's
  * pass-throughs in a second place and lose the `as const satisfies keyof`
  * method allowlists, which cannot drift. Everything a form or a tree actually
- * does — the wire contract, the open/watch/update/close sequence, `basedOn`
+ * does — the wire contract, the open/watch/update/close sequence, `baseVersion`
  * conflict handling, echo filtering by `sourceClientId` — is host-invariant and
  * lives above this interface. What varies between hosts is exactly the
  * members below.

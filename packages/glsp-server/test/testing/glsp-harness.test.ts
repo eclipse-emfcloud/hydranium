@@ -41,7 +41,7 @@ import {
 } from '@eclipse-glsp/server';
 import { ContainerModule, inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import type { ElementKeyProvider, ServerSharedServices } from '@hydranium/core';
+import { DefaultModelLedger, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { makeStubServiceRegistry } from '@hydranium/core/testing';
 import { ReconcilingConflictResolver } from '@hydranium/protocol';
 import { HydraniumGlspIndex } from '../../src/state/hydranium-glsp-index.js';
@@ -241,8 +241,8 @@ function stubSharedServices(): ServerSharedServices {
          }
       ]),
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      workspace: { LangiumDocuments: { getDocument: () => undefined } },
-      model: { ModelService: { waitForDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
+      workspace: { LangiumDocuments: { getDocument: () => undefined }, ModelLedger: new DefaultModelLedger() },
+      model: { ModelService: { ensureDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
 }
 

@@ -194,7 +194,7 @@ describe('data head sessions', () => {
       const { services, uri, connect } = await boot();
       const { proxy } = connect();
 
-      const failure = await rejectionOf(proxy.updateModelDocument({ uri, clientId: 'plain-client', model: EDITED, basedOn: 'anything' }));
+      const failure = await rejectionOf(proxy.updateModelDocument({ uri, clientId: 'plain-client', model: EDITED, baseVersion: 'any' }));
 
       expect(isSessionClosedError(failure)).toBe(true);
       expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, 'plain-client')).toBe(false);
@@ -226,10 +226,10 @@ describe('data head sessions', () => {
       await proxy.createSession({ clientId: SESSION, resumeToken: 'secret' });
 
       expect(textDocuments.isOpenInClient(uri, SESSION)).toBe(false);
-      const late = await rejectionOf(stale.proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, basedOn: 'anything' }));
+      const late = await rejectionOf(stale.proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: 'any' }));
       expect(isSessionClosedError(late)).toBe(true);
       await proxy.openModelDocument({ uri, clientId: SESSION });
-      await proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, basedOn: 'anything' });
+      await proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: 'any' });
    });
 
    it('closeSession closes everything the session has open, drops its watches and frees the id', async () => {
@@ -275,7 +275,7 @@ describe('data head sessions', () => {
       await proxy.createSession({ clientId: SESSION });
       await proxy.closeSession({ clientId: SESSION });
 
-      const late = await rejectionOf(proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, basedOn: 'anything' }));
+      const late = await rejectionOf(proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: 'any' }));
       const lateClose = await rejectionOf(proxy.closeModelDocument({ uri, clientId: SESSION }));
 
       expect(isSessionClosedError(late)).toBe(true);
@@ -320,7 +320,9 @@ describe('data head sessions', () => {
       await head.proxy.createSession({ clientId: SESSION });
       const opened = await head.proxy.openModelDocument({ uri, clientId: SESSION });
 
-      const write = rejectionOf(head.server.updateModelDocument({ uri, clientId: SESSION, model: EDITED, basedOn: opened.version }));
+      const write = rejectionOf(
+         head.server.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: opened.model!.version })
+      );
       head.server.dispose();
 
       expect(isDocumentNotOpenError(await write)).toBe(true);
@@ -352,11 +354,11 @@ describe('data head sessions', () => {
       await proxy.createSession({ clientId: SESSION });
 
       const created = await proxy.createModelDocument({ uri: newUri, clientId: SESSION, text: CLEAN });
-      expect(TransferDocument.assertLoaded(created).root.$type).toBe('DomainModel');
+      expect(TransferDocument.assertLoaded(created).model.root.$type).toBe('DomainModel');
       expect(services.shared.workspace.TextDocuments.isOpenInClient(newUri, SESSION)).toBe(true);
       expect(() => readFileSync(path(NEW_FILE), 'utf8')).toThrow();
 
-      await proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: EDITED, basedOn: created.version });
+      await proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: EDITED, baseVersion: created.model!.version });
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(EDITED);
    });
 
@@ -399,13 +401,13 @@ describe('data head sessions', () => {
       await head.proxy.createSession({ clientId: SESSION });
       await head.proxy.openModelDocument({ uri, clientId: SESSION });
       const wire = (model: string): TransferUpdateDocumentArgs<DomainModel> =>
-         ({ uri, clientId: SESSION, model, basedOn: 'anything', note: 'wire only' }) as TransferUpdateDocumentArgs<DomainModel>;
+         ({ uri, clientId: SESSION, model, baseVersion: 'any', note: 'wire only' }) as TransferUpdateDocumentArgs<DomainModel>;
 
       await head.proxy.updateModelDocument(wire(EDITED));
       await head.proxy.saveModelDocument(wire(CLEAN));
       await head.proxy.updateModelDocuments({ clientId: SESSION, updates: [wire(EDITED)] });
 
-      const written = { uri, basedOn: 'anything' };
+      const written = { uri, baseVersion: 'any' };
       expect(writes).toEqual([
          { ...written, model: EDITED },
          { ...written, model: CLEAN },
@@ -456,7 +458,7 @@ function drop(head: Harness): void {
 }
 
 describe('DataSession restore against the real stack', () => {
-   it('reports a write based on anything that a revert took, and sends it nowhere', async () => {
+   it('reports a write based on any version that a revert took, and sends it nowhere', async () => {
       // The session is the document's only client, so ending it reverts the
       // document to disk.
       const { services, uri, connect } = await boot();
@@ -465,7 +467,7 @@ describe('DataSession restore against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       drop(head);
       head = connect();
@@ -477,13 +479,13 @@ describe('DataSession restore against the real stack', () => {
       expect(textDocuments.isOpenInClient(uri, 'form#restore')).toBe(true);
    });
 
-   it('reports a write based on anything that a restarted server never had, and sends it nowhere', async () => {
+   it('reports a write based on any version that a restarted server never had, and sends it nowhere', async () => {
       const { uri, connect } = await boot();
       let head: Harness = connect();
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       drop(head);
       const restarted = makeServices();
@@ -506,7 +508,7 @@ describe('DataSession restore against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       drop(head);
       head = connect();
@@ -530,7 +532,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      const written = await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      const written = await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
 
       head.server.lose();
       head.dispose();
@@ -540,7 +542,7 @@ describe('DataSession re-apply against the real stack', () => {
       expect(head.server.writes).toEqual([]);
       expect(reported).toEqual([]);
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
-      expect(textDocuments.version(uri)).toBe(written.version);
+      expect(textDocuments.version(uri)).toBe(written.model!.version);
    });
 
    it('writes the edit again to a document reverted after the grace', async () => {
@@ -550,7 +552,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
 
       head.server.lose();
       head.dispose();
@@ -572,12 +574,12 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
 
       drop(head);
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
-      await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+      await other.update({ uri, model: THEIRS, baseVersion: 'any' });
       head = connect();
       await session.connected();
 
@@ -592,7 +594,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
 
       drop(head);
       const restarted = makeServices();
@@ -618,8 +620,8 @@ describe('DataSession re-apply against the real stack', () => {
       const otherOpened = await session.openDocument({ uri: otherUri });
       await session.updateDocuments({
          updates: [
-            { uri, model: EDITED, basedOn: opened.version },
-            { uri: otherUri, model: EDITED, basedOn: otherOpened.version }
+            { uri, model: EDITED, baseVersion: opened.model!.version },
+            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version }
          ]
       });
 
@@ -643,15 +645,15 @@ describe('DataSession re-apply against the real stack', () => {
       const otherOpened = await session.openDocument({ uri: otherUri });
       await session.updateDocuments({
          updates: [
-            { uri, model: EDITED, basedOn: opened.version },
-            { uri: otherUri, model: EDITED, basedOn: otherOpened.version }
+            { uri, model: EDITED, baseVersion: opened.model!.version },
+            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version }
          ]
       });
 
       drop(head);
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(otherUri);
-      await other.update({ uri: otherUri, model: THEIRS, basedOn: 'anything' });
+      await other.update({ uri: otherUri, model: THEIRS, baseVersion: 'any' });
       head = connect();
       await session.connected();
 
@@ -668,7 +670,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
 
       drop(head);
       head = connect();
@@ -676,7 +678,7 @@ describe('DataSession re-apply against the real stack', () => {
       head.server.afterWatch = async () => {
          head.server.afterWatch = undefined;
          await other.open(uri);
-         await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+         await other.update({ uri, model: THEIRS, baseVersion: 'any' });
       };
       await session.connected();
 
@@ -697,7 +699,7 @@ describe('DataSession re-apply against the real stack', () => {
          client: {
             onDocumentDirtyChanged: event => {
                dirtyChanged.fire(event);
-               if (!event.dirty) {
+               if (!event.text?.dirty) {
                   cleaned.push(event.uri);
                }
             }
@@ -705,10 +707,10 @@ describe('DataSession re-apply against the real stack', () => {
       });
       heads.push(head);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
-      await other.save({ uri, model: THEIRS, basedOn: 'anything' });
+      await other.save({ uri, model: THEIRS, baseVersion: 'any' });
       await waitFor(() => cleaned.includes(uri), { message: 'the save never turned the document clean for the session' });
 
       drop(head);
@@ -742,15 +744,15 @@ describe('DataSession re-apply against the real stack', () => {
       head.server.answerGate = new Promise<void>(resolve => {
          release = resolve;
       });
-      const late = session.updateDocument({ uri, model: EDITED, basedOn: opened.version });
+      const late = session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
       const textDocuments = services.shared.workspace.TextDocuments;
       await waitFor(() => textDocuments.get(uri)?.getText() === EDITED, { message: 'the write was never applied' });
-      await session.saveDocument({ uri, model: EDITED, basedOn: 'anything' });
+      await session.saveDocument({ uri, model: EDITED, baseVersion: 'any' });
       // Another client moves the text on before the write answers, so the
       // answer carries neither the saved text nor the write's base.
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
-      await other.update({ uri, model: THEIRS, basedOn: 'anything' });
+      await other.update({ uri, model: THEIRS, baseVersion: 'any' });
       release();
       await late;
 

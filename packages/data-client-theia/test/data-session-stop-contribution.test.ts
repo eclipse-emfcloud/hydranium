@@ -168,7 +168,7 @@ describe('DataSessionStopContribution', () => {
       contribution.track(connection);
       const panel = connection.createSession('panel', 'panel');
       await panel.openDocument({ uri: URI });
-      const saving = panel.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      const saving = panel.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
 
       const veto = contribution.onWillStop() as OnWillStopAction;
       expect(veto).toBeDefined();
@@ -195,13 +195,13 @@ describe('DataSessionStopContribution', () => {
       contribution.trackOne(panel);
       contribution.trackOne(tree);
       await Promise.all([panel.openDocument({ uri: URI }), tree.openDocument({ uri: URI })]);
-      const saving = panel.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      const saving = panel.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
 
       const veto = contribution.onWillStop() as OnWillStopAction;
       let allowed: boolean | undefined;
       const deciding = Promise.resolve(veto.action(undefined)).then(result => (allowed = result));
       await tick(5);
-      const later = tree.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      const later = tree.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
       first.resolve();
       await saving;
       await tick(5);
@@ -218,7 +218,7 @@ describe('DataSessionStopContribution', () => {
       const panel = new ShortBoundSession('panel', { connected: async () => server }, 'panel');
       contribution.trackOne(panel);
       await panel.openDocument({ uri: URI });
-      void panel.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      void panel.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
       await tick(5);
 
       const veto = contribution.onWillStop() as OnWillStopAction;
@@ -236,7 +236,7 @@ describe('DataSessionStopContribution', () => {
       contribution.track(connection);
       const panel = connection.createSession('panel', 'panel');
       await panel.openDocument({ uri: URI });
-      const saving = panel.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      const saving = panel.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
       // On the wire before the dispose, which refuses a call it overtakes.
       await tick(5);
 
@@ -257,7 +257,7 @@ describe('DataSessionStopContribution', () => {
       const panel = new ShortBoundSession('panel', { connected: async () => server }, 'panel');
       contribution.trackOne(panel);
       await panel.openDocument({ uri: URI });
-      const saving = panel.saveDocument({ uri: URI, model: MODEL, basedOn: 'anything' });
+      const saving = panel.saveDocument({ uri: URI, model: MODEL, baseVersion: 'any' });
       await tick(5);
 
       panel.dispose();

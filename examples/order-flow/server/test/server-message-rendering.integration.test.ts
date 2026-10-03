@@ -342,7 +342,7 @@ describe('order-flow server-side message rendering', () => {
       // ONE pass over `document.diagnostics`, which both heads read. A per-head
       // render would surface here as one head holding the English.
       expect(lspMessages).toEqual([RENDERED_SELF_TRANSITION]);
-      expect(document.diagnostics.map(diagnostic => diagnostic.message)).toEqual(lspMessages);
+      expect(document.model?.diagnostics?.map(diagnostic => diagnostic.message)).toEqual(lspMessages);
    });
 
    it('keeps the identity on the wire, now for identification rather than rendering', async () => {
@@ -494,7 +494,7 @@ describe('rendering across a racing rebuild', () => {
       await settle();
 
       const before = booted.diagnostics.length;
-      await session.update({ uri, model: `${text}\n// touched\n`, basedOn: 'anything' });
+      await session.update({ uri, model: `${text}\n// touched\n`, baseVersion: 'any' });
       // `update` resolves before the builds it queued publish.
       await settle();
 
@@ -571,7 +571,7 @@ describe('the applyEdit undo label', () => {
       const pending = booted.nextAppliedEdit(uri);
       const session = shared.model.ModelService.createSession('edit-label', 'edit-label');
       await session.open(uri);
-      await session.update({ uri, model: `${text}\n// touched\n`, basedOn: 'anything' });
+      await session.update({ uri, model: `${text}\n// touched\n`, baseVersion: 'any' });
       return (await pending).params.label;
    }
 

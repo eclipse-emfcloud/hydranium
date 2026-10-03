@@ -31,6 +31,7 @@ export * from './latency-collector';
 // the modules that raise them.
 export * from './messages/primitives';
 export * from './patch-merge';
+export * from './reconcile-write';
 export * from './noop-logger';
 export * from './observable-value';
 export * from './profile-session';

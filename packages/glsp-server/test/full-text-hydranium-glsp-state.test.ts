@@ -12,8 +12,8 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-gl
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import type { ClientSession, ServerSharedServices } from '@hydranium/core';
-import { type BasedOn, asSnapshotVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
+import { type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
+import { type BaseVersion, asModelVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
@@ -29,17 +29,27 @@ function makeRoot(label = 'r1'): TestRoot {
    return makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label });
 }
 
+/** The ledger every test's services share; a root is recorded once, so they never collide. */
+const ledger = new DefaultModelLedger();
+
+/** A built root parsed from the text at `version`. */
+function parsedAt(version: number): TestRoot {
+   const root = makeRoot();
+   ledger.record(root, version);
+   return root;
+}
+
 interface UpdateCall {
    uri: string;
    model: unknown;
    clientId: string;
-   basedOn: BasedOn;
+   baseVersion: BaseVersion;
 }
 
 interface Harness {
    readonly updateCalls: UpdateCall[];
    /**
-    * Version the fake document store reports, so a based-on assertion can
+    * Version the fake document store reports, so a base-version assertion can
     * distinguish the CAPTURED version from any other number. With every
     * document at v0 an armed gate and a dropped one differ only by type.
     */
@@ -98,7 +108,7 @@ function createState(harness: Harness): TestFullTextState {
    ]);
    const sharedServices = {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      workspace: { TextDocuments: { get: () => undefined }, LangiumDocuments: { getDocument: () => undefined } },
+      workspace: { TextDocuments: { get: () => undefined }, LangiumDocuments: { getDocument: () => undefined }, ModelLedger: ledger },
       ServiceRegistry: registry,
       model: {
          ModelService: {
@@ -108,7 +118,7 @@ function createState(harness: Harness): TestFullTextState {
                return { root: harness.nextUpdatedRoot };
             },
             snapshot: (uri: string) => ({ uri, version: harness.documentVersion, root: undefined, diagnostics: [] }),
-            getDocument: () => ({ textDocument: { version: harness.documentVersion }, diagnostics: [] })
+            getDocument: () => ({ parseResult: { value: parsedAt(harness.documentVersion) }, diagnostics: [] })
          }
       }
    };
@@ -164,15 +174,15 @@ describe('FullTextHydraniumGlspState', () => {
          const harness = makeHarness();
          harness.nextUpdatedRoot = makeRoot('reparsed');
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.setSourceRoot('file:///a.a', parsedAt(harness.documentVersion));
 
          await state.updateSourceModel({ text: 'new document text' });
 
-         // No explicit `basedOn`, so the parameter default applies — and it is the
-         // state's own snapshot version rather than `'anything'`, which is what makes the
+         // No explicit `baseVersion`, so the parameter default applies — and it is the
+         // state's own model version rather than `'any'`, which is what makes the
          // gate the thing a caller gets by typing less.
          expect(harness.updateCalls).toEqual([
-            { uri: 'file:///a.a', model: 'new document text', clientId: 'test-client', basedOn: asSnapshotVersion(0) }
+            { uri: 'file:///a.a', model: 'new document text', clientId: 'test-client', baseVersion: asModelVersion(0) }
          ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
       });
@@ -249,7 +259,7 @@ describe('FullTextHydraniumGlspState', () => {
          const { harness, setText } = makeTextHarness('element Before {}');
          harness.documentVersion = 7;
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.setSourceRoot('file:///a.a', parsedAt(harness.documentVersion));
          // Advanced AFTER the read. The write must still claim v7, so an
          // assertion on the number cannot be satisfied by a late read.
          harness.documentVersion = 9;
@@ -257,7 +267,7 @@ describe('FullTextHydraniumGlspState', () => {
          await recordOver(state, 'Rename element', () => setText('element After {}')).execute();
 
          expect(harness.updateCalls).toEqual([
-            { uri: 'file:///a.a', model: 'element After {}', clientId: 'test-client', basedOn: asSnapshotVersion(7) }
+            { uri: 'file:///a.a', model: 'element After {}', clientId: 'test-client', baseVersion: asModelVersion(7) }
          ]);
       });
 
@@ -265,13 +275,13 @@ describe('FullTextHydraniumGlspState', () => {
          const { harness, setText } = makeTextHarness('element Before {}');
          harness.documentVersion = 7;
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.setSourceRoot('file:///a.a', parsedAt(harness.documentVersion));
 
          const command = recordOver(state, 'Rename element', () => setText('element After {}'));
          await command.execute();
          await command.undo();
 
-         expect(harness.updateCalls.map(call => call.basedOn)).toEqual([7, 'anything']);
+         expect(harness.updateCalls.map(call => call.baseVersion)).toEqual([7, 'any']);
       });
    });
 });

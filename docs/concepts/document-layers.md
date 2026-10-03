@@ -7,22 +7,24 @@ it, what the server hands to in-process consumers, and what crosses the wire.
 
 **How to read it.** The layers are listed outermost-in: bytes first, wire
 shape last. The two the framework itself owns — `AstDocument` and
-`TransferDocument` — are structural twins that are deliberately NOT the same
-type; the section after the table explains why, because that is the decision
-people try to undo.
+`TransferDocument` — carry the same model, live in the first and encoded in
+the second's `model` block, and are deliberately NOT the same type; the
+section after the table explains why, because that is the decision people try
+to undo.
 
 ## The layers
 
 | # | Layer | Type | Owned by | Carries |
 | --- | --- | --- | --- | --- |
-| 1 | LSP text | `TextDocument` | `vscode-languageserver-textdocument` | the characters, plus a version counter |
+| 1 | LSP text | `TextDocument` | `vscode-languageserver-textdocument` | the characters, plus the text store's version counter |
 | 2 | Langium build artifact | `LangiumDocument` | `langium` | the live parse result, CST, references, build state |
-| 3 | AST-layer snapshot | `AstDocument<TAst, TDiagnostic>` | `@hydranium/core` | an AST root + diagnostics + version |
-| 4 | Wire envelope | `TransferDocument<TTransfer, TDiagnostic>` | `@hydranium/protocol` | a transfer root + diagnostics + version |
+| 3 | AST-layer envelope | `AstDocument<TAst, TDiagnostic>` | `@hydranium/core` | the live AST root + the diagnostics and model version read with it |
+| 4 | Wire envelope | `TransferDocument<TTransfer, TDiagnostic>` | `@hydranium/protocol` | a `model` (transfer root + diagnostics + version + hash) and a `text` (version + hash + dirty) |
 
 Layers 1 and 2 are upstream: the framework consumes them and does not
 redefine them. Layers 3 and 4 are the framework's own, and are where the
-naming questions arise.
+naming questions arise. Every layer carries a version, and they all count
+one thing; [Versions](#versions) says what each identifies.
 
 ### Layer 1 can lag layer 2's AST
 
@@ -61,7 +63,8 @@ the repair — only a consumer reading the raw text sees the older state.
 
 The shared text store is `HydraniumTextDocuments`; it is keyed by canonical
 URI. Its *server-owned* content version is distinct from the version an LSP
-client declares for its own buffer. A language-client shadow records the
+client declares for its own buffer; [Every version and
+hash](#every-version-and-hash) lists both. A language-client shadow records the
 client-facing URI and the buffer used to calculate an outbound edit. The shadow
 is delivery state, not another source for parsing.
 
@@ -82,10 +85,18 @@ The transitions that change the owner are explicit:
   otherwise from the client's declared text. An editor shadow starts from the
   text the editor actually declared. If another client already holds the URI,
   the editor attaches to that entry and refreshes from its current content.
+  A first open of a document a build already parsed continues the numbering:
+  the version of the text last built when the opening text is that text, the
+  next version when it differs. Numbered from the
+  opener alone, a write based on that root could pass the gate over different
+  text. A URI with no history, never built or held only by the builder's
+  placeholder, starts at the opening client's declared version and continues
+  the shared sequence from then on, as does one whose root records
+  `STALE_VERSION`.
 - **`didChange` or a data/GLSP update** changes shared text and drives a build.
   LSP versions gate only that client's incoming packets; the server's content
   sequence advances only when shared text changes. A server-authored update
-  checks its `basedOn` version before installing a payload.
+  checks its `baseVersion` before installing a payload.
 - **Integrity repair** compares the AST's parsed source with the current open
   store before committing. A stale repair cannot overwrite a newer edit, and
   reconciliation discards its obsolete AST mutation. A repair for a URI some
@@ -113,34 +124,51 @@ modes: an unsaved update's repair across a save, and a repair of a defect the
 head found on disk. The order-flow GLSP suite holds a URI through an open
 diagram alone and checks that the repair of an unsaved write stays off disk.
 
-### Layer 3 — `AstDocument`, the in-process snapshot
+### Layer 3 — `AstDocument`, the live AST with its version
 
 `AstDocument<TAst extends AstNode, TDiagnostic>`
-(`core/src/documents/ast-document-manager.ts`) is a **snapshot envelope**, not
-a live handle. It pairs an AST root with the diagnostics and the text-document
-version that root was read at. Its manager is `AstDocumentManager`.
+(`core/src/documents/ast-document-manager.ts`) pairs the AST root a build holds
+with the diagnostics and the model version read with it. Its manager is
+`AstDocumentManager`, and the `ModelService` reads return it.
 
-It exists because a `LangiumDocument` is live and mutable — it advances
-through build phases, its references resolve and re-resolve, its CST may be
-shed. A consumer that wants "the model as of now, with the diagnostics that
-went with it" needs a snapshot, and needs the version so it can later say
-which state its edit was based on.
+**The root is live, not a copy.** It is the build's own
+`parseResult.value`, shared with every reader: a relink resolves its
+references again in place, and a reparse replaces it. It must not be mutated.
+A mutation changes the model every reader sees without a write, so no
+conflict gate hears of it. A writer edits a copy or a transfer model and writes
+that through a session.
 
-That version field is load-bearing rather than informational: an in-process
-caller sends it straight back as the `basedOn` of its write
-(`ClientSessionWriteArgs.basedOn`) to arm the conflict gate. Its type is
-`SnapshotVersion`, a branded `number`, so the field a write declares itself
-based on can only be filled from a read. It is a server-owned counter that
-advances iff
-the content changes, which is what makes the gate sound — and an integrity
-repair is one of those changes, so a snapshot taken before a repair is
-genuinely stale rather than merely older.
+`version` and `diagnostics` are as read: a later build does not move them.
+`diagnostics` is absent until the document is validated, and `[]` once it is
+and nothing was found. `snapshot` below `Validated` and the phase reads
+`parsed` to `indexed` leave it absent even when an earlier build's diagnostics
+exist, since those may describe text the document no longer has.
+
+The version is load-bearing rather than informational: an in-process caller
+sends it straight back as the `baseVersion` of its write
+(`ClientSessionWriteArgs.baseVersion`) to arm the conflict gate. Its type is
+`ModelVersion`, recorded when the document factory parsed the root, so it
+names the text the root came from even after the store has moved on. An
+integrity repair moves the store's counter like any edit, so a read taken
+before a repair is stale rather than merely older.
 
 ### Layer 4 — `TransferDocument`, the wire envelope
 
 `TransferDocument<TTransfer extends TransferElement, TDiagnostic>`
-(`protocol/src/transfer-document.ts`) is the same shape one layer out: a root,
-diagnostics, a version. The difference is the constraint. `TransferElement` is
+(`protocol/src/transfer-document.ts`) is `{ uri, model?, text? }`, two blocks
+that are each absent where the server has nothing to put in them:
+
+| Block | Type | Fields | Absent when |
+| --- | --- | --- | --- |
+| `model` | `TransferModelSnapshot` | `root`, `diagnostics?`, `version`, `hash` | the document does not exist (`TransferDocument.absent`) |
+| `text` | `TextState` | `version`, `hash`, `dirty` | the server holds no text for the document |
+
+`model` is the encoded, frozen form of an `AstDocument`'s model: the same
+version and diagnostics, the root encoded once. `text` is read when the
+document is sent, so its version can be ahead of the model's; see [Comparing
+the two versions](#comparing-the-two-versions).
+
+The root's type is the difference between the layers. `TransferElement` is
 the **transfer** shape — no `$container` back-references, cross-references as
 strings — because an AST root cannot be serialized to JSON: its containment
 links are cyclic and its `Reference<T>` objects are resolution machinery, not
@@ -152,8 +180,8 @@ AST layer's `AstDocumentUpdatedEvent` / `AstDocumentSavedEvent`.
 
 ## Why 3 and 4 are not one type
 
-`AstDocument` and `TransferDocument` have identical structure: `uri`,
-`version`, `root`, `diagnostics`. Collapsing them into a single
+`AstDocument` and `TransferDocument.model` carry the same model: `version`,
+`root`, `diagnostics`. Collapsing them into a single
 `ModelDocument<TRoot, TDiagnostic>` was **proposed and rejected** (locked
 2026-05-12).
 
@@ -216,26 +244,257 @@ against a base the document never contained. The framework scopes the hook
 for you; the thing to remember is *why* it is scoped, because the same reasoning
 applies to any extension that reaches the grammar shape.
 
+## Versions
+
+One counter numbers a document's text: the text store's
+(`HydraniumTextDocuments`, carried as `TextDocument.version`). It moves exactly
+when the shared text changes, never goes back within one server lifetime, and
+is kept across a close and a reopen. It counts every document a build parsed,
+opened or not, and survives the file's deletion, so neither an external change
+of a never-opened file nor a recreated file reuses a version handed out for
+other text. Every other version names one value of it at a particular moment:
+a **model version** (`ModelVersion`) is the value of the text a model was
+parsed from, a **text version** (`TextVersion`) the value of the text the
+server holds now.
+
+Three services keep the two sides apart. The text store is the text side: the
+counter, the open text, and each URI's `TextState` (version, hash, dirty). The
+`ModelLedger` is the model side: each root's `ModelVersion`, the text it was
+parsed from where the CST no longer holds that text, and which root is the
+builder's placeholder. The `VersionSyncService` reconciles every model a
+producer reports with the store, decides whether a model is behind its text,
+and owns every recovery build: `requestRecoveryBuild` and `syncTo` retry a failed
+build once, then give up.
+
+### Reading a transfer document
+
+A document the data head sends between an edit and its build:
+
+```jsonc
+{
+   "uri": "file:///workspace/a.x",
+   "model": {
+      "root": { "$type": "…" },
+      "diagnostics": [], // absent until the document is validated
+      "version": 4,
+      "hash": "…"
+   },
+   "text": { "version": 5, "hash": "…", "dirty": true }
+}
+```
+
+- **Write against `model.version`.** A write's `baseVersion` is the
+  `model.version` of the model it edits, 4 here. `text.version` is a
+  `TextVersion` and does not compile in that field.
+- **Render on `model.hash`.** It fingerprints the model sent and never its
+  version, so an update with an unchanged `model.hash` has nothing new to draw.
+- **Dirty state is `text.dirty`**, read when the document is sent. A watcher
+  learns of later changes through `onDocumentDirtyChanged`.
+- **`model.version` below `text.version`** means the text moved and its build
+  has not parsed it yet. A watcher is sent an update at version 5 or later. A
+  write based on 4 conflicts meanwhile, since the gate compares it with 5.
+- **`text` can be absent**, when the server holds no text for the document. A
+  dirty flip's `text` is absent when the document no longer exists.
+
+### One edit, version by version
+
+```mermaid
+sequenceDiagram
+    participant Editor
+    participant Store as Text store
+    participant Build
+    participant Watcher as Data client
+    Editor->>Store: didChange
+    Note over Store: text.version 4 → 5 at once
+    Store-->>Watcher: dirty flip with text.version 5, when the answer changes
+    Note over Store,Build: debounceMs window, off by default
+    Store->>Build: build the document
+    Build->>Build: parse text v5, record model version 5
+    Build-->>Watcher: update with model.version 5 and text.version 5
+```
+
+Between the edit and the parse, the model is behind its text: a document sent
+then carries `model.version` 4 with `text.version` 5. Once the build has parsed,
+`model.version === text.version` again. A session write moves the same counter:
+the gate checks its `baseVersion` against `text.version`, the store applies the
+text (5 → 6), and the session rebuilds before it answers, so the answer
+carries version 6 in both blocks unless another edit landed meanwhile.
+
+### Comparing the two versions
+
+A transfer document carries both moments, and how they compare is the whole
+answer to "is this model current?":
+
+| Comparison | Means | What follows |
+| --- | --- | --- |
+| `model.version === text.version` | in sync: the model was parsed from the text the server holds | nothing |
+| `model.version < text.version` | behind: the text moved and its build has not parsed it yet | a watcher is sent an update at `text.version` or later; a reader takes it or reads again. A write based on `model.version` conflicts, and its writer reconciles |
+| `model.version > text.version` | never, within one server lifetime | — |
+
+The text moves first, at the edit; the model moves when a build parses that
+text. The data head sends a watcher every new model version, with an unchanged
+`model.hash` when only the text moved (whitespace, a comment the encoder
+drops), so a client that skips a render on an equal `model.hash` still learns
+its version. `>` cannot happen because a model version is a value the counter
+already had and the counter never goes back. A restarted server numbers afresh,
+so a version from before the restart identifies nothing; compare `text.hash`
+across a restart, as `DataSession`'s restore does.
+
+### Waiting for a current model
+
+A `ModelService` wait resolves **synced to the text version of the call**: the
+document has reached the state, with a root parsed from text no older than the store's version when the
+call was made. The reads differ in what they do until then:
+
+| API | Document missing | Can initiate a build? | Returns |
+| --- | --- | --- | --- |
+| `snapshot(uri)` | `undefined`, as for the builder's placeholder | no, and it does not wait | the `AstDocument` as it stands; diagnostics only from `Validated` |
+| `waitForDocumentState(uri, state)` | rejects | only a re-queue of a document the builder's last build left short of `state`; a root behind its text waits for another build | the `AstDocument` at `state` or above; diagnostics only when `state` is `Validated` |
+| `waitForDocumentSettled(uri)` | rejects | as `waitForDocumentState` | the `AstDocument` at `IntegrityService.SettledState` or above, without diagnostics |
+| `ensureDocumentState(uri, state?)` | builds it through `rebuild`, and rejects when that build leaves no document | yes: the re-queue, and `VersionSyncService.syncTo` for a root behind its text | the `AstDocument` at `state`, by default `IntegrityService.SettledState`, or above; diagnostics only when `state` is `Validated` |
+| `parsed` / `linked` / `settled` / `indexed` / `validated` | as `ensureDocumentState` | as `ensureDocumentState` | as `ensureDocumentState` at that phase; diagnostics only from `validated` |
+
+Every wait in the table shares these exceptions:
+
+- **Inside a tracked write-lock scope, the state alone.** The build that would
+  sync the document cannot start until the lock is released. On a Node
+  host the scope follows the async stack (`AsyncLocalStorage`), so a build's
+  phase and `onUpdate` listeners, and async work they start, even work that
+  outlives the build, wait for the state only. There, `ensureDocumentState`
+  on a missing document rejects with `ReentrantWriteLockError` unless
+  `ModelServiceOptions.allowReentrantBuilds` is set.
+- **A root with no recorded version counts as synced**, since no build
+  would ever record it.
+- **A later edit does not extend a call's target**: the store's version is read
+  when the call is made.
+- **Never await one inside a build phase listener or a `WorkspaceLock.read`.**
+  A browser host installs no write-lock scope, so inside a listener the wait
+  cannot tell it is inside a build, and waits for one that cannot start.
+  Langium's lock starts no write while a read runs, so inside a read the build
+  waits for the read that waits for it.
+- **For `ensureDocumentState` and the phase shortcuts, recovery that keeps
+  failing rejects.** A failed sync or re-queued build is retried once;
+  when the retry fails too, or the builder stops re-queuing a document its
+  builds do not advance, the call rejects with an error naming the document
+  and the state rather than waiting for a build that is not coming. This
+  holds until the state is reached, so a build that fails after the parse
+  rejects the call too. `waitForDocumentState` and `waitForDocumentSettled`
+  keep waiting instead, for another build or their cancellation token.
+
+### Every version and hash
+
+| Name | Type | Stamped by | When | Identifies |
+| --- | --- | --- | --- | --- |
+| LSP client version id | `number` | the editor | on its `didOpen` / `didChange` | that editor's own buffer. Gates only that client's own packets, against its previous id, and is the version an outbound `workspace/applyEdit` names |
+| Shared counter (`TextDocument.version`), `TextVersion` | `number` | `HydraniumTextDocuments` | on each change of the shared text: an edit, a session write, an integrity repair, a build that reads different file text while no client holds the document (a revert, a watched-file change, a recreated file) | the text the server holds |
+| `ModelVersion` | branded `number` | the root's producer, reported to `VersionSyncService.modelProduced` and recorded in the `ModelLedger` | when a root is parsed or created, from the store's version read before the parse | the text the root was parsed from. `UNRECORDED_VERSION` (`-2`) for a root no producer reported; `STALE_VERSION` (`-1`) for a root parsed from the file while the store held the document open with other text, which reads as behind until the build it requests |
+| `AstDocument.version`, `model.version` | `ModelVersion` | the envelope constructors, from the root's `ModelLedger` record | when the envelope is made | as `ModelVersion` |
+| `text.version` | `TextVersion` | the data head, from `TextDocuments.textState(uri)`, or from the built document for a text the store never held | when the document is sent | the text the server held as it sent it |
+| `baseVersion` (write field) | `BaseVersion` = `ModelVersion \| 'any'` | the writer | per write | the text the write was authored against; `'any'` writes ungated |
+| `ConflictError.baseVersion` / `.actualVersion` | `ModelVersion` / `TextVersion` | the session's gate | when it refuses a write | the write's base, and the text the gate found instead |
+| Dirty flip `text.version` | `TextVersion` | the text store | when `isDirty` changes; for an edit, before its build | the text the answer was decided on. Absent when the document no longer exists, or after a release whose follow-up build failed (see [Dirty state](client-sessions.md#dirty-state)) |
+| GLSP `baseVersion` / `baseVersionOf(uri)` | `ModelVersion` | the GLSP state: the source root's `ModelLedger.versionOf` in `setSourceRoot`; a secondary document's through `readModelVersion` | when the source root is read; for a secondary document, at `trackSecondaryDocument` and each `setSourceRoot` | the text the diagram's projection came from; `UNRECORDED_VERSION` for a document with no parsed root, so a write based on it conflicts; a secondary created through `createSecondaryDocument` takes the version the create gave it. A merged retry is gated on its refetch's `VersionedModel.baseVersion`, the store's version read in the tick its text is |
+| `text.hash` | `string` | the text store (once per version), or the data head for a text the store never held | when the document is sent | the text content alone, not its version or dirty state, so equal across a revert and a server restart |
+| `model.hash` | `string` | the data head's fingerprint | when the document is sent | the snapshot sent, never live state: its `root` + `diagnostics` (absent hashes apart from `[]`), or under the `'text-diagnostics'` strategy the text that root was parsed from + `diagnostics`. Never the version |
+
+### Replacing the factory, registry, integrity or residency service
+
+A replacement has one obligation: report every model it produces to
+`VersionSyncService.modelProduced(document, origin)`. A factory passes
+`origin.version`, the store's version read before the parse; a producer whose
+CST does not hold the text the model describes, such as an in-place repair,
+passes that text as `origin.text`; a registry reports each document it
+registers, with no `origin`. A residency service that sheds a CST produces no
+model: it records the root's text with `ModelLedger.record`, at the root's
+recorded version, before shedding.
+
+A model nobody reported reads `UNRECORDED_VERSION`. Waits count it as
+synced, so a read of it loses its freshness guarantee, and every write gated on
+its version conflicts, since no text version matches it. The warning `No model
+version recorded for the root: it was built outside the document factory`,
+which `AstDocumentManager.toAstDocument` logs when it projects such a root,
+means some producer made that root without reporting it; the builder's
+placeholder is exempt.
+
+### Lifecycle mechanics
+
+**Registration and re-parse.** A workspace root gets its model version in one
+of two places: when a load registers it, and when a build re-parses it (the
+document factory's `update`). A cancel can skip neither. Both report it to
+`modelProduced`, which reconciles it with the store, so a root records the
+store's version exactly when it was parsed from the store's text at that
+version, and then fires `onDidRecordModel`. A root parsed from other text, the
+file read while a client opened the document with text of its own, records
+less than the store's version (`STALE_VERSION`, or the version read before the
+parse). `modelProduced` and a session's first open hand such a root to
+`syncTo`.
+
+**Placeholders.** The builder's placeholder for a file it has not parsed yet
+is not handed out as a document: `snapshot` answers `undefined` and the data
+head an envelope with no model. `modelProduced` marks the root of any document
+registered below `Parsed` as one (`ModelLedger.isPlaceholder`), and that root
+records no version, so a write based on a projection of it conflicts. A
+rebuilt document is reset to `Changed` too, but keeps its root and that root's
+version until the parse replaces it, and is handed out.
+
+**Integrity repairs and residency.** An integrity repair of a document no
+client has open reports the root with the repaired text, which the CST does
+not hold when the factory skipped the re-parse; the root then records the
+store's version of the repair, and `ModelLedger.textOf` answers that text.
+Shedding a CST records the root's text in the ledger directly rather than
+through `modelProduced`: no root is produced, and reconciling would step a
+closed document's sequence for a root behind its text.
+
+**Scheduling.** `syncTo` requests a build from a `WorkspaceLock` read, so the
+build queues behind the running one rather than cancelling it, starts once no
+write runs or is queued, and is skipped if the root is no longer behind then.
+Requests for a URI whose build is pending share its next build. A change the
+update handler still debounces (`registerDeferredBuilds`) is left to the
+debounce's build, which serves the wait, so the change is built once. A
+re-queue ignores the debounce, answering a waiting caller sooner at the cost
+of a possible duplicate build, and stops after a bounded number of builds that
+do not advance the document: a syncing read (`ensureDocumentState` and the
+phase shortcuts) then rejects, and any other wait is left to its cancellation
+token. A syncing read on a document a failed
+build left short of its state re-queues it even with no build to end.
+
+**Cancellation and retry.** A wait behind its text wakes on `onDidRecordModel`
+for the document, or its deletion, and then waits for the state again: a
+`Parsed` phase listener would be skipped by a cancel right after the parse,
+and the resumed build does not parse again. A request whose build a later
+write cancelled rides the next build, and the cancel does not count as a
+failure. Each request is retried once after a failed build, also when it
+joined the batch late; when its retry fails too, `requestRecoveryBuild` resolves
+`false` for that request alone, and a syncing read waiting on it, as its
+sync build or as its re-queue, rejects.
+
 ## What a write says it was based on
 
-A based-on version is only meaningful relative to the moment the content was
+A base version is only meaningful relative to the moment the content was
 read. Two write styles are in play, and they read at different moments:
 
 - **Snapshot-diff** — project the model, edit the projection, write the result.
   The version to declare is the one the projection carried, because that is the
   state the edit is expressed against. `ReconcilingMultiDocumentGlspState` works
   this way: it takes a base at `setSourceRoot` and diffs against it.
-- **Live-AST** — resolve a node, mutate it in place, write the document it
-  belongs to. The version to declare is the one the *read* returned, immediately
-  before mutating, because that is the content the mutation assumed.
+- **Read-then-write** — read the document, author the change from what the read
+  returned, write it. The version to declare is the one that read returned,
+  because that is the content the change assumed.
 
-The rule for both: **a write declares the version its read returned.** `basedOn`
-enforces it in two steps.
+The rule for both: **a write's `baseVersion` is the version its read
+returned**, which is the model version of the model it edited. The gate
+compares it with the store's version when the text is applied: equal, the
+write applies; anything else, the write fails with a `ConflictError` naming
+both, and applies nothing. `'any'` skips the gate and overwrites whatever the
+server holds. The field enforces the rule in two steps.
 
-Its type is `SnapshotVersion` — a `number`, branded so the compiler can tell a
-version that came out of a read apart from one read off a live handle. Only the
-envelope constructors mint it, so every snapshot read hands back a version that
-already fits the field and every live handle hands back one that does not.
+Its type is `BaseVersion`, `ModelVersion | 'any'`. `ModelVersion` is a
+`number`, branded so the compiler can tell a version that came out of a read
+apart from one read off the live store. Only the readers mint it: the envelope
+constructors, from the root's record, and the GLSP state: its refetch reads the
+store's version in the tick it reads the text, and a secondary it creates for a
+write takes the version the create gave it. So every read hands back a version
+that already fits the field and every live handle hands back one that does not.
 Writing the correct thing is therefore writing less:
 
 <!-- snippet-skip: contrasting fragments shown outside any enclosing method -->
@@ -243,21 +502,21 @@ Writing the correct thing is therefore writing less:
 ```ts
 // Right: the version is the one the read returned, next to the read.
 const snapshot = await modelService.validated(uri);
-mutate(document.parseResult.value);
-await session.save({ uri, model: document.parseResult.value, basedOn: snapshot.version });
+await session.save({ uri, model: edited(snapshot.root), baseVersion: snapshot.version });
 
 // Explicitly ungated, for a write with no reader behind it.
-await session.save({ uri, model, basedOn: 'anything' });
+await session.save({ uri, model, baseVersion: 'any' });
 ```
 
-`document.textDocument.version` does not compile in that field. It is a plain
-`number` read off the live store, so at write time it answers with the version
-the gate is about to compare it against — the gate passes unconditionally and
-the concurrent edit is gone with nothing logged. `asSnapshotVersion` will still
-force it through, which is deliberate: the escape hatch stays, it just has to be
-typed out where a reviewer can see it.
+`document.textDocument.version` and `text.version` do not compile in that
+field. Both are a `TextVersion`, a plain `number` naming the text the server
+holds now, which can be newer than the model the write edited: the gate then
+passes and the write overwrites the newer text with an edit of the older,
+with nothing logged. `asModelVersion` will still force it through, which is
+deliberate: the escape hatch stays, it just has to be typed out where a
+reviewer can see it.
 
-And `basedOn` is **required**. An omitted gate is an absence, so no type-level
+And `baseVersion` is **required**. An omitted gate is an absence, so no type-level
 discriminator can see it — a file of twenty writes hides the one that lost the
 field, and it reads exactly like the other nineteen. Requiring it turns the
 omission into a compile error and the opt-out into a word someone chose.

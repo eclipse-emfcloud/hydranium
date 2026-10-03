@@ -306,9 +306,9 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          uri: processUri,
          clientId: 'coherence-data',
          model: EDITED_PROCESS_TEXT,
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
-      expect(edited.diagnostics).toEqual([]);
+      expect(edited.model?.diagnostics).toEqual([]);
 
       // The GLSP head observes it through the SHARED document store: its storage
       // goes through the same `ModelService`, already open from the data head,
@@ -356,7 +356,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             uri: domainUri,
             clientId: 'coherence-data',
             model: DOMAIN_TEXT_WITH_EXTRA_FIELD,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          await waitFor(() => publishedFor(lsp, processUri, beforeCleanEdit).length > 0, {
             timeoutMs: CASCADE_TIMEOUT_MS,
@@ -371,13 +371,13 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             uri: domainUri,
             clientId: 'coherence-data',
             model: DOMAIN_TEXT_WITHOUT_STATUS,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          expect(edited.uri).toBe(domainUri);
          // The edited document itself stays clean — the enum is merely unused. So
          // everything reported below is a consequence in the OTHER grammar rather
          // than a spill-over from this one.
-         expect(edited.diagnostics).toEqual([]);
+         expect(edited.model?.diagnostics).toEqual([]);
 
          // **The cascade is asynchronous.** `updateModelDocument` has already
          // resolved, and the dependent documents' publishes arrive after it —
@@ -454,11 +454,16 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       // separate wires, so a write sent first races the edit to the server,
       // and one that arrives first is not stale at all.
       lsp.changeDocument(processUri, EDITED_PROCESS_TEXT, 2);
-      await waitFor(() => textDocuments.version(processUri) > snapshot.version, {
+      await waitFor(() => textDocuments.version(processUri) > snapshot.model!.version, {
          message: 'the LSP edit did not advance the shared version'
       });
       await expect(
-         data.proxy.updateModelDocument({ uri: processUri, clientId: 'stale-data-client', model: initial, basedOn: snapshot.version })
+         data.proxy.updateModelDocument({
+            uri: processUri,
+            clientId: 'stale-data-client',
+            model: initial,
+            baseVersion: snapshot.model!.version
+         })
       ).rejects.toSatisfy(isConflictError);
 
       // `DataServer` also disposes itself on the transport's close event, but
@@ -487,15 +492,15 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       try {
          await reconnected.proxy.createSession({ clientId: 'reconnected-data' });
          const reopened = await reconnected.proxy.openModelDocument({ uri: processUri, clientId: 'reconnected-data' });
-         expect(reopened.root?.$type).toBe('ProcessModel');
-         expect((reopened.root as ProcessModel).nodes.map(node => node.name)).toContain('Archive');
+         expect(reopened.model?.root?.$type).toBe('ProcessModel');
+         expect((reopened.model!.root as ProcessModel).nodes.map(node => node.name)).toContain('Archive');
          await reconnected.proxy.watchModelDocument({ uri: processUri, clientId: 'reconnected-data' });
 
          await reconnected.proxy.updateModelDocument({
             uri: processUri,
             clientId: 'reconnected-data',
             model: RECONNECTED_PROCESS_TEXT,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          await waitFor(() => reconnected.events.length >= 1, {
             message: 'the reconnected data watch did not receive its first update'
@@ -506,7 +511,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             uri: processUri,
             clientId: 'reconnected-data',
             model: EDITED_PROCESS_TEXT,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          await waitFor(() => reconnected.events.length >= 2, {
             message: 'the reconnected data watch did not receive its second update'
@@ -538,7 +543,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
          await openOverData(held.proxy, 'held-data-client', processUri);
          const snapshot = await held.proxy.getModelDocument({ uri: processUri });
          lsp.changeDocument(processUri, EDITED_PROCESS_TEXT, 2);
-         await waitFor(() => textDocuments.version(processUri) > snapshot.version, {
+         await waitFor(() => textDocuments.version(processUri) > snapshot.model!.version, {
             message: 'the LSP edit did not advance the shared version'
          });
 
@@ -546,7 +551,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             uri: processUri,
             clientId: 'held-data-client',
             model: initial,
-            basedOn: snapshot.version
+            baseVersion: snapshot.model!.version
          });
          // Observed here rather than at the assertion: the rejection lands
          // during the disconnect, and an unobserved one surfaces as an

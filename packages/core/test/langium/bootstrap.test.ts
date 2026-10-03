@@ -20,7 +20,7 @@ import {
 } from '../../src/langium/bootstrap.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import { ExtendedServiceRegistry } from '../../src/langium/service-registry.js';
-import { URI } from '@hydranium/langium';
+import { DefaultLangiumDocumentFactory, DefaultLangiumDocuments, URI } from '@hydranium/langium';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
 /** One `ServiceRegistry.register` call, recorded by the stub registry. */
@@ -402,5 +402,27 @@ describe('warnOnUnexpectedBindings', () => {
       expect(warns.length).toBeGreaterThan(0);
       expect(warns.some(message => /references\.ScopeComputation.*HydraniumScopeComputation/.test(message))).toBe(true);
       expect(warns.some(message => /workspace\.WorkspaceManager.*HydraniumWorkspaceManager/.test(message))).toBe(true);
+   });
+
+   it('warns for a plain Langium document factory, which records no root version', () => {
+      const { shared, warns } = captureLogger();
+      (shared.workspace as unknown as { LangiumDocumentFactory: unknown }).LangiumDocumentFactory = new DefaultLangiumDocumentFactory(
+         shared
+      );
+      withStrictEnv('1', () => warnOnUnexpectedBindings(shared, fullyBoundLanguage()));
+      expect(warns.filter(message => message.includes('LangiumDocumentFactory'))).toEqual([
+         expect.stringMatching(
+            /`shared\.workspace\.LangiumDocumentFactory` is bound to `DefaultLangiumDocumentFactory`.*HydraniumLangiumDocumentFactory/
+         )
+      ]);
+   });
+
+   it('warns for a plain Langium document registry, which reports no registered root', () => {
+      const { shared, warns } = captureLogger();
+      (shared.workspace as unknown as { LangiumDocuments: unknown }).LangiumDocuments = new DefaultLangiumDocuments(shared);
+      withStrictEnv('1', () => warnOnUnexpectedBindings(shared, fullyBoundLanguage()));
+      expect(warns.filter(message => message.includes('LangiumDocuments`'))).toEqual([
+         expect.stringMatching(/`shared\.workspace\.LangiumDocuments` is bound to `DefaultLangiumDocuments`.*HydraniumLangiumDocuments/)
+      ]);
    });
 });

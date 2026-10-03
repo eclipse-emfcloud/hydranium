@@ -265,9 +265,9 @@ const proxy = createRpcProxy<DataServerProtocol<DomainModel>, DataClientProtocol
 });
 
 const response = await proxy.getModelDocument({ uri: 'file:///workspace/orders.domain' });
-// `root` is absent when the server has no such document, so the answer is a
+// `model` is absent when the server has no such document, so the answer is a
 // shaped envelope rather than an error and the caller branches on it.
-console.log(response.root ? response.root.declarations.length : 'no such document');
+console.log(response.model ? response.model.root.declarations.length : 'no such document');
 ```
 
 The pieces a new adopter discovers from the example:

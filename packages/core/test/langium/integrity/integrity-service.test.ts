@@ -330,14 +330,12 @@ interface AuthorCall {
 
 /**
  * Richer text-document stub recording the calls `syncCorrections` /
- * `resyncDocument` make: authorship marks, staged pending content, and
- * re-versioning reconciliations. `update` returns a real {@link TextDocument}
+ * `resyncDocument` make: authorship marks and staged pending content. `update` returns a real {@link TextDocument}
  * carrying `newText` so the reparse-guard branch can read it back.
  */
 class RecordingTextDocuments {
    readonly setAuthorCalls: AuthorCall[] = [];
    readonly stagedContent: { uri: string; text: string }[] = [];
-   readonly reconciledContent: { uri: string; text: string }[] = [];
    openInLanguageClient = false;
    /** Held by a client other than the language client — the data or GLSP head. */
    openInOtherClient = false;
@@ -375,19 +373,6 @@ class RecordingTextDocuments {
 
    updateDiskBaseline(uri: string, text: string | undefined): void {
       this.diskBaselines.push({ uri, text });
-   }
-
-   /**
-    * `undefined` is the truthful answer for a stub holding no version sequence —
-    * the same one the real store gives for a URI it never tracked — so these
-    * tests exercise `resyncDocument`'s fallback to the pre-re-parse version
-    * rather than the reconciled one. A test that needs the reconciled branch
-    * wants the real store (see the order-flow suite, where the renumbering this
-    * interacts with is the real document factory's).
-    */
-   reconcileExternalContent(uri: string, text: string): number | undefined {
-      this.reconciledContent.push({ uri, text });
-      return undefined;
    }
 
    /**
@@ -458,6 +443,8 @@ interface CorrectionsHarness {
    builderCalls: { reparse: string[]; reparseAndRelink: string[] };
    /** URIs of the tasks queued through the (stubbed) file-system task queue. */
    diskTasks: string[];
+   /** What the service reported to `VersionSyncService.modelProduced`, in order. */
+   produced: { uri: string; text: string | undefined }[];
 }
 
 function makeCorrectionsProbe(
@@ -468,6 +455,7 @@ function makeCorrectionsProbe(
    const fileSystemProvider = new RecordingFileSystemProvider();
    const builderCalls = { reparse: [] as string[], reparseAndRelink: [] as string[] };
    const diskTasks: string[] = [];
+   const produced: CorrectionsHarness['produced'] = [];
    let runningDiskTasks = 0;
    fileSystemProvider.inDiskQueue = () => runningDiskTasks > 0;
    const syncMode = typeof options === 'string' ? options : options.syncMode;
@@ -486,6 +474,11 @@ function makeCorrectionsProbe(
                },
                reparseAndRelink: async (document: LangiumDocument) => {
                   builderCalls.reparseAndRelink.push(document.uri.toString());
+               }
+            },
+            VersionSyncService: {
+               modelProduced: (document: LangiumDocument, origin?: { text?: string }) => {
+                  produced.push({ uri: document.uri.toString(), text: origin?.text });
                }
             },
             FileSystemTaskQueue: {
@@ -508,7 +501,7 @@ function makeCorrectionsProbe(
       serializer: { Serializer: { serializeAst: () => serializeResult } }
    });
    const probe = new CorrectionsProbe(services, syncMode ? { syncMode } : {});
-   return { probe, textDocuments, fileSystemProvider, builderCalls, diskTasks };
+   return { probe, textDocuments, fileSystemProvider, builderCalls, diskTasks, produced };
 }
 
 /** A `LangiumDocument` carrying real text plus a mutable parse-result value. */
@@ -698,7 +691,7 @@ describe('IntegrityService corrections sync', () => {
       // The write is the premise, not a bonus assertion: without it there would
       // be nothing for the sequence to have fallen behind.
       expect(harness.fileSystemProvider.writes).toHaveLength(1);
-      expect(harness.textDocuments.reconciledContent).toEqual([{ uri: 'file:///cancelled.fake', text: 'new-serialized' }]);
+      expect(harness.produced).toEqual([{ uri: 'file:///cancelled.fake', text: 'new-serialized' }]);
    });
 
    it('delegates a Parsed-phase correction to builder.reparse and a Linked-phase one to reparseAndRelink', async () => {
@@ -714,7 +707,7 @@ describe('IntegrityService corrections sync', () => {
       // The Parsed branch re-versions against the REPAIRED text, because the
       // re-parse renumbers a closed document and the store's own reconciliation
       // already ran with the pre-repair content.
-      expect(parsedHarness.textDocuments.reconciledContent).toEqual([{ uri: 'file:///parsed.fake', text: 'new-serialized' }]);
+      expect(parsedHarness.produced).toEqual([{ uri: 'file:///parsed.fake', text: 'new-serialized' }]);
 
       // A correction found after linking must re-parse AND re-link in place — the build has
       // already passed those phases, and a stale CST would otherwise strand the mutated AST.
@@ -729,7 +722,7 @@ describe('IntegrityService corrections sync', () => {
       // notification, so the store's own reconciliation runs — but against the
       // text on DISK, which in editor mode is the pre-repair text, so the
       // repaired text still has to be reconciled here.
-      expect(linkedHarness.textDocuments.reconciledContent).toEqual([{ uri: 'file:///linked.fake', text: 'new-serialized' }]);
+      expect(linkedHarness.produced).toEqual([{ uri: 'file:///linked.fake', text: 'new-serialized' }]);
    });
 });
 

@@ -31,8 +31,10 @@ import type { ServerSharedServices } from '../../src/langium/module.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
+import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
+import { DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
-import { makeNoopTracer } from '../../src/testing/index.js';
+import { makeNoopTracer, makeStubLangiumDocuments } from '../../src/testing/index.js';
 
 const FILE = URI.file('/hydranium-test/revert.a').toString();
 const OTHER_FILE = URI.file('/hydranium-test/other.a').toString();
@@ -94,31 +96,42 @@ function makeRig(revertGraceMs?: number, workspaceInitialized: Promise<unknown> 
       with: () => scoped,
       trace: () => tracer
    });
+   const update = async (changed: URI[], deleted: URI[]): Promise<void> => {
+      const failure = nextBuildFailure;
+      nextBuildFailure = undefined;
+      if (failure) {
+         throw failure;
+      }
+      builds.push({
+         changed: changed.map(uri => uri.toString()),
+         ...(deleted.length > 0 ? { deleted: deleted.map(uri => uri.toString()) } : {}),
+         reason: staged
+      });
+      staged = undefined;
+   };
    const services = {
       // Layered over the fake clock rather than spread from it, for the same reason.
       Clock: Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs }),
       Tracer: { for: () => tracer },
       workspace: {
          DocumentUriPolicy: uriPolicy,
+         LangiumDocuments: makeStubLangiumDocuments(),
          WorkspaceManager: { ready: Promise.resolve(), workspaceInitialized },
-         WorkspaceLock: { write: (action: (token: unknown) => unknown) => lockTail.then(() => action(undefined)) },
+         WorkspaceLock: {
+            write: (action: (token: unknown) => unknown) => lockTail.then(() => action(undefined)),
+            read: (action: () => unknown) => lockTail.then(() => action())
+         },
+         ModelLedger: new DefaultModelLedger(),
          DocumentBuilder: {
             markNextReason: (reason: string | undefined) => {
                staged = reason;
             },
-            update: async (changed: URI[], deleted: URI[]) => {
-               const failure = nextBuildFailure;
-               nextBuildFailure = undefined;
-               if (failure) {
-                  throw failure;
-               }
-               builds.push({
-                  changed: changed.map(uri => uri.toString()),
-                  ...(deleted.length > 0 ? { deleted: deleted.map(uri => uri.toString()) } : {}),
-                  reason: staged
-               });
-               staged = undefined;
-            }
+            update,
+            scheduleUpdate: (changed: URI[], deleted: URI[], reason?: string) =>
+               lockTail.then(() => {
+                  staged = reason ?? staged;
+                  return update(changed, deleted);
+               })
          },
          FileSystemProvider: {
             exists: async (uri: URI) => {
@@ -129,6 +142,7 @@ function makeRig(revertGraceMs?: number, workspaceInitialized: Promise<unknown> 
          FileSystemTaskQueue: fileSystemTaskQueue
       }
    } as unknown as ServerSharedServices;
+   services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
    const docs = new InspectableTextDocuments(services, { revertGraceMs });
    return {
       docs,
@@ -253,7 +267,7 @@ describe('HydraniumTextDocuments — revert on last close', () => {
       expect(errors).toEqual([]);
    });
 
-   it("keeps a document whose rebuild fails on another document's missing file, and logs it", async () => {
+   it("keeps a document whose rebuild fails on another document's missing file, logs it, and builds it once more", async () => {
       const { docs, builds, errors, failNextBuild } = makeRig();
       open(docs, 'form');
       failNextBuild(
@@ -263,8 +277,22 @@ describe('HydraniumTextDocuments — revert on last close', () => {
       close(docs, 'form');
       await settle();
 
-      expect(builds).toEqual([]);
+      expect(builds).toEqual([{ changed: [FILE], reason: 'didClose' }]);
+      expect(errors.filter(message => message.startsWith('Revert on last close dropped'))).toHaveLength(1);
       expect(errors.some(message => message.includes('ENOENT'))).toBe(true);
+   });
+
+   it('removes, rather than rebuilds, a document with no file behind it after its removal fails', async () => {
+      const { docs, builds, errors, onDisk, failNextBuild } = makeRig();
+      onDisk.clear();
+      open(docs, 'form');
+      failNextBuild(new Error('EIO: i/o error'));
+
+      close(docs, 'form');
+      await settle();
+
+      expect(builds).toEqual([{ changed: [], deleted: [FILE], reason: 'didClose' }]);
+      expect(errors.filter(message => message.startsWith('Build after a revert that stopped short failed'))).toEqual([]);
    });
 
    it('reads whether the file exists before it takes the write lock, so no build waits on its disk queue', async () => {

@@ -16,7 +16,7 @@ import type { ClientSessionClosedEvent } from '../../src/documents/client-sessio
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
-import { type CapturedLine, makeCapturingTracer } from '../../src/testing/index.js';
+import { type CapturedLine, makeCapturingTracer, makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
 
 const A = 'file:///a.x';
 const B = 'file:///b.x';
@@ -25,7 +25,13 @@ function makeDocs(): { docs: HydraniumTextDocuments<TextDocument>; lines: Captur
    const { tracer, lines } = makeCapturingTracer();
    const services = {
       Tracer: { for: () => tracer },
-      workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() }
+      workspace: {
+         DocumentUriPolicy: new DefaultDocumentUriPolicy(),
+         LangiumDocuments: makeStubLangiumDocuments(),
+         DocumentBuilder: makeStubDocumentBuilder(),
+         // The revert's fallback build is not under test here.
+         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
+      }
    } as unknown as ServerSharedServices;
    return { docs: new HydraniumTextDocuments(services), lines };
 }

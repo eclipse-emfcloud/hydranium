@@ -74,7 +74,7 @@ describe('order-flow .process dirty state', () => {
       const form = services.shared.model.ModelService.createSession('form');
       await form.open(processUri);
       const text = readFileSync(processPath, 'utf8');
-      await form.update({ uri: processUri, model: text.replace('process Fulfillment', 'process Fulfilled'), basedOn: 'anything' });
+      await form.update({ uri: processUri, model: text.replace('process Fulfillment', 'process Fulfilled'), baseVersion: 'any' });
 
       const opened = await openDiagram(services);
 
@@ -94,9 +94,9 @@ describe('order-flow .process dirty state', () => {
       const text = readFileSync(processPath, 'utf8');
 
       const edited = text.replace('process Fulfillment', 'process Fulfilled');
-      await form.update({ uri: processUri, model: edited, basedOn: 'anything' });
+      await form.update({ uri: processUri, model: edited, baseVersion: 'any' });
       await waitFor(() => dirtyStates(opened, before).includes('true external'));
-      await form.save({ uri: processUri, model: edited, basedOn: 'anything' });
+      await form.save({ uri: processUri, model: edited, baseVersion: 'any' });
 
       await waitFor(() => dirtyStates(opened, before).includes('false external'));
       expect(dirtyStates(opened, before).filter(state => state.endsWith('external'))).toEqual(['true external', 'false external']);
@@ -149,7 +149,7 @@ describe('order-flow .process dirty state', () => {
          if (!edited) {
             edited = true;
             const text = readFileSync(processPath, 'utf8');
-            await form.update({ uri: processUri, model: text.replace('process Fulfillment', 'process Fulfilled'), basedOn: 'anything' });
+            await form.update({ uri: processUri, model: text.replace('process Fulfillment', 'process Fulfilled'), baseVersion: 'any' });
          }
          return saved;
       });

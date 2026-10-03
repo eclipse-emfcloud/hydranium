@@ -60,7 +60,7 @@ import {
    HydraniumTypes
 } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/lib/testing';
-import type { ServerSharedServices } from '@hydranium/core';
+import { DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import { ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
 import { ContainerModule, inject, injectable } from 'inversify';
 import { HydraniumGlspSaveable } from '../../src/browser/glsp-saveable';
@@ -190,8 +190,8 @@ function stubSharedServices(): ServerSharedServices {
    return {
       ServiceRegistry: { getServicesFor: () => language },
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      workspace: { LangiumDocuments: { getDocument: () => undefined } },
-      model: { ModelService: { waitForDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
+      workspace: { LangiumDocuments: { getDocument: () => undefined }, ModelLedger: new DefaultModelLedger() },
+      model: { ModelService: { ensureDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
 }
 

@@ -93,7 +93,7 @@ async function saveOpened(
             throw new Error(`Cannot save ${uri}: ${describe(opened)} (creating it failed first: ${describe(created)})`, { cause: created });
          })
       );
-      saved = await server.saveModelDocument({ uri, clientId, model, basedOn: 'anything' });
+      saved = await server.saveModelDocument({ uri, clientId, model, baseVersion: 'any' });
    } catch (error: unknown) {
       await server.closeSession({ clientId }).catch(() => undefined);
       throw error;

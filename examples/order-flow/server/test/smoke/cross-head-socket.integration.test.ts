@@ -268,7 +268,7 @@ describe('order-flow cross-head write smoke (data socket in, LSP wire out)', () 
             uri: domainUri,
             clientId: 'cross-head-l4',
             model: DOMAIN_TEXT_WITHOUT_STATUS,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
 
          // Deliberately NOT asserted on the write response: the cascade is

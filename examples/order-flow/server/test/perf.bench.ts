@@ -261,6 +261,9 @@ afterAll(() => {
    if (wireByteObservations.length > 0) {
       process.stdout.write(`\n[perf] LSP hover wire-byte observations: ${JSON.stringify(wireByteObservations)}\n`);
    }
+   if (watchedEventObservations.length > 0) {
+      process.stdout.write(`\n[perf] data-head events per comment-only edit: ${JSON.stringify(watchedEventObservations)}\n`);
+   }
    for (const [name, observations] of Object.entries(probeObservations)) {
       if (observations.length > 0) {
          process.stdout.write(`[perf] ${name} ms observations: ${JSON.stringify(observations)}\n`);
@@ -347,19 +350,20 @@ process.stdout.write(
 );
 
 /**
- * Pick the first file matching `suffix` under the corpus, in sorted order.
+ * Pick the first file matching `suffix` under the corpus in sorted order, or
+ * the one at `index`.
  *
  * Discovered rather than hardcoded: the generator owns its naming (`gen-core` /
  * `gen-appN` holding `entity-NN.domain` and `flow-NN.process`), and a bench that
  * spells those out breaks silently the day the generator renames anything. A
  * missing file throws here instead, naming the corpus root.
  */
-function firstFile(root: string, suffix: string): string {
+function firstFile(root: string, suffix: string, index = 0): string {
    const matches = fs
       .readdirSync(root, { recursive: true, encoding: 'utf-8' })
       .filter(entry => entry.endsWith(suffix))
       .sort();
-   const match = matches[0];
+   const match = matches[index];
    if (match === undefined) {
       throw new Error(`No '${suffix}' file under the generated corpus at ${root}.`);
    }
@@ -404,8 +408,10 @@ const probeObservations: Record<string, number[]> = {
    'local edit': [],
    'integrity repair': [],
    reconnect: [],
-   'concurrent three-head operations': []
+   'concurrent three-head operations': [],
+   'comment-only edit, data head watching': []
 };
+const watchedEventObservations: number[] = [];
 
 /**
  * The phase tinybench is running the current bench in, set through its `setup`
@@ -444,6 +450,18 @@ for (const clientId of ['bench-text', 'bench-concurrent']) {
 }
 let editToggle = 0;
 let concurrentToggle = false;
+// A second entity file, watched through the data head: watching the first would
+// add a data-head event to the edits benched above. A comment changes the text
+// but not the transfer model, so the watcher gets the new version with an
+// unchanged `model.hash`.
+const watchedDocPath = firstFile(largeCorpus, '.domain', 1);
+const watchedDocUri = URI.file(watchedDocPath).toString();
+const watchedVariantA = fs.readFileSync(watchedDocPath, 'utf-8');
+const watchedVariantB = `${watchedVariantA}\n// bench edit\n`;
+await warm.data.proxy.createSession({ clientId: 'bench-watch' });
+await warm.data.proxy.openModelDocument({ uri: watchedDocUri, clientId: 'bench-watch' });
+await warm.data.proxy.watchModelDocument({ uri: watchedDocUri, clientId: 'bench-watch' });
+let watchedToggle = 0;
 
 describe('warm cross-head interaction (large workspace, 3 heads attached)', () => {
    bench(
@@ -452,7 +470,7 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
          const started = performance.now();
          const republished = warm.lsp.nextDiagnostics(editedDocUri);
          const model = editToggle++ % 2 === 0 ? editVariantA : editVariantB;
-         await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model, basedOn: 'anything' });
+         await warm.data.proxy.updateModelDocument({ uri: editedDocUri, clientId: 'bench-text', model, baseVersion: 'any' });
          await republished;
          recordSample(probeObservations['local edit'], performance.now() - started);
       },
@@ -536,7 +554,7 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
             uri: editedDocUri,
             clientId: 'bench-concurrent',
             model,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          // The GLSP model is requested here, not pushed by the edit: the
          // diagram document need not depend on the edited one, so this times
@@ -546,5 +564,21 @@ describe('warm cross-head interaction (large workspace, 3 heads attached)', () =
          recordSample(probeObservations['concurrent three-head operations'], performance.now() - started);
       },
       { iterations: 10, warmupIterations: 1, time: 0, ...trackPhase }
+   );
+
+   bench(
+      'comment-only edit of a .domain document the data head watches',
+      async () => {
+         const started = performance.now();
+         const eventsBefore = warm.data.events.length;
+         const model = watchedToggle++ % 2 === 0 ? watchedVariantB : watchedVariantA;
+         await warm.data.proxy.updateModelDocument({ uri: watchedDocUri, clientId: 'bench-watch', model, baseVersion: 'any' });
+         // Past the phase the data head dispatches at, and past the delivery.
+         await warm.services.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, URI.parse(watchedDocUri));
+         await new Promise(resolve => setImmediate(resolve));
+         recordSample(probeObservations['comment-only edit, data head watching'], performance.now() - started);
+         recordSample(watchedEventObservations, warm.data.events.length - eventsBefore);
+      },
+      trackPhase
    );
 });

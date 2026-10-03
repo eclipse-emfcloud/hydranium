@@ -18,7 +18,7 @@ interface FakeRoot extends TransferElement {
 
 const updateEvent = { document: { uri: 'a' }, sourceClientId: 'c', reason: 'changed' } as unknown as TransferDocumentUpdatedEvent<FakeRoot>;
 const saveEvent = { document: { uri: 'a' }, sourceClientId: 'c' } as unknown as TransferDocumentSavedEvent<FakeRoot>;
-const dirtyEvent = { uri: 'a', dirty: true };
+const dirtyEvent = { uri: 'a', text: { version: 1, hash: 'a', dirty: true } };
 const deleteEvent = { uri: 'a' };
 const builtEvent = { uris: ['a', 'b'] };
 const projectEvent = { project: { id: 'p' }, reason: 'added' } as unknown as ProjectsChangedEvent;

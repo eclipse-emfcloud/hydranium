@@ -78,10 +78,10 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
    it('fans an update out with the adopter diagnostic intact', () => {
       const events: AuditedEvents = new DataEvents<WidgetRoot, AuditedDiagnostic, TieredProject>();
       const seen: AuditedDiagnostic[][] = [];
-      events.onDidUpdateDocument(event => seen.push([...event.document.diagnostics]));
+      events.onDidUpdateDocument(event => seen.push([...(event.document.model?.diagnostics ?? [])]));
 
       events.onDocumentUpdated({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, [auditedDiagnostic()]),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, 'hash', [auditedDiagnostic()]),
          sourceClientId: 'widget-form',
          reason: 'changed'
       });
@@ -111,7 +111,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDidSaveDocument(event => saved.push(event.document.uri));
 
       events.onDocumentSaved({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 4, WIDGET, []),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 4, WIDGET, 'hash', []),
          sourceClientId: 'widget-form'
       });
 
@@ -151,11 +151,11 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
    it('fans a dirty flip out on its own channel, and releases it on dispose', () => {
       const events = new DataEvents<WidgetRoot>();
       const flips: string[] = [];
-      events.onDidChangeDocumentDirty(event => flips.push(`${event.uri} ${event.dirty}`));
+      events.onDidChangeDocumentDirty(event => flips.push(`${event.uri} ${event.text?.dirty}`));
 
-      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: true });
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', text: { version: 1, hash: 'dirty', dirty: true } });
       events.dispose();
-      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', dirty: false });
+      events.onDocumentDirtyChanged({ uri: 'file:///widgets/gauge.widget', text: { version: 1, hash: 'clean', dirty: false } });
 
       expect(flips).toEqual(['file:///widgets/gauge.widget true']);
    });
@@ -167,7 +167,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.dispose();
 
       events.onDocumentUpdated({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, []),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, 'hash', []),
          sourceClientId: 'widget-form',
          reason: 'changed'
       });

@@ -11,7 +11,7 @@
  * The document-scoped properties model, against a real data server.
  *
  * This suite drives the data head the way a form does: read a root, mutate a
- * field, write the whole root back under a `basedOn` version, and reconcile when
+ * field, write the whole root back under a `baseVersion`, and reconcile when
  * that gate fires. Two paths are reachable only from a client of this shape.
  *
  * - **The typed transfer write.** A form holds a root and not text, so it takes
@@ -33,11 +33,25 @@
  * events object and asserts that following actually works.
  */
 
-import { initializeWorkspaceProgrammatically } from '@hydranium/core';
+import { initializeWorkspaceProgrammatically, type ServerSharedServices } from '@hydranium/core';
+import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lib/lsp';
 import { NodeFileSystem } from '@hydranium/core/lib/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
+import {
+   type LspHarness,
+   makeLspHarness,
+   makeLspServerConnection,
+   type ScratchWorkspace,
+   makeScratchWorkspace
+} from '@hydranium/core/lib/testing/node';
 import { DataServer } from '@hydranium/data-server';
-import { DataConnection, DataEvents, type DataSession, TransferDocument, type DataPort } from '@hydranium/protocol';
+import {
+   DataConnection,
+   DataEvents,
+   type DataSession,
+   TransferDocument,
+   type DataPort,
+   type TransferDocumentUpdatedEvent
+} from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/lib/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/lib/testing/node';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
@@ -46,6 +60,7 @@ import type {
    LayoutModel,
    ProcessModel
 } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -154,10 +169,47 @@ function pinnedModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
    return model;
 }
 
+/** `target`, with `afterRead` awaited after each `getModelDocument` of its server answers. */
+function refetchIntercepting<TSession extends DataSession<OrderFlowTransferRoot>>(
+   target: TSession,
+   afterRead: () => Promise<void>
+): TSession {
+   return new Proxy(target, {
+      get(sessionTarget, property, receiver): unknown {
+         if (property === 'connected') {
+            return async (): Promise<unknown> => {
+               const server = await sessionTarget.connected();
+               return new Proxy(server, {
+                  get(serverTarget, serverProperty, serverReceiver): unknown {
+                     if (serverProperty === 'getModelDocument') {
+                        return async (args: Parameters<typeof serverTarget.getModelDocument>[0]): Promise<unknown> => {
+                           const document = await serverTarget.getModelDocument(args);
+                           await afterRead();
+                           return document;
+                        };
+                     }
+                     const value = Reflect.get(serverTarget, serverProperty, serverReceiver);
+                     return typeof value === 'function' ? value.bind(serverTarget) : value;
+                  }
+               });
+            };
+         }
+         const value = Reflect.get(sessionTarget, property, receiver);
+         return typeof value === 'function' ? value.bind(sessionTarget) : value;
+      }
+   });
+}
+
 /** Write `root` as a third party, ungated, so it always lands. */
 async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promise<void> {
    const server = await session!.connected();
    await writeAsThirdParty(server, THIRD_PARTY, uri, root);
+}
+
+/** Write `text` as a third party, ungated: a change the transfer model cannot express. */
+async function thirdPartyText(uri: string, text: string): Promise<void> {
+   const server = await session!.connected();
+   await writeAsThirdParty(server, THIRD_PARTY, uri, text);
 }
 
 describe('order-flow properties model', () => {
@@ -266,7 +318,7 @@ describe('order-flow properties model', () => {
       // And the server really reparsed it, which only a fresh read can show.
       const server = await session!.connected();
       const reread = await server.getModelDocument({ uri });
-      expect((reread.root as ProcessModel).name).toBe('Fulfilment');
+      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment');
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('Fulfilment');
    });
 
@@ -290,7 +342,7 @@ describe('order-flow properties model', () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
       const other = sharedServices!.model.ModelService.createSession('other');
       await other.open(uri);
-      await other.update({ uri, model: `${sharedServices!.workspace.TextDocuments.get(uri)!.getText()}\n`, basedOn: 'anything' });
+      await other.update({ uri, model: `${sharedServices!.workspace.TextDocuments.get(uri)!.getText()}\n`, baseVersion: 'any' });
       // Pinned, so only what the open read can make it dirty.
       const model = pinnedModel();
 
@@ -311,7 +363,7 @@ describe('order-flow properties model', () => {
       expect(model.dirty).toBe(true);
       const other = sharedServices!.model.ModelService.createSession('other');
       await other.open(uri);
-      await other.save({ uri, model: sharedServices!.workspace.TextDocuments.get(uri)!.getText(), basedOn: 'anything' });
+      await other.save({ uri, model: sharedServices!.workspace.TextDocuments.get(uri)!.getText(), baseVersion: 'any' });
 
       await waitFor(() => !model.dirty, { message: 'the save by another client never reached the model' });
       expect(flips).toEqual([true, false]);
@@ -366,6 +418,57 @@ describe('order-flow properties model', () => {
       expect(changes).toBeGreaterThan(0);
    });
 
+   it("takes a third party's comment-only edit's version without re-rendering", async () => {
+      const model = followingModel();
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      await model.open(uri);
+      const opened = model.version;
+
+      let changes = 0;
+      model.onDidChange(() => {
+         changes++;
+      });
+
+      const text = sharedServices!.workspace.TextDocuments.get(uri)!.getText();
+      await thirdPartyText(uri, `${text}\n// a comment\n`);
+
+      await waitFor(() => model.version !== opened, { message: 'the model never took the new version' });
+      expect({ changes, dirty: model.dirty }).toEqual({ changes: 0, dirty: true });
+   });
+
+   it('re-renders an unchanged-model update over a model it missed the change to', async () => {
+      const relay = new DataEvents<OrderFlowTransferRoot>();
+      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, relay);
+      models.push(model);
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      await model.open(uri);
+      let changes = 0;
+      model.onDidChange(() => {
+         changes++;
+      });
+      const updates: TransferDocumentUpdatedEvent<OrderFlowTransferRoot>[] = [];
+      events!.onDidUpdateDocument(event => updates.push(event));
+      // The comment-only edit's update: the model of the update before it, at a newer version.
+      const commentOnly = (): TransferDocumentUpdatedEvent<OrderFlowTransferRoot> | undefined =>
+         updates.find((event, index) => {
+            const previous = updates[index - 1]?.document.model;
+            const current = event.document.model;
+            return previous !== undefined && current?.hash === previous.hash && current.version > previous.version;
+         });
+
+      // The rename never reaches the model, as one sent while it was offline.
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, name: 'RenamedByOther' });
+      const text = sharedServices!.workspace.TextDocuments.get(uri)!.getText();
+      await thirdPartyText(uri, `${text}\n// a comment\n`);
+      await waitFor(() => commentOnly() !== undefined, { message: 'the comment-only edit sent no unchanged-model update' });
+      relay.onDocumentUpdated(commentOnly()!);
+
+      expect(model.fields.find(field => field.name === 'name')?.value).toBe('RenamedByOther');
+      expect(changes).toBe(1);
+      relay.dispose();
+   });
+
    it('clears its fields when the open document is deleted', async () => {
       const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
@@ -402,9 +505,35 @@ describe('order-flow properties model', () => {
       // Both intents have to survive — that is what distinguishes a merge from
       // a clobber, and asserting only the status would pass for either.
       const server = await session!.connected();
-      const reread = (await server.getModelDocument({ uri })).root as ProcessModel;
+      const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       expect(reread.name).toBe('Fulfilment');
       expect(reread.subject).toBe('LineItem');
+   });
+
+   it('merges again when a foreign edit lands between the refetch and the merged write', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      let landBetween: (() => Promise<void>) | undefined;
+      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(
+         refetchIntercepting(session!, async () => {
+            const write = landBetween;
+            landBetween = undefined;
+            await write?.();
+         }),
+         new DataEvents<OrderFlowTransferRoot>()
+      );
+      models.push(model);
+      await model.open(uri);
+
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+      landBetween = () => thirdPartyWrite(uri, { ...foreign, subject: 'Customer' });
+
+      expect(await model.setField('name', 'Fulfilment')).toEqual({ status: 'merged' });
+
+      const server = await session!.connected();
+      const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
+      expect(reread.name).toBe('Fulfilment');
+      expect(reread.subject).toBe('Customer');
    });
 
    it('drops a write that raced a foreign edit to the same field', async () => {
@@ -420,7 +549,7 @@ describe('order-flow properties model', () => {
       // The foreign value stands on disk AND the panel now shows it, rather
       // than leaving a stale field the user would write again.
       const server = await session!.connected();
-      const reread = (await server.getModelDocument({ uri })).root as ProcessModel;
+      const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       expect(reread.name).toBe('WonByTheOtherWriter');
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('WonByTheOtherWriter');
    });
@@ -447,5 +576,74 @@ describe('order-flow properties model', () => {
 /** The server's current root for `uri`, as a foreign writer would read it. */
 async function currentRoot(uri: string): Promise<OrderFlowTransferRoot> {
    const server = await session!.connected();
-   return TransferDocument.assertLoaded(await server.getModelDocument({ uri })).root;
+   return TransferDocument.assertLoaded(await server.getModelDocument({ uri })).model.root;
 }
+
+describe('order-flow properties model beside a debouncing editor', () => {
+   let lsp: LspHarness | undefined;
+
+   afterEach(() => {
+      for (const model of models) {
+         model.dispose();
+      }
+      models.length = 0;
+      session?.dispose();
+      session = undefined;
+      events?.dispose();
+      events = undefined;
+      port?.dispose();
+      port = undefined;
+      lsp?.dispose();
+      lsp = undefined;
+      sharedServices = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   });
+
+   it('merges a field write over an editor change the debounce still holds, once it is built', async () => {
+      workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-props-debounce-' });
+      const wire = makeLspServerConnection();
+      const { shared } = createOrderFlowServices(
+         { ...NodeFileSystem, connection: wire.serverConnection },
+         {
+            extraSharedModules: [
+               {
+                  lsp: {
+                     DocumentUpdateHandler: (services: ServerSharedServices) =>
+                        new HydraniumDocumentUpdateHandler(services, { debounceMs: 60_000 })
+                  }
+               }
+            ]
+         }
+      );
+      sharedServices = shared;
+      lsp = makeLspHarness({ connection: wire, services: shared });
+      await lsp.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
+      port = new FakeDataPort(channel => {
+         void new DataServer<OrderFlowTransferRoot>(channel, shared);
+      });
+      events = new DataEvents<OrderFlowTransferRoot>();
+      connection = new DataConnection<OrderFlowTransferRoot>(port, events);
+      session = connection.createSession('order-flow-model-test');
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const store = shared.workspace.TextDocuments;
+      const clean = readFileSync(path.join(workspace.root, FULFILLMENT_PROCESS), 'utf8');
+      const edited = clean.replace('   transition Pay', '   task Audit reads Order.id\n   transition Pay');
+      lsp.openDocument(uri, clean, 'order-flow-process', 1);
+      await waitFor(() => store.get(uri)?.getText() === clean);
+      const model = pinnedModel();
+      await model.open(uri);
+      lsp.changeDocument(uri, edited, 2);
+      await waitFor(() => store.get(uri)?.getText() === edited);
+
+      const writing = model.setField('name', 'Fulfilment');
+      const refetches = (): number => port!.sent.filter(request => request.method.endsWith('getModelDocument')).length;
+      const beforeRefetch = refetches();
+      await waitFor(() => refetches() > beforeRefetch, { message: 'the conflicting write never refetched' });
+      shared.lsp.DocumentUpdateHandler.flushPending();
+
+      expect(await writing).toEqual({ status: 'merged' });
+      const text = store.get(uri)!.getText();
+      expect({ audit: text.includes('task Audit'), renamed: text.includes('process Fulfilment') }).toEqual({ audit: true, renamed: true });
+   });
+});

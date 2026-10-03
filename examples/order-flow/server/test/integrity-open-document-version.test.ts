@@ -18,10 +18,9 @@
  * text-document instance, and applying that re-versioning to it restores the
  * number captured before the repair, rolling the store back under the repair.
  *
- * The real store is required. The guard rests on `reconcileExternalContent`
- * answering `undefined` for anything currently synced, and the framework's own
- * double answers `undefined` unconditionally, so a stub cannot tell the two
- * cases apart.
+ * The real store is required: the framework's own double answers
+ * `undefined` from `reconcileExternalContent` unconditionally, so it cannot
+ * tell an open document from a closed one.
  */
 
 import { INTEGRITY_CLIENT_ID } from '@hydranium/core';

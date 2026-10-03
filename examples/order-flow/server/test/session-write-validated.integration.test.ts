@@ -118,9 +118,9 @@ describe('a session write answers with its document validated', () => {
       await models.validated(uri(ORDER));
 
       const renamed = writeDuringBuildOf(harness, uri(ORDER), () =>
-         editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, basedOn: 'anything' })
+         editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, baseVersion: 'any' })
       );
-      const answer = await panel.update({ uri: uri(ORDER), model: ORDER_EDITED, basedOn: 'anything' });
+      const answer = await panel.update({ uri: uri(ORDER), model: ORDER_EDITED, baseVersion: 'any' });
       await renamed;
 
       // Both references now fail to resolve. Before validation the answer
@@ -141,12 +141,12 @@ describe('a session write answers with its document validated', () => {
 
       const [order] = await writer.updateAll({
          updates: [
-            { uri: uri(ORDER), model: ORDER_BROKEN, basedOn: 'anything' },
-            { uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' }
+            { uri: uri(ORDER), model: ORDER_BROKEN, baseVersion: 'any' },
+            { uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' }
          ]
       });
 
-      expect(order.diagnostics.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchThing')]);
+      expect(order.diagnostics?.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchThing')]);
    });
 
    it('answers unvalidated when rebuilds do not validate, rather than waiting for a phase no build reaches', async () => {
@@ -156,7 +156,7 @@ describe('a session write answers with its document validated', () => {
       await writer.open(uri(ORDER));
       harness.shared.workspace.DocumentBuilder.updateBuildOptions = { validation: false };
 
-      const answer = await writer.update({ uri: uri(ORDER), model: ORDER_BROKEN, basedOn: 'anything' });
+      const answer = await writer.update({ uri: uri(ORDER), model: ORDER_BROKEN, baseVersion: 'any' });
 
       expect(answer.root).toBeDefined();
       expect(models.getDocument(uri(ORDER))?.state).toBeLessThan(DocumentState.Validated);

@@ -151,7 +151,7 @@ async function openDiagram({ preValidate = true }: { preValidate?: boolean } = {
          const models = services.shared.model.ModelService;
          const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
          await editor.open(harness.state.layoutUri);
-         await editor.update({ uri: harness.state.layoutUri, model: text, basedOn: 'anything' });
+         await editor.update({ uri: harness.state.layoutUri, model: text, baseVersion: 'any' });
       },
       apply: async action => {
          const before = harness.actions.length;

@@ -46,7 +46,7 @@ function typeAssertions(): void {
    // `severity` types as LSP's numeric enum here and as a string union on
    // `TransferDiagnostic`, which is why the two cannot stand in for each other.
    const plain = AstDocument.create<Root>('file:///a.x', 1, root);
-   const severity: number | undefined = plain.diagnostics[0]?.severity;
+   const severity: number | undefined = plain.diagnostics?.[0]?.severity;
    void severity;
 
    // Accepted: LSP's own reader narrows `message`, which is
@@ -64,7 +64,7 @@ function typeAssertions(): void {
    // Accepted: an adopter narrowing to their validator's own shape. This is the
    // seam the parameter exists for — removing it would cost them this.
    const adopter = AstDocument.create<Root, RichDiagnostic>('file:///a.x', 1, root, rich);
-   const ruleId: string | undefined = adopter.diagnostics[0]?.ruleId;
+   const ruleId: string | undefined = adopter.diagnostics?.[0]?.ruleId;
    void ruleId;
 
    // @ts-expect-error the WIRE diagnostic, which is the other end of the

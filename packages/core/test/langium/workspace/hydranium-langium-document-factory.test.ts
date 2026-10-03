@@ -8,9 +8,12 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type AstNode, type LangiumSharedCoreServices, URI } from '@hydranium/langium';
+import { type AstNode, URI } from '@hydranium/langium';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
+import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
+import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { HydraniumLangiumDocumentFactory } from '../../../src/langium/workspace/hydranium-langium-document-factory.js';
-import { makeFakeAstNode } from '../../../src/testing/index.js';
+import { makeFakeAstNode, makeNoopTracer } from '../../../src/testing/index.js';
 
 interface NamedNode extends AstNode {
    name: string;
@@ -18,15 +21,22 @@ interface NamedNode extends AstNode {
 
 function factoryWith(serializeAst?: (node: AstNode) => string): HydraniumLangiumDocumentFactory {
    const services = {
+      Tracer: makeNoopTracer(),
       ServiceRegistry: {
          getServices: (_uri: URI) => ({
             LanguageMetaData: { languageId: 'test' },
             serializer: serializeAst ? { Serializer: { serializeAst } } : undefined
          })
       },
-      workspace: { TextDocuments: undefined, FileSystemProvider: {} }
-   };
-   return new HydraniumLangiumDocumentFactory(services as unknown as LangiumSharedCoreServices);
+      workspace: {
+         TextDocuments: undefined,
+         FileSystemProvider: {},
+         ModelLedger: new DefaultModelLedger(),
+         VersionSyncService: undefined as unknown
+      }
+   } as unknown as ServerSharedServices;
+   services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
+   return new HydraniumLangiumDocumentFactory(services);
 }
 
 const model = makeFakeAstNode<NamedNode>({ $type: 'Container', name: 'std' });

@@ -205,7 +205,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
 
       const server = await session!.connected();
       const reread = await server.getModelDocument({ uri });
-      expect((reread.root as ProcessModel).name).toBe('Fulfilment');
+      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment');
    });
 
    it('delivers a server-initiated notification back through the relay', async () => {
@@ -217,7 +217,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       await model!.open(uri);
 
       const server = await session!.connected();
-      const foreign = (await server.getModelDocument({ uri })).root as ProcessModel;
+      const foreign = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       await thirdPartyWrite(server, THIRD_PARTY, uri, { ...foreign, name: 'RenamedByOther' });
 
       await waitFor(() => model!.fields.find(field => field.name === 'name')?.value === 'RenamedByOther', {

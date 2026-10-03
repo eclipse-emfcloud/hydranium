@@ -71,7 +71,7 @@ async function loadCopy(harness: OrderFlowHarness, relativePath: string): Promis
 async function writeAsForm(harness: OrderFlowHarness, uri: string, model: TransferElement): Promise<void> {
    const session = harness.shared.model.ModelService.createSession('form', 'form-editor');
    await session.open(uri);
-   await session.update({ uri, model, basedOn: 'anything' });
+   await session.update({ uri, model, baseVersion: 'any' });
 }
 
 describe('order-flow structured write path — ClientSession.update with a transfer model', () => {

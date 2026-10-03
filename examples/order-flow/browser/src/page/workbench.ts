@@ -548,13 +548,13 @@ interface DataHead {
  * and how many diagnostics it currently carries.
  */
 function describeDataDocument(document: TransferDocument<OrderFlowTransferRoot>): string {
-   const root = document.root;
+   const root = document.model?.root;
    const rootType = typeof root === 'object' && root !== null && '$type' in root ? String(root.$type) : 'unknown';
-   return `root ${rootType}, ${document.diagnostics?.length ?? 0} diagnostic(s)`;
+   return `root ${rootType}, ${document.model?.diagnostics?.length ?? 0} diagnostic(s)`;
 }
 
 function describeDomainDeclarations(document: TransferDocument<OrderFlowTransferRoot>): string | undefined {
-   const root = document.root;
+   const root = document.model?.root;
    if (root?.$type !== 'DomainModel' || !('declarations' in root)) {
       return undefined;
    }
@@ -603,8 +603,8 @@ async function watchThroughDataHead({ session, connection }: DataHead): Promise<
    await session.openDocument({ uri: DATA_HEAD_DOCUMENT });
    // `openDocument` settles at the integrity landmark, so the diagnostics on
    // its snapshot are NOT GUARANTEED — and a client cannot tell which case it
-   // got. A document the settle had to build arrives pre-validation with an
-   // empty array; one that something else already carried to `Validated` comes
+   // got. A document the settle had to build arrives pre-validation with no
+   // diagnostics; one that something else already carried to `Validated` comes
    // back carrying them, which is what this page produces, since the worker
    // validates the whole workspace before anything here opens a document. So
    // adopting the snapshot and never asking again reports whatever happened to
@@ -615,7 +615,7 @@ async function watchThroughDataHead({ session, connection }: DataHead): Promise<
    // Still needed with the watch in place, and not redundant with it: the
    // workspace build that validated this document may already have finished, in
    // which case no phase event is owed to a watcher registered afterwards and
-   // the line would sit on the open snapshot's empty array until someone edited
+   // the line would sit on the open snapshot's missing diagnostics until someone edited
    // the file.
    const server = await session.connected();
    setDataReport(await server.getModelDocument({ uri: DATA_HEAD_DOCUMENT, includeDiagnostics: true }));
@@ -651,13 +651,13 @@ function setLayoutReport(root: LayoutModel): void {
  */
 async function watchLayoutThroughDataHead({ session, connection }: DataHead): Promise<void> {
    connection.events.onDidUpdateDocument(event => {
-      if (event.document.uri === LAYOUT_DOCUMENT && isLayoutModel(event.document.root)) {
-         setLayoutReport(event.document.root);
+      if (event.document.uri === LAYOUT_DOCUMENT && isLayoutModel(event.document.model?.root)) {
+         setLayoutReport(event.document.model.root);
       }
    });
    const document = await session.openDocument({ uri: LAYOUT_DOCUMENT });
-   if (isLayoutModel(document.root)) {
-      setLayoutReport(document.root);
+   if (isLayoutModel(document.model?.root)) {
+      setLayoutReport(document.model.root);
    }
 }
 
@@ -697,12 +697,12 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, edit
    setWorkspaceReport(`saving ${documents.length} document(s)…`);
    try {
       for (const document of documents) {
-         // `'anything'`, and `EditorDocument.version` must NOT be dressed up as
-         // a snapshot version: it is Monaco's alternative-version id for the local
+         // `'any'`, and `EditorDocument.version` must not be dressed up as
+         // a model version: it is Monaco's alternative-version id for the local
          // buffer, which counts keystrokes in this page and has no relation to
          // the server's text-document counter the gate compares against.
          await dataHead.session.withOpenDocument({ uri: document.uri }, () =>
-            dataHead.session.saveDocument({ uri: document.uri, model: document.text, basedOn: 'anything' })
+            dataHead.session.saveDocument({ uri: document.uri, model: document.text, baseVersion: 'any' })
          );
          // Marked one at a time, so a failure part-way through leaves the
          // documents it never reached dirty and a second press retries exactly

@@ -251,7 +251,7 @@ export function getAt<T = unknown>(obj: unknown, path: string[]): T | undefined 
 
 /**
  * A stable, non-cryptographic digest of `text`, equal on every host for equal
- * text: the `TransferDocument.textHash` a data server stamps, so a client can
+ * text: the `TextState.hash` a data server stamps, so a client can
  * hash text of its own to compare. An array is read as its elements joined, so
  * a large text is hashed in parts without concatenating it. It tells whether a
  * text changed, not who could forge one.

@@ -21,6 +21,8 @@ import { HydraniumScopeComputation } from './scope/hydranium-scope-computation.j
 import { HydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
 import { processEnv } from '../util/environment.js';
 import { DefaultTransferEncoder } from './transfer/transfer-encoder.js';
+import { HydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import { HydraniumLangiumDocuments } from './workspace/langium-documents.js';
 import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 
 /**
@@ -191,6 +193,20 @@ interface StrictSlot {
 
 const STRICT_SHARED_SLOTS: readonly StrictSlot[] = [
    { side: 'shared', path: 'workspace.TextDocuments', base: HydraniumTextDocuments, get: s => nested(s, 'workspace', 'TextDocuments') },
+   // Every root it builds records no version, so every write gated on one conflicts.
+   {
+      side: 'shared',
+      path: 'workspace.LangiumDocumentFactory',
+      base: HydraniumLangiumDocumentFactory,
+      get: s => nested(s, 'workspace', 'LangiumDocumentFactory')
+   },
+   // It reports no registered root, so none is reconciled with the text store or announced.
+   {
+      side: 'shared',
+      path: 'workspace.LangiumDocuments',
+      base: HydraniumLangiumDocuments,
+      get: s => nested(s, 'workspace', 'LangiumDocuments')
+   },
    {
       side: 'shared',
       path: 'workspace.WorkspaceManager',

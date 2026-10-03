@@ -10,7 +10,7 @@
 import type { ClientSession } from '@hydranium/core';
 import { type MultiDocumentSourceModel, ReconcilingMultiDocumentGlspState } from '@hydranium/glsp-server';
 import { type AstNode, URI } from '@hydranium/langium';
-import { type BasedOn, type TransferElement } from '@hydranium/protocol';
+import { type BaseVersion, type ModelVersion, type TransferElement } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
@@ -136,11 +136,11 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     *
     * Created EMPTY rather than with the layout being written, so the write
     * itself still goes through the base class's all-or-none write with the
-    * process file. The created document takes version 0, the version the
-    * state recorded for the layout while it did not exist, so the write's
-    * gate passes. When the create fails, because a file the workspace has not
-    * read exists or another client created the layout first, the layout is
-    * opened instead.
+    * process file, based on the version {@link createSecondaryDocument} records for the
+    * created layout. When the create fails, because a file the workspace has
+    * not read exists or another client created the layout first, the layout is
+    * opened instead, and the write, based on the version recorded while the
+    * layout did not exist, conflicts and is replayed onto that layout's text.
     */
    protected override async openForWrite(session: ClientSession<AstNode>, uri: string): Promise<void> {
       if (uri !== this.layoutUri || this.sharedServices.model.ModelService.getDocument(uri)) {
@@ -150,7 +150,7 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
       // Outside the `try`: only a failed create means the layout may exist.
       const text = await serializer.serializeTransfer(this.projectRoot(this.createLayoutRoot()));
       try {
-         await session.create(uri, text);
+         await this.createSecondaryDocument(session, uri, text);
          this.createdLayout = true;
       } catch {
          await super.openForWrite(session, uri);
@@ -162,10 +162,14 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     * the empty layout would stay in the diagram's session and its next save
     * would write it to disk, though no write of the diagram ever landed in it.
     */
-   protected override async persist(model: OrderFlowSourceModel, basedOn: BasedOn): Promise<{ root: ProcessModel }> {
+   protected override async persist(
+      model: OrderFlowSourceModel,
+      baseVersion: BaseVersion,
+      secondaryVersions?: Readonly<Record<string, ModelVersion>>
+   ): Promise<{ root: ProcessModel }> {
       this.createdLayout = false;
       try {
-         return await super.persist(model, basedOn);
+         return await super.persist(model, baseVersion, secondaryVersions);
       } catch (error: unknown) {
          if (this.createdLayout) {
             await this.modelSession?.close(this.layoutUri);

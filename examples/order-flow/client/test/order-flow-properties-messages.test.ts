@@ -69,11 +69,11 @@ describe("the properties panel's message texts", () => {
       // A renderer given a catalogue reads the sentence out of `params`, not out
       // of `text` — a message that arrived with its parameters dropped would
       // render correctly in English and lose the detail in every other language.
-      const reported = resolve(PROPERTIES_WRITE_FAILED, { field: 'name', detail: 'stale based-on version' });
+      const reported = resolve(PROPERTIES_WRITE_FAILED, { field: 'name', detail: 'stale base version' });
       const catalogue = { [PROPERTIES_WRITE_FAILED.code]: "{detail} — '{field}' wurde nicht gespeichert." };
 
-      expect(reported.params).toEqual({ field: 'name', detail: 'stale based-on version' });
-      expect(renderFrameworkMessage(reported, catalogue)).toBe("stale based-on version — 'name' wurde nicht gespeichert.");
+      expect(reported.params).toEqual({ field: 'name', detail: 'stale base version' });
+      expect(renderFrameworkMessage(reported, catalogue)).toBe("stale base version — 'name' wurde nicht gespeichert.");
    });
 });
 

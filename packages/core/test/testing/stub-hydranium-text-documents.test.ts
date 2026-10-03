@@ -37,7 +37,12 @@ import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-u
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { HydraniumTextDocuments, type ClientTextDocumentChangeEvent } from '../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { makeNoopSharedServices, makeStubHydraniumTextDocuments } from '../../src/testing/index.js';
+import {
+   makeNoopSharedServices,
+   makeStubDocumentBuilder,
+   makeStubHydraniumTextDocuments,
+   makeStubLangiumDocuments
+} from '../../src/testing/index.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
 const URI_ONE = 'file:///a.x';
@@ -51,7 +56,13 @@ const AUTHORING_CLIENT = 'client-a';
  */
 function realStore(): HydraniumTextDocuments<TextDocument> {
    const services = makeNoopSharedServices<ServerSharedServices>({
-      workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() }
+      workspace: {
+         DocumentUriPolicy: new DefaultDocumentUriPolicy(),
+         LangiumDocuments: makeStubLangiumDocuments(),
+         DocumentBuilder: makeStubDocumentBuilder(),
+         // The revert's fallback build is not under test here.
+         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
+      }
    });
    return new HydraniumTextDocuments<TextDocument>(services);
 }

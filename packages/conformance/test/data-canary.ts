@@ -36,13 +36,13 @@
  */
 
 import {
-   asSnapshotVersion,
+   asModelVersion,
    ConflictError,
    DocumentNotOpenError,
    DuplicateClientIdError,
    FRAMEWORK_CLIENT_IDS,
    isDocumentSource,
-   isSnapshotVersion,
+   isModelVersion,
    isSyntheticSource,
    ReservedClientIdError,
    SessionClosedError,
@@ -137,7 +137,7 @@ export interface CanaryDefects {
    readonly readyRejects?: boolean;
    /** The transfer root carries an empty `$type`. */
    readonly blankRootType?: boolean;
-   /** The envelope's `version` is a non-integer. */
+   /** The model's `version` is a non-integer. */
    readonly fractionalVersion?: boolean;
    /** A valid model is reported with a diagnostic anyway. */
    readonly diagnosticsOnValid?: boolean;
@@ -173,7 +173,7 @@ export interface CanaryDefects {
    readonly dependentCreditedToOpener?: boolean;
    /**
     * Every write lands, whatever version it claims to be based on — the head
-    * that accepts `basedOn` on the wire and never compares it, so a form editor
+    * that accepts `baseVersion` on the wire and never compares it, so a form editor
     * overwrites a concurrent text edit with nothing logged.
     */
    readonly ungatedWrites?: boolean;
@@ -218,7 +218,7 @@ export interface CanaryDefects {
    readonly releaseKeepsText?: boolean;
    /** The last close keeps a document that has no file. */
    readonly releaseKeepsUnsaved?: boolean;
-   /** A read of a URI the server has no document for is refused, where the protocol answers an envelope with no root. */
+   /** A read of a URI the server has no document for is refused, where the protocol answers an envelope with no model. */
    readonly refusesUnknownRead?: boolean;
    /** Any close goes back to the file, even while another session has the document open. */
    readonly releaseOnAnyClose?: boolean;
@@ -412,7 +412,7 @@ export class CanaryDataServer {
          // harmlessly.
          for (const update of args.updates) {
             this.assertSessionMayWrite(args.clientId, update.uri);
-            this.assertBasedOn(update.uri, update.basedOn);
+            this.assertBaseVersion(update.uri, update.baseVersion);
          }
       }
       const documents: TransferDocument<CanaryRoot, TransferDiagnostic>[] = [];
@@ -445,13 +445,13 @@ export class CanaryDataServer {
       }
    }
 
-   private assertBasedOn(uri: string, basedOn: TransferUpdateDocumentArgs<CanaryRoot>['basedOn']): void {
+   private assertBaseVersion(uri: string, baseVersion: TransferUpdateDocumentArgs<CanaryRoot>['baseVersion']): void {
       // An unknown URI answers v0, so a write claiming a version against a
       // document that does not exist is stale rather than unchecked.
-      if (!this.defects.ungatedWrites && isSnapshotVersion(basedOn)) {
+      if (!this.defects.ungatedWrites && isModelVersion(baseVersion)) {
          const current = this.documents.get(uri)?.version ?? 0;
-         if (current !== basedOn) {
-            throw new ConflictError(uri, basedOn, current);
+         if (current !== baseVersion) {
+            throw new ConflictError(uri, baseVersion, current);
          }
       }
    }
@@ -460,8 +460,8 @@ export class CanaryDataServer {
       this.assertSessionMayWrite(args.clientId, args.uri);
       const text = typeof args.model === 'string' ? args.model : args.model.text;
       const existing = this.documents.get(args.uri);
-      // The conflict gate, which is the property the based-on check probes.
-      this.assertBasedOn(args.uri, args.basedOn);
+      // The conflict gate, which is the property the base-version check probes.
+      this.assertBaseVersion(args.uri, args.baseVersion);
       // An edit is any update that follows the first one for this URI, which is
       // the only notion of "edit" a fake with no grammar can hold.
       const isEdit = existing !== undefined;
@@ -469,7 +469,10 @@ export class CanaryDataServer {
          this.documents.set(args.uri, { text, version: (existing?.version ?? 0) + 1 });
       }
       const document = this.envelope(args.uri);
-      const answer = this.defects.writeAnswersUnvalidated ? { ...document, diagnostics: [] } : document;
+      const answer =
+         this.defects.writeAnswersUnvalidated && document.model
+            ? { ...document, model: { ...document.model, diagnostics: undefined } }
+            : document;
       if (this.watched.has(args.uri) || this.defects.notifiesBeforeSubscribe) {
          this.events.push({ document, sourceClientId: args.clientId, reason: this.defects.ownWriteRebuilt ? 'rebuilt' : 'changed' });
       }
@@ -536,7 +539,7 @@ export class CanaryDataServer {
    private envelope(uri: string): TransferDocument<CanaryRoot, TransferDiagnostic> {
       const stored = this.documents.get(uri);
       if (!stored) {
-         // `root` absent is the documented answer for a URI the server does not
+         // `model` absent is the documented answer for a URI the server does not
          // have, so this is an ordinary branch rather than an error.
          return TransferDocument.absent<CanaryRoot, TransferDiagnostic>(uri);
       }
@@ -547,11 +550,17 @@ export class CanaryDataServer {
            : diagnosticsFor(stored.text, this.defects);
       return {
          uri,
-         version: asSnapshotVersion(this.defects.fractionalVersion ? stored.version + 0.5 : stored.version),
-         root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
-         diagnostics,
-         dirty: !this.defects.neverDirty && stored.text !== this.disk.get(uri),
-         textHash: this.defects.textHashByVersion ? String(stored.version) : stored.text
+         model: {
+            root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
+            diagnostics,
+            version: asModelVersion(this.defects.fractionalVersion ? stored.version + 0.5 : stored.version),
+            hash: JSON.stringify(diagnostics) + stored.text
+         },
+         text: {
+            version: stored.version,
+            hash: this.defects.textHashByVersion ? String(stored.version) : stored.text,
+            dirty: !this.defects.neverDirty && stored.text !== this.disk.get(uri)
+         }
       };
    }
 }

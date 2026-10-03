@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { BasedOn } from '../model-service/based-on';
+import type { BaseVersion } from '../model-service/base-version';
 
 /** Get the current state of a single document. The server returns the latest built version. */
 export interface GetModelDocumentArgs {
@@ -53,16 +53,16 @@ export interface TransferUpdateDocumentArgs<TTransfer> {
    /** The whole structured model root, or its serialised textual form. */
    model: TTransfer | string;
    /**
-    * What this write was authored against. A `SnapshotVersion` is compared
+    * What this write was authored against. A `ModelVersion` is compared
     * against the server's current text-document version for `uri` and throws
-    * `ConflictError` on mismatch; `'anything'` writes unconditionally.
+    * `ConflictError` on mismatch; `'any'` writes unconditionally.
     *
     * **Required so that an ungated write is a decision rather than an
     * omission.** An optional gate is indistinguishable from a forgotten one at
     * the call site, and a file of twenty writes hides the one that lost the
     * field. Nothing else here can see that, since the defect is an absence.
     */
-   basedOn: BasedOn;
+   baseVersion: BaseVersion;
 }
 
 /** Update a document the session `clientId` has open, then persist it to disk. */

@@ -241,7 +241,7 @@ async function publishedAfterWrite(locked: boolean): Promise<Payload[]> {
    const before = booted.diagnostics.length;
    const session = shared.model.ModelService.createSession('dedupe', 'dedupe-test');
    await session.open(uri);
-   await session.update({ uri, model: `${text}\n// touched\n`, basedOn: 'anything' });
+   await session.update({ uri, model: `${text}\n// touched\n`, baseVersion: 'any' });
    await booted.nextDiagnostics(uri);
    // Let any FOLLOWING publish from the second, racing build land too. Without
    // this the tail holds only the first payload and the duplicated one escapes.

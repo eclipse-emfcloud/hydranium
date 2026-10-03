@@ -8,13 +8,14 @@
  ********************************************************************************/
 
 import {
-   type BasedOn,
+   type BaseVersion,
    ConflictError,
-   isSnapshotVersion,
+   isModelVersion,
    Logger,
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
+   type TextVersion,
    type Tracer,
    type TransferElement
 } from '@hydranium/protocol';
@@ -35,11 +36,11 @@ export interface ClientSessionWriteArgs<TTransfer> {
    /** The whole structured model root, or its serialised textual form. */
    model: TTransfer | string;
    /**
-    * The version the write was authored against, or `'anything'` to write
+    * The version the write was authored against, or `'any'` to write
     * unconditionally. Required, so an ungated write is a decision the caller
     * makes rather than a field it forgot.
     */
-   basedOn: BasedOn;
+   baseVersion: BaseVersion;
 }
 
 /** What a session's `updateAll` writes, all or none. */
@@ -89,8 +90,12 @@ export interface ClientSession<
     * disk on the first `save`. Fails when the file exists, any client has the
     * URI open, or the URI waits out the revert grace, and of two creates of one
     * URI at most one succeeds.
+    *
+    * Resolves with the version the created document took, which a write based
+    * on it names: once this resolves, the store's version may already be
+    * another client's write.
     */
-   create(uri: string, text: string): Promise<void>;
+   create(uri: string, text: string): Promise<TextVersion>;
    /**
     * Write `args.model` into a document this session has open. Resolves to the
     * rebuilt document once it is validated, in whichever build carried the
@@ -221,7 +226,7 @@ export class DefaultClientSession<
          : undefined;
    }
 
-   create(uri: string, text: string): Promise<void> {
+   create(uri: string, text: string): Promise<TextVersion> {
       this.assertLive();
       return this.createDocument(uri, text);
    }
@@ -279,19 +284,19 @@ export class DefaultClientSession<
    }
 
    /**
-    * Throw `ConflictError` when `basedOn` names a version other than
+    * Throw `ConflictError` when `baseVersion` names a version other than
     * `currentVersion`. A write calls it at the door and again in the
     * synchronous step that applies the text, and has to call it synchronously
     * there: a check separated from the apply by an await lets two writes based
     * on one version both apply.
     */
-   protected assertBasedOn(uri: string, basedOn: BasedOn, currentVersion: number): void {
-      if (isSnapshotVersion(basedOn) && currentVersion !== basedOn) {
+   protected assertBaseVersion(uri: string, baseVersion: BaseVersion, currentVersion: number): void {
+      if (isModelVersion(baseVersion) && currentVersion !== baseVersion) {
          // Distinct from the post-build "superseded" debug line of an update: this
-         // is a based-on-stale rejection (the write never applies), not two
+         // is a stale-base-version rejection (the write never applies), not two
          // writes racing.
-         this.tracer.debug(`Conflict on ${uri}: based-on v${basedOn} stale, server at v${currentVersion}`);
-         throw new ConflictError(uri, basedOn, currentVersion);
+         this.tracer.debug(`Conflict on ${uri}: stale base, model v${baseVersion} / text v${currentVersion}`);
+         throw new ConflictError(uri, baseVersion, currentVersion);
       }
    }
 
@@ -299,7 +304,7 @@ export class DefaultClientSession<
     * Serialise `args.model`, apply it to the store under this session's id,
     * rebuild, and resolve to the rebuilt document.
     *
-    * The open check and the `basedOn` gate run at the door, so a write that
+    * The open check and the `baseVersion` gate run at the door, so a write that
     * cannot land is refused before any adopter serialiser runs, and again in
     * the synchronous step that applies the text: made only before the
     * serialiser's await, a close during it lets the write land on a document
@@ -321,11 +326,12 @@ export class DefaultClientSession<
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (profile ? profile.scope(stage, fn) : fn());
       const textDocuments = this.services.workspace.TextDocuments;
       this.assertOpen(uri);
-      this.assertBasedOn(uri, args.basedOn, textDocuments.version(uri));
+      this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
+      service.assertCanBuild(uri);
       const text = await run('serialize', () => service.modelToText(uri, args.model, cancelToken));
       const appliedVersion = await run('apply', () => {
          this.assertOpen(uri);
-         this.assertBasedOn(uri, args.basedOn, textDocuments.version(uri));
+         this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
          return this.services.workspace.AstDocumentManager.update(uri, text, this.clientId);
       });
       // Through the public `rebuild`, so an override of it stays in the path.
@@ -352,7 +358,7 @@ export class DefaultClientSession<
 
    /**
     * Write every document of `args.updates`, all or none: every model is
-    * serialised first, then every open check and `basedOn` gate runs and every
+    * serialised first, then every open check and `baseVersion` gate runs and every
     * text is applied in one synchronous step. Checked at the door as well, so
     * a stale set is refused before any adopter serialiser runs.
     *
@@ -374,7 +380,8 @@ export class DefaultClientSession<
       const check = (): void =>
          updates.forEach((update, i) => {
             this.assertOpen(uris[i]);
-            this.assertBasedOn(uris[i], update.basedOn, textDocuments.version(uris[i]));
+            this.assertBaseVersion(uris[i], update.baseVersion, textDocuments.version(uris[i]));
+            service.assertCanBuild(uris[i]);
          });
       check();
       const texts: string[] = [];
@@ -455,7 +462,7 @@ export class DefaultClientSession<
       return this.services.workspace.DocumentUriPolicy.canonicalUri(uri);
    }
 
-   protected async createDocument(uri: string, text: string): Promise<void> {
+   protected async createDocument(uri: string, text: string): Promise<TextVersion> {
       if (await this.services.workspace.FileSystemProvider.exists(UriUtils.toUri(uri))) {
          throw new Error(`Cannot create ${uri}: the file exists`);
       }
@@ -473,10 +480,10 @@ export class DefaultClientSession<
       // document holds `text`; the client list afterwards cannot, since a
       // client that registered first may have closed again by then.
       const key = this.canonicalKey(uri);
-      let created = false;
+      let created: TextVersion | undefined;
       const listener = this.services.workspace.TextDocuments.onDidOpen(event => {
          if (event.clientId === this.clientId && event.document.uri === key) {
-            created = true;
+            created = event.document.version;
          }
       });
       try {
@@ -485,10 +492,11 @@ export class DefaultClientSession<
          listener.dispose();
       }
       await this.rejectIfEnded(uri, false);
-      if (!created) {
+      if (created === undefined) {
          await this.closeDocument(uri);
          throw new Error(`Cannot create ${uri}: it is open in a client`);
       }
+      return created;
    }
 
    protected async runWithOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T> {

@@ -61,7 +61,7 @@ describe('CLI subprocess integration', () => {
       expect(lines).toHaveLength(1);
       const doc = JSON.parse(lines[0]);
       expect(doc.uri).toBe(FIXTURE_URI);
-      expect(doc.root.name).toBe('initial');
+      expect(doc.model.root.name).toBe('initial');
    });
 
    it('save: spawns the fixture, updates the document, returns the post-save envelope', async () => {
@@ -77,7 +77,7 @@ describe('CLI subprocess integration', () => {
       expect(lines).toHaveLength(1);
       const doc = JSON.parse(lines[0]);
       expect(doc.uri).toBe(FIXTURE_URI);
-      expect(doc.root.name).toBe('from-cli');
+      expect(doc.model.root.name).toBe('from-cli');
    });
 
    it('logLevel: forwards the requested level onto the spawned server env', async () => {
@@ -89,7 +89,7 @@ describe('CLI subprocess integration', () => {
          logLevel: 'debug',
          write: line => lines.push(line)
       });
-      expect(JSON.parse(lines[0]).root.name).toBe('debug');
+      expect(JSON.parse(lines[0]).model.root.name).toBe('debug');
    });
 
    it('logLevel: omitted leaves the server env untouched', async () => {
@@ -100,7 +100,7 @@ describe('CLI subprocess integration', () => {
          uri: ENV_ECHO_URI,
          write: line => lines.push(line)
       });
-      expect(JSON.parse(lines[0]).root.name).toBe('unset');
+      expect(JSON.parse(lines[0]).model.root.name).toBe('unset');
    });
 });
 
