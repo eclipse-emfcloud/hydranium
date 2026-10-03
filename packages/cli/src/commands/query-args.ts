@@ -11,6 +11,7 @@ import {
    assertRequired,
    exitWithUsage,
    helpRequested,
+   logHelpLines,
    parseFlagOptions,
    parseServerSpawnOptions,
    printHelp,
@@ -35,7 +36,7 @@ export const QUERY_VALUE_FLAGS: readonly string[] = QUERY_FLAGS;
 
 /** The `--help` text, as data, held to {@link QUERY_FLAGS} by a test. */
 export const QUERY_HELP: readonly string[] = [
-   'Usage: hydranium-cli query --server "<cmd> [args...]" --uri <uri> [--cwd <dir>] [--log-level <level>]',
+   'Usage: hydranium-cli query --server "<cmd> [args...]" --uri <uri> [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Print the data-server document envelope for `<uri>` as a single JSON line.',
    '',
@@ -43,13 +44,13 @@ export const QUERY_HELP: readonly string[] = [
    '  --server "<cmd>"   Command-line for the data-server subprocess (required).',
    '  --uri <uri>        Document URI (required).',
    '  --cwd <dir>        Working directory for the spawned child. Default: cwd.',
-   '  --log-level <lvl>  Log threshold for the spawned server (off|error|warn|info|debug|trace).'
+   ...logHelpLines(19, 'the spawned server')
 ];
 
 export function parseQueryArgs(args: string[], onError: UsageError = exitWithUsage): QueryCommandOptions {
-   const { serverCommand, serverArgs, cwd, logLevel, extra } = parseServerSpawnOptions(args, 'query', onError);
+   const { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel, extra } = parseServerSpawnOptions(args, 'query', onError);
    const { uri } = parseFlagOptions(extra, 'query', OWN_FLAGS, onError);
-   return { serverCommand, serverArgs, cwd, logLevel, uri: assertRequired(uri, '--uri', 'query', onError) };
+   return { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel, uri: assertRequired(uri, '--uri', 'query', onError) };
 }
 
 export function runQueryCommand(args: string[]): Promise<void> {

@@ -24,6 +24,7 @@ export const LEVEL_LABELS: Record<LogLevel, string> = {
 /** Module-global threshold; shared by every `AbstractLogger` instance so derived child
  *  loggers pick up live updates without each having to subscribe to a configuration source. */
 let currentLevel: LogThreshold = 'info';
+let fileLevel: LogThreshold | undefined;
 
 /**
  * Cross-side public logger contract. Every consumer of the framework — browser
@@ -93,12 +94,32 @@ export namespace Logger {
       return currentLevel;
    }
    /**
-    * Whether a message at `level` would be emitted at the current threshold.
+    * Set the log file's own threshold, which {@link setLevel} does not move;
+    * `undefined` makes the file follow {@link getLevel}. A file sink compares
+    * against `getFileLevel() ?? getLevel()`, every other sink against
+    * {@link getLevel}.
+    *
+    * Set it through the file sink's own configuration, which clears it with
+    * the file: set here with no file configured, it widens
+    * {@link isLevelEnabled} for lines nothing writes.
+    */
+   export function setFileLevel(level: LogThreshold | undefined): void {
+      fileLevel = level;
+   }
+   /** Read the log file's own threshold, `undefined` while it follows {@link getLevel}. */
+   export function getFileLevel(): LogThreshold | undefined {
+      return fileLevel;
+   }
+   /**
+    * Whether any sink takes a message at `level`: the more verbose of
+    * {@link getLevel} and {@link getFileLevel} decides. A sink that admits less
+    * re-checks its own threshold before writing.
+    *
     * Use to guard expensive log-line construction:
     * `if (Logger.isLevelEnabled('trace')) logger.trace(buildPayload())`.
     */
    export function isLevelEnabled(level: LogLevel): boolean {
-      return LEVEL_ORDER[level] <= LEVEL_ORDER[currentLevel];
+      return LEVEL_ORDER[level] <= Math.max(LEVEL_ORDER[currentLevel], fileLevel ? LEVEL_ORDER[fileLevel] : 0);
    }
    /**
     * Whether a message at `threshold` would be emitted: `false` for `'off'`,
@@ -136,6 +157,11 @@ export function parseLogLevel(value: unknown): LogThreshold | undefined {
 export const DEFAULT_LOG_LEVEL_ENV = 'HYDRANIUM_LOG_LEVEL';
 /** Env var the server reads its log file-tee target from. See {@link DEFAULT_LOG_LEVEL_ENV}. */
 export const DEFAULT_LOG_FILE_ENV = 'HYDRANIUM_LOG_FILE';
+/**
+ * Env var the server reads the file tee's own threshold from, which the LSP
+ * log-level setting does not change. See {@link Logger.setFileLevel}.
+ */
+export const DEFAULT_LOG_FILE_LEVEL_ENV = 'HYDRANIUM_LOG_FILE_LEVEL';
 
 /**
  * Human-readable formatting helpers used in log lines and diagnostic output.

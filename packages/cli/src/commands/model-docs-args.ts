@@ -10,9 +10,9 @@
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    parseHarnessArgs,
    printHelp,
    SERVICES_FLAG,
@@ -21,7 +21,7 @@ import {
 import { OUT_FILE_FLAG } from './headless-harness.js';
 import { runModelDocs, type ModelDocsCommandOptions } from './model-docs.js';
 
-const VALUE_FLAGS = [OUT_FILE_FLAG, LOG_LEVEL_FLAG] as const;
+const VALUE_FLAGS = [OUT_FILE_FLAG, ...LOG_VALUE_FLAGS] as const;
 
 /**
  * Every flag `model-docs` accepts, derived from the sets the parser is handed so
@@ -35,7 +35,7 @@ export const MODEL_DOCS_VALUE_FLAGS: readonly string[] = MODEL_DOCS_FLAGS;
 
 /** The `--help` text, as data, held to {@link MODEL_DOCS_FLAGS} by a test. */
 export const MODEL_DOCS_HELP: readonly string[] = [
-   'Usage: hydranium-cli model-docs --services <module> [--out-file <file>] [--log-level <lvl>]',
+   'Usage: hydranium-cli model-docs --services <module> [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Generate a navigable Markdown reference of every AST node type — a type index,',
    'cross-linked super/sub types, a reverse "referenced by" index, and a per-language',
@@ -49,7 +49,7 @@ export const MODEL_DOCS_HELP: readonly string[] = [
    '  --out-file <file>     Write the Markdown to this file instead of stdout. Written',
    '                        only once the report exists, unlike a shell redirection,',
    '                        which truncates the file before the head is even booted.',
-   logLevelHelpLine(22)
+   ...logHelpLines(22)
 ];
 
 export function parseModelDocsArgs(args: string[], onError: UsageError = exitWithUsage): ModelDocsCommandOptions {
@@ -57,7 +57,7 @@ export function parseModelDocsArgs(args: string[], onError: UsageError = exitWit
       requireWorkspace: false,
       onError
    });
-   return { servicesModule, outFile: options[OUT_FILE_FLAG], logLevel: logLevelOption(options[LOG_LEVEL_FLAG]) };
+   return { servicesModule, outFile: options[OUT_FILE_FLAG], ...logOptions(options) };
 }
 
 export function runModelDocsCommand(args: string[]): Promise<void> {

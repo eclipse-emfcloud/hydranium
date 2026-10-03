@@ -8,14 +8,13 @@
  ********************************************************************************/
 
 import type * as HydraniumCoreNode from '@hydranium/core/node';
-import type { LogThreshold } from '@hydranium/protocol';
 import { spawn } from 'node:child_process';
 import { statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { driverHeapArgs, type HeapReading } from '../driver-heap.js';
-import { logLevelEnv } from '../log-level.js';
+import { logEnv, type LogOptions } from '../log-level.js';
 import { SERVICES_FLAG } from './harness-args.js';
 
 /** The flag every report-producing subcommand names its destination file with. */
@@ -131,14 +130,13 @@ export function spawnNodeChild(execArgs: string[], env?: Record<string, string>)
 /** How a subcommand parent reaches its driver child; the seam `__spawnForTest` replaces. */
 export type SpawnDriverChild = (execArgs: string[], env?: Record<string, string>) => Promise<number>;
 
-/** What every `--services` subcommand carries for the child it spawns, on top of its own options. */
-export interface DriverSpawnOptions {
-   /**
-    * Log threshold for the head the driver boots. Absent leaves the child's
-    * inherited environment alone, so an ambient `HYDRANIUM_LOG_LEVEL` still wins
-    * where a caller set one.
-    */
-   readonly logLevel?: LogThreshold;
+/**
+ * What every `--services` subcommand carries for the child it spawns, on top of
+ * its own options. The log options apply to the head the driver boots; an
+ * absent one leaves the child's inherited environment alone, so an ambient
+ * variable still wins where a caller set one.
+ */
+export interface DriverSpawnOptions extends LogOptions {
    /** Test-only: capture the node argv and env instead of spawning the real child. */
    readonly __spawnForTest?: SpawnDriverChild;
    /**
@@ -154,12 +152,12 @@ export interface DriverSpawnOptions {
  * Parent-side: run a subcommand's driver child and propagate its exit code, so a
  * shell or CI step sees the gate.
  *
- * **The log threshold travels in the child's ENVIRONMENT, not its argv.** The
- * head's logger reads `HYDRANIUM_LOG_LEVEL` while `createServices` constructs it,
- * which is inside the driver's dynamic import — a flag the driver parsed would
- * arrive after the only moment it can be read. Setting it here rather than
- * exporting it also leaves the CLI's own output alone, unlike an ambient
- * `HYDRANIUM_LOG_LEVEL=…` the parent would carry too.
+ * **The log options travel in the child's ENVIRONMENT, not its argv.** The
+ * head's logger reads its `HYDRANIUM_LOG_*` variables while `createServices`
+ * constructs it, which is inside the driver's dynamic import — a flag the driver
+ * parsed would arrive after the only moment it can be read. Setting them here
+ * rather than exporting them also leaves the CLI's own output alone, unlike
+ * ambient variables the parent would carry too.
  *
  * A head that binds a logger of its own decides for itself whether the flag means
  * anything, which is the intended seam: the CLI is language-agnostic and cannot
@@ -173,10 +171,7 @@ export interface DriverSpawnOptions {
  */
 export async function runDriverChild(execArgs: string[], options: DriverSpawnOptions): Promise<void> {
    const spawnChild = options.__spawnForTest ?? spawnNodeChild;
-   const code = await spawnChild(
-      [...driverHeapArgs(options.__heapReadingForTest), ...execArgs],
-      options.logLevel === undefined ? undefined : logLevelEnv(options.logLevel)
-   );
+   const code = await spawnChild([...driverHeapArgs(options.__heapReadingForTest), ...execArgs], logEnv(options));
    if (code) {
       process.exitCode = code;
    }

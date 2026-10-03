@@ -10,9 +10,10 @@
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_FILE_FLAG,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    numericOption,
    parseHarnessArgs,
    printHelp,
@@ -29,7 +30,7 @@ const VALUE_FLAGS = [
    '--snapshot-path',
    '--profile',
    '--session-out',
-   LOG_LEVEL_FLAG
+   ...LOG_VALUE_FLAGS
 ] as const;
 const BOOL_FLAGS = ['--snapshot', '--json'] as const;
 
@@ -67,11 +68,13 @@ export const MEASURE_MEMORY_HELP: readonly string[] = [
    '  --profile <dims>      Capture sampled profiles around the build (+churn) into a',
    '                        profiling session. Comma-separated: cpu,alloc,gc,eld,heap.',
    '  --session-out <dir>   Parent directory for the profiling session folder (with --profile).',
+   '                        The session logs to its server.log at --log-file-level, else at',
+   '                        --log-level, else info; --log-file is refused beside --profile.',
    '  --json                Emit the measurement as one JSON document instead of the',
    '                        progress lines: documentCount, buildMs, emptyHeapBytes,',
    '                        afterBuildHeapBytes, and churnGrowthBytes / snapshotPath /',
    '                        profilingSession where the run produced them.',
-   logLevelHelpLine(22)
+   ...logHelpLines(22)
 ];
 
 /**
@@ -98,6 +101,11 @@ function validatedProfile(csv: string | undefined, onError: UsageError): string 
 
 export function parseMeasureMemoryArgs(args: string[], onError: UsageError = exitWithUsage): MeasureMemoryCommandOptions {
    const { servicesModule, workspace, options } = parseHarnessArgs(args, 'measure-memory', VALUE_FLAGS, BOOL_FLAGS, { onError });
+   // The profiling session points the log at its own `server.log`, which would
+   // replace the requested file without a word.
+   if (options['--profile'] !== undefined && options[LOG_FILE_FLAG] !== undefined) {
+      onError(`${LOG_FILE_FLAG} cannot be combined with --profile, which logs to the session's server.log`);
+   }
    return {
       servicesModule,
       workspace,
@@ -110,7 +118,7 @@ export function parseMeasureMemoryArgs(args: string[], onError: UsageError = exi
       profile: validatedProfile(options['--profile'], onError),
       sessionOut: options['--session-out'],
       json: options['--json'] === 'true',
-      logLevel: logLevelOption(options[LOG_LEVEL_FLAG])
+      ...logOptions(options)
    };
 }
 

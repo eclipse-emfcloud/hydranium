@@ -9,7 +9,7 @@
 
 import { type Logger as GlspLogger, LogLevel } from '@eclipse-glsp/server';
 import { LspLogger, type LspLoggerOptions, type ServerSharedServices } from '@hydranium/core';
-import { Logger, type LogThreshold } from '@hydranium/protocol';
+import { LEVEL_ORDER, Logger, type LogThreshold } from '@hydranium/protocol';
 
 /**
  * Options accepted by {@link GlspClientLogger}. Extends
@@ -19,11 +19,11 @@ import { Logger, type LogThreshold } from '@hydranium/protocol';
 export interface GlspClientLoggerOptions extends LspLoggerOptions {
    /**
     * Per-instance NARROWING of the framework threshold. Omit it — the default
-    * tracks `Logger.getLevel()` live, which is what makes one
+    * tracks the framework thresholds live, which is what makes one
     * `HYDRANIUM_LOG_LEVEL` / one LSP setting govern GLSP output too.
     *
     * It can only narrow, never widen, and that is not a policy choice:
-    * `AbstractLogger.send` gates every emission on the process-wide threshold
+    * `AbstractLogger.send` gates every emission on `Logger.isLevelEnabled`
     * before it reaches the output channel, so a value more verbose than the
     * global is silently ineffective. Set it only to make ONE component quieter
     * than the rest.
@@ -66,8 +66,8 @@ export function glspLogLevelOf(threshold: LogThreshold): LogLevel {
  * GLSP-specific concerns layered on top of {@link LspLogger}:
  *
  * - A {@link logLevel} field, because GLSP's `Logger` contract declares one.
- *   **It tracks the framework's process-wide threshold by default**, resolving
- *   `Logger.getLevel()` through {@link glspLogLevelOf} on every read — so
+ *   **It tracks the framework's thresholds by default**, resolving them
+ *   through {@link glspLogLevelOf} on every read — so
  *   `HYDRANIUM_LOG_LEVEL`, the LSP log-level setting and the Theia preference
  *   all reach GLSP output without a second knob. Assigning the field (or
  *   passing `logLevel`) pins an explicit per-instance NARROWING; see
@@ -104,9 +104,16 @@ export class GlspClientLogger extends LspLogger implements GlspLogger {
       this.logLevelOverride = options.logLevel;
    }
 
-   /** GLSP's `Logger.logLevel` contract; the framework threshold unless pinned. */
+   /**
+    * GLSP's `Logger.logLevel` contract; unless pinned, the more verbose of
+    * `Logger.getLevel()` and `Logger.getFileLevel()`. The process threshold
+    * alone drops GLSP lines a log file with its own threshold asks for.
+    */
    get logLevel(): LogLevel {
-      return this.logLevelOverride ?? glspLogLevelOf(Logger.getLevel());
+      const level = Logger.getLevel();
+      const fileLevel = Logger.getFileLevel();
+      const widest = fileLevel && LEVEL_ORDER[fileLevel] > LEVEL_ORDER[level] ? fileLevel : level;
+      return this.logLevelOverride ?? glspLogLevelOf(widest);
    }
 
    set logLevel(level: LogLevel) {

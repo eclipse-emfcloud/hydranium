@@ -49,6 +49,36 @@ describe('Logger threshold gating', () => {
    });
 });
 
+describe('Logger file threshold', () => {
+   afterEach(() => {
+      Logger.setLevel('info');
+      Logger.setFileLevel(undefined);
+   });
+
+   it('widens isLevelEnabled to the file threshold without moving getLevel', () => {
+      Logger.setLevel('info');
+      Logger.setFileLevel('debug');
+      expect(Logger.isLevelEnabled('debug')).toBe(true);
+      expect(Logger.isLevelEnabled('trace')).toBe(false);
+      expect(Logger.getLevel()).toBe('info');
+   });
+
+   it('leaves isLevelEnabled to the process threshold when the file admits less', () => {
+      Logger.setLevel('debug');
+      Logger.setFileLevel('warn');
+      expect(Logger.isLevelEnabled('debug')).toBe(true);
+   });
+
+   it('keeps the file threshold across a process threshold change', () => {
+      // The LSP setting moves the process threshold; a capture's file level
+      // has to survive that.
+      Logger.setFileLevel('debug');
+      Logger.setLevel('off');
+      expect(Logger.isLevelEnabled('debug')).toBe(true);
+      expect(Logger.getFileLevel()).toBe('debug');
+   });
+});
+
 describe('Logger.logAt', () => {
    afterEach(() => Logger.setLevel('info'));
 

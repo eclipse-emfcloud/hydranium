@@ -10,9 +10,9 @@
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    parseHarnessArgs,
    printHelp,
    SERVICES_FLAG,
@@ -21,7 +21,7 @@ import {
 import { OUT_FILE_FLAG } from './headless-harness.js';
 import { runReflect, type ReflectCommandOptions } from './reflect.js';
 
-const VALUE_FLAGS = [OUT_FILE_FLAG, LOG_LEVEL_FLAG] as const;
+const VALUE_FLAGS = [OUT_FILE_FLAG, ...LOG_VALUE_FLAGS] as const;
 const BOOL_FLAGS = ['--json'] as const;
 
 /**
@@ -36,7 +36,7 @@ export const REFLECT_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_F
 
 /** The `--help` text, as data, held to {@link REFLECT_FLAGS} by a test. */
 export const REFLECT_HELP: readonly string[] = [
-   'Usage: hydranium-cli reflect --services <module> [--json] [--out-file <file>] [--log-level <lvl>]',
+   'Usage: hydranium-cli reflect --services <module> [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Dump a head's grammar/AST reflection — the type hierarchy, each language's",
    'terminals and entry rule, and every cross-reference target. Read-only: no',
@@ -50,7 +50,7 @@ export const REFLECT_HELP: readonly string[] = [
    '  --out-file <file>     Write the report to this file instead of stdout. Written',
    '                        only once the report exists, unlike a shell redirection,',
    '                        which truncates the file before the head is even booted.',
-   logLevelHelpLine(22)
+   ...logHelpLines(22)
 ];
 
 export function parseReflectArgs(args: string[], onError: UsageError = exitWithUsage): ReflectCommandOptions {
@@ -62,7 +62,7 @@ export function parseReflectArgs(args: string[], onError: UsageError = exitWithU
       servicesModule,
       json: options['--json'] === 'true',
       outFile: options[OUT_FILE_FLAG],
-      logLevel: logLevelOption(options[LOG_LEVEL_FLAG])
+      ...logOptions(options)
    };
 }
 

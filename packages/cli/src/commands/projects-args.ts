@@ -10,6 +10,7 @@
 import {
    exitWithUsage,
    helpRequested,
+   logHelpLines,
    parseFlagOptions,
    parseServerSpawnOptions,
    printHelp,
@@ -32,7 +33,7 @@ export const PROJECTS_VALUE_FLAGS: readonly string[] = PROJECTS_FLAGS;
 
 /** The `--help` text, as data, held to {@link PROJECTS_FLAGS} by a test. */
 export const PROJECTS_HELP: readonly string[] = [
-   'Usage: hydranium-cli projects --server "<cmd> [args...]" [--cwd <dir>] [--log-level <level>]',
+   'Usage: hydranium-cli projects --server "<cmd> [args...]" [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'List projects exposed by the data-server subprocess. Output is newline-delimited',
    'JSON — one project envelope per line.',
@@ -40,17 +41,17 @@ export const PROJECTS_HELP: readonly string[] = [
    'Options:',
    '  --server "<cmd>"   Command-line for the data-server subprocess (required).',
    '  --cwd <dir>        Working directory for the spawned child. Default: cwd.',
-   '  --log-level <lvl>  Log threshold for the spawned server (off|error|warn|info|debug|trace).'
+   ...logHelpLines(19, 'the spawned server')
 ];
 
 export function parseProjectsArgs(args: string[], onError: UsageError = exitWithUsage): ProjectsCommandOptions {
-   const { serverCommand, serverArgs, cwd, logLevel, extra } = parseServerSpawnOptions(args, 'projects', onError);
+   const { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel, extra } = parseServerSpawnOptions(args, 'projects', onError);
    // `projects` declares no options beyond the shared ones, so nothing may
    // survive the spawn parser. Draining `extra` against an empty set is what
    // makes a typo an error here rather than a flag that silently did nothing —
    // the siblings get this from the option list they pass.
    parseFlagOptions(extra, 'projects', [], onError);
-   return { serverCommand, serverArgs, cwd, logLevel };
+   return { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel };
 }
 
 export function runProjectsCommand(args: string[]): Promise<void> {

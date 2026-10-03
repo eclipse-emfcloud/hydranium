@@ -10,9 +10,9 @@
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    parseHarnessArgs,
    printHelp,
    SERVICES_FLAG,
@@ -20,7 +20,7 @@ import {
 } from './harness-args.js';
 import { runLintGrammar, type LintGrammarCommandOptions } from './lint-grammar.js';
 
-const VALUE_FLAGS = [LOG_LEVEL_FLAG] as const;
+const VALUE_FLAGS = [...LOG_VALUE_FLAGS] as const;
 const BOOL_FLAGS = ['--strict', '--json'] as const;
 const REPEATABLE_VALUE_FLAGS = ['--name-property'] as const;
 
@@ -36,7 +36,7 @@ export const LINT_GRAMMAR_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...RE
 
 /** The `--help` text, as data, held to {@link LINT_GRAMMAR_FLAGS} by a test. */
 export const LINT_GRAMMAR_HELP: readonly string[] = [
-   'Usage: hydranium-cli lint-grammar --services <module> [--name-property <p>]... [--strict] [--json] [--log-level <lvl>]',
+   'Usage: hydranium-cli lint-grammar --services <module> [--name-property <p>]... [--strict] [--json] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Check a head's grammar against the framework's conventions — a CI gate: the",
    'process exits non-zero when a violation is found. Read-only: no workspace is',
@@ -52,7 +52,7 @@ export const LINT_GRAMMAR_HELP: readonly string[] = [
    '                         (repeatable). Default: name.',
    '  --strict               Also fail (non-zero exit) on warnings, not only errors.',
    '  --json                 Emit the raw JSON result instead of the human report.',
-   logLevelHelpLine(23)
+   ...logHelpLines(23)
 ];
 
 export function parseLintGrammarArgs(args: string[], onError: UsageError = exitWithUsage): LintGrammarCommandOptions {
@@ -66,7 +66,7 @@ export function parseLintGrammarArgs(args: string[], onError: UsageError = exitW
       nameProperties: values['--name-property'],
       strict: options['--strict'] === 'true',
       json: options['--json'] === 'true',
-      logLevel: logLevelOption(options[LOG_LEVEL_FLAG])
+      ...logOptions(options)
    };
 }
 

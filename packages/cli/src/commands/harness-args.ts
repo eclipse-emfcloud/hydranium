@@ -35,7 +35,7 @@ import type { LogThreshold } from '@hydranium/protocol';
 import { statSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseLogLevelOption } from '../log-level.js';
+import { type LogOptions, parseLogLevelOption } from '../log-level.js';
 
 /**
  * How a parser reports a usage problem. It never returns, so a parser can treat
@@ -68,33 +68,57 @@ export const SERVICES_FLAG = '--services';
  * on which command a caller happened to reach for.
  */
 export const LOG_LEVEL_FLAG = '--log-level';
+export const LOG_FILE_FLAG = '--log-file';
+export const LOG_FILE_LEVEL_FLAG = '--log-file-level';
+
+/** The log flags every subcommand takes, read by {@link logOptions}. */
+export const LOG_VALUE_FLAGS = [LOG_LEVEL_FLAG, LOG_FILE_FLAG, LOG_FILE_LEVEL_FLAG] as const;
 
 /** The value flags {@link parseServerSpawnOptions} consumes itself. */
-export const SERVER_SPAWN_VALUE_FLAGS: readonly string[] = ['--server', '--cwd', LOG_LEVEL_FLAG];
+export const SERVER_SPAWN_VALUE_FLAGS: readonly string[] = ['--server', '--cwd', ...LOG_VALUE_FLAGS];
 
 /**
- * The `--help` line every subcommand describes {@link LOG_LEVEL_FLAG} with.
+ * The `--help` lines every subcommand describes {@link LOG_VALUE_FLAGS} with.
  *
  * Shared text, per-command padding: `command-args.test.ts` compares the flags a
  * help block DESCRIBES against the flags the parser accepts, and it recognises a
- * description by the two-space indent — so the line has to be a real option entry
+ * description by the two-space indent — so each line has to be a real option entry
  * in each block, and the column each block aligns its descriptions at is the
- * block's own.
+ * block's own. A flag too wide for that column takes its description on the
+ * next line, at the column.
  */
-export function logLevelHelpLine(padTo: number): string {
-   return `  ${`${LOG_LEVEL_FLAG} <lvl>`.padEnd(padTo)}Log threshold for the head this boots (off|error|warn|info|debug|trace).`;
+export function logHelpLines(padTo: number, head = 'the head this boots'): string[] {
+   const line = (flag: string, text: string): string[] =>
+      flag.length < padTo - 1 ? [`  ${flag.padEnd(padTo)}${text}`] : [`  ${flag}`, `${' '.repeat(padTo + 2)}${text}`];
+   return [
+      line(`${LOG_LEVEL_FLAG} <lvl>`, `Log threshold for ${head} (off|error|warn|info|debug|trace).`),
+      line(`${LOG_FILE_FLAG} <file>`, `Also write ${head}'s log to <file>; {workspace} expands to the workspace.`),
+      line(`${LOG_FILE_LEVEL_FLAG} <lvl>`, `Threshold for that file, which the log-level setting does not change.`)
+   ].flat();
 }
 
 /**
- * Narrow a raw {@link LOG_LEVEL_FLAG} value that {@link parseHarnessArgs}
- * collected, leaving an absent flag absent.
+ * Narrow the raw {@link LOG_VALUE_FLAGS} values a parser collected, leaving
+ * absent flags absent.
+ *
+ * `--log-file` resolves against the caller's directory: the child may run
+ * elsewhere (`--cwd`), and a relative path would land the log there.
  *
  * Throws rather than reaching `onError`, matching {@link parseServerSpawnOptions}:
  * the level vocabulary belongs to the protocol package, which reports it, and the
  * entry point's catch turns that into the same message-and-exit.
  */
-export function logLevelOption(value: string | undefined): LogThreshold | undefined {
-   return value === undefined ? undefined : parseLogLevelOption(value);
+export function logOptions(options: Readonly<Record<string, string | undefined>>): LogOptions {
+   const level = (flag: string): LogThreshold | undefined => {
+      const value = options[flag];
+      return value === undefined ? undefined : parseLogLevelOption(value, flag);
+   };
+   const logFile = options[LOG_FILE_FLAG];
+   return {
+      logLevel: level(LOG_LEVEL_FLAG),
+      logFile: logFile === undefined ? undefined : path.resolve(logFile),
+      logFileLevel: level(LOG_FILE_LEVEL_FLAG)
+   };
 }
 
 /**
@@ -336,11 +360,10 @@ function kebabToCamel(name: string): string {
 }
 
 /** What {@link parseServerSpawnOptions} recovered from an argv. */
-export interface SpawnOptions {
+export interface SpawnOptions extends LogOptions {
    serverCommand: string;
    serverArgs: string[];
    cwd?: string;
-   logLevel?: LogThreshold;
    /** The tokens this parser did not claim, for the subcommand's own options. */
    extra: string[];
 }
@@ -363,10 +386,10 @@ function isRelativePathToken(token: string, isCommand: boolean): boolean {
 
 /**
  * Shared option parser for subcommands that spawn a data-server child. Consumes
- * `--server` / `--cwd` / `--log-level` and returns the surviving tokens as
+ * `--server` / `--cwd` / the {@link LOG_VALUE_FLAGS} and returns the surviving tokens as
  * `extra` for {@link parseFlagOptions} to finish.
  *
- * An unrecognised `--log-level` value throws rather than reaching `onError`: the
+ * An unrecognised log level value throws rather than reaching `onError`: the
  * level vocabulary belongs to the protocol package, which reports it, and the
  * entry point's catch turns that into the same message-and-exit.
  *
@@ -383,7 +406,7 @@ function isRelativePathToken(token: string, isCommand: boolean): boolean {
 export function parseServerSpawnOptions(args: string[], commandName: string, onError: UsageError = exitWithUsage): SpawnOptions {
    let serverSpec: string | undefined;
    let cwd: string | undefined;
-   let logLevel: LogThreshold | undefined;
+   const logFlags: Record<string, string> = {};
    const extra: string[] = [];
    for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
@@ -399,8 +422,8 @@ export function parseServerSpawnOptions(args: string[], commandName: string, onE
          serverSpec = claim();
       } else if (flag === '--cwd') {
          cwd = claim();
-      } else if (flag === LOG_LEVEL_FLAG) {
-         logLevel = parseLogLevelOption(claim());
+      } else if ((LOG_VALUE_FLAGS as readonly string[]).includes(flag)) {
+         logFlags[flag] = claim();
       } else {
          extra.push(flag);
       }
@@ -425,5 +448,5 @@ export function parseServerSpawnOptions(args: string[], commandName: string, onE
          );
       }
    }
-   return { serverCommand, serverArgs, cwd, logLevel, extra };
+   return { serverCommand, serverArgs, cwd, ...logOptions(logFlags), extra };
 }

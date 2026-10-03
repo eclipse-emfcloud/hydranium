@@ -11,9 +11,9 @@ import { runAstGroundTruth, type AstGroundTruthCommandOptions } from './ast-grou
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    parseHarnessArgs,
    printHelp,
    SERVICES_FLAG,
@@ -21,7 +21,7 @@ import {
 } from './harness-args.js';
 import { OUT_FILE_FLAG } from './headless-harness.js';
 
-const VALUE_FLAGS = [OUT_FILE_FLAG, LOG_LEVEL_FLAG] as const;
+const VALUE_FLAGS = [OUT_FILE_FLAG, ...LOG_VALUE_FLAGS] as const;
 
 /**
  * Every flag `ast-ground-truth` accepts, derived from the sets the parser is
@@ -35,7 +35,7 @@ export const AST_GROUND_TRUTH_VALUE_FLAGS: readonly string[] = AST_GROUND_TRUTH_
 
 /** The `--help` text, as data, held to {@link AST_GROUND_TRUTH_FLAGS} by a test. */
 export const AST_GROUND_TRUTH_HELP: readonly string[] = [
-   'Usage: hydranium-cli ast-ground-truth --services <module> <workspace> [--out-file <file>] [--log-level <lvl>]',
+   'Usage: hydranium-cli ast-ground-truth --services <module> <workspace> [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Tally a workspace's live-model AST nodes by `$type` — the ground truth that",
    '`analyze-heap --validate <gt.json>` checks a heap snapshot against. `<module>`',
@@ -46,12 +46,12 @@ export const AST_GROUND_TRUTH_HELP: readonly string[] = [
    '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
    '  <workspace>           Workspace root (path or file URI) to build (required).',
    '  --out-file <file>     Write the JSON to this file instead of stdout.',
-   logLevelHelpLine(22)
+   ...logHelpLines(22)
 ];
 
 export function parseAstGroundTruthArgs(args: string[], onError: UsageError = exitWithUsage): AstGroundTruthCommandOptions {
    const { servicesModule, workspace, options } = parseHarnessArgs(args, 'ast-ground-truth', VALUE_FLAGS, [], { onError });
-   return { servicesModule, workspace, outFile: options[OUT_FILE_FLAG], logLevel: logLevelOption(options[LOG_LEVEL_FLAG]) };
+   return { servicesModule, workspace, outFile: options[OUT_FILE_FLAG], ...logOptions(options) };
 }
 
 export function runAstGroundTruthCommand(args: string[]): Promise<void> {

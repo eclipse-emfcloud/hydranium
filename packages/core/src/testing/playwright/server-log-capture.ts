@@ -10,7 +10,13 @@
 import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
+import {
+   DEFAULT_LOG_FILE_ENV,
+   DEFAULT_LOG_FILE_LEVEL_ENV,
+   DEFAULT_LOG_LEVEL_ENV,
+   type LogThreshold,
+   parseLogLevel
+} from '@hydranium/protocol';
 import { toLogFileWorkspaceToken } from '../../langium/diagnostics/log-file-token.js';
 
 /**
@@ -69,11 +75,16 @@ export interface CaptureServerLogOptions {
     */
    dir?: string;
    /**
-    * Server log level set on `HYDRANIUM_LOG_LEVEL`. When omitted, respects a
-    * pre-set `HYDRANIUM_LOG_LEVEL` env (so a run can pick the level without editing
-    * the config), then falls back to `'debug'` (a capture at `'info'` is too thin).
+    * Threshold the log file is written at, set on `HYDRANIUM_LOG_FILE_LEVEL`;
+    * the client's log-level setting does not change it. When omitted, respects a
+    * pre-set `HYDRANIUM_LOG_FILE_LEVEL`, then `HYDRANIUM_LOG_LEVEL` env (so a run
+    * can pick the level without editing the config), then falls back to `'debug'`
+    * (a capture at `'info'` is too thin).
+    *
+    * The server's own threshold is left alone: it governs what the client sees,
+    * not the file, and the setting replaces it within moments of startup.
     */
-   level?: string;
+   level?: LogThreshold;
 }
 
 /** A Playwright `reporter` config entry: `[modulePath, options]`. */
@@ -119,7 +130,11 @@ export function captureServerLog(options: CaptureServerLogOptions = {}): Capture
    const env: Record<string, string> = {
       [DEFAULT_LOG_FILE_ENV]: join(dir, `${WORKSPACE_PLACEHOLDER}.log`)
    };
-   env[DEFAULT_LOG_LEVEL_ENV] = options.level ?? process.env[DEFAULT_LOG_LEVEL_ENV] ?? 'debug';
+   env[DEFAULT_LOG_FILE_LEVEL_ENV] =
+      options.level ??
+      parseLogLevel(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]) ??
+      parseLogLevel(process.env[DEFAULT_LOG_LEVEL_ENV]) ??
+      'debug';
    const reporterModule = fileURLToPath(new URL('./server-log-rename-reporter.js', import.meta.url));
    return { env, reporter: [reporterModule, { dir }] };
 }

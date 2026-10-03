@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmS
 import type * as NodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
+import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
 import {
    attachServerLog,
    captureServerLog,
@@ -40,6 +40,14 @@ vi.mock('node:fs', async importOriginal => {
    return { ...actual, appendFileSync: vi.fn(actual.appendFileSync), writeFileSync: vi.fn(actual.writeFileSync) };
 });
 
+function restoreEnv(name: string, value: string | undefined): void {
+   if (value === undefined) {
+      delete process.env[name];
+   } else {
+      process.env[name] = value;
+   }
+}
+
 describe('captureServerLog', () => {
    // A resolved dir is published onto the env var, so every case here has to put
    // the original back or the next one inherits a directory it never configured.
@@ -54,39 +62,70 @@ describe('captureServerLog', () => {
 
    it('sets the framework env var names and defaults the level to debug', () => {
       const previous = process.env[DEFAULT_LOG_LEVEL_ENV];
+      const previousFileLevel = process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
       delete process.env[DEFAULT_LOG_LEVEL_ENV];
+      delete process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
       try {
          const { env } = captureServerLog({ dir: '/tmp/logs' });
          // `join`, not a literal: the capture builds a filesystem path, so the
          // separator is the platform's and a hardcoded `/` asserts the
          // separator rather than the template.
          expect(env[DEFAULT_LOG_FILE_ENV]).toBe(join('/tmp/logs', '{workspace}.log'));
-         expect(env[DEFAULT_LOG_LEVEL_ENV]).toBe('debug');
+         // The file keeps the capture's level once the client's setting
+         // replaces the process level.
+         expect(env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('debug');
+         // The process level governs the client, not the file, so a capture
+         // leaves it to the server's own environment and the setting.
+         expect(env).not.toHaveProperty(DEFAULT_LOG_LEVEL_ENV);
       } finally {
-         if (previous !== undefined) {
-            process.env[DEFAULT_LOG_LEVEL_ENV] = previous;
-         }
+         restoreEnv(DEFAULT_LOG_LEVEL_ENV, previous);
+         restoreEnv(DEFAULT_LOG_FILE_LEVEL_ENV, previousFileLevel);
       }
    });
 
    it('honours an explicit level override', () => {
       const { env } = captureServerLog({ dir: '/tmp/logs', level: 'trace' });
-      expect(env[DEFAULT_LOG_LEVEL_ENV]).toBe('trace');
+      expect(env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('trace');
+      expect(env).not.toHaveProperty(DEFAULT_LOG_LEVEL_ENV);
    });
 
-   it('respects a pre-set HYDRANIUM_LOG_LEVEL env when no explicit level is passed', () => {
-      const previous = process.env[DEFAULT_LOG_LEVEL_ENV];
+   it('prefers a pre-set HYDRANIUM_LOG_FILE_LEVEL over HYDRANIUM_LOG_LEVEL', () => {
+      const previous = { file: process.env[DEFAULT_LOG_FILE_LEVEL_ENV], process: process.env[DEFAULT_LOG_LEVEL_ENV] };
+      process.env[DEFAULT_LOG_FILE_LEVEL_ENV] = 'trace';
       process.env[DEFAULT_LOG_LEVEL_ENV] = 'info';
       try {
-         expect(captureServerLog({ dir: '/tmp/logs' }).env[DEFAULT_LOG_LEVEL_ENV]).toBe('info');
-         // An explicit option still wins over the env.
-         expect(captureServerLog({ dir: '/tmp/logs', level: 'trace' }).env[DEFAULT_LOG_LEVEL_ENV]).toBe('trace');
+         expect(captureServerLog({ dir: '/tmp/logs' }).env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('trace');
       } finally {
-         if (previous !== undefined) {
-            process.env[DEFAULT_LOG_LEVEL_ENV] = previous;
-         } else {
-            delete process.env[DEFAULT_LOG_LEVEL_ENV];
-         }
+         restoreEnv(DEFAULT_LOG_FILE_LEVEL_ENV, previous.file);
+         restoreEnv(DEFAULT_LOG_LEVEL_ENV, previous.process);
+      }
+   });
+
+   it('falls back to a pre-set HYDRANIUM_LOG_LEVEL for the file level', () => {
+      const previous = { file: process.env[DEFAULT_LOG_FILE_LEVEL_ENV], process: process.env[DEFAULT_LOG_LEVEL_ENV] };
+      delete process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
+      process.env[DEFAULT_LOG_LEVEL_ENV] = 'info';
+      try {
+         expect(captureServerLog({ dir: '/tmp/logs' }).env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('info');
+         // An explicit option still wins over the env.
+         expect(captureServerLog({ dir: '/tmp/logs', level: 'trace' }).env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('trace');
+      } finally {
+         restoreEnv(DEFAULT_LOG_FILE_LEVEL_ENV, previous.file);
+         restoreEnv(DEFAULT_LOG_LEVEL_ENV, previous.process);
+      }
+   });
+
+   it('skips a pre-set level the protocol does not define', () => {
+      // Passed through, the server would ignore it and the file would follow
+      // the client's setting with nothing to say so.
+      const previous = { file: process.env[DEFAULT_LOG_FILE_LEVEL_ENV], process: process.env[DEFAULT_LOG_LEVEL_ENV] };
+      process.env[DEFAULT_LOG_FILE_LEVEL_ENV] = 'debgu';
+      delete process.env[DEFAULT_LOG_LEVEL_ENV];
+      try {
+         expect(captureServerLog({ dir: '/tmp/logs' }).env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('debug');
+      } finally {
+         restoreEnv(DEFAULT_LOG_FILE_LEVEL_ENV, previous.file);
+         restoreEnv(DEFAULT_LOG_LEVEL_ENV, previous.process);
       }
    });
 

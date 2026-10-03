@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { LogThreshold, TransferElement } from '@hydranium/protocol';
+import type { TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
-import { logLevelEnv } from '../log-level.js';
+import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
 
 /**
@@ -22,12 +22,10 @@ import { withDataServer } from '../spawn-data-server.js';
  * Test-only `__proxyForTest` bypasses the spawn for unit tests; the
  * production CLI never passes it.
  */
-export interface QueryCommandOptions {
+export interface QueryCommandOptions extends LogOptions {
    readonly serverCommand: string;
    readonly serverArgs?: readonly string[];
    readonly cwd?: string;
-   /** Log threshold for the spawned server, set on its `HYDRANIUM_LOG_LEVEL` env. */
-   readonly logLevel?: LogThreshold;
    readonly uri: string;
    readonly write?: (line: string) => void;
    readonly __proxyForTest?: DataServerProtocol<TransferElement>;
@@ -48,7 +46,7 @@ export async function runQuery(options: QueryCommandOptions): Promise<void> {
          command: options.serverCommand,
          args: options.serverArgs,
          cwd: options.cwd,
-         env: options.logLevel ? logLevelEnv(options.logLevel) : undefined
+         env: logEnv(options)
       },
       async server => {
          const doc = await server.getModelDocument({ uri: options.uri, includeDiagnostics: true });
