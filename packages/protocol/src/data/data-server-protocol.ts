@@ -270,11 +270,11 @@ export type ProjectOf<TServer> = TServer extends ProjectServerProtocol<infer TPr
  * source/URI (an `ElementSource` with no URI resolves to the sole
  * registered language; a multi-language workspace overrides).
  *
- * Generic over the transfer root type only — the resolution result
- * ({@link ReferenceTarget}) carries the resolved node's encoded subtree;
- * candidates and names are diagnostic-free.
+ * Not generic over a server's root type: {@link resolveReference} answers with
+ * a node a reference names, which is no document root, and candidates and
+ * names are diagnostic-free.
  */
-export interface ReferenceServerProtocol<TTransfer extends TransferElement> {
+export interface ReferenceServerProtocol {
    /**
     * List the reference candidates reachable for the property named in `ctx`
     * from its (possibly synthetic) source. Backed by the language's
@@ -287,8 +287,13 @@ export interface ReferenceServerProtocol<TTransfer extends TransferElement> {
     * target's document URI, display fields, and the resolved node's encoded
     * transfer subtree. Resolves via the language's reference services;
     * `undefined` when the reference does not resolve.
+    *
+    * `TElement` is the caller's claim about the target node's type; nothing
+    * checks it, so leave it at the default unless the reference names one type.
     */
-   resolveReference(ref: ReferenceRequest): Promise<ReferenceTarget<TTransfer> | undefined>;
+   resolveReference<TElement extends TransferElement = TransferElement>(
+      ref: ReferenceRequest
+   ): Promise<ReferenceTarget<TElement> | undefined>;
 
    /**
     * Compute the next free name for a new element of `args.type` based on

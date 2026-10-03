@@ -60,7 +60,7 @@ export const REFERENCE_SERVER_PROTOCOL_METHODS = [
    'findReferenceCandidates',
    'resolveReference',
    'findNextName'
-] as const satisfies ReadonlyArray<keyof ReferenceServerProtocol<TransferElement> & string>;
+] as const satisfies ReadonlyArray<keyof ReferenceServerProtocol & string>;
 
 /** Notification-method names on {@link DocumentClientProtocol}. */
 export const DOCUMENT_CLIENT_PROTOCOL_METHODS = [

@@ -73,7 +73,7 @@ export interface DataConformanceDriver<
     * all. Absent means the reference check reports skipped with a named reason
     * rather than failing a head that never claimed the surface.
     */
-   readonly references?: ReferenceServerProtocol<TTransfer>;
+   readonly references?: ReferenceServerProtocol;
 }
 
 /** Options for `runDataConformance`. */

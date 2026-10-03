@@ -418,6 +418,10 @@ export interface DataServerUriWatchRecord {
  * adopters subclass ONLY when they need to decorate wire returns or
  * notifications. The usual adoption path is DI rebinds alone.
  *
+ * **`TTransfer` is not checked.** It declares the union of the transfer roots
+ * the workspace's languages produce. Which root a document has is known only
+ * at runtime, from its language, so a `TTransfer` missing a language compiles.
+ *
  * Lifecycle: the constructor registers framework request handlers (plus
  * any names supplied via {@link DataServerOptions.additionalMethods}) and
  * builds the {@link DataClientProtocol} notification proxy on the same
@@ -927,14 +931,16 @@ export class DataServer<
       return this.resolveReferenceServices(ctx.source).CandidateProvider.find(ctx);
    }
 
-   async resolveReference(ref: ReferenceRequest): Promise<ReferenceTarget<TTransfer> | undefined> {
+   async resolveReference<TElement extends TransferElement = TransferElement>(
+      ref: ReferenceRequest
+   ): Promise<ReferenceTarget<TElement> | undefined> {
       await this.awaitReferencesLinked(ref.source);
       const resolved = this.resolveReferenceServices(ref.source).CandidateProvider.resolveCandidate(ref);
       if (!resolved) {
          return undefined;
       }
-      const element = this.encoder.toTransfer(resolved.node) as TTransfer;
-      return { ...resolved.candidate, element };
+      // The caller's claim about the target's type; see `ReferenceServerProtocol.resolveReference`.
+      return { ...resolved.candidate, element: this.encoder.toTransfer(resolved.node) as TElement };
    }
 
    async findNextName(args: FindNextNameArgs): Promise<string> {
@@ -1148,12 +1154,6 @@ export class DataServer<
     * `TransferEncoder.toTransferDocument` for the walk). `fingerprint` is the
     * caller's {@link computeDocumentFingerprint} of that same state, which
     * spares hashing it twice.
-    *
-    * The encoder field's generic-map binding is widened to
-    * `Record<string, TransferElement>` at the framework-default level, and an
-    * adopter supplying a typed-overlay encoder narrows the runtime shape to
-    * its wire types; {@link withServerState} asserts the adopter's `TTransfer`
-    * matches its encoder's overlay.
     */
    protected envelope(uri: URI, fingerprint?: string): TransferDocument<TTransfer, TDiagnostic> {
       // Resolve through the model service's canonicalizing gateway rather than
@@ -1201,7 +1201,8 @@ export class DataServer<
       }
       return {
          uri: encoded.uri,
-         // Where the adopter's `TTransfer` is asserted to match its encoder's overlay.
+         // The encoder returns the structural base; `TTransfer` is the adopter's
+         // declaration of the roots its languages produce, and nothing checks it.
          model: { ...encoded.model, hash } as TransferModelSnapshot<TTransfer, TDiagnostic>,
          ...(text ? { text } : {})
       };
