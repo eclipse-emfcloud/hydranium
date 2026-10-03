@@ -10,7 +10,7 @@
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
-import type { TransferDocument } from '../transfer-document';
+import type { TextState, TransferDocument } from '../transfer-document';
 
 /**
  * Why an update event fired. Subscribers filter on reason for behaviour
@@ -106,14 +106,20 @@ export type TransferDocumentSavedListener<
 /**
  * Delivered on the data-server when a watched document's text starts or stops
  * differing from its file, as the server last knew the file. The current
- * answer rides on every transfer document the server sends as `dirty`; this
- * carries only its changes, so a client that follows it needs no rebuild to
- * learn of a save.
+ * answer rides on every transfer document the server sends as `text.dirty`;
+ * this carries only its changes, so a client that follows it needs no rebuild
+ * to learn of a save.
  */
 export interface TransferDocumentDirtyChangedEvent {
    /** Canonical URI, keyed as the subscription is. */
    readonly uri: string;
-   readonly dirty: boolean;
+   /**
+    * The text the answer was decided on. It is sent before that text is
+    * built, so a `text.version` ahead of the model a client holds means an
+    * update at this version or a later one follows. Absent when the document
+    * no longer exists, or when the build that follows its release failed.
+    */
+   readonly text?: TextState;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentDirtyChanged`. */

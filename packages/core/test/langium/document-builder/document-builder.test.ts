@@ -21,6 +21,8 @@ import {
 } from '@hydranium/langium';
 import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
+import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
+import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
@@ -764,8 +766,14 @@ describe('HydraniumDocumentBuilder', () => {
          readonly updateCalls: string[][] = [];
          lastUpdateToken?: CancellationToken;
          readonly lock = this.workspaceLock;
-         constructor(document: LangiumDocument | undefined, workspaceState: DocumentState) {
-            super(makeServicesWithDocument(document), { logLevel: 'off' });
+         constructor(
+            document: LangiumDocument | undefined,
+            workspaceState: DocumentState,
+            services: ServerSharedServicesMinimal = makeServicesWithDocument(document)
+         ) {
+            super(services, { logLevel: 'off' });
+            // A re-queue builds through the slot, as the sync service does.
+            Object.assign(services.workspace, { DocumentBuilder: this });
             this.currentState = workspaceState;
          }
          override update(changed: URI[], _deleted: URI[], cancelToken?: CancellationToken): Promise<void> {
@@ -800,13 +808,15 @@ describe('HydraniumDocumentBuilder', () => {
       }
 
       function makeServicesWithDocument(document: LangiumDocument | undefined): ServerSharedServicesMinimal {
-         return makeNoopSharedServices({
+         const services = makeNoopSharedServices({
             Logger: makeNoopLogger(),
             workspace: {
                LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
                WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
             }
          });
+         services.workspace.VersionSyncService = new DefaultVersionSyncService(services as unknown as ServerSharedServices);
+         return services;
       }
 
       const DOC_URI = URI.parse('file:///workspace/a.a');

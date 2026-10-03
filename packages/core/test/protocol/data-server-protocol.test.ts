@@ -56,7 +56,7 @@ const FakeRoot = {
 
 /** Helper that synthesises a `TransferDocument<FakeRoot>` for the fake-impl factories. */
 function makeDocument(uri: string, root: FakeRoot): TransferDocument<FakeRoot> {
-   return TransferDocument.create<FakeRoot>(uri, 1, root);
+   return TransferDocument.create<FakeRoot>(uri, 1, root, 'hash', []);
 }
 
 /**
@@ -121,8 +121,8 @@ describe('DataServerProtocol — type contract', () => {
    it('compiles a fake implementation against a custom AST root', async () => {
       const protocol = makeFakeProtocol();
       const doc = await protocol.getModelDocument({ uri: 'fake://doc' });
-      expect(doc.root?.$type).toBe('FakeRoot');
-      expect(doc.diagnostics).toEqual([]);
+      expect(doc.model?.root.$type).toBe('FakeRoot');
+      expect(doc.model?.diagnostics).toEqual([]);
    });
 
    it('accepts both structured and string `model` payloads', async () => {
@@ -131,16 +131,16 @@ describe('DataServerProtocol — type contract', () => {
          uri: 'fake://doc',
          clientId: 'test',
          model: 'serialised',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
       const fromStruct = await protocol.updateModelDocument({
          uri: 'fake://doc',
          clientId: 'test',
          model: FakeRoot.make('structured'),
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
-      expect(fromString.root?.name).toBe('serialised');
-      expect(fromStruct.root?.name).toBe('structured');
+      expect(fromString.model?.root.name).toBe('serialised');
+      expect(fromStruct.model?.root.name).toBe('structured');
    });
 
    it('watchModelDocument / unwatchModelDocument are void-returning by contract', async () => {

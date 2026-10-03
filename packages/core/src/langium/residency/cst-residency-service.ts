@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { asMutable, type Clock, Debouncer, Format, type Tracer } from '@hydranium/protocol';
+import { asMutable, type Clock, Debouncer, Format, type Tracer, UNRECORDED_VERSION } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
@@ -404,6 +404,15 @@ export class DefaultCstResidencyService implements CstResidencyService {
       const root = document.parseResult?.value;
       if (root === undefined || root.$cstNode === undefined) {
          return 0;
+      }
+      // Readers of the parsed text, the `'text-diagnostics'` fingerprint among
+      // them, otherwise see none once the CST is gone. Recorded in the ledger
+      // directly: no root is produced, and reconciling it with the store would
+      // step a closed document's sequence for a root behind its text.
+      const ledger = this.services.workspace.ModelLedger;
+      const version = ledger.versionOf(root);
+      if (version !== UNRECORDED_VERSION) {
+         ledger.record(root, version, ledger.textOf(root));
       }
       let cleared = 0;
       for (const node of AstUtils.streamAst(root)) {

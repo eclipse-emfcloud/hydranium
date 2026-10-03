@@ -10,7 +10,7 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type BasedOn, type TransferElement } from '@hydranium/protocol';
+import { type BaseVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -57,7 +57,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * state because operation handlers mutate `_sourceRoot` in place during
     * `execute` while `setSourceRoot` only re-runs once the write commits.
     */
-   protected base?: TSourceModel;
+   protected base!: TSourceModel;
 
    /**
     * Persisted-shape projection of the current source root, consumed by GLSP's
@@ -78,51 +78,58 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
 
    /**
     * Persist `model` back to the document store, then capture the resulting
-    * AST root. On a `ConflictError` (the based-on version was superseded),
+    * AST root. On a `ConflictError` (the base version was superseded),
     * reconcile the user's intent against the server's current root via the bound
     * `conflictResolver` and act on the outcome — one declarative policy
     * (force = last-writer-wins, reconciling = field-level merge) shared with
     * undo / redo.
     */
-   async updateSourceModel(model: TSourceModel, basedOn: BasedOn = this.basedOn): Promise<void> {
+   async updateSourceModel(model: TSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
       // Orchestration lives in `reconcileSourceModelWrite` so the multi-document
       // state gets the identical conflict handling; this method supplies only
       // the single-document meaning of persist / project.
-      return reconcileSourceModelWrite<TSourceModel>(model, basedOn, {
-         persist: async (candidate, candidateBasedOn) => {
-            const { root } = await this.persist(candidate, candidateBasedOn);
+      return reconcileSourceModelWrite<TSourceModel>(model, baseVersion, {
+         persist: async (candidate, candidateBaseVersion) => {
+            const { root } = await this.persist(candidate, candidateBaseVersion);
             this.setSourceRoot(this._sourceUri, root);
          },
          refetch: () => this.refetch(),
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
-         onConflictDropped: () => this.refreshSourceRoot()
+         onConflictDropped: () => this.refreshSourceRoot(),
+         maxWrites: this.maxSourceModelWrites
       });
    }
 
    /**
     * Persist hook — the only write-side I/O. Default routes the structured
     * model through the diagram session's `update` (serialize → reparse),
-    * opting into the `ConflictError` gate unless `basedOn` is `'anything'`,
+    * opting into the `ConflictError` gate unless `baseVersion` is `'any'`,
     * and throws without a session. Adopters whose document
     * round-trip differs override this; the orchestration in
     * {@link updateSourceModel} is unchanged.
     */
-   protected async persist(model: TSourceModel, basedOn: BasedOn): Promise<{ root: TRoot }> {
-      const document = await this.requireModelSession().update({ uri: this._sourceUri, model, basedOn });
+   protected async persist(model: TSourceModel, baseVersion: BaseVersion): Promise<{ root: TRoot }> {
+      const document = await this.requireModelSession().update({ uri: this._sourceUri, model, baseVersion });
       return document as unknown as { root: TRoot };
    }
 
    /**
     * Refetch hook — the stored text parsed afresh, as a persisted-shape
-    * projection (or `undefined` when unavailable): theirs, which the
-    * `conflictResolver` replays the user's intent onto. Default uses
-    * {@link AbstractHydraniumGlspState.readCurrentRoot} + the framework
-    * encoder's `'grammar'` mode; adopters override alongside {@link persist}.
+    * projection with the version of that text (or `undefined` when
+    * unavailable): theirs, which the `conflictResolver` replays the user's
+    * intent onto. Default uses {@link AbstractHydraniumGlspState.readCurrentRoot}
+    * + the framework encoder's `'grammar'` mode; adopters override alongside
+    * {@link persist}.
     */
-   protected async refetch(): Promise<TSourceModel | undefined> {
+   protected async refetch(): Promise<VersionedModel<TSourceModel> | undefined> {
       const theirs = await this.readCurrentRoot(this._sourceUri);
-      return theirs ? (this.sharedServices.model.TransferEncoder.toTransfer(theirs, 'grammar') as unknown as TSourceModel) : undefined;
+      return (
+         theirs && {
+            model: this.sharedServices.model.TransferEncoder.toTransfer(theirs.root, 'grammar') as unknown as TSourceModel,
+            baseVersion: theirs.version
+         }
+      );
    }
 }

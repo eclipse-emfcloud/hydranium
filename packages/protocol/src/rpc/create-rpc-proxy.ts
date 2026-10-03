@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
+import { reviveProtocolError } from '../errors';
 import { type BindRpcMethodsOptions, bindRpcMethods } from './bind-rpc-methods';
 import { assertValidMethodNamespace } from './wire-prefix';
 
@@ -198,6 +199,9 @@ function assertSingleArg(wireName: string, args: unknown[]): void {
  * params, results and errors, and a second layer here would double every
  * traced line.
  *
+ * A rejection whose code names one of the framework's typed errors is rethrown
+ * as that class, through {@link reviveProtocolError}.
+ *
  * Accepts either a ready connection or a `Promise<MessageConnection>` —
  * proxy methods called before the promise resolves queue until it does,
  * then dispatch, so adopters can wire the proxy before its underlying
@@ -293,7 +297,8 @@ export function createRpcProxy<T extends object, TLocal extends object = never>(
             const capturedError = new Error(`RPC request '${wireName}' failed`);
             return resolvedConnection
                .then(connection => connection.sendRequest(wireName, args[0]))
-               .catch((err: unknown) => {
+               .catch((rejection: unknown) => {
+                  const err = reviveProtocolError(rejection);
                   if (err instanceof Error && capturedError.stack) {
                      err.stack = `${err.stack ?? err.message}\nCaused by request from:\n${capturedError.stack}`;
                   }

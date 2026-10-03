@@ -18,6 +18,7 @@
     "protocol": {
       "data-server-connect-failed": "Verbindung zum Datenserver fehlgeschlagen: {detail}",
       "data-server-not-ready": "Der Datenserver war nicht rechtzeitig bereit: {detail}",
+      "data-session-answer-without-model": "Der Datenserver hat einen Schreibvorgang für {uri} ohne Modell beantwortet; die Sitzung behandelt diese Antwort als älter als jede Version.",
       "data-session-restore-failed": "{uri} konnte nach der erneuten Verbindung zum Datenserver nicht wiederhergestellt werden: {detail}",
       "data-session-unsaved-lost": "Ungespeicherte Änderungen an {uris} sind beim Abbruch der Verbindung zum Datenserver möglicherweise verloren gegangen.",
       "relay-replay-failed": "Eine gepufferte Nachricht konnte nicht an den weitergeleiteten Transport gesendet werden: {detail}",

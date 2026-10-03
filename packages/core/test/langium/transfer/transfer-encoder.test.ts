@@ -11,24 +11,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { type AstNode, type AstReflection, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { AstDocument } from '../../../src/documents/ast-document-manager.js';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { makeFakeAstNode, makeFakeDocument } from '../../../src/testing/fake-document.js';
 import { makeFakeReflection, makeNoopSharedServices, makeTestServices } from '../../../src/testing/index.js';
 import { makeStubDocumentBuilder } from '../../../src/testing/stub-document-builder.js';
 import {
    type EncodeContext,
+   type EncodedTransferDocument,
    DefaultTransferEncoder,
    type TransferEnvelopeSource,
    type TransferMode
 } from '../../../src/langium/transfer/transfer-encoder.js';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { defineMessage, messageData, renderFrameworkMessage, TransferDiagnostic } from '@hydranium/protocol';
-import type { TransferDocument, TransferElement, TransferTypeFor } from '@hydranium/protocol';
+import type { TransferElement, TransferTypeFor } from '@hydranium/protocol';
 
-function buildEncoder(reflection: AstReflection): DefaultTransferEncoder {
+function buildEncoder(reflection: AstReflection, ledger = new DefaultModelLedger()): DefaultTransferEncoder {
    const services = makeNoopSharedServices({
       AstReflection: reflection,
       // toTransferDocument's internal root cache subscribes to build phases
-      workspace: { DocumentBuilder: makeStubDocumentBuilder() }
+      workspace: { DocumentBuilder: makeStubDocumentBuilder(), ModelLedger: ledger }
    });
    return new DefaultTransferEncoder(services);
 }
@@ -332,11 +334,14 @@ describe('TransferEncoder.toTransferDiagnostic', () => {
 
 describe('TransferEncoder.toTransferDocument', () => {
    it('bundles root + diagnostics + uri/version from a LangiumDocument', () => {
-      const encoder = buildEncoder(makeFakeReflection({ Root: { id: {} } }));
+      const ledger = new DefaultModelLedger();
+      const encoder = buildEncoder(makeFakeReflection({ Root: { id: {} } }), ledger);
+      const root = makeFakeAstNode({ $type: 'Root', id: 'r', _computed: 'x' });
+      ledger.record(root, 7);
       const langiumDocument = {
          uri: URI.parse('file:///a.a'),
-         parseResult: { value: { $type: 'Root', id: 'r', _computed: 'x' } },
-         textDocument: { uri: 'file:///a.a', version: 7 },
+         parseResult: { value: root },
+         textDocument: { uri: 'file:///a.a', version: 8 },
          diagnostics: [
             {
                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
@@ -349,15 +354,15 @@ describe('TransferEncoder.toTransferDocument', () => {
 
       const result = encoder.toTransferDocument(langiumDocument);
       expect(result.uri).toBe('file:///a.a');
-      expect(result.version).toBe(7);
+      expect(result.model.version).toBe(7);
       // full mode default keeps computed props
-      expect(result.root).toEqual({ $type: 'Root', id: 'r', _computed: 'x' });
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0].severity).toBe('warning');
-      expect(result.diagnostics[0].element).toBe('/root');
+      expect(result.model.root).toEqual({ $type: 'Root', id: 'r', _computed: 'x' });
+      expect(result.model.diagnostics).toHaveLength(1);
+      expect(result.model.diagnostics?.[0].severity).toBe('warning');
+      expect(result.model.diagnostics?.[0].element).toBe('/root');
    });
 
-   it('produces an empty diagnostics array when the document has none (undefined)', () => {
+   it('leaves the diagnostics absent when the document is not validated', () => {
       const encoder = buildEncoder(makeFakeReflection({ Root: {} }));
       const langiumDocument = {
          uri: URI.parse('file:///b.a'),
@@ -367,7 +372,7 @@ describe('TransferEncoder.toTransferDocument', () => {
       } as unknown as LangiumDocument;
 
       const result = encoder.toTransferDocument(langiumDocument);
-      expect(result.diagnostics).toEqual([]);
+      expect(result.model).not.toHaveProperty('diagnostics');
    });
 });
 
@@ -385,7 +390,7 @@ describe('TransferEncoder.toTransferDocument (internal root cache)', () => {
       const second = encoder.toTransferDocument(document);
       // the encode walk ran once; the second envelope reused the cached root
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(second.root).toBe(first.root);
+      expect(second.model.root).toBe(first.model.root);
 
       // a (cascade or direct) rebuild drives the document through Linked; the
       // cache must evict so the next read recomputes against the new derived state
@@ -422,15 +427,15 @@ describe('TransferEncoder.toTransferDocument (internal root cache)', () => {
       const document = makeFakeDocument('file:///A.fake', { $type: 'A', name: 'a' });
 
       const first = encoder.toTransferDocument(document);
-      expect((first.root as unknown as Record<string, unknown>)._label).toBe('short');
+      expect((first.model.root as unknown as Record<string, unknown>)._label).toBe('short');
 
       label = 'long';
       const second = encoder.toTransferDocument(document);
-      expect((second.root as unknown as Record<string, unknown>)._label).toBe('long');
+      expect((second.model.root as unknown as Record<string, unknown>)._label).toBe('long');
 
       // Back to the first context: still cached, so it is the SAME object, not a re-encode.
       label = 'short';
-      expect(encoder.toTransferDocument(document).root).toBe(first.root);
+      expect(encoder.toTransferDocument(document).model.root).toBe(first.model.root);
    });
 });
 
@@ -453,11 +458,11 @@ describe('TransferEncoder.astDocumentToTransferDocument', () => {
 
       const result = encoder.astDocumentToTransferDocument(astDocument);
       expect(result.uri).toBe('file:///c.a');
-      expect(result.version).toBe(3);
-      expect(result.root).toEqual({ $type: 'Root', id: 'r', _computed: 'y' });
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0].severity).toBe('error');
-      expect(result.diagnostics[0].element).toBe('/root');
+      expect(result.model.version).toBe(3);
+      expect(result.model.root).toEqual({ $type: 'Root', id: 'r', _computed: 'y' });
+      expect(result.model.diagnostics).toHaveLength(1);
+      expect(result.model.diagnostics?.[0].severity).toBe('error');
+      expect(result.model.diagnostics?.[0].element).toBe('/root');
    });
 });
 
@@ -471,7 +476,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
       protected override assembleTransferDocument<TAst extends AstNode>(
          source: TransferEnvelopeSource<TransferDiagnostic>,
          root: TransferTypeFor<TAst, Record<string, TransferElement>>
-      ): TransferDocument<TransferTypeFor<TAst, Record<string, TransferElement>>, TransferDiagnostic> {
+      ): EncodedTransferDocument<TransferTypeFor<TAst, Record<string, TransferElement>>, TransferDiagnostic> {
          const tagged = { ...(root as object), _assembled: true } as unknown as TransferTypeFor<TAst, Record<string, TransferElement>>;
          return super.assembleTransferDocument<TAst>(source, tagged);
       }
@@ -480,7 +485,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
    function buildTaggingEncoder(): TaggingEncoder {
       const services = makeNoopSharedServices({
          AstReflection: makeFakeReflection({ Root: { id: {} } }),
-         workspace: { DocumentBuilder: makeStubDocumentBuilder() }
+         workspace: { DocumentBuilder: makeStubDocumentBuilder(), ModelLedger: new DefaultModelLedger() }
       });
       return new TaggingEncoder(services);
    }
@@ -490,7 +495,7 @@ describe('TransferEncoder.assembleTransferDocument', () => {
       const document = makeFakeDocument('file:///live.fake', { $type: 'Root', id: 'r' });
 
       const result = encoder.toTransferDocument(document);
-      expect((result.root as unknown as Record<string, unknown>)._assembled).toBe(true);
+      expect((result.model.root as unknown as Record<string, unknown>)._assembled).toBe(true);
    });
 
    it('is the chokepoint for the AstDocument snapshot path too', () => {
@@ -501,9 +506,9 @@ describe('TransferEncoder.assembleTransferDocument', () => {
       // Guards the two-path split: were this path to build the envelope inline
       // instead of delegating, an adopter override of the documented seam would
       // silently miss every facade return.
-      expect((result.root as unknown as Record<string, unknown>)._assembled).toBe(true);
+      expect((result.model.root as unknown as Record<string, unknown>)._assembled).toBe(true);
       expect(result.uri).toBe('file:///snap.a');
-      expect(result.version).toBe(7);
+      expect(result.model.version).toBe(7);
    });
 });
 
@@ -598,7 +603,7 @@ describe('TransferEncoder extension hooks', () => {
       const encoder = new HookedEncoder(services);
       const astDocument = AstDocument.create<AstNode>('file:///ctx.a', 1, makeFakeAstNode({ $type: 'Root', name: 'a' }));
       const result = encoder.astDocumentToTransferDocument(astDocument);
-      expect((result.root as unknown as Record<string, unknown>)._decorated).toBe('@file:///ctx.a');
+      expect((result.model.root as unknown as Record<string, unknown>)._decorated).toBe('@file:///ctx.a');
    });
 
    it('derives the URI from an attached node through the bare toTransfer door', () => {

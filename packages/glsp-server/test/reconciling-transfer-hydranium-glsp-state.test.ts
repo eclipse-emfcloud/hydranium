@@ -12,8 +12,8 @@ import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } f
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState } from '@hydranium/langium';
-import { AstDocument, type ClientSession, type ServerSharedServices } from '@hydranium/core';
-import { type BasedOn, asSnapshotVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
+import { AstDocument, type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
+import { type BaseVersion, asModelVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
@@ -28,6 +28,9 @@ interface TestSourceModel {
    $type: string;
    label: string;
 }
+
+/** The ledger every test's services share; a root is recorded once, so they never collide. */
+const ledger = new DefaultModelLedger();
 
 function makeRoot(label = 'r1'): TestRoot {
    return makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label });
@@ -53,7 +56,7 @@ interface UpdateCall {
    uri: string;
    model: TestSourceModel;
    clientId: string;
-   basedOn: BasedOn;
+   baseVersion: BaseVersion;
 }
 
 interface Harness {
@@ -62,6 +65,8 @@ interface Harness {
    readonly documents: Map<string, FakeDocument>;
    readonly updateCalls: UpdateCall[];
    throwConflictOnNextUpdate: boolean;
+   /** Every update conflicts while set. */
+   alwaysConflict: boolean;
    nextUpdatedRoot: TestRoot;
    validatedRoot: TestRoot;
    /** Text the store holds for every URI; the stub parser turns it into a root labelled with it. */
@@ -88,6 +93,7 @@ function makeHarness(): Harness {
       documents: new Map(),
       updateCalls: [],
       throwConflictOnNextUpdate: false,
+      alwaysConflict: false,
       nextUpdatedRoot: makeRoot('updated'),
       validatedRoot: makeRoot('validated'),
       storeText: 'stored',
@@ -95,7 +101,12 @@ function makeHarness(): Harness {
    };
 }
 
-function createState(harness: Harness): TestReconcilingState {
+/** A diagram that gives up on the first conflicting write. */
+class SingleWriteState extends TestReconcilingState {
+   protected override readonly maxSourceModelWrites = 1;
+}
+
+function createState(harness: Harness, stateClass: new () => TestReconcilingState = TestReconcilingState): TestReconcilingState {
    const childLogger = {
       info: () => undefined,
       warn: (msg: string) => harness.warns.push(msg),
@@ -113,11 +124,13 @@ function createState(harness: Harness): TestReconcilingState {
          for: () => ({ withUri: () => childLogger })
       },
       workspace: {
+         ModelLedger: ledger,
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
          },
          TextDocuments: {
-            get: (uri: string) => ({ version: harness.documents.get(uri)?.textDocument?.version ?? 0, getText: () => harness.storeText })
+            get: (uri: string) => ({ version: harness.documents.get(uri)?.textDocument?.version ?? 0, getText: () => harness.storeText }),
+            version: (uri: string) => harness.documents.get(uri)?.textDocument?.version ?? 0
          },
          LangiumDocumentFactory: {
             fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
@@ -131,13 +144,13 @@ function createState(harness: Harness): TestReconcilingState {
          },
          ModelService: {
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
-            waitForDocumentState: () => Promise.resolve(),
+            ensureDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
             async update(args: UpdateCall): Promise<{ root: TestRoot }> {
                harness.updateCalls.push(args);
-               if (harness.throwConflictOnNextUpdate) {
+               if (harness.throwConflictOnNextUpdate || harness.alwaysConflict) {
                   harness.throwConflictOnNextUpdate = false;
-                  throw new ConflictError(args.uri, 1, 2);
+                  throw new ConflictError(args.uri, asModelVersion(1), 2);
                }
                return { root: harness.nextUpdatedRoot };
             },
@@ -163,7 +176,7 @@ function createState(harness: Harness): TestReconcilingState {
    container.bind(GModelSerializer).toConstantValue({} as GModelSerializer);
    container.bind(GModelIndex).toService(HydraniumGlspIndex);
    container.bind(ClientId).toConstantValue('test-client');
-   container.bind(ModelState).to(TestReconcilingState).inSingletonScope();
+   container.bind(ModelState).to(stateClass).inSingletonScope();
    container.bind(TestReconcilingState).toService(ModelState);
    const state = container.get(TestReconcilingState);
    // The diagram's session is stubbed to record through the service double,
@@ -208,47 +221,54 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          state.setSourceRoot('file:///a.a', makeRoot('before'));
          state.modelSession = undefined;
 
-         await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5))).rejects.toThrow(
+         await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5))).rejects.toThrow(
             /No client session/
          );
          expect(harness.updateCalls).toEqual([]);
       });
 
-      it('persists through the diagram session with uri/model/basedOn and captures the returned root', async () => {
+      it('persists through the diagram session with uri/model/baseVersion and captures the returned root', async () => {
          const harness = makeHarness();
          harness.nextUpdatedRoot = makeRoot('persisted');
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(harness.updateCalls).toEqual([
-            { uri: 'file:///a.a', model: { $type: 'TestRoot', label: 'edited' }, clientId: 'test-client', basedOn: asSnapshotVersion(5) }
+            {
+               uri: 'file:///a.a',
+               model: { $type: 'TestRoot', label: 'edited' },
+               clientId: 'test-client',
+               baseVersion: asModelVersion(5)
+            }
          ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
       });
 
-      it('defaults basedOn to the state snapshot version when the caller passes none', async () => {
+      it('defaults baseVersion to the state model version when the caller passes none', async () => {
          const harness = makeHarness();
+         const parsed = makeRoot('before');
+         ledger.record(parsed, 7);
          harness.documents.set('file:///a.a', {
             uri: { toString: () => 'file:///a.a' },
             state: DocumentState.Validated,
-            parseResult: { value: makeRoot('before') },
+            parseResult: { value: parsed },
             textDocument: { version: 7 }
          });
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         state.setSourceRoot('file:///a.a', parsed);
 
          await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' });
 
-         // v7 and not `'anything'`: the parameter is optional only because GLSP's
+         // v7 and not `'any'`: the parameter is optional only because GLSP's
          // one-argument `JsonModelState.updateSourceModel` has to stay satisfiable,
          // so the default is what decides whether an ungated write is the easy one.
          expect(harness.updateCalls).toHaveLength(1);
-         expect(harness.updateCalls[0].basedOn).toBe(asSnapshotVersion(7));
+         expect(harness.updateCalls[0].baseVersion).toBe(asModelVersion(7));
       });
 
-      it('on a ConflictError with a merged outcome, re-persists the merged model based on anything', async () => {
+      it('on a merged outcome that refetched nothing, re-persists the merged model based on any version', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.nextUpdatedRoot = makeRoot('merged-root');
@@ -256,17 +276,80 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(harness.updateCalls).toHaveLength(2);
-         expect(harness.updateCalls[0].basedOn).toBe(5);
+         expect(harness.updateCalls[0].baseVersion).toBe(5);
          expect(harness.updateCalls[1]).toEqual({
             uri: 'file:///a.a',
             model: { $type: 'TestRoot', label: 'merged' },
             clientId: 'test-client',
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
+      });
+
+      it('gates the merged write on the version the refetch read with its text', async () => {
+         const harness = makeHarness();
+         harness.throwConflictOnNextUpdate = true;
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: makeRoot('built') },
+            textDocument: { version: 9 }
+         });
+         harness.resolve = async (_base, ours, refetch) => {
+            await refetch();
+            return { status: 'merged', merged: ours };
+         };
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
+
+         expect(harness.updateCalls.map(call => call.baseVersion)).toEqual([5, 9]);
+      });
+
+      it('drops the edit with a warning once the merged writes keep conflicting', async () => {
+         const harness = makeHarness();
+         harness.alwaysConflict = true;
+         harness.resolve = async (_base, ours, refetch) => {
+            await refetch();
+            return { status: 'merged', merged: ours };
+         };
+         const refreshed = makeRoot('refreshed');
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: refreshed },
+            textDocument: { version: 2, getText: () => 'stored' }
+         });
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1));
+
+         expect(harness.updateCalls).toHaveLength(3);
+         expect(state.sourceRoot).toBe(refreshed);
+         expect(harness.warns.filter(msg => msg.includes('still conflicting'))).toEqual([
+            'updateSourceModel still conflicting after 3 writes (model v1 / text v2); dropping the diagram edit'
+         ]);
+      });
+
+      it('drops the edit after as many writes as the subclass allows', async () => {
+         const harness = makeHarness();
+         harness.alwaysConflict = true;
+         harness.resolve = async (_base, ours, refetch) => {
+            await refetch();
+            return { status: 'merged', merged: ours };
+         };
+         const state = createState(harness, SingleWriteState);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1));
+
+         expect(harness.updateCalls).toHaveLength(1);
+         expect(harness.warns.filter(msg => msg.includes('still conflicting after 1 write '))).toHaveLength(1);
       });
 
       it('on a no-op outcome, does not persist again and leaves the source root', async () => {
@@ -277,7 +360,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const before = makeRoot('before');
          state.setSourceRoot('file:///a.a', before);
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(harness.updateCalls).toHaveLength(1);
          expect(state.sourceRoot).toBe(before);
@@ -298,14 +381,14 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(harness.updateCalls).toHaveLength(1);
          expect(state.sourceRoot).toBe(refreshed);
          expect(harness.warns.some(msg => msg.includes('conflict'))).toBe(true);
       });
 
-      it('on an unavailable outcome, force-persists based on anything and warns', async () => {
+      it('on an unavailable outcome, force-persists based on any version and warns', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.nextUpdatedRoot = makeRoot('forced');
@@ -313,10 +396,10 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(harness.updateCalls).toHaveLength(2);
-         expect(harness.updateCalls[1].basedOn).toBe('anything');
+         expect(harness.updateCalls[1].baseVersion).toBe('any');
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
          expect(harness.warns.some(msg => msg.includes('unavailable') || msg.includes('forcing'))).toBe(true);
       });
@@ -352,7 +435,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('base-label'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asSnapshotVersion(5));
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
 
          expect(seenBase).toEqual({ $type: 'TestRoot', label: 'base-label' });
          expect(seenRefetch).toEqual({ $type: 'TestRoot', label: 'server-current' });

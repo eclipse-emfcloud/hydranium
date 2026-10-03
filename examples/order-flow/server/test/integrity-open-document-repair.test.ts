@@ -33,7 +33,7 @@
 import { DefaultFileSystemProviderRegistry, DefaultIntegrityService, HydraniumTextDocuments, INTEGRITY_CLIENT_ID } from '@hydranium/core';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
-import { asSnapshotVersion, isConflictError } from '@hydranium/protocol';
+import { asModelVersion, isConflictError } from '@hydranium/protocol';
 import { tick } from '@hydranium/protocol/testing';
 import { readFileSync, writeFileSync } from 'node:fs';
 import type { ApplyWorkspaceEditParams, TextEdit } from 'vscode-languageserver';
@@ -376,7 +376,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          // settled phase, past both integrity passes, and `Validated` follows
          // every settled-phase listener — so each place a repair could be
          // persisted or staged has already run.
-         await session.update({ uri: uriString, model: DUPLICATES, basedOn: 'anything' });
+         await session.update({ uri: uriString, model: DUPLICATES, baseVersion: 'any' });
          await builder.waitUntil(DocumentState.Validated, uri);
 
          expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
@@ -390,7 +390,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          // read the same either way.
          const held = textDocuments.get(uriString)!.getText();
          const heldVersion = textDocuments.version(uriString);
-         await session.save({ uri: uriString, model: held, basedOn: asSnapshotVersion(heldVersion) });
+         await session.save({ uri: uriString, model: held, baseVersion: asModelVersion(heldVersion) });
 
          expect(textDocuments.version(uriString)).toBe(heldVersion);
          expect(onDisk()).toBe(held);
@@ -414,7 +414,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const repaired = await session.update({
             uri: uriString,
             model: DUPLICATES,
-            basedOn: asSnapshotVersion(opened)
+            baseVersion: asModelVersion(opened)
          });
          await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
 
@@ -430,7 +430,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const stale = session.update({
             uri: uriString,
             model: DUPLICATES,
-            basedOn: asSnapshotVersion(opened + 1)
+            baseVersion: asModelVersion(opened + 1)
          });
          await expect(stale).rejects.toSatisfy(isConflictError);
       });

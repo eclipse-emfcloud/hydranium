@@ -36,6 +36,7 @@ import {
    AstDocument,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
+   DefaultModelLedger,
    type ServerSharedServices,
    UNKNOWN_CLIENT_ID
 } from '@hydranium/core';
@@ -173,7 +174,7 @@ function makeSessionModelService(
    const calls = options.calls ?? [];
    return {
       snapshot: () => undefined,
-      getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri } : undefined),
+      getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri, parseResult: { value: { $type: 'Root' } } } : undefined),
       createSession(label: string, clientId: string): ModelClientSession<AstNode> {
          calls.push(`createSession ${label} ${clientId}`);
          if (options.refuse) {
@@ -294,7 +295,7 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
 class PolicyStorage extends HydraniumGlspStorage<TestRoot> {
    /** Deliver a dirty flip of `uri`, as the text store does. */
    dirtyChanged(uri: string, dirty: boolean): void {
-      this.handleDirtyChanged({ uri: asCanonicalUri(uri), dirty });
+      this.handleDirtyChanged({ uri: asCanonicalUri(uri), text: { version: 1, hash: '', dirty } });
    }
 }
 
@@ -336,6 +337,7 @@ function createPolicyStorage(options: {
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(
       makeNoopSharedServices<ServerSharedServices>({
          workspace: {
+            ModelLedger: new DefaultModelLedger(),
             AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
             TextDocuments: {
                isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
@@ -466,6 +468,7 @@ describe('HydraniumGlspStorage', () => {
                }
             },
             workspace: {
+               ModelLedger: new DefaultModelLedger(),
                AstDocumentManager: {
                   save: async (uri: string) => {
                      calls.push(`save ${uri}`);

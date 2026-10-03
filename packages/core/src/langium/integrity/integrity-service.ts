@@ -399,28 +399,19 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       // during the re-parse saw the text on disk, which in `'editor'` sync mode
       // is the PRE-repair text. Leave the sequence describing that and the next
       // open hashes the repair, finds a mismatch and steps the version again, so
-      // every based-on version taken from this build is stale before it is used.
-      // Falls back to the pre-re-parse number for a URI the store never tracked,
-      // where there is no sequence to advance; an OPEN document answers
-      // `undefined` and keeps the store's own version, which is not this
+      // every base version taken from this build is stale before it is used.
+      // An open document keeps the store's own version, which is not this
       // method's to move.
       //
       // Deliberately NOT gated on cancellation, unlike the entry to this method:
       // `syncCorrections` has already written or staged the repair by now, so a
       // preempted build that skipped this would leave the sequence describing
       // text that is no longer there.
-      //
-      // Gated on the document being closed, because the fallback restores a
-      // number this method captured off whatever object it started with — and
-      // for a separately created document that is its own seeded numbering, not
-      // the store's. Applying it to the store's document (which the re-parse has
-      // by then made `textDocument`) would roll the shared version backwards.
-      // The store's own answer for an open document is `undefined` either way.
       if (!this.textDocuments.isOpen(document.textDocument.uri)) {
-         const reconciled = this.textDocuments.reconcileExternalContent(document.textDocument.uri, newText) ?? version;
-         if (document.textDocument.version !== reconciled) {
-            this.textDocuments.update(document.textDocument, [], reconciled);
-         }
+         // The root describes the repair too; left at the re-parse's number, a
+         // syncing read waits for a build nothing requests. The CST is still
+         // the unrepaired text, so the repair is reported as the parsed text.
+         this.services.shared.workspace.VersionSyncService.modelProduced(document, { text: newText });
       }
    }
 

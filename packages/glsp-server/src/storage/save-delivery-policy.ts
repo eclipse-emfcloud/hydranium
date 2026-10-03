@@ -17,7 +17,7 @@
  * delivered as a bound option (see the {@link SaveDeliveryPolicy} symbol) rather
  * than a behaviour hook.
  *
- * **Neither arm guards on a based-on version.** A save flushes the store's
+ * **Neither arm guards on a base version.** A save flushes the store's
  * settled text rather than authoring from the diagram's captured model, and the
  * store already holds every other client's change — so a guard here refuses a
  * write whose content is already correct. The gate that does exist sits on the

@@ -8,9 +8,18 @@
  ********************************************************************************/
 
 import { describe, expect, it, vi } from 'vitest';
-import { ErrorCodes } from 'vscode-jsonrpc';
+import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { DATA_CLIENT_PROTOCOL_METHODS, DATA_SERVER_PROTOCOL_METHODS } from '../../src/data/data-protocol-methods';
+import {
+   CONFLICT_ERROR_CODE,
+   ConflictError,
+   DocumentNotOpenError,
+   DuplicateClientIdError,
+   ReservedClientIdError,
+   SessionClosedError
+} from '../../src/errors';
 import { LatencyCollector } from '../../src/latency-collector';
+import { asModelVersion } from '../../src/model-service/base-version';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { createRpcProxy, defaultIsNotification } from '../../src/rpc/create-rpc-proxy';
 import { tick, waitFor } from '../../src/testing';
@@ -334,6 +343,97 @@ describe('createRpcProxy with localTarget binding', () => {
       } finally {
          pair.dispose();
       }
+   });
+});
+
+describe('createRpcProxy revives the typed errors', () => {
+   async function rejectionOf(thrown: unknown, renderErrorMessage?: (error: ResponseError<unknown>) => string): Promise<unknown> {
+      const pair = makeDuplexConnectionPair();
+      try {
+         const target = {
+            fail: async (): Promise<never> => {
+               throw thrown;
+            }
+         };
+         bindRpcMethods(pair.left, target, ['fail'], { methodNamespace: 'demo/', renderErrorMessage });
+         const proxy = createRpcProxy<{ fail(): Promise<unknown> }>(pair.right, { methodNamespace: 'demo/' });
+         return await proxy.fail().then(
+            () => expect.unreachable('expected the request to reject'),
+            (err: unknown) => err
+         );
+      } finally {
+         pair.dispose();
+      }
+   }
+
+   it('revives a ConflictError with its version mismatch', async () => {
+      const thrown = new ConflictError('file:///a.of', asModelVersion(3), 5);
+      const caught = await rejectionOf(thrown);
+      expect(caught).toBeInstanceOf(ConflictError);
+      const conflict = caught as ConflictError;
+      expect([conflict.uri, conflict.baseVersion, conflict.actualVersion]).toEqual(['file:///a.of', 3, 5]);
+      expect([conflict.code, conflict.message, conflict.data]).toEqual([thrown.code, thrown.message, thrown.data]);
+   });
+
+   it('revives a SessionClosedError with its client id and message', async () => {
+      const thrown = new SessionClosedError('client-1', 'Closed by the host.');
+      const caught = await rejectionOf(thrown);
+      expect(caught).toBeInstanceOf(SessionClosedError);
+      const closed = caught as SessionClosedError;
+      expect([closed.clientId, closed.code, closed.message, closed.data]).toEqual(['client-1', thrown.code, thrown.message, thrown.data]);
+   });
+
+   it('revives a DocumentNotOpenError with its uri and client id', async () => {
+      const thrown = new DocumentNotOpenError('file:///a.of', 'client-1');
+      const caught = await rejectionOf(thrown);
+      expect(caught).toBeInstanceOf(DocumentNotOpenError);
+      const notOpen = caught as DocumentNotOpenError;
+      expect([notOpen.uri, notOpen.clientId, notOpen.code, notOpen.data]).toEqual(['file:///a.of', 'client-1', thrown.code, thrown.data]);
+   });
+
+   it('revives a DuplicateClientIdError with its client id', async () => {
+      const thrown = new DuplicateClientIdError('client-1');
+      const caught = await rejectionOf(thrown);
+      expect(caught).toBeInstanceOf(DuplicateClientIdError);
+      const duplicate = caught as DuplicateClientIdError;
+      expect([duplicate.clientId, duplicate.code, duplicate.message, duplicate.data]).toEqual([
+         'client-1',
+         thrown.code,
+         thrown.message,
+         thrown.data
+      ]);
+   });
+
+   it('revives a ReservedClientIdError with its client id', async () => {
+      const thrown = new ReservedClientIdError('hydranium-glsp');
+      const caught = await rejectionOf(thrown);
+      expect(caught).toBeInstanceOf(ReservedClientIdError);
+      const reserved = caught as ReservedClientIdError;
+      expect([reserved.clientId, reserved.code, reserved.message, reserved.data]).toEqual([
+         'hydranium-glsp',
+         thrown.code,
+         thrown.message,
+         thrown.data
+      ]);
+   });
+
+   it('keeps the message the server rendered', async () => {
+      const caught = await rejectionOf(new ConflictError('file:///a.of', asModelVersion(3), 5), () => 'Rendered.');
+      expect(caught).toBeInstanceOf(ConflictError);
+      expect((caught as ConflictError).message).toBe('Rendered.');
+   });
+
+   it('passes a code that is not one of the typed errors through unchanged', async () => {
+      const caught = await rejectionOf(new ResponseError(4242, 'Not ours.', { uri: 'file:///a.of' }));
+      expect(caught).toBeInstanceOf(ResponseError);
+      expect(Object.getPrototypeOf(caught)).toBe(ResponseError.prototype);
+      expect(caught).toMatchObject({ code: 4242, message: 'Not ours.', data: { uri: 'file:///a.of' } });
+   });
+
+   it('passes one of our codes through unchanged when its data lacks the fields the class reads', async () => {
+      const caught = await rejectionOf(new ResponseError(CONFLICT_ERROR_CODE, 'Not ours.', { uri: 'file:///a.of' }));
+      expect(Object.getPrototypeOf(caught)).toBe(ResponseError.prototype);
+      expect(caught).toMatchObject({ code: CONFLICT_ERROR_CODE, message: 'Not ours.', data: { uri: 'file:///a.of' } });
    });
 });
 

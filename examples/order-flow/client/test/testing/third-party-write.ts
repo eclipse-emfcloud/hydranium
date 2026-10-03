@@ -13,7 +13,7 @@ import { isDuplicateClientIdError, type TransferElement } from '@hydranium/proto
 export interface ThirdPartyWriteServer<TTransfer extends TransferElement> {
    createSession(args: { clientId: string }): Promise<void>;
    openModelDocument(args: { uri: string; clientId: string }): Promise<unknown>;
-   updateModelDocument(args: { uri: string; clientId: string; model: TTransfer | string; basedOn: 'anything' }): Promise<unknown>;
+   updateModelDocument(args: { uri: string; clientId: string; model: TTransfer | string; baseVersion: 'any' }): Promise<unknown>;
 }
 
 /**
@@ -38,5 +38,5 @@ export async function thirdPartyWrite<TTransfer extends TransferElement>(
       }
    });
    await server.openModelDocument({ uri, clientId });
-   await server.updateModelDocument({ uri, clientId, model, basedOn: 'anything' });
+   await server.updateModelDocument({ uri, clientId, model, baseVersion: 'any' });
 }

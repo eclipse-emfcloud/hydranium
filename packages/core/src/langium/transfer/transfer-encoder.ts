@@ -8,11 +8,12 @@
  ********************************************************************************/
 
 import {
+   asModelVersion,
    hasMessageIdentity,
+   type TransferModelSnapshot,
    type Tracer,
    type TransferDiagnostic,
    type TransferElement,
-   TransferDocument,
    type TransferTypeFor
 } from '@hydranium/protocol';
 import { AstUtils, type AstNode, DocumentCache, DocumentState, isAstNode, isReference, type LangiumDocument } from '@hydranium/langium';
@@ -75,11 +76,21 @@ export interface EncodeContext {
  * `diagnostics` accepts either the wire shape (an already-projected
  * `TDiagnostic`, as a snapshot may carry) or a raw LSP {@link Diagnostic}; the
  * assembly projects each through {@link TransferEncoder.toTransferDiagnostic}.
+ * Absent for a document not validated yet, and left absent on the wire.
  */
 export interface TransferEnvelopeSource<TDiagnostic> {
    readonly uri: string;
    readonly version: number;
-   readonly diagnostics: readonly (TDiagnostic | Diagnostic)[];
+   readonly diagnostics?: readonly (TDiagnostic | Diagnostic)[];
+}
+
+/**
+ * A `TransferDocument` as the encoder produces it: the model block without
+ * its `hash`, which the data server computes from the encoded model.
+ */
+export interface EncodedTransferDocument<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic> {
+   uri: string;
+   model: Omit<TransferModelSnapshot<TTransfer, TDiagnostic>, 'hash'>;
 }
 
 /**
@@ -106,10 +117,10 @@ export interface TransferEnvelopeSource<TDiagnostic> {
  */
 export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = TransferDiagnostic> {
    toTransfer<T extends AstNode>(ast: T, mode?: TransferMode): TransferElement;
-   toTransferDocument(langiumDocument: LangiumDocument): TransferDocument<TransferElement, TDiagnostic>;
+   toTransferDocument(langiumDocument: LangiumDocument): EncodedTransferDocument<TransferElement, TDiagnostic>;
    astDocumentToTransferDocument<TAst extends AstNode>(
       document: AstDocument<TAst, AstDiagnostic>
-   ): TransferDocument<TransferElement, TDiagnostic>;
+   ): EncodedTransferDocument<TransferElement, TDiagnostic>;
    toTransferDiagnostic(diagnostic: AstDiagnostic): TDiagnostic;
 }
 
@@ -153,7 +164,7 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
  *   to special-case reference encoding or to drop specific value shapes.
  * Envelope-level seams:
  * - {@link toTransferDocument} — bundle root + diagnostics into the wire
- *   {@link TransferDocument} envelope. Override to filter / merge
+ *   {@link EncodedTransferDocument} envelope. Override to filter / merge
  *   diagnostics from auxiliary sources or to project a synthesised root.
  * - {@link toTransferDiagnostic} — project a {@link AstDiagnostic}
  *   (the framework validator's output) to {@link TDiagnostic}.
@@ -336,7 +347,7 @@ export class DefaultTransferEncoder<
    }
 
    /**
-    * Build a wire {@link TransferDocument} envelope from a built
+    * Build a wire {@link EncodedTransferDocument} envelope from a built
     * {@link LangiumDocument}. The `'full'` root is served from the internal
     * {@link rootCache} (memoised per document until it next rebuilds), under
     * {@link rootCacheKey} — so the data-server's fingerprint and emitted
@@ -360,7 +371,7 @@ export class DefaultTransferEncoder<
     */
    toTransferDocument<TAst extends AstNode>(
       langiumDocument: LangiumDocument
-   ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
+   ): EncodedTransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
       const context = this.createEncodeContext('full', langiumDocument.uri.toString());
       const root = this.rootCache.get(langiumDocument.uri, this.rootCacheKey(context), () =>
          this.encodeNode(langiumDocument.parseResult.value, context)
@@ -368,8 +379,8 @@ export class DefaultTransferEncoder<
       return this.assembleTransferDocument<TAst>(
          {
             uri: langiumDocument.textDocument.uri,
-            version: langiumDocument.textDocument.version,
-            diagnostics: langiumDocument.diagnostics ?? []
+            version: this.services.workspace.ModelLedger.versionOf(langiumDocument.parseResult.value),
+            diagnostics: langiumDocument.diagnostics
          },
          root
       );
@@ -390,17 +401,13 @@ export class DefaultTransferEncoder<
    protected assembleTransferDocument<TAst extends AstNode>(
       source: TransferEnvelopeSource<TDiagnostic>,
       root: TransferTypeFor<TAst, TTransferMap>
-   ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
-      return TransferDocument.create(
-         source.uri,
-         source.version,
-         root,
-         source.diagnostics.map(diagnostic => this.toTransferDiagnostic(diagnostic as AstDiagnostic))
-      );
+   ): EncodedTransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
+      const diagnostics = source.diagnostics?.map(diagnostic => this.toTransferDiagnostic(diagnostic as AstDiagnostic));
+      return { uri: source.uri, model: { root, version: asModelVersion(source.version), ...(diagnostics ? { diagnostics } : {}) } };
    }
 
    /**
-    * Build a wire {@link TransferDocument} envelope from a server-internal
+    * Build a wire {@link EncodedTransferDocument} envelope from a server-internal
     * {@link AstDocument} snapshot (the AST-typed envelope emitted by
     * `AstDocumentManager.onUpdate` / `onSave` and returned from
     * `ModelService.request` / `update` / `save`). Distinct from
@@ -422,7 +429,7 @@ export class DefaultTransferEncoder<
     */
    astDocumentToTransferDocument<TAst extends AstNode>(
       document: AstDocument<TAst, AstDiagnostic>
-   ): TransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
+   ): EncodedTransferDocument<TransferTypeFor<TAst, TTransferMap>, TDiagnostic> {
       const root = this.encodeNode(document.root, this.createEncodeContext('full', document.uri)) as TransferTypeFor<TAst, TTransferMap>;
       return this.assembleTransferDocument<TAst>(document, root);
    }

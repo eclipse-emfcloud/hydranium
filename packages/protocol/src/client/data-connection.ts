@@ -172,7 +172,7 @@ export class DataConnection<
             connected: () => this.connected(),
             reportError: (error, reported) => this.reportError(error, reported),
             restoreDirty: event => {
-               if (this.dirtyStates.get(event.uri) !== event.dirty) {
+               if (this.dirtyStates.get(event.uri) !== (event.text?.dirty ?? false)) {
                   this.deliverDirty(event);
                }
             },
@@ -234,7 +234,7 @@ export class DataConnection<
 
    /** Record `event` in {@link dirtyStates} and hand it to the client. */
    protected deliverDirty(event: TransferDocumentDirtyChangedEvent): void {
-      this.dirtyStates.set(event.uri, event.dirty);
+      this.dirtyStates.set(event.uri, event.text?.dirty ?? false);
       const client = this.client as unknown as Partial<Pick<DataClientProtocol<TTransfer>, 'onDocumentDirtyChanged'>>;
       client.onDocumentDirtyChanged?.(event);
    }

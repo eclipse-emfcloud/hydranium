@@ -11,7 +11,7 @@ import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { type ClientSession, type ClientSessionWriteArgs } from '@hydranium/core';
-import { type BasedOn, type TransferElement } from '@hydranium/protocol';
+import { asModelVersion, type BaseVersion, type ModelVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -30,6 +30,13 @@ export interface MultiDocumentSourceModel<TPrimary extends TransferElement = Tra
    primary: TPrimary;
    /** Projection of each registered secondary document, keyed by its URI. */
    secondaries: Record<string, TransferElement>;
+}
+
+/** A write set, with the version of each secondary's text it was projected from, keyed by URI. */
+export interface VersionedMultiDocumentSourceModel<TPrimary extends TransferElement = TransferElement> extends VersionedModel<
+   MultiDocumentSourceModel<TPrimary>
+> {
+   readonly secondaryVersions: Readonly<Record<string, ModelVersion>>;
 }
 
 /**
@@ -51,16 +58,17 @@ export interface MultiDocumentSourceModel<TPrimary extends TransferElement = Tra
  * and write order carries no meaning.
  *
  * **Every document of the set is gated.** The primary on the caller's
- * `basedOn`, each secondary on {@link secondaryBasedOn}, by default the version
+ * `baseVersion`, each secondary on {@link secondaryBaseVersion}, by default the version
  * it had when the source root was last read. A conflict on any of them is
- * reconciled against the whole write set. A write based on `'anything'` — a
- * merged retry, an undo or redo replaying a patch — forces every document of
- * the set.
+ * reconciled against the whole write set, and the merged retry is gated on
+ * the versions its refetch read. A write based on `'any'` — an undo or redo
+ * replaying a patch — forces every document of the set.
  *
  * A secondary is written only while the diagram's session has it open. The
  * storage opens it as it joins the write set, and {@link openForWrite} opens it
  * again before each write; an adopter whose write set can name a document that
- * does not exist yet overrides {@link openForWrite} to create it.
+ * does not exist yet overrides {@link openForWrite} to create it through
+ * {@link createSecondaryDocument}.
  */
 @injectable()
 export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary extends TransferElement = TransferElement>
@@ -72,7 +80,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * {@link setSourceRoot}. Same role as the single-document base: the state a
     * forward-write conflict reconciles the user's intent against.
     */
-   protected base?: MultiDocumentSourceModel<TPrimary>;
+   protected base!: MultiDocumentSourceModel<TPrimary>;
 
    /**
     * Projection of the primary plus every registered secondary, in the framework
@@ -128,46 +136,66 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * policy exactly as the single-document state does — the orchestration is
     * shared.
     */
-   async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn = this.basedOn): Promise<void> {
-      return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, basedOn, {
-         persist: async (candidate, candidateBasedOn) => {
-            const { root } = await this.persist(candidate, candidateBasedOn);
+   async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
+      let secondaryVersions: Readonly<Record<string, ModelVersion>> | undefined;
+      return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, baseVersion, {
+         persist: async (candidate, candidateBaseVersion) => {
+            const { root } = await this.persist(candidate, candidateBaseVersion, secondaryVersions);
             this.setSourceRoot(this._sourceUri, root);
          },
-         refetch: () => this.refetch(),
+         refetch: async () => {
+            const refetched = await this.refetch();
+            secondaryVersions = refetched?.secondaryVersions;
+            return refetched;
+         },
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
-         onConflictDropped: () => this.refreshSourceRoot()
+         onConflictDropped: () => this.refreshSourceRoot(),
+         maxWrites: this.maxSourceModelWrites
       });
    }
 
    /**
     * Write hook — every document of `model` that changed, opened first through
     * {@link openForWrite}, in one `updateAll` on the diagram's session: the
-    * primary gated on `basedOn`, each secondary on {@link secondaryBasedOn}, or
-    * every document on `'anything'` when `basedOn` is `'anything'`. Resolves to
+    * primary gated on `baseVersion`, each secondary on its entry in
+    * `secondaryVersions` (a refetch's) or else {@link secondaryBaseVersion}, or
+    * every document on `'any'` when `baseVersion` is `'any'`. Resolves to
     * the primary's root, the one already captured when the primary did not
     * change. A write that bypasses `updateAll` gives up the all-or-none
     * guarantee the class describes. Throws without a session
     * ({@link requireModelSession}).
     */
-   protected async persist(model: MultiDocumentSourceModel<TPrimary>, basedOn: BasedOn): Promise<{ root: TRoot }> {
-      const primaryChanged = this.hasChanged(this.base?.primary, model.primary);
-      const updates: ClientSessionWriteArgs<TransferElement>[] = primaryChanged
-         ? [{ uri: this._sourceUri, model: model.primary, basedOn }]
-         : [];
-      for (const [uri, secondary] of Object.entries(model.secondaries)) {
-         if (this.hasChanged(this.base?.secondaries[uri], secondary)) {
-            updates.push({ uri, model: secondary, basedOn: basedOn === 'anything' ? 'anything' : this.secondaryBasedOn(uri) });
-         }
-      }
-      if (updates.length === 0) {
+   protected async persist(
+      model: MultiDocumentSourceModel<TPrimary>,
+      baseVersion: BaseVersion,
+      secondaryVersions?: Readonly<Record<string, ModelVersion>>
+   ): Promise<{ root: TRoot }> {
+      const primaryChanged = this.hasChanged(this.base.primary, model.primary);
+      const changedSecondaries = Object.entries(model.secondaries).filter(([uri, secondary]) =>
+         this.hasChanged(this.base.secondaries[uri], secondary)
+      );
+      if (!primaryChanged && changedSecondaries.length === 0) {
          return { root: this._sourceRoot };
       }
       const session = this.requireModelSession();
-      for (const update of updates) {
-         await this.openForWrite(session, update.uri);
+      if (primaryChanged) {
+         await this.openForWrite(session, this._sourceUri);
+      }
+      for (const [uri] of changedSecondaries) {
+         await this.openForWrite(session, uri);
+      }
+      // Based after the opens, so a secondary created there is gated on the version it was created at.
+      const updates: ClientSessionWriteArgs<TransferElement>[] = primaryChanged
+         ? [{ uri: this._sourceUri, model: model.primary, baseVersion }]
+         : [];
+      for (const [uri, secondary] of changedSecondaries) {
+         updates.push({
+            uri,
+            model: secondary,
+            baseVersion: baseVersion === 'any' ? 'any' : (secondaryVersions?.[uri] ?? this.secondaryBaseVersion(uri))
+         });
       }
       const documents = await session.updateAll({ updates });
       return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot };
@@ -197,45 +225,59 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * Make sure the diagram's session has `uri` open before the write set is
     * written. Default: open it, a no-op for a document the session already
     * has open. Override to create a document the write set names before it
-    * exists, through `session.create`: `updateAll` opens nothing.
+    * exists, through {@link createSecondaryDocument}: `updateAll` opens nothing.
     */
    protected openForWrite(session: ClientSession<AstNode>, uri: string): Promise<void> {
       return session.open(uri);
    }
 
    /**
+    * Create the secondary `uri` holding `text` through `session.create`, and
+    * base its write on the version the created document took. The version
+    * recorded while it did not exist matches no write, so the write conflicts.
+    */
+   protected async createSecondaryDocument(session: ClientSession<AstNode>, uri: string, text: string): Promise<void> {
+      const created = await session.create(uri, text);
+      if (this._secondaryVersions.has(uri)) {
+         this._secondaryVersions.set(uri, asModelVersion(created));
+      }
+   }
+
+   /**
     * What a secondary write declares it was based on. Default: the version the
     * secondary had when the source root was last read
-    * ({@link AbstractHydraniumGlspState.snapshotVersionOf}), so a foreign edit
+    * ({@link AbstractHydraniumGlspState.baseVersionOf}), so a foreign edit
     * to it since is reported as a conflict and reconciled rather than
-    * overwritten; `'anything'` for a secondary with no recorded version.
-    * Return `'anything'` to force secondary writes.
+    * overwritten; `'any'` for a secondary with no recorded version.
+    * Return `'any'` to force secondary writes.
     */
-   protected secondaryBasedOn(uri: string): BasedOn {
-      return this.snapshotVersionOf(uri) ?? 'anything';
+   protected secondaryBaseVersion(uri: string): BaseVersion {
+      return this.baseVersionOf(uri) ?? 'any';
    }
 
    /**
     * Refetch hook — the current projection across the write set, each document
-    * read through {@link AbstractHydraniumGlspState.readCurrentRoot}: theirs,
-    * which the conflict resolver replays the user's intent onto.
-    * Returns `undefined` when the PRIMARY cannot be read, since a reconcile
-    * without it has nothing to merge into; an unreadable secondary is omitted the
-    * same way {@link sourceModel} omits one.
+    * read through {@link AbstractHydraniumGlspState.readCurrentRoot}, with the
+    * versions read alongside: theirs, which the conflict resolver replays the
+    * user's intent onto. Returns `undefined` when the PRIMARY cannot be read,
+    * since a reconcile without it has nothing to merge into; an unreadable
+    * secondary is omitted the same way {@link sourceModel} omits one.
     */
-   protected async refetch(): Promise<MultiDocumentSourceModel<TPrimary> | undefined> {
+   protected async refetch(): Promise<VersionedMultiDocumentSourceModel<TPrimary> | undefined> {
       const theirs = await this.readCurrentRoot(this._sourceUri);
       if (!theirs) {
          return undefined;
       }
       const secondaries: Record<string, TransferElement> = {};
+      const secondaryVersions: Record<string, ModelVersion> = {};
       for (const uri of this.secondaryUris) {
-         const root = await this.readCurrentRoot(uri);
-         if (root) {
-            secondaries[uri] = this.projectRoot(root);
+         const read = await this.readCurrentRoot(uri);
+         if (read) {
+            secondaries[uri] = this.projectRoot(read.root);
+            secondaryVersions[uri] = read.version;
          }
       }
-      return { primary: this.projectRoot<TPrimary>(theirs), secondaries };
+      return { model: { primary: this.projectRoot<TPrimary>(theirs.root), secondaries }, baseVersion: theirs.version, secondaryVersions };
    }
 
    /** Project a currently-loaded document's root, or `undefined` when it is not loaded. */

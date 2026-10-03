@@ -132,6 +132,17 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
       return this.langiumDocumentFactory.fromString('', uri);
    }
 
+   /**
+    * Registers `document`, then reports it to `VersionSyncService.modelProduced`:
+    * a first load parses outside the build, so no build's re-parse reports it.
+    * That marks one below `Parsed`, such as the builder's placeholder for a new
+    * file, as a placeholder. A rejected duplicate is not reported.
+    */
+   override addDocument(document: LangiumDocument): void {
+      super.addDocument(document);
+      this.services.workspace.VersionSyncService.modelProduced(document);
+   }
+
    override async getOrCreateDocument(uri: URI): Promise<LangiumDocument<AstNode>> {
       const resolved = this.uriPolicy.loadUri(uri);
       if (resolved) {

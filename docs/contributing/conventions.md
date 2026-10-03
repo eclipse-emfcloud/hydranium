@@ -1399,7 +1399,9 @@ three outcomes:
   the reader's locale.
 - **(b) Developer-addressed, and a caller must react** — a typed error: a class,
   a JSON-RPC code and an `is*` guard, with an English message. The code is what
-  a caller branches on after an RPC, where the class does not survive.
+  crosses an RPC; a class whose fields a caller reads after one also takes an
+  entry in the reviver map beside it in `errors.ts`, which `createRpcProxy`
+  rebuilds it through.
 - **(c) Developer-addressed, and nothing reacts** — a plain `Error`, or a named
   `Error` subclass with no code and no guard, where the name tells a log reader
   what failed.
@@ -1448,7 +1450,7 @@ its answer on the rest.
 Worked cases:
 
 - **`ConflictError` is (b) with an identity.** A caller reconciles on
-  `isConflictError`, and `STALE_BASED_UPDATE` gives the error an identity. Its
+  `isConflictError`, and `STALE_BASE_VERSION_UPDATE` gives the error an identity. Its
   sentence names the URI and says "an older version of the document" where the
   two version numbers would be; the numbers stay in `data`. Rewording it means
   rewording, in the same change, the marker that `isConflictError`'s last tier

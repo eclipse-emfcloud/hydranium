@@ -21,14 +21,14 @@ import {
    type ServerSharedServices
 } from '@hydranium/core';
 import {
-   type BasedOn,
-   type SnapshotVersion,
+   type BaseVersion,
+   type ModelVersion,
    type ConflictResolver,
    type Logger,
    type Tracer,
-   asSnapshotVersion,
-   NO_MATCHING_VERSION,
-   TIMED_OUT
+   asModelVersion,
+   TIMED_OUT,
+   UNRECORDED_VERSION
 } from '@hydranium/protocol';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -87,6 +87,12 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    @inject(HydraniumTypes.ConflictResolver) readonly conflictResolver!: ConflictResolver;
 
    /**
+    * Writes of one diagram edit, the first included, that may conflict before
+    * the edit is dropped with a warning; each further write reconciles again.
+    */
+   protected readonly maxSourceModelWrites: number = 3;
+
+   /**
     * Per-class tracer, caller-tagged with this state's runtime subclass name by
     * the `HydraniumTypes.Tracer` binding. {@link setSourceRoot} derives the
     * URI-tagged {@link _tracer} from it; the {@link tracer}/{@link logger}
@@ -126,9 +132,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    protected _sourceUri!: string;
    protected _sourceRoot!: TRoot;
    protected _tracer?: Tracer;
-   protected _basedOn: SnapshotVersion = asSnapshotVersion(0);
-   /** Snapshot versions of the secondary write set, keyed by URI. See {@link trackSecondaryDocument}. */
-   protected readonly _secondaryVersions = new Map<string, SnapshotVersion>();
+   protected _baseVersion: ModelVersion = asModelVersion(0);
+   /** Model versions of the secondary write set, keyed by URI. See {@link trackSecondaryDocument}. */
+   protected readonly _secondaryVersions = new Map<string, ModelVersion>();
 
    /** Backing emitter for {@link onSecondaryUrisChanged}; fired only on a membership change. */
    protected readonly secondaryUrisChangedEmitter = new Emitter<void>();
@@ -151,16 +157,18 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    setSourceRoot(uri: string, root: TRoot): void {
       this._sourceUri = uri;
       this._sourceRoot = root;
-      this._basedOn = this.readSnapshotVersion(uri);
-      // Re-read the secondary write set for the same reason the primary is
-      // re-read: the write that brought us here advanced their versions too, and
-      // a stale based-on version would gate the NEXT command against a
-      // superseded number — reporting a conflict that is really this state's own
-      // last write.
+      // The root's own version: the registry's current root can be a later
+      // build's, and a write based on its version passes the gate over edits
+      // `root` never saw.
+      this._baseVersion = this.sharedServices.workspace.ModelLedger.versionOf(root);
+      // Re-read the secondary write set: the write that brought us here
+      // advanced their versions too, and a stale base version would gate the
+      // NEXT command against a superseded number — reporting a conflict that is
+      // really this state's own last write.
       this.refreshSecondaryVersions();
       this.set(SOURCE_URI_ARG, uri);
       this._tracer = this.baseTracer.withUri(uri);
-      this.tracer.debug(`Captured source root at doc.version=v${this._basedOn}`);
+      this.tracer.debug(`Captured source root at doc.version=v${this._baseVersion}`);
       this.checkDeclaredLanguage(uri);
       this.index.indexSourceRoot(root, uri);
    }
@@ -277,8 +285,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Snapshot version taken at the last {@link setSourceRoot} call — frozen
-    * until the next one, then re-read from the document store.
+    * Model version of the root the last {@link setSourceRoot} call captured,
+    * frozen until the next one.
     *
     * Threaded by `HydraniumGlspRecordingCommand` into
     * {@link updateSourceModel} so the downstream session `update` / `save`
@@ -289,24 +297,19 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * on.** A version read when the write is issued is the store's current one,
     * so it matches by construction and the gate can never fire.
     */
-   get basedOn(): SnapshotVersion {
-      return this._basedOn;
+   get baseVersion(): ModelVersion {
+      return this._baseVersion;
    }
 
    /**
-    * Text-document version of {@link basedOn}. Mirrors the server-side
-    * `TextDocuments.version(uri)` counter as of the snapshot, or is
-    * `NO_MATCHING_VERSION` when the store's text could not be tied to the
-    * root (see {@link readSnapshotVersion}).
+    * {@link baseVersion} as a plain number: the store's version of the text the
+    * root was parsed from.
     *
-    * Falls back to `0` when the document is absent from `LangiumDocuments`
-    * when the snapshot is taken — the same observable state callers see for a
-    * doc that was never opened. Callers that need to distinguish
-    * "never-versioned" from "v0" must consult the document registry
-    * directly.
+    * `UNRECORDED_VERSION` when the document was not built when the snapshot
+    * was taken, which no write matches.
     */
    get version(): number {
-      return this._basedOn;
+      return this._baseVersion;
    }
 
    // ============================================================
@@ -328,7 +331,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * identified once the operation names the node. What the framework supplies
     * is the part an adopter cannot reconstruct after the fact — the version each
     * document was at BEFORE the command mutated anything (see
-    * {@link snapshotVersionOf}). Idempotent; registering the primary is ignored,
+    * {@link baseVersionOf}). Idempotent; registering the primary is ignored,
     * since {@link version} already tracks it. Registering a URI not already in
     * the set fires {@link onSecondaryUrisChanged}.
     */
@@ -337,7 +340,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
          return;
       }
       const added = !this._secondaryVersions.has(uri);
-      this._secondaryVersions.set(uri, this.readSnapshotVersion(uri));
+      this._secondaryVersions.set(uri, this.readModelVersion(uri));
       if (added) {
          this.secondaryUrisChangedEmitter.fire();
       }
@@ -357,7 +360,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * Fires whenever the secondary write set gains or loses a URI — never when a
-    * tracked document's snapshot version is merely refreshed, which happens on
+    * tracked document's model version is merely refreshed, which happens on
     * every {@link setSourceRoot} and changes nothing a subscriber cares about.
     *
     * **This exists so no caller has to know when the set can change.** The set is
@@ -384,69 +387,44 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Snapshot version for `uri` — {@link basedOn} for the primary, the version
-    * taken at {@link trackSecondaryDocument} (refreshed by {@link setSourceRoot})
-    * for a secondary, `undefined` for anything untracked.
+    * The base version of a write of `uri`: {@link baseVersion} for the primary,
+    * the version taken at {@link trackSecondaryDocument} (refreshed by
+    * {@link setSourceRoot}) for a secondary, `undefined` for anything untracked.
     *
     * `undefined` rather than v0 for an untracked URI deliberately: `0` is a real
     * version meaning "present but never edited", so collapsing the two would let
     * a caller gate a write against a document this state never read.
     */
-   snapshotVersionOf(uri: string): SnapshotVersion | undefined {
+   baseVersionOf(uri: string): ModelVersion | undefined {
       if (uri === this._sourceUri) {
-         return this._basedOn;
+         return this._baseVersion;
       }
       return this._secondaryVersions.get(uri);
    }
 
    /**
-    * Read a document's version out of the live store and mark it as a snapshot,
-    * through the model service's canonicalizing gateway so a URI spelled through
-    * a symlink still resolves to the document keyed by its real path rather than
-    * stranding at `0` (which would silently weaken the conflict gate).
+    * The `ModelLedger` version of the document's current root, looked up through
+    * the model service's canonicalizing gateway so a symlinked URI does not strand
+    * without one. `UNRECORDED_VERSION`, which no write matches, for a URI with no
+    * parsed document: the store counts a file it has not built at `0`, and so does
+    * the placeholder the builder registers before its parse, and a write based on
+    * `0` overwrites text this state never read.
     *
-    * **Call this only at the point the source root is read.** It is the one
-    * place the framework turns a live version into a snapshot one, and the value
-    * is true only because that is where it is called. Called at write time it
-    * answers with the version the write is about to be compared against, so the
-    * gate passes unconditionally.
-    *
-    * Falls back to v0 for a URI neither store knows, matching what
-    * {@link version} reports for a document that was never opened.
-    *
-    * **The version of the text store, which the gate compares against.**
-    * When the store holds the text the root was parsed from, that is its
-    * version, even while the built document still carries an older number.
-    * When the store holds other text, `NO_MATCHING_VERSION`, so the write
-    * conflicts instead of overwriting text the root never saw: the
-    * reconciling states reconcile it, `FullTextHydraniumGlspState` throws the
-    * `ConflictError`. When the root keeps no syntax tree to read its text
-    * from, the built document's text stands in for it, unless the built
-    * document IS the store's, whose text says nothing about what was parsed;
-    * that also gets `NO_MATCHING_VERSION`.
+    * Call this where the source root is read. Called later, it answers for the root
+    * a later build put there, and a write based on it passes the gate over edits the
+    * source root never saw.
     */
-   protected readSnapshotVersion(uri: string): SnapshotVersion {
+   protected readModelVersion(uri: string): ModelVersion {
       const document = this.sharedServices.model.ModelService.getDocument(uri);
-      const stored = document && this.sharedServices.workspace.TextDocuments.get(uri);
-      if (stored) {
-         const parsed = document.parseResult.value.$cstNode?.root.fullText;
-         if (parsed !== undefined) {
-            return parsed === stored.getText() ? asSnapshotVersion(stored.version) : NO_MATCHING_VERSION;
-         }
-         if (document.textDocument === stored) {
-            return NO_MATCHING_VERSION;
-         }
-         if (stored.version !== document.textDocument.version && stored.getText() === document.textDocument.getText()) {
-            return asSnapshotVersion(stored.version);
-         }
-      }
-      return this.sharedServices.model.ModelService.snapshot(uri)?.version ?? asSnapshotVersion(0);
+      const ledger = this.sharedServices.workspace.ModelLedger;
+      const root = document?.parseResult.value;
+      return root && !ledger.isPlaceholder(root) ? ledger.versionOf(root) : UNRECORDED_VERSION;
    }
 
-   /** Re-take every registered secondary's snapshot version from the document store. */
+   /** Re-take every registered secondary's model version from its built root. */
    protected refreshSecondaryVersions(): void {
       for (const uri of [...this._secondaryVersions.keys()]) {
-         this._secondaryVersions.set(uri, this.readSnapshotVersion(uri));
+         this._secondaryVersions.set(uri, this.readModelVersion(uri));
       }
    }
 
@@ -474,8 +452,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * The root that `uri`'s text parses to (the text store's, or the built
-    * document's when the store holds none), read once the document has
-    * validated; `undefined` when it cannot be read.
+    * document's when the store holds none) and the store's version of that
+    * text, read once the document has validated; `undefined` when it cannot be
+    * read. The version is read in the tick the text is, so a write based on it
+    * conflicts with any edit made after.
     *
     * **Parsed afresh, never the built root.** Operation handlers edit the
     * built root in place, so until a rebuild replaces it, it already holds
@@ -483,21 +463,28 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * twice. The root is parsed, not linked: an encoder hook reading a
     * reference's `ref` sees `undefined` on it.
     */
-   protected async readCurrentRoot(uri: string): Promise<AstNode | undefined> {
+   protected async readCurrentRoot(uri: string): Promise<{ root: AstNode; version: ModelVersion } | undefined> {
       const modelService = this.sharedServices.model.ModelService;
       if (!(await modelService.validated(uri).catch(() => undefined))) {
          return undefined;
       }
-      const text = this.sharedServices.workspace.TextDocuments.get(uri)?.getText() ?? modelService.getDocument(uri)?.textDocument.getText();
-      return text === undefined
-         ? undefined
-         : this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri)).parseResult.value;
+      const store = this.sharedServices.workspace.TextDocuments;
+      const text = store.get(uri)?.getText() ?? modelService.getDocument(uri)?.textDocument.getText();
+      if (text === undefined) {
+         return undefined;
+      }
+      const version = asModelVersion(store.version(uri));
+      return { root: this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri)).parseResult.value, version };
    }
 
    /**
     * Wait until the captured document reaches `state`, then run
     * {@link onReadyRefreshed} so consumers see a fresh AST. Wraps the
     * wait in {@link Tracer.time} for observability.
+    *
+    * A source not in the document registry is built first, through
+    * `ModelService.rebuild`. For a source with neither a file nor text, that
+    * build leaves no document, and this rejects rather than timing out.
     */
    async ready(state: DocumentState): Promise<void> {
       await this.tracer.time(`Wait for state '${DocumentState[state]}'`, () => this.readyWithTimeout(state), 'debug');
@@ -505,16 +492,16 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Race `ModelService.waitForDocumentState` against
-    * {@link readyTimeoutMs}. If the timeout fires but the document has
-    * already reached `state` silently (Langium build-phase event race),
-    * log a warning and resolve; otherwise raise
-    * {@link ModelReadyTimeoutError} via {@link buildReadyTimeoutError}.
+    * Race `ModelService.ensureDocumentState`, which builds a root behind its
+    * text, against {@link readyTimeoutMs}. If the timeout fires but the
+    * document has already reached `state`, log a warning naming the cause, a
+    * root behind its text or a missed phase event, and resolve; otherwise
+    * raise {@link ModelReadyTimeoutError} via {@link buildReadyTimeoutError}.
     */
    protected async readyWithTimeout(state: DocumentState): Promise<void> {
       const uri = this._sourceUri;
       const stopwatch = this.sharedServices.Clock.stopwatch();
-      const reached = this.sharedServices.model.ModelService.waitForDocumentState(uri, state);
+      const reached = this.sharedServices.model.ModelService.ensureDocumentState(uri, state);
       if ((await this.sharedServices.Clock.raceTimer(reached, this.readyTimeoutMs)) !== TIMED_OUT) {
          return;
       }
@@ -524,6 +511,15 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       const doc = this.sharedServices.model.ModelService.getDocument(uri);
       if (!doc || doc.state < state) {
          throw this.buildReadyTimeoutError(state, elapsed);
+      }
+      const built = this.sharedServices.workspace.ModelLedger.versionOf(doc.parseResult.value);
+      const text = this.sharedServices.workspace.TextDocuments.version(uri);
+      if (built !== UNRECORDED_VERSION && built < text) {
+         this.logger.warn(
+            `No build caught the root up after ${elapsed}ms: the document is at state '${DocumentState[doc.state]}', ` +
+               `but its root was parsed from v${built} and the text is at v${text}.`
+         );
+         return;
       }
       this.logger.warn(
          `Missed '${DocumentState[state]}' notification after ${elapsed}ms; document is already at state ` +
@@ -583,22 +579,22 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * `JsonModelState` shape meet the framework state via structural
     * intersection at the recording-command call site.
     *
-    * `basedOn` is the snapshot version taken at command start by
+    * `baseVersion` is the model version taken at command start by
     * `HydraniumGlspRecordingCommand.execute`. Adopters that write through the
-    * diagram's session forward it as the args' `basedOn` field; adopters whose
+    * diagram's session forward it as the args' `baseVersion` field; adopters whose
     * write path doesn't go through the session ignore it.
-    * `'anything'` when the writer is not the recording command (an external
+    * `'any'` when the writer is not the recording command (an external
     * storage refresh, an undo replaying a recorded patch), which is a write
     * authored against no particular server version.
     *
-    * **Optional, and every implementation must default it to {@link basedOn}
-    * rather than to `'anything'`.** Optional is forced: GLSP's `JsonModelState`
+    * **Optional, and every implementation must default it to {@link baseVersion}
+    * rather than to `'any'`.** Optional is forced: GLSP's `JsonModelState`
     * declares a one-parameter `updateSourceModel` and calls it with one
     * argument, so a second required parameter makes the state unassignable to
-    * the slot it has to fill. Defaulting to the state's own snapshot version is
+    * the slot it has to fill. Defaulting to the state's own model version is
     * what keeps that from costing anything — an operation handler calling
     * `updateSourceModel(model)` gets the gate, and skipping it has to be typed
-    * out as `'anything'`.
+    * out as `'any'`.
     */
-   abstract updateSourceModel(model: TSourceModel, basedOn?: BasedOn): MaybePromise<void>;
+   abstract updateSourceModel(model: TSourceModel, baseVersion?: BaseVersion): MaybePromise<void>;
 }

@@ -168,7 +168,7 @@ describe('requests that coincide share one locked build', () => {
       recorder.reset();
 
       for (const edit of ['one', 'two', 'three']) {
-         await writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// ${edit}\n`, basedOn: 'anything' });
+         await writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// ${edit}\n`, baseVersion: 'any' });
       }
       await idle(shared);
 
@@ -189,8 +189,8 @@ describe('requests that coincide share one locked build', () => {
 
       await writer.updateAll({
          updates: [
-            { uri: uri(CUSTOMER), model: `${CUSTOMER_SOURCE}// customer\n`, basedOn: 'anything' },
-            { uri: uri(LONE), model: `${LONE_SOURCE}// lone\n`, basedOn: 'anything' }
+            { uri: uri(CUSTOMER), model: `${CUSTOMER_SOURCE}// customer\n`, baseVersion: 'any' },
+            { uri: uri(LONE), model: `${LONE_SOURCE}// lone\n`, baseVersion: 'any' }
          ]
       });
       await idle(shared);
@@ -212,8 +212,8 @@ describe('requests that coincide share one locked build', () => {
       recorder.reset();
 
       await Promise.all([
-         one.update({ uri: uri(CUSTOMER), model: `${CUSTOMER_SOURCE}// one\n`, basedOn: 'anything' }),
-         two.update({ uri: uri(LONE), model: `${LONE_SOURCE}// two\n`, basedOn: 'anything' })
+         one.update({ uri: uri(CUSTOMER), model: `${CUSTOMER_SOURCE}// one\n`, baseVersion: 'any' }),
+         two.update({ uri: uri(LONE), model: `${LONE_SOURCE}// two\n`, baseVersion: 'any' })
       ]);
       await idle(shared);
 
@@ -231,7 +231,7 @@ describe('requests that coincide share one locked build', () => {
       recorder.reset();
 
       const hold = holdNextBuild(shared);
-      const written = writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// held\n`, basedOn: 'anything' });
+      const written = writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// held\n`, baseVersion: 'any' });
       await hold.reached;
       const rebuilt = [models.rebuild(uri(ORDER)), models.rebuild(uri(ORDER))];
       hold.release();
@@ -253,7 +253,7 @@ describe('requests that coincide share one locked build', () => {
       recorder.reset();
 
       const hold = holdNextBuild(shared);
-      const written = writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// session\n`, basedOn: 'anything' });
+      const written = writer.update({ uri: uri(ORDER), model: `${ORDER_SOURCE}// session\n`, baseVersion: 'any' });
       await hold.reached;
       lsp!.changeDocument(uri(ORDER), `${ORDER_SOURCE}// session\n// typed\n`, 2);
       try {

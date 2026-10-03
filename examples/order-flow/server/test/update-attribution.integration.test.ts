@@ -110,7 +110,7 @@ describe('update attribution against the real builder', () => {
       await models.validated(uri(ORDER));
       const events = record(harness, uri(ORDER));
 
-      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, basedOn: 'anything' });
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, baseVersion: 'any' });
       await models.validated(uri(ORDER));
 
       expect(events.length).toBeGreaterThan(0);
@@ -128,7 +128,7 @@ describe('update attribution against the real builder', () => {
       await models.validated(uri(ORDER));
       const events = record(harness, uri(ORDER));
 
-      await panel.update({ uri: uri(ORDER), model: ORDER_EDITED, basedOn: 'anything' });
+      await panel.update({ uri: uri(ORDER), model: ORDER_EDITED, baseVersion: 'any' });
 
       expect(events.map(attribution)).toEqual([{ reason: 'changed', sourceClientId: 'panel', causedBy: 'panel' }]);
       expect(panel.isOwnEcho(events[0].sourceClientId)).toBe(true);
@@ -168,9 +168,9 @@ describe('update attribution against the real builder', () => {
          }
       });
       disposables.push(listener);
-      const written = panel.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      const written = panel.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
       await reached;
-      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_EDITED, basedOn: 'anything' });
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_EDITED, baseVersion: 'any' });
       await written;
 
       expect(cancelled).toBe(true);
@@ -190,8 +190,8 @@ describe('update attribution against the real builder', () => {
 
       await writer.updateAll({
          updates: [
-            { uri: uri(CUSTOMER), model: CUSTOMER_EDITED, basedOn: 'anything' },
-            { uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' }
+            { uri: uri(CUSTOMER), model: CUSTOMER_EDITED, baseVersion: 'any' },
+            { uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' }
          ]
       });
 
@@ -217,9 +217,9 @@ describe('update attribution against the real builder', () => {
       const events = record(harness, uri(ORDER));
 
       builder.resetToState(order(), DocumentState.IndexedReferences);
-      await diagram.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      await diagram.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
       builder.resetToState(order(), DocumentState.IndexedReferences);
-      await editor.update({ uri: uri(LONE), model: LONE_SOURCE, basedOn: 'anything' });
+      await editor.update({ uri: uri(LONE), model: LONE_SOURCE, baseVersion: 'any' });
 
       expect(events.map(attribution)).toEqual([
          { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'diagram' },
@@ -234,10 +234,10 @@ describe('update attribution against the real builder', () => {
       const second = models.createSession('second', 'second');
       await first.open(uri(LONE));
       await second.open(uri(LONE));
-      await first.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      await first.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
       const events = record(harness, uri(LONE));
 
-      await second.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      await second.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
 
       expect(events.map(attribution)).toEqual([{ reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: UNKNOWN_CLIENT_ID }]);
    });
@@ -290,14 +290,14 @@ describe('update attribution over the data head', () => {
       const editor = harness.shared.model.ModelService.createSession('editor', 'editor');
       await editor.open(uri(CUSTOMER));
 
-      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, basedOn: 'anything' });
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, baseVersion: 'any' });
 
       await waitFor(() => panel.events.some(event => event.document.uri === uri(ORDER)), {
          message: 'no update event for the dependent document'
       });
       const sent = panel.events.filter(event => event.document.uri === uri(ORDER));
       expect(sent.map(event => [event.reason, event.sourceClientId])).toEqual(sent.map(() => ['rebuilt', UNKNOWN_CLIENT_ID]));
-      expect(sent.at(-1)?.document.diagnostics.length).toBeGreaterThan(0);
+      expect(sent.at(-1)?.document.model?.diagnostics?.length).toBeGreaterThan(0);
    });
 
    it('falls back to the last update when rebuilds do not validate, rather than crediting every event to its author', async () => {
@@ -309,8 +309,8 @@ describe('update attribution over the data head', () => {
       harness.shared.workspace.DocumentBuilder.updateBuildOptions = { validation: false };
       let emitted = 0;
       class EveryEventServer extends DataServer<DomainModel> {
-         protected override additionalFingerprintInputs(): readonly unknown[] {
-            return [emitted++];
+         protected override computeDocumentFingerprint(): string {
+            return String(emitted++);
          }
       }
       const head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
@@ -323,7 +323,7 @@ describe('update attribution over the data head', () => {
       const editor = harness.shared.model.ModelService.createSession('editor', 'editor');
       await editor.open(uri(CUSTOMER));
 
-      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, basedOn: 'anything' });
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, baseVersion: 'any' });
 
       await waitFor(() => head.events.some(event => event.document.uri === uri(ORDER)), {
          message: 'no update event for the dependent document'
@@ -341,8 +341,8 @@ describe('update attribution over the data head', () => {
       const { harness, uri } = await boot();
       let emitted = 0;
       class EveryEventServer extends DataServer<DomainModel> {
-         protected override additionalFingerprintInputs(): readonly unknown[] {
-            return [emitted++];
+         protected override computeDocumentFingerprint(): string {
+            return String(emitted++);
          }
       }
       const head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
@@ -369,7 +369,7 @@ describe('update attribution over the data head', () => {
          })
       );
 
-      const written = writer.update({ uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' });
+      const written = writer.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
       await reachedBarrier.promise;
       const rebuilt = harness.shared.workspace.WorkspaceLock.write(token => builder.update([URI.parse(uri(LONE))], [], token));
       release.resolve();
@@ -414,8 +414,8 @@ describe('update attribution over the data head', () => {
       await writer.proxy.updateModelDocuments({
          clientId: 'writer',
          updates: [
-            { uri: uri(CUSTOMER), model: CUSTOMER_EDITED, basedOn: 'anything' },
-            { uri: uri(LONE), model: LONE_EDITED, basedOn: 'anything' }
+            { uri: uri(CUSTOMER), model: CUSTOMER_EDITED, baseVersion: 'any' },
+            { uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' }
          ]
       });
       // A round trip on the same connection flushes the notifications sent before it.

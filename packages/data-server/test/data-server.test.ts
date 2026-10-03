@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+   asModelVersion,
    type CanonicalUri,
    createRpcProxy,
    Disposable,
@@ -22,6 +23,7 @@ import {
    type ReferenceCandidate,
    type ReferenceContext,
    type ReferenceRequest,
+   textHash,
    type TransferDiagnostic
 } from '@hydranium/protocol';
 import type { ResponseError } from 'vscode-jsonrpc';
@@ -38,6 +40,7 @@ import {
    IntegrityService,
    REVERT_ON_CLOSE_CLIENT_ID,
    type DocumentUriPolicy,
+   type EncodedTransferDocument,
    type HydraniumLanguageServices,
    type ServerLanguageServices,
    type ServerSharedServices,
@@ -52,7 +55,7 @@ import {
 } from '@hydranium/core/testing';
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { ProfileCapture } from '@hydranium/core/node';
-import { DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
+import { type AstNode, DocumentState, type LangiumDocument, URI, UriUtils } from '@hydranium/langium';
 import {
    DataServer,
    type DataServerUriWatchRecord,
@@ -130,6 +133,13 @@ class FailingSnapshotServer extends TestDataServer {
    }
 }
 
+/** Exposes the fingerprint `model.hash` carries. */
+class FingerprintProbeServer extends TestDataServer {
+   fingerprintOf(root: AstNode, encoded: EncodedTransferDocument<FakeRoot, FakeDiagnostic>): string {
+      return this.computeDocumentFingerprint(root, encoded);
+   }
+}
+
 type TestHarness = DataServerHarness<TestDataServer, FakeRoot, FakeDiagnostic>;
 
 /**
@@ -193,8 +203,9 @@ describe('DataServer', () => {
             // Warm document: smart dispatch waits, does not force a rebuild.
             expect(bundle.documentBuilder.updateCalls).toHaveLength(0);
             expect(result.uri).toBe(URI_A);
-            expect(result.root?.name).toBe('current');
-            expect(result.diagnostics).toEqual([]);
+            expect(result.model?.root.name).toBe('current');
+            // Below Validated the read leaves them absent.
+            expect(result.model?.diagnostics).toBeUndefined();
          } finally {
             pair.dispose();
          }
@@ -231,7 +242,7 @@ describe('DataServer', () => {
             gate.resolve();
             const result = await pending;
 
-            expect(result.root?.name).toBe('built');
+            expect(result.model?.root.name).toBe('built');
             expect(bundle.documentBuilder.waitUntilCalls).toHaveLength(1);
             expect(bundle.documentBuilder.waitUntilCalls[0].args[0]).toBe(IntegrityService.SettledState);
          } finally {
@@ -275,12 +286,12 @@ describe('DataServer', () => {
          [
             'updateModelDocument',
             (proxy: TestHarness['proxy']) =>
-               proxy.updateModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', basedOn: 'anything' })
+               proxy.updateModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', baseVersion: 'any' })
          ],
          [
             'saveModelDocument',
             (proxy: TestHarness['proxy']) =>
-               proxy.saveModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', basedOn: 'anything' })
+               proxy.saveModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', baseVersion: 'any' })
          ],
          ['closeModelDocument', (proxy: TestHarness['proxy']) => proxy.closeModelDocument({ uri: URI_A, clientId: unregistered })]
       ])('fails %s with the closed-session code and opens, writes and saves nothing', async (_method, request) => {
@@ -314,14 +325,14 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-1',
                model: { $type: 'FakeRoot', name: 'updated' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             // Simulate the post-update document by updating the test registry.
             bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'updated' });
 
             const result = await proxy.getModelDocument({ uri: URI_A });
             expect(bundle.textDocuments.changes[0]?.text).toBe('name:updated');
-            expect(result.root?.name).toBe('updated');
+            expect(result.model?.root.name).toBe('updated');
          } finally {
             pair.dispose();
          }
@@ -337,7 +348,7 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-1',
                model: 'name:from-string',
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             expect(bundle.textDocuments.changes[0]?.text).toBe('name:from-string');
          } finally {
@@ -356,7 +367,7 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'data-server-tools',
                model: { $type: 'FakeRoot', name: 'attributed' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             expect(bundle.textDocuments.getAuthor(URI_A)).toBe('data-server-tools');
          } finally {
@@ -376,7 +387,7 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-1',
                model: { $type: 'FakeRoot', name: 'persisted' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             expect(bundle.fileSystem.writes).toHaveLength(1);
             expect(bundle.fileSystem.writes[0]?.content).toBe('name:persisted');
@@ -412,7 +423,7 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-1',
                model: { $type: 'FakeRoot', name: 'one' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             await tick(); // give a (wrongly) fired save event a chance, then assert none arrived
             expect(savedEvents).toHaveLength(0);
@@ -423,7 +434,7 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-2',
                model: { $type: 'FakeRoot', name: 'two' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             await waitFor(() => savedEvents.length === 1);
             expect(savedEvents).toEqual([{ uri: URI_A, sourceClientId: 'editor-2' }]);
@@ -475,7 +486,7 @@ describe('DataServer', () => {
                uri: LINK,
                clientId: 'editor-2',
                model: { $type: 'FakeRoot', name: 'two' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             await waitFor(() => savedEvents.length === 1);
             expect(savedEvents[0]?.sourceClientId).toBe('editor-2');
@@ -749,7 +760,7 @@ describe('DataServer', () => {
             bundle.documentBuilder.firePhase(DocumentState.Validated, docWithDiag);
             await waitFor(() => events.length === 1);
             expect(events).toHaveLength(1);
-            expect(events[0]?.document.diagnostics).toHaveLength(1);
+            expect(events[0]?.document.model?.diagnostics).toHaveLength(1);
          } finally {
             pair.dispose();
          }
@@ -783,20 +794,71 @@ describe('DataServer', () => {
          // expectation. Identical text and diagnostics means an identical hash,
          // so the root-only change is de-duplicated away.
          const bundle = buildBundle();
-         bundle.documents.set(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x', _eff: 'a' }), { text: 'FIXED' });
+         const $cstNode = { root: { fullText: 'FIXED' } };
+         bundle.documents.set(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x', _eff: 'a', $cstNode }), { text: 'FIXED' });
          const { proxy, events, pair } = makeDataServerHarness<TestDataServer, FakeRoot, FakeDiagnostic>({
             server: channel => new TestDataServer(channel, bundle.services, { fingerprintStrategy: 'text-diagnostics' })
          });
          try {
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
 
-            const changed = bundle.documents.set(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x', _eff: 'b' }), {
+            const changed = bundle.documents.set(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x', _eff: 'b', $cstNode }), {
                text: 'FIXED'
             });
             fireRebuild(bundle, changed);
             // Nothing to wait FOR, so settle the connection and assert absence.
             await tick(20);
             expect(events).toHaveLength(0);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it.each(['transfer-document', 'text-diagnostics'] as const)(
+         '%s strategy hashes a document not validated yet apart from one validated clean',
+         strategy => {
+            const bundle = buildBundle();
+            const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' }, { diagnostics: [] });
+            const pair = makeDuplexConnectionPair();
+            try {
+               const server = new FingerprintProbeServer(pair.left, bundle.services, { fingerprintStrategy: strategy });
+               const model = { root: { $type: 'FakeRoot', name: 'A' } satisfies FakeRoot, version: asModelVersion(0) };
+               const root = document.parseResult.value;
+               const clean = server.fingerprintOf(root, { uri: URI_A, model: { ...model, diagnostics: [] } });
+               expect(server.fingerprintOf(root, { uri: URI_A, model })).not.toBe(clean);
+            } finally {
+               pair.dispose();
+            }
+         }
+      );
+
+      it('text-diagnostics strategy hashes the text the answered root was parsed from, not the live text', async () => {
+         const bundle = buildBundle();
+         const parsed = { $type: 'FakeRoot', name: 'A', $cstNode: { root: { fullText: 'name:parsed' } } };
+         bundle.documents.set(URI_A, makeFakeAstNode<FakeRoot>(parsed), { text: 'name:live' });
+         const { proxy, pair } = makeDataServerHarness<TestDataServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new TestDataServer(channel, bundle.services, { fingerprintStrategy: 'text-diagnostics' })
+         });
+         try {
+            const answer = await proxy.getModelDocument({ uri: URI_A });
+            expect(answer.model?.hash).toBe(textHash(['name:parsed', '\0', JSON.stringify(answer.model?.diagnostics ?? null)]));
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('fires onDocumentUpdated when a watch baselined before validation sees it find nothing', async () => {
+         const bundle = buildBundle();
+         const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         document.diagnostics = undefined;
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+
+            document.diagnostics = [];
+            fireRebuild(bundle, document);
+            await waitFor(() => events.length === 1);
+            expect(events[0]?.document.model?.diagnostics).toEqual([]);
          } finally {
             pair.dispose();
          }
@@ -873,14 +935,14 @@ describe('DataServer', () => {
             await openAs(proxy, bundle, 'editor-1');
             await proxy.watchModelDocument({ uri: URI_A, clientId: 'editor-1' });
 
-            bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
+            const edited = bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
             bundle.textDocuments.applyContentChange(URI_B, 'name:edited', 'other');
             bundle.textDocuments.updateDiskBaseline(URI_A, 'name:edited');
 
             await waitFor(() => dirtyChanges.length === 2);
             expect(dirtyChanges).toEqual([
-               { uri: URI_A, dirty: true },
-               { uri: URI_A, dirty: false }
+               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: true } },
+               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: false } }
             ]);
          } finally {
             pair.dispose();
@@ -900,12 +962,12 @@ describe('DataServer', () => {
                uri: URI_A,
                clientId: 'editor-1',
                model: { $type: 'FakeRoot', name: 'edited' },
-               basedOn: 'anything'
+               baseVersion: 'any'
             });
             const read = await proxy.getModelDocument({ uri: URI_A });
             const closed = await proxy.getModelDocument({ uri: URI_B });
 
-            expect([opened.dirty, updated.dirty, read.dirty, closed.dirty]).toEqual([false, true, true, false]);
+            expect([opened.text?.dirty, updated.text?.dirty, read.text?.dirty, closed.text?.dirty]).toEqual([false, true, true, false]);
          } finally {
             pair.dispose();
          }
@@ -2457,7 +2519,7 @@ describe('DataServer fingerprint digests', () => {
    /** Reaches the fingerprint the de-dup compares. */
    class FingerprintProbe extends TestDataServer {
       fingerprintOf(document: LangiumDocument): string {
-         return this.computeDocumentFingerprint(document);
+         return this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
       }
    }
 
@@ -2466,7 +2528,9 @@ describe('DataServer fingerprint digests', () => {
       ['text-diagnostics', 'ea435fb69664cb28']
    ] as const)('keeps the %s digest', (strategy, digest) => {
       const bundle = buildBundle();
-      const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'Größe 𝒳' }, { text: 'entity Größe { 𝒳: string }\n' });
+      const text = 'entity Größe { 𝒳: string }\n';
+      const root = makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'Größe 𝒳', $cstNode: { root: { fullText: text } } });
+      const document = bundle.documents.set(URI_A, root, { text });
       const harness = makeDataServerHarness<FingerprintProbe, FakeRoot, FakeDiagnostic>({
          server: channel => new FingerprintProbe(channel, bundle.services, { fingerprintStrategy: strategy })
       });

@@ -44,7 +44,7 @@ import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode, type ParseResult } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import {
-   AstDocument,
+   type AstDocument,
    type AstDocumentSavedEvent,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
@@ -591,12 +591,12 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * projection — so reacting to a secondary neither waits nor can force a build.
     * `settled()` is not an alternative: besides being asynchronous, it cannot be
     * relied on to carry diagnostics — a document it has to drive to the landmark
-    * arrives pre-validation with an empty array — and diagnostics are the reason
+    * arrives pre-validation, without them — and diagnostics are the reason
     * {@link doUpdateAndSubmit} takes a separate event document at all.
     */
    protected currentPrimaryDocument(): AstDocument<AstNode> | undefined {
       const document = this.sharedServices.model.ModelService.getDocument(this.state.sourceUri);
-      return document ? AstDocument.from(document) : undefined;
+      return document ? this.sharedServices.workspace.AstDocumentManager.toAstDocument(document) : undefined;
    }
 
    /**
@@ -780,7 +780,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (parsed?.value === document.root) {
          return hasStructuralErrors(parsed);
       }
-      return document.diagnostics.some(diagnostic => isStructuralDiagnostic(diagnostic));
+      return document.diagnostics?.some(diagnostic => isStructuralDiagnostic(diagnostic)) ?? false;
    }
 
    /**
@@ -869,7 +869,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     *
     * The configured {@link SaveDeliveryPolicy} (see {@link saveDeliveryPolicy})
     * decides await-vs-fire-and-forget and failure handling. It carries no
-    * based-on guard: the guard exists to stop a stale writer overwriting a newer
+    * base-version guard: the guard exists to stop a stale writer overwriting a newer
     * document, and a flush persists the store — which already holds every other
     * client's change, including the one that advanced the version.
     *

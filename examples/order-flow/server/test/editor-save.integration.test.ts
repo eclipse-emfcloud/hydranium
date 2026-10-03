@@ -129,7 +129,7 @@ async function boot(options: { editorText?: string; withForm?: boolean } = {}): 
    // The form session attaches to the editor's open and puts server text in the shared document.
    const session = services.shared.model.ModelService.createSession('form', 'form');
    await session.open(uri);
-   await session.update({ uri, model: SERVER_TEXT, basedOn: 'anything' });
+   await session.update({ uri, model: SERVER_TEXT, baseVersion: 'any' });
    return { initialized, harness, uri, services };
 }
 

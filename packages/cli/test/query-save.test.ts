@@ -34,11 +34,11 @@ function makeStubProxy(
    return {
       async getModelDocument(args) {
          calls.getModelDocument.push(args);
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'echo', uri: args.uri });
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'echo', uri: args.uri }, 'hash');
       },
       async updateModelDocument(args) {
          calls.updateModelDocument.push(args);
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' });
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' }, 'hash');
       },
       async saveModelDocument(args) {
          calls.saveModelDocument.push(args);
@@ -46,17 +46,22 @@ function makeStubProxy(
          if (options.failSave) {
             throw new Error('disk refused');
          }
-         return TransferDocument.create<FakeRoot>(args.uri, 1, {
-            $type: 'FakeRoot',
-            name: typeof args.model === 'string' ? args.model : 'structured'
-         });
+         return TransferDocument.create<FakeRoot>(
+            args.uri,
+            1,
+            {
+               $type: 'FakeRoot',
+               name: typeof args.model === 'string' ? args.model : 'structured'
+            },
+            'hash'
+         );
       },
       async openModelDocument(args) {
          calls.sequence.push(`open ${args.clientId} ${args.uri}`);
          if (options.failOpen) {
             throw new Error(options.failOpen);
          }
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' });
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' }, 'hash');
       },
       async createSession(args) {
          calls.sequence.push(`session ${args.clientId}`);
@@ -75,7 +80,7 @@ function makeStubProxy(
          if (!options.noFile) {
             throw new Error(`Cannot create ${args.uri}: the file exists`);
          }
-         return TransferDocument.create<FakeRoot>(args.uri, 0, { $type: 'FakeRoot', name: 'created' });
+         return TransferDocument.create<FakeRoot>(args.uri, 0, { $type: 'FakeRoot', name: 'created' }, 'hash');
       },
       closeModelDocument: () => Promise.reject(new Error('not exercised')),
       updateModelDocuments: () => Promise.reject(new Error('not exercised')),
@@ -121,11 +126,11 @@ describe('runSave', () => {
          __proxyForTest: makeStubProxy(calls)
       });
       expect(calls.saveModelDocument).toEqual([
-         { uri: 'file:///workspace/A.fake', clientId: 'hydranium-cli', model: 'name:literal', basedOn: 'anything' }
+         { uri: 'file:///workspace/A.fake', clientId: 'hydranium-cli', model: 'name:literal', baseVersion: 'any' }
       ]);
       expect(written).toHaveLength(1);
       const parsed = JSON.parse(written[0]);
-      expect(parsed.root.name).toBe('name:literal');
+      expect(parsed.model.root.name).toBe('name:literal');
    });
 
    it('saves through a session that opens the document first and ends afterwards, also when the save fails', async () => {

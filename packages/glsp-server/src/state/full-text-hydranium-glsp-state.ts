@@ -11,7 +11,7 @@ import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { type BasedOn, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
+import { type BaseVersion, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 
 /** Whole-document-text source model: the serialised text of the source root. */
@@ -34,7 +34,7 @@ export interface FullTextSourceModel {
  *   because serialization may be async; the sync fast path is preserved.
  * - {@link updateSourceModel} pushes the text back through the diagram's
  *   session (`update` accepts a raw text payload) and captures the re-parsed
- *   root, gated on the caller's `basedOn`; it throws without a session.
+ *   root, gated on the caller's `baseVersion`; it throws without a session.
  *
  * No `base` / conflict reconcile: a whole-document model has exactly one
  * field, so every concurrent edit is a same-field collision and undo / redo
@@ -52,8 +52,8 @@ export class FullTextHydraniumGlspState<TRoot extends AstNode>
       return isPromiseLike(text) ? text.then(value => ({ text: value })) : { text };
    }
 
-   async updateSourceModel(model: FullTextSourceModel, basedOn: BasedOn = this.basedOn): Promise<void> {
-      const document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, basedOn });
+   async updateSourceModel(model: FullTextSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
+      const document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, baseVersion });
       this.setSourceRoot(this._sourceUri, document.root as TRoot);
    }
 }

@@ -17,7 +17,7 @@ import {
    type LangiumDocument,
    MultiMap,
    OperationCancelled,
-   type URI,
+   URI,
    UriUtils,
    type WorkspaceLock,
    interruptAndCheck,
@@ -27,6 +27,7 @@ import {
 // namespace helper to read the `string | MarkupContent` union without
 // restating it.
 import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
+import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
@@ -124,6 +125,15 @@ export interface DocumentBuilderOptions extends LogNameOptions {
     * cost of one extra `collectLocalSymbols` per cascade-affected document.
     */
    readonly refreshCrossDocumentComputedScopes?: boolean;
+}
+
+/** Options for a {@link HydraniumDocumentBuilder.waitUntil} wait on one document. */
+export interface WaitUntilOptions {
+   /**
+    * Reject once the builder gives up carrying the document to the target
+    * state. Without it, such a wait stays pending until its token is cancelled.
+    */
+   readonly rejectWhenStuck?: boolean;
 }
 
 /**
@@ -237,6 +247,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly buildEndedListeners = new Set<(drained: boolean) => void>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
+   /** Resolved per call: the sync service reaches this builder. */
+   protected readonly versionSyncService: () => VersionSyncService;
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -245,6 +257,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.clock = services.Clock;
       this.messageRenderer = services.MessageRenderer;
       this.workspaceLock = services.workspace.WorkspaceLock;
+      this.versionSyncService = () => services.workspace.VersionSyncService;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -343,6 +356,24 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    // ============================================================
 
    /**
+    * Resolve once the document at `uri` reaches `state`, or without `uri`, once
+    * the workspace does. A wait on `uri` re-queues a document no build is
+    * carrying, as {@link awaitDocumentState} describes.
+    */
+   override waitUntil(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
+   override waitUntil(state: DocumentState, uri?: URI, cancelToken?: CancellationToken, options?: WaitUntilOptions): Promise<URI>;
+   override waitUntil(
+      state: DocumentState,
+      uriOrToken?: URI | CancellationToken,
+      cancelToken?: CancellationToken,
+      options: WaitUntilOptions = {}
+   ): Promise<URI | void> {
+      return URI.isUri(uriOrToken)
+         ? this.awaitDocumentState(state, uriOrToken, cancelToken ?? CancellationToken.None, options)
+         : super.waitUntil(state, uriOrToken);
+   }
+
+   /**
     * Two edge cases the default Langium implementation rejects on:
     * - Document below target state with no build active (newly-created file):
     *   wait for the next build instead of rejecting with "workspace state
@@ -367,7 +398,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * whatever cancelled it may build nothing. Re-queuing stops after
     * {@link MAX_STALLED_REQUEUES} builds that fail to advance the document, so a
     * document the builder will never carry to `state` degrades to a pending wait
-    * plus a warning rather than an endless build loop.
+    * plus a warning rather than an endless build loop. With `rejectWhenStuck`,
+    * the wait rejects instead, both then and once
+    * `VersionSyncService.requestRecoveryBuild` gives up a re-queued build.
     *
     * A wait for `Validated` on a document that a validating build skips
     * resolves once that build has indexed its references, without diagnostics:
@@ -380,7 +413,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * a re-queue: the build waits for that action to end. Await it outside the
     * lock.
     */
-   protected override awaitDocumentState(state: DocumentState, uri: URI, cancelToken: CancellationToken): Promise<URI> {
+   protected override awaitDocumentState(
+      state: DocumentState,
+      uri: URI,
+      cancelToken: CancellationToken,
+      { rejectWhenStuck = false }: WaitUntilOptions = {}
+   ): Promise<URI> {
       const document = this.langiumDocuments.getDocument(uri);
       if (!document) {
          return super.awaitDocumentState(state, uri, cancelToken);
@@ -398,15 +436,28 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          // land while a busy workspace keeps cancelling builds.
          let stalledRequeues = 0;
          let lastRequeueState: DocumentState | undefined;
+         const giveUp = (reason: string): void => {
+            cleanup();
+            reject(
+               new Error(
+                  `Gave up building ${this.formatUri(uri)} to '${DocumentState[state]}' ` +
+                     `(at '${DocumentState[document.state]}'): ${reason}`
+               )
+            );
+         };
          const requeue = (reason: string): void => {
             if (document.state === lastRequeueState) {
                if (++stalledRequeues > MAX_STALLED_REQUEUES) {
+                  const stalled = `${stalledRequeues} builds did not advance it`;
+                  if (rejectWhenStuck) {
+                     giveUp(stalled);
+                     return;
+                  }
                   this.tracer
                      .withUri(uri.toString())
                      .warn(
                         `Giving up re-queuing ${this.formatUri(uri)}: stuck at '${DocumentState[document.state]}', needs ` +
-                           `'${DocumentState[state]}' after ${stalledRequeues} builds that did not advance it. ` +
-                           'The wait now depends on its cancellation token.'
+                           `'${DocumentState[state]}' after ${stalled}. The wait now depends on its cancellation token.`
                      );
                   return;
                }
@@ -414,7 +465,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                stalledRequeues = 0;
                lastRequeueState = document.state;
             }
-            this.requeueOrphaned(document, state, reason);
+            void this.requeueOrphaned(document, state, reason).then(built => {
+               if (!built && rejectWhenStuck) {
+                  giveUp('its recovery build failed');
+               }
+            });
          };
          const phaseDisposable = this.onDocumentPhase(
             state,
@@ -465,7 +520,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          // advanced this document has already finished, so none of these
          // listeners fires until some other build runs. Re-queue now — the listeners are
          // registered, so the resulting build resolves this wait.
-         if (this.isOrphaned(document, state)) {
+         // With `rejectWhenStuck`, also a document a failed build left behind:
+         // no build ends to re-queue it, so the wait would never give up.
+         if (this.isOrphaned(document, state) || (rejectWhenStuck && this.activeSession === undefined)) {
             requeue('quiescent builder');
          }
       });
@@ -514,39 +571,21 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    }
 
    /**
-    * Schedule a build for a document no in-flight build will advance. Deliberately
-    * fire-and-forget: the caller is a waiter that resolves off the resulting phase
-    * notification, so awaiting here would invert the dependency. A rejection is
-    * logged rather than swallowed — it leaves the waiter pending until its own
-    * cancellation token fires, which is worth a line in the log.
-    *
-    * The build is a {@link scheduleUpdate}, entered from a {@link WorkspaceLock}
-    * read. The read waits until no write runs or is queued, so the build neither
-    * runs beside a locked one nor cancels the build a re-queue is fired from.
-    * Unlocked, it runs beside a locked build that cannot cancel it: both
-    * validate the same version and deliver it twice. Taking the write directly,
-    * without the read, cancels the running build and skips the rest of its
-    * build-phase listeners. The read must not await the write, which queues
-    * behind that read. A build scheduled in the gap between the read batch
-    * starting and this action running is still queued, so the re-queue merges
-    * into it rather than cancelling it.
-    *
-    * A write that ran while the read waited may have carried the document to
-    * `state` already, and a second build would deliver that version again; the
-    * read skips the write then.
+    * Schedule a build for a document no in-flight build will advance, through
+    * `VersionSyncService.requestRecoveryBuild`: from a {@link WorkspaceLock} read, so
+    * the build neither runs beside a locked one nor cancels the build a
+    * re-queue is fired from, and skipped if a write that ran meanwhile carried
+    * the document to `state`. The waiter resolves off the resulting phase
+    * notification; the answer only tells it whether the build was given up.
     */
-   protected requeueOrphaned(document: LangiumDocument, state: DocumentState, reason: string): void {
+   protected requeueOrphaned(document: LangiumDocument, state: DocumentState, reason: string): Promise<boolean> {
       const tracer = this.tracer.withUri(document.uri.toString());
       tracer.info(`Re-queuing orphaned document (at '${DocumentState[document.state]}', needs '${DocumentState[state]}'): ${reason}`);
-      void this.workspaceLock.read(() => {
-         if (document.state >= state) {
-            return;
-         }
-         this.scheduleUpdate([document.uri], []).catch((err: unknown) => {
-            if (!isOperationCancelled(err)) {
-               tracer.error(`Re-queue build failed: ${err instanceof Error ? err.message : String(err)}`);
-            }
-         });
+      return this.versionSyncService().requestRecoveryBuild(document.uri, {
+         // Skipped on purpose: a waiting caller is answered sooner, at the cost
+         // of a possible duplicate build once the debounce fires.
+         ignoreDeferred: true,
+         stillNeeded: () => document.state < state
       });
    }
 

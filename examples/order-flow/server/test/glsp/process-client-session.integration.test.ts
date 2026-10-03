@@ -33,7 +33,7 @@ import {
    ServerModule
 } from '@eclipse-glsp/server';
 import { DIAGRAM_SESSION_REFUSED, HydraniumGlspAppModule } from '@hydranium/glsp-server';
-import { ForceConflictResolver, asSnapshotVersion } from '@hydranium/protocol';
+import { ForceConflictResolver, asModelVersion } from '@hydranium/protocol';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ServerSharedServices } from '@hydranium/core';
@@ -98,7 +98,7 @@ async function startDiagram(relativePath: string, options: { open: boolean } = {
          const models = shared.model.ModelService;
          const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
          await editor.open(uri);
-         await editor.update({ uri, model: text, basedOn: 'anything' });
+         await editor.update({ uri, model: text, baseVersion: 'any' });
       }
    };
    if (options.open) {
@@ -208,11 +208,11 @@ describe('order-flow .process diagram as a client session', () => {
       const diagram = await startDiagram(WORKSPACE_FILES.fulfillmentProcess);
       const layoutBefore = diagram.text(diagram.layoutUri)!;
       expect(layoutBefore).toContain('node Pay at 40, 100 size 160, 60');
-      const capturedLayoutVersion = diagram.harness.state.snapshotVersionOf(diagram.layoutUri);
+      const capturedLayoutVersion = diagram.harness.state.baseVersionOf(diagram.layoutUri);
 
       await diagram.foreignWrite(diagram.layoutUri, layoutBefore.replace('node Pay at 40, 100', 'node Pay at 41, 101'));
       // The gate is armed: the diagram still holds the layout version it read.
-      expect(diagram.harness.state.snapshotVersionOf(diagram.layoutUri)).toBe(capturedLayoutVersion);
+      expect(diagram.harness.state.baseVersionOf(diagram.layoutUri)).toBe(capturedLayoutVersion);
 
       diagram.harness.dispatch(
          ChangeBoundsOperation.create([
@@ -227,17 +227,17 @@ describe('order-flow .process diagram as a client session', () => {
       expect(diagram.text(diagram.layoutUri)).not.toContain('node Pay at 300, 220');
    });
 
-   it('gates a drag on the store version of a layout an editor opened before its rebuild', async () => {
-      // An editor's first open gives the layout the editor's version, while
-      // the built document keeps its own until a rebuild. Nothing in this
-      // harness rebuilds on an editor open, so the window stays open.
+   it('lands a drag on a layout an editor opened before its rebuild without reconciling', async () => {
+      // Nothing in this harness rebuilds on an editor open, so the drag is
+      // gated on the root built before it: a first open of the same text has
+      // to keep that root's version, whatever version the editor declares.
       const diagram = await startDiagram(WORKSPACE_FILES.fulfillmentProcess, { open: false });
       await diagram.harness.start();
       const languageId = diagram.shared.ServiceRegistry.getServices(URI.parse(diagram.layoutUri)).LanguageMetaData.languageId;
       diagram.shared.workspace.TextDocuments.notifyDidOpenTextDocument({
          textDocument: { uri: diagram.layoutUri, languageId, version: 5, text: diagram.text(diagram.layoutUri)! }
       });
-      expect(diagram.shared.workspace.TextDocuments.version(diagram.layoutUri)).toBe(5);
+      expect(diagram.shared.workspace.TextDocuments.version(diagram.layoutUri)).toBe(0);
       await diagram.harness.openDocument(URI.parse(diagram.processUri).fsPath);
       await waitFor(() => diagram.isOpenForDiagram(diagram.layoutUri), { message: 'the layout was never opened for the diagram' });
       expect(diagram.shared.model.ModelService.getDocument(diagram.layoutUri)?.textDocument.version).toBe(0);
@@ -262,7 +262,7 @@ describe('order-flow .process diagram as a client session', () => {
       const diagram = await startDiagram(WORKSPACE_FILES.fulfillmentProcess);
       expect(diagram.text(diagram.layoutUri)).not.toContain('node Cancel');
       // A layout gate that fails over unchanged text.
-      Object.defineProperty(diagram.harness.state, 'secondaryBasedOn', { value: () => asSnapshotVersion(99) });
+      Object.defineProperty(diagram.harness.state, 'secondaryBaseVersion', { value: () => asModelVersion(99) });
 
       diagram.harness.dispatch(
          ChangeBoundsOperation.create([
@@ -366,6 +366,60 @@ describe('order-flow .process diagram as a client session', () => {
          message: 'the drag never landed'
       });
       expect(readFileSync(layoutPath, 'utf8')).toContain('layout ReturnsLayout for Returns');
+   });
+
+   it('merges a drag into a layout file the workspace has not read rather than overwriting it', async () => {
+      // The diagram read no text of the layout, so its write has to conflict
+      // and be replayed onto the file's text.
+      const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
+      const layoutPath = URI.parse(diagram.layoutUri).fsPath;
+      writeFileSync(layoutPath, 'layout ReturnsLayout for Returns {\n   node Restock at 5, 5 size 100, 40\n}\n');
+      expect(diagram.text(diagram.layoutUri)).toBeUndefined();
+
+      diagram.harness.dispatch(
+         ChangeBoundsOperation.create([
+            { elementId: idOf(diagram, 'Receive'), newPosition: { x: 20, y: 20 }, newSize: { width: 140, height: 50 } }
+         ])
+      );
+
+      await waitFor(() => diagram.text(diagram.layoutUri)?.includes('node Receive at 20, 20') ?? false, {
+         message: 'the drag never landed'
+      });
+      expect(diagram.text(diagram.layoutUri)).toContain('node Restock at 5, 5 size 100, 40');
+   });
+
+   it('merges a drag into a layout another client created first rather than overwriting it', async () => {
+      const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
+      const editor = diagram.shared.model.ModelService.createSession('text-editor', 'text-editor');
+      await editor.create(diagram.layoutUri, 'layout ReturnsLayout for Returns {\n   node Restock at 5, 5 size 100, 40\n}\n');
+
+      diagram.harness.dispatch(
+         ChangeBoundsOperation.create([
+            { elementId: idOf(diagram, 'Receive'), newPosition: { x: 20, y: 20 }, newSize: { width: 140, height: 50 } }
+         ])
+      );
+
+      await waitFor(() => diagram.text(diagram.layoutUri)?.includes('node Receive at 20, 20') ?? false, {
+         message: 'the drag never landed'
+      });
+      expect(diagram.text(diagram.layoutUri)).toContain('node Restock at 5, 5 size 100, 40');
+   });
+
+   it('fails a write to a missing layout it does not create, leaving the layout absent', async () => {
+      const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
+      Object.defineProperty(diagram.harness.state, 'openForWrite', {
+         value: (session: { open(uri: string): Promise<void> }, uri: string) => session.open(uri)
+      });
+
+      diagram.harness.dispatch(
+         ChangeBoundsOperation.create([
+            { elementId: idOf(diagram, 'Receive'), newPosition: { x: 20, y: 20 }, newSize: { width: 140, height: 50 } }
+         ])
+      );
+
+      const message = await diagram.harness.nextAction<MessageAction>(MessageAction.KIND);
+      expect(message.details).toContain(URI.parse(diagram.layoutUri).fsPath);
+      expect(diagram.text(diagram.layoutUri)).toBeUndefined();
    });
 
    it('fails a write whose layout cannot be serialised, rather than opening a layout that does not exist', async () => {

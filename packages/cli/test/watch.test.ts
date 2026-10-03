@@ -129,12 +129,12 @@ describe('runWatch', () => {
       expect(harness.subscribes[0]).toEqual({ uri: 'file:///workspace/A.fake', clientId: 'watcher' });
 
       harness.fire({
-         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 1, { $type: 'FakeRoot', v: 1 }),
+         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 1, { $type: 'FakeRoot', v: 1 }, 'hash'),
          sourceClientId: 'editor-1',
          reason: 'changed'
       });
       harness.fire({
-         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }),
+         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }, 'hash'),
          sourceClientId: 'editor-1',
          reason: 'changed'
       });
@@ -143,8 +143,8 @@ describe('runWatch', () => {
       await run;
 
       expect(written).toHaveLength(2);
-      expect(JSON.parse(written[0]).document.root).toEqual({ $type: 'FakeRoot', v: 1 });
-      expect(JSON.parse(written[1]).document.root).toEqual({ $type: 'FakeRoot', v: 2 });
+      expect(JSON.parse(written[0]).document.model.root).toEqual({ $type: 'FakeRoot', v: 1 });
+      expect(JSON.parse(written[1]).document.model.root).toEqual({ $type: 'FakeRoot', v: 2 });
       expect(harness.unsubscribes).toHaveLength(1);
       expect(harness.unsubscribes[0]).toEqual({ uri: 'file:///workspace/A.fake', clientId: 'watcher' });
       expect(harness.shutdownCalls.count).toBe(1);
@@ -167,12 +167,12 @@ describe('runWatch', () => {
 
       // Notification for a different URI — must be ignored.
       harness.fire({
-         document: TransferDocument.create<FakeRoot>('file:///workspace/B.fake', 1, { $type: 'FakeRoot', v: 1 }),
+         document: TransferDocument.create<FakeRoot>('file:///workspace/B.fake', 1, { $type: 'FakeRoot', v: 1 }, 'hash'),
          sourceClientId: 'editor-1',
          reason: 'changed'
       });
       harness.fire({
-         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }),
+         document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }, 'hash'),
          sourceClientId: 'editor-1',
          reason: 'changed'
       });

@@ -127,7 +127,7 @@ lifecycle to a multi-client scenario:
   path replaces shared content with the caller's optional seed.
 - Between open and close, a client may send `update`s through its
   [client session](client-sessions.md), which fails for a document the session
-  does not have open. The `basedOn` check runs before serialization or
+  does not have open. The `baseVersion` check runs before serialization or
   mutation and again where the text applies; a successful
   content change is installed by
   [`AstDocumentManager.update`](../../packages/core/src/documents/ast-document-manager.ts),

@@ -34,12 +34,14 @@ import {
    type ReferenceContext,
    type ReferenceRequest,
    type ReferenceTarget,
+   type TransferModelSnapshot,
+   type ModelVersion,
+   type TextState,
    type Tracer,
    type TransferDiagnostic,
    TransferDocument,
    type TransferElement,
    UNKNOWN_CLIENT_ID,
-   asSnapshotVersion,
    textHash
 } from '@hydranium/protocol';
 import {
@@ -122,6 +124,7 @@ import type {
    LogNameOptions,
    AstDiagnostic,
    AstDocument,
+   EncodedTransferDocument,
    ModelService,
    ProjectChangeEvent,
    ServerSharedServices,
@@ -170,22 +173,32 @@ const resumableByModelService = new WeakMap<object, Map<string, ResumableSession
  *   folded in on a cascade rebuild that leaves the document's own text
  *   untouched. Safe for any adopter whose AST extensions fold derived state
  *   into the transfer projection (the framework norm).
- * - `'text-diagnostics'` — the cheaper `getText()` + diagnostics hash. An
- *   opt-DOWN for adopters that fold no derived state and want to avoid the
- *   transfer-encode per phase event.
+ * - `'text-diagnostics'` — the cheaper parsed-text + diagnostics hash. An
+ *   opt-DOWN for adopters that fold no derived state and want to avoid
+ *   stringifying the transfer root per phase event.
  */
 export type FingerprintStrategy = 'transfer-document' | 'text-diagnostics';
 
-/** Hash a document's raw text + diagnostics — the `'text-diagnostics'` strategy. */
-function textDiagnosticsFingerprint(document: LangiumDocument): string {
-   return textHash([document.textDocument.getText(), FINGERPRINT_SEPARATOR, JSON.stringify(document.diagnostics ?? [])]);
+/**
+ * Hash `text`, the text the model was parsed from, + `model`'s diagnostics — the `'text-diagnostics'` strategy.
+ * The text comes from the root's ledger record or CST, as the document's own may have moved on,
+ * and a repair in place leaves the CST on the unrepaired text;
+ * a root built without a CST hashes as `'transfer-document'`.
+ * Absent diagnostics must hash apart from `[]`, as in {@link transferDocumentFingerprint}.
+ */
+function textDiagnosticsFingerprint(text: string | undefined, model: EncodedTransferDocument<TransferElement, unknown>['model']): string {
+   return text === undefined
+      ? transferDocumentFingerprint(model)
+      : textHash([text, FINGERPRINT_SEPARATOR, JSON.stringify(model.diagnostics ?? null)]);
 }
 
-/** Hash an encoded transfer document's root + diagnostics — the `'transfer-document'` strategy. */
-function transferDocumentFingerprint(transferDocument: Pick<TransferDocument<TransferElement, unknown>, 'root' | 'diagnostics'>): string {
-   // null, not undefined: `JSON.stringify(undefined)` yields undefined rather
-   // than a string, putting a non-string into the hash inputs.
-   return textHash([JSON.stringify(transferDocument.root ?? null), FINGERPRINT_SEPARATOR, JSON.stringify(transferDocument.diagnostics)]);
+/**
+ * Hash an encoded model's root + diagnostics — the `'transfer-document'` strategy.
+ * Absent diagnostics must hash apart from `[]`: a client skipping a render on an
+ * equal hash would otherwise miss a validation that found nothing.
+ */
+function transferDocumentFingerprint(model: EncodedTransferDocument<TransferElement, unknown>['model']): string {
+   return textHash([JSON.stringify(model.root), FINGERPRINT_SEPARATOR, JSON.stringify(model.diagnostics ?? null)]);
 }
 /**
  * `logAfterMs` threshold passed to {@link Tracer.time} around
@@ -363,6 +376,13 @@ export interface DataServerUriWatchRecord {
    readonly watchers: Set<string>;
    /** Digest of the last emitted state, or of the state a first watch found; see {@link DataServer.dispatchPhaseEvent} for why it de-duplicates, {@link DataServer.computeDocumentFingerprint} for its inputs. */
    fingerprint?: string;
+   /**
+    * The version {@link DataServerUriWatchRecord.fingerprint} was taken at; an
+    * event goes out when either moves. Not {@link DataServerUriWatchRecord.sentVersion}:
+    * a first watch sets this and sends nothing, so the next event at its
+    * version still carries the manager's attribution.
+    */
+   fingerprintVersion?: ModelVersion;
    /** Set by {@link DataServer.subscribeToTextDocumentCloses}; the next phase event broadcasts even without a watcher. */
    revertPending?: boolean;
    /**
@@ -663,7 +683,7 @@ export class DataServer<
     * through an override of this.
     */
    protected toSessionWrite(request: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>): ClientSessionWriteArgs<TTransfer> {
-      return { uri: request.uri, model: request.model, basedOn: request.basedOn };
+      return { uri: request.uri, model: request.model, baseVersion: request.baseVersion };
    }
 
    /**
@@ -693,25 +713,15 @@ export class DataServer<
     * fails, `rollback` undoes the open this call made before the failure is
     * rethrown: the caller sees no open, so nothing on its side would ever close
     * it.
-    *
-    * Versioned with the store's shared version rather than the snapshot's own:
-    * the built document's `textDocument.version` lags the store's whenever the
-    * store assigned the version, and the store's is what a write's `basedOn` is
-    * compared against, so reporting the snapshot's would make the caller's
-    * first based-on write conflict with itself.
     */
    protected async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
-      let document: TransferDocument<TTransfer, TDiagnostic>;
       try {
-         document = await this.getModelDocument({ uri });
+         return await this.getModelDocument({ uri });
       } catch (error: unknown) {
          // The open's failure is the one the caller needs, not the cleanup's.
          await rollback?.().catch(() => undefined);
          throw error;
       }
-      // Stamped again with the version, in one step: a write landing after the
-      // read would otherwise pair its version with the read's text hash.
-      return this.withServerState({ ...document, version: asSnapshotVersion(this.services.workspace.TextDocuments.version(uri)) });
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
@@ -741,7 +751,7 @@ export class DataServer<
          return this.encodeDocument(await this.modelService.ensureDocumentState(args.uri, state));
       } catch (error: unknown) {
          // The protocol answers a read of a URI with no document with an
-         // envelope that has no root.
+         // envelope that has no model.
          if (this.isMissingDocument(error, args.uri)) {
             return this.envelope(UriUtils.toUri(args.uri));
          }
@@ -780,8 +790,9 @@ export class DataServer<
       record.watchers.add(args.clientId);
       if (record.fingerprint === undefined) {
          const document = this.services.workspace.LangiumDocuments.getDocument(UriUtils.toUri(uri));
-         if (document) {
-            record.fingerprint = this.computeDocumentFingerprint(document);
+         if (document && !this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
+            record.fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
+            record.fingerprintVersion = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
          }
       }
    }
@@ -813,6 +824,7 @@ export class DataServer<
       }
       if (record.revertPending) {
          record.fingerprint = undefined;
+         record.fingerprintVersion = undefined;
       } else {
          this.uriWatchRecords.delete(uri);
       }
@@ -1133,58 +1145,75 @@ export class DataServer<
    /**
     * Build a {@link TransferDocument} envelope from the current document state,
     * delegating root + diagnostic encoding to {@link encoder} (see
-    * `TransferEncoder.toTransferDocument` for the walk).
+    * `TransferEncoder.toTransferDocument` for the walk). `fingerprint` is the
+    * caller's {@link computeDocumentFingerprint} of that same state, which
+    * spares hashing it twice.
     *
     * The encoder field's generic-map binding is widened to
     * `Record<string, TransferElement>` at the framework-default level, and an
     * adopter supplying a typed-overlay encoder narrows the runtime shape to
-    * its wire types. The cast on the return is where that invariant — the
-    * adopter's `TTransfer` matches its encoder's overlay — is asserted, at a
-    * single boundary point rather than spread across the callers.
+    * its wire types; {@link withServerState} asserts the adopter's `TTransfer`
+    * matches its encoder's overlay.
     */
-   protected envelope(uri: URI): TransferDocument<TTransfer, TDiagnostic> {
+   protected envelope(uri: URI, fingerprint?: string): TransferDocument<TTransfer, TDiagnostic> {
       // Resolve through the model service's canonicalizing gateway rather than
       // reaching into `LangiumDocuments` directly, so a divergent (symlink) URI
       // still finds the document the build keys by its real path — and so the
       // data-server never has to remember to canonicalize this lookup itself.
       const document = this.modelService.getDocument(uri.toString());
-      if (!document) {
+      if (!document || this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
          // No document — a shaped envelope rather than a throw, so the caller
-         // decides policy at its own layer; `root` is optional on the envelope
+         // decides policy at its own layer; `model` is optional on the envelope
          // so the compiler forces that decision. Adopters preferring to throw
-         // override `envelope`.
+         // override `envelope`. The builder's unparsed placeholder is no
+         // document either: its root parses no text.
          return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
       }
-      return this.withServerState(this.encoder.toTransferDocument(document) as TransferDocument<TTransfer, TDiagnostic>);
+      const encoded = this.encoder.toTransferDocument(document);
+      return this.withServerState(encoded, fingerprint ?? this.computeDocumentFingerprint(document.parseResult.value, encoded));
    }
 
    /**
-    * The transfer document a request answers with for `astDocument`, the
-    * store's current `dirty` and `textHash` stamped on it by
-    * {@link withServerState}. Every document a request answers with goes
-    * through here, so none goes out without the stamp.
+    * The transfer document a request answers with for `astDocument`, its model
+    * hashed and the text stamped on it by {@link withServerState}. Every
+    * document a request answers with goes through here, so none goes out
+    * without them.
     */
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      return this.withServerState(this.encoder.astDocumentToTransferDocument(astDocument) as TransferDocument<TTransfer, TDiagnostic>);
+      const encoded = this.encoder.astDocumentToTransferDocument(astDocument);
+      return this.withServerState(encoded, this.computeDocumentFingerprint(astDocument.root, encoded));
    }
 
    /**
-    * `document` with the store's current {@link TransferDocument.dirty} and
-    * the {@link TransferDocument.textHash} of the text the server holds for
-    * it: the store's text while a client has it open, the build's otherwise.
-    * Both are read when the document is sent rather than kept with the build:
-    * a save changes `dirty` without a rebuild, and the store's text moves on
-    * before the build that follows it.
+    * `encoded` with `hash` on its model and the text the server holds for it:
+    * the store's while it holds the document, the build's otherwise. The text
+    * is read when the document is sent rather than kept with the build: a save
+    * changes `text.dirty` without a rebuild, and the store's text moves on before
+    * the build that follows it.
     */
-   protected withServerState(document: TransferDocument<TTransfer, TDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
-      const text = (
-         this.services.workspace.TextDocuments.get(document.uri) ?? this.modelService.getDocument(document.uri)?.textDocument
-      )?.getText();
+   protected withServerState(
+      encoded: EncodedTransferDocument<TransferElement, TDiagnostic>,
+      hash: string
+   ): TransferDocument<TTransfer, TDiagnostic> {
+      const text = this.services.workspace.TextDocuments.textState(encoded.uri) ?? this.builtTextState(encoded.uri);
+      if (text && text.version > encoded.model.version) {
+         this.tracer.withUri(encoded.uri).debug(`Send a model behind its text: model v${encoded.model.version} / text v${text.version}`);
+      }
       return {
-         ...document,
-         dirty: this.services.workspace.TextDocuments.isDirty(document.uri),
-         ...(text === undefined ? {} : { textHash: textHash(text) })
+         uri: encoded.uri,
+         // Where the adopter's `TTransfer` is asserted to match its encoder's overlay.
+         model: { ...encoded.model, hash } as TransferModelSnapshot<TTransfer, TDiagnostic>,
+         ...(text ? { text } : {})
       };
+   }
+
+   /**
+    * The text a build read for a document the store never held, which is
+    * clean: the store holds every text a client gave it.
+    */
+   protected builtTextState(uri: string): TextState | undefined {
+      const textDocument = this.modelService.getDocument(uri)?.textDocument;
+      return textDocument && { version: textDocument.version, hash: textHash(textDocument.getText()), dirty: false };
    }
 
    /**
@@ -1285,7 +1314,7 @@ export class DataServer<
    protected dispatchDirtyEvent(event: DocumentDirtyChangedEvent): void {
       const uri = this.canonicalKey(event.uri);
       if (this.uriWatchRecords.get(uri)?.watchers.size) {
-         this.clientProxy.onDocumentDirtyChanged({ uri, dirty: event.dirty });
+         this.clientProxy.onDocumentDirtyChanged({ uri, text: event.text });
       }
    }
 
@@ -1362,6 +1391,7 @@ export class DataServer<
          const record = this.uriWatchRecords.get(uri);
          if (record) {
             record.fingerprint = undefined;
+            record.fingerprintVersion = undefined;
             record.revertPending = undefined;
             record.sentVersion = undefined;
             this.pruneUriWatchRecord(uri);
@@ -1404,7 +1434,9 @@ export class DataServer<
     * {@link subscribeToTextDocumentCloses}).
     *
     * An event for a rebuild with no observable change since the last emit is
-    * suppressed against the URI's fingerprint. Such rebuilds are routine: a
+    * suppressed against the URI's fingerprint and the version it was taken at;
+    * a new version with the same fingerprint goes out with the same
+    * `model.hash`, so a watcher still learns the version. Such rebuilds are routine: a
     * second client attaching to an open document makes
     * `HydraniumTextDocuments.refreshContent` fire `onDidChangeContent` purely
     * to re-trigger the build, and Langium rebuilds a document when a
@@ -1443,16 +1475,18 @@ export class DataServer<
          record.revertPending = undefined;
          this.pruneUriWatchRecord(uri);
       }
-      const fingerprint = this.computeDocumentFingerprint(document);
-      if (record.fingerprint === fingerprint) {
+      const fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
+      const stamped = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
+      if (record.fingerprint === fingerprint && record.fingerprintVersion === stamped) {
          // A rebuild that produced no observable change since the last emit —
          // suppressed so RPC subscribers don't see a no-op broadcast. Logged at
          // debug so a *needed* re-broadcast wrongly suppressed by this dedup
          // (the failure mode the fingerprint strategy must avoid) is visible.
-         this.tracer.withUri(uri).debug(`Suppress onDocumentUpdated v${document.textDocument.version}: fingerprint unchanged`);
+         this.tracer.withUri(uri).debug(`Suppress onDocumentUpdated v${stamped}: fingerprint and version unchanged`);
          return;
       }
       record.fingerprint = fingerprint;
+      record.fingerprintVersion = stamped;
       // The manager's attribution, so this head names the same client as the
       // in-process heads do for one build, except for a version this head
       // already sent; see `DataServerUriWatchRecord.sentVersion`.
@@ -1463,54 +1497,39 @@ export class DataServer<
             : this.services.workspace.AstDocumentManager.attributeUpdate(document);
       record.sentVersion = version;
       const event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
-         document: this.envelope(document.uri),
+         document: this.envelope(document.uri, fingerprint),
          sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,
          reason
       };
-      this.tracer
-         .withUri(uri)
-         .debug(`Emit onDocumentUpdated v${event.document.version} (reason=${event.reason}, sourceClientId=${event.sourceClientId})`);
+      this.tracer.withUri(uri).debug(`Emit onDocumentUpdated v${stamped} (reason=${event.reason}, sourceClientId=${event.sourceClientId})`);
       this.clientProxy.onDocumentUpdated(event);
    }
 
    /**
-    * Fingerprint of the document's observable state, used to de-dup
-    * `onDocumentUpdated` emissions. The {@link FingerprintStrategy} option
-    * selects what is hashed (default `'transfer-document'` — see the type), and
-    * {@link additionalFingerprintInputs} folds in any extra adopter signal.
+    * Fingerprint of the snapshot `root` and its encoding `encoded`, used to
+    * de-dup `onDocumentUpdated` emissions and sent as every document's
+    * `model.hash`, so it must not depend on the version or on live state. The
+    * {@link FingerprintStrategy} option selects what is hashed (default
+    * `'transfer-document'` — see the type).
     *
-    * The default `'transfer-document'` strategy goes through the encoder's
-    * {@link TransferEncoder.toTransferDocument}, which is cached per build —
-    * so within one phase event the fingerprint and the subsequently-emitted
-    * `envelope` share a single encode walk.
+    * {@link TransferEncoder.toTransferDocument} is cached per build, so within
+    * one phase event the fingerprint and the subsequently-emitted `envelope`
+    * share a single encode walk.
     *
     * Wrapped in {@link Tracer.time} against {@link FINGERPRINT_LOG_AFTER_MS}.
     */
-   protected computeDocumentFingerprint(document: LangiumDocument): string {
-      return this.tracer.withUri(document.uri.toString()).time(
-         'Compute fingerprint',
-         () => {
-            const base =
+   protected computeDocumentFingerprint(root: AstNode, encoded: EncodedTransferDocument<TransferElement, TDiagnostic>): string {
+      return this.tracer
+         .withUri(encoded.uri)
+         .time(
+            'Compute fingerprint',
+            () =>
                this.options.fingerprintStrategy === 'text-diagnostics'
-                  ? textDiagnosticsFingerprint(document)
-                  : transferDocumentFingerprint(this.encoder.toTransferDocument(document));
-            const extra = this.additionalFingerprintInputs(document);
-            return extra.length === 0 ? base : textHash([base, FINGERPRINT_SEPARATOR, ...extra.map(value => JSON.stringify(value))]);
-         },
-         'debug',
-         { logAfterMs: FINGERPRINT_LOG_AFTER_MS }
-      );
-   }
-
-   /**
-    * Extra inputs folded into {@link computeDocumentFingerprint} alongside the
-    * chosen {@link FingerprintStrategy}. Default: none. Override to contribute a
-    * signal that lives outside the document's text / root / diagnostics — each
-    * entry need only be stable across equivalent emissions and
-    * JSON-serialisable.
-    */
-   protected additionalFingerprintInputs(_document: LangiumDocument): readonly unknown[] {
-      return [];
+                  ? textDiagnosticsFingerprint(this.services.workspace.ModelLedger.textOf(root), encoded.model)
+                  : transferDocumentFingerprint(encoded.model),
+            'debug',
+            { logAfterMs: FINGERPRINT_LOG_AFTER_MS }
+         );
    }
 
    /**

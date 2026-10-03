@@ -79,7 +79,7 @@ describe('order-flow .process integrity repair under an open diagram', () => {
       if (!session) {
          throw new Error(`no client session for the diagram ${sessionClient}`);
       }
-      await session.update({ uri: uriString, model: duplicated, basedOn: 'anything' });
+      await session.update({ uri: uriString, model: duplicated, baseVersion: 'any' });
       await services.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
 
       expect(textDocuments.get(uriString)?.getText()).toContain('Pay__1');

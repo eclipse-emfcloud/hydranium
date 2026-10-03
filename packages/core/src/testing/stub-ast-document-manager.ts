@@ -18,7 +18,8 @@ import {
    type WritableFileSystemProvider
 } from '../documents/ast-document-manager.js';
 import { UNKNOWN_CLIENT_ID } from '../documents/client-ids.js';
-import type { CloseModelArgs, OpenModelArgs } from '@hydranium/protocol';
+import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
+import { type CloseModelArgs, type OpenModelArgs } from '@hydranium/protocol';
 import type { StubHydraniumTextDocuments } from './stub-hydranium-text-documents.js';
 import type { StubLangiumDocuments } from './stub-langium-documents.js';
 
@@ -60,6 +61,7 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extend
    | 'onClientClosed'
    | 'getAuthor'
    | 'getDocument'
+   | 'toAstDocument'
    | 'attributeUpdate'
 > {
    readonly openClients: Map<string, Set<string>>;
@@ -109,7 +111,8 @@ export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extend
 export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic>(
    textDocuments: StubHydraniumTextDocuments,
    fileSystem: Pick<WritableFileSystemProvider, 'writeFile'>,
-   documents?: StubLangiumDocuments<TAst, TDiagnostic>
+   documents?: StubLangiumDocuments<TAst, TDiagnostic>,
+   ledger: ModelLedger = new DefaultModelLedger()
 ): StubAstDocumentManager<TAst, TDiagnostic> {
    const openClients = new Map<string, Set<string>>();
    // Keyed by the URI as given, not canonicalized: the stub has no URI policy,
@@ -226,6 +229,11 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
       // that need real symlink canonicalization wire the real AstDocumentManager).
       getDocument(uri: string): LangiumDocument | undefined {
          return documents?.getDocument(UriUtils.toUri(uri));
+      },
+      toAstDocument(document: LangiumDocument): AstDocument<TAst, TDiagnostic> {
+         const uri = document.textDocument.uri;
+         const root = document.parseResult.value as TAst;
+         return AstDocument.create<TAst, TDiagnostic>(uri, ledger.versionOf(root), root, document.diagnostics as TDiagnostic[] | undefined);
       }
    };
 }

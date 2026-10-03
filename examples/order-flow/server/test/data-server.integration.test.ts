@@ -97,9 +97,9 @@ describe('order-flow data head', () => {
       // Routing by URI alone: one server, two languages, two different root
       // types. Asserting the $type rather than just "no throw" is what
       // distinguishes a real router from one answering with its only language.
-      expect(domain.root?.$type).toBe('DomainModel');
-      expect(process.root?.$type).toBe('ProcessModel');
-      expect(isProcessModel(process.root)).toBe(true);
+      expect(domain.model?.root?.$type).toBe('DomainModel');
+      expect(process.model?.root?.$type).toBe('ProcessModel');
+      expect(isProcessModel(process.model?.root)).toBe(true);
    });
 
    it('encodes a cross-reference as its name, not as a reference object', async () => {
@@ -113,7 +113,7 @@ describe('order-flow data head', () => {
       // The wire shape, and the reason `main.ts` naming the AST roots was a
       // type-level lie: `Reference<T>` is `string` in the transfer model, so a
       // client typed off the AST would reach for `.ref` on a bare name.
-      const root = document.root as ProcessModel;
+      const root = document.model?.root as ProcessModel;
       expect(root.subject).toBe('Order');
       expect(typeof root.subject).toBe('string');
    });
@@ -144,9 +144,9 @@ describe('order-flow data head', () => {
       // "it resolves" test and return an empty array here. `audit-leak.domain`
       // is the workspace's one deliberate error (a cross-project reference to a
       // non-`public` declaration), so this pins that validation really ran.
-      expect(leaked.diagnostics).toHaveLength(1);
-      expect(leaked.diagnostics[0]).toMatchObject({ severity: 'error' });
-      expect(leaked.diagnostics[0].message).toContain('AuditStamp');
+      expect(leaked.model?.diagnostics).toHaveLength(1);
+      expect(leaked.model?.diagnostics?.[0]).toMatchObject({ severity: 'error' });
+      expect(leaked.model?.diagnostics?.[0].message).toContain('AuditStamp');
 
       // The control on the assertion above: a clean file over the same head
       // reports zero, so "1 diagnostic" is this document's error rather than
@@ -155,19 +155,18 @@ describe('order-flow data head', () => {
          uri: head.uri(WORKSPACE_FILES.ordersDomain),
          includeDiagnostics: true
       });
-      expect(clean.diagnostics).toEqual([]);
+      expect(clean.model?.diagnostics).toEqual([]);
    });
 
    it.each([false, true])(
-      'answers a read of a URI with no document with an envelope that has no root (includeDiagnostics %s)',
+      'answers a read of a URI with no document with an envelope that has no model (includeDiagnostics %s)',
       async includeDiagnostics => {
          const head = await driveDataHead();
          const uri = head.uri('orders/never-created.domain');
 
          const answer = await head.harness.proxy.getModelDocument({ uri, includeDiagnostics });
 
-         expect(answer).toMatchObject({ uri, diagnostics: [] });
-         expect(answer.root).toBeUndefined();
+         expect(answer).toEqual({ uri });
       }
    );
 
@@ -198,7 +197,7 @@ describe('order-flow data head', () => {
       const path = WORKSPACE_FILES.fulfillmentProcess;
 
       const opened = await head.harness.proxy.openModelDocument({ uri: head.uri(path), clientId: CLIENT_ID });
-      const root = opened.root as ProcessModel;
+      const root = opened.model?.root as ProcessModel;
       const pay = root.nodes.filter(isTask).find(task => task.name === 'Pay');
       expect(pay?.effects).toHaveLength(1);
 
@@ -214,14 +213,14 @@ describe('order-flow data head', () => {
          uri: head.uri(path),
          clientId: CLIENT_ID,
          model: renamed,
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
 
       // `model` is `T | string`, and this drives the T branch — the one that
       // carried the live defect where a hand-written serializer blanked every
       // transfer-mode cross-reference, turning `writes Order.status = PAID`
       // into `writes . = `. A string payload would not have reached it.
-      const updatedRoot = updated.root as ProcessModel;
+      const updatedRoot = updated.model?.root as ProcessModel;
       expect(updatedRoot.nodes.filter(isTask).map(task => task.name)).toContain('Settle');
       const settle = updatedRoot.nodes.filter(isTask).find(task => task.name === 'Settle');
       expect(settle?.effects[0]?.entity).toBe('Order');
@@ -252,7 +251,7 @@ describe('order-flow data head', () => {
          uri,
          clientId: CLIENT_ID,
          model: 'process Fulfillment for Order {\n   task Pay\n}',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
 
       expect(head.harness.events.length).toBeGreaterThan(before);
@@ -260,7 +259,7 @@ describe('order-flow data head', () => {
       expect(event.document.uri).toBe(uri);
       expect(event.sourceClientId).toBe(CLIENT_ID);
       // The notification carries the projected document, not just a signal.
-      expect((event.document.root as ProcessModel).nodes.map(node => node.name)).toEqual(['Pay']);
+      expect((event.document.model!.root as ProcessModel).nodes.map(node => node.name)).toEqual(['Pay']);
    });
 
    it('tells a watching client its document was deleted, on its own channel', async () => {
@@ -277,7 +276,7 @@ describe('order-flow data head', () => {
          uri,
          clientId: CLIENT_ID,
          model: 'process Fulfillment for Order {\n   task Pay\n}',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
       const afterUpdate = head.harness.events.length;
       expect(afterUpdate).toBeGreaterThan(0);
@@ -369,13 +368,13 @@ describe('order-flow data head', () => {
          uri,
          clientId: CLIENT_ID,
          model: 'process Fulfillment for Order {\n   task Settle\n}',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
       // Control: update alone is in-memory, so disk must still hold the original.
       expect(head.diskText(path)).toContain('task Pay');
 
-      const updatedRoot = TransferDocument.assertLoaded(updated).root;
-      await head.harness.proxy.saveModelDocument({ uri, clientId: CLIENT_ID, model: updatedRoot, basedOn: 'anything' });
+      const updatedRoot = TransferDocument.assertLoaded(updated).model.root;
+      await head.harness.proxy.saveModelDocument({ uri, clientId: CLIENT_ID, model: updatedRoot, baseVersion: 'any' });
 
       expect(head.diskText(path)).toContain('task Settle');
       expect(head.harness.saves.map(save => save.document.uri)).toContain(uri);
@@ -414,14 +413,14 @@ describe('order-flow data head', () => {
          uri,
          clientId: CLIENT_ID,
          model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
 
       const fired = head.harness.events.slice(before);
       expect(fired.length).toBeGreaterThan(0);
       const last = fired[fired.length - 1];
-      expect(last.document.diagnostics).toHaveLength(1);
-      expect(last.document.diagnostics[0].message).toContain('AuditStamp');
+      expect(last.document.model?.diagnostics).toHaveLength(1);
+      expect(last.document.model?.diagnostics?.[0].message).toContain('AuditStamp');
    });
 
    it('honours a non-default subscriptionPhase, firing before validation has run', async () => {
@@ -435,7 +434,7 @@ describe('order-flow data head', () => {
          uri,
          clientId: CLIENT_ID,
          model: 'entity ShipmentAudit {\n   stamp: AuditStamp\n}',
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
 
       const fired = head.harness.events.slice(before);
@@ -444,7 +443,7 @@ describe('order-flow data head', () => {
       // configured phase, so a head that also fired at `Validated` would show up
       // here as an extra event carrying the diagnostic.
       for (const event of fired) {
-         expect(event.document.diagnostics).toEqual([]);
+         expect(event.document.model).not.toHaveProperty('diagnostics');
       }
       // And the payload is a real projection, not an empty envelope that would
       // trivially satisfy the assertion above.
@@ -465,11 +464,11 @@ describe('order-flow data head', () => {
       const [written] = await head.harness.proxy.updateModelDocuments({
          clientId: CLIENT_ID,
          updates: [
-            { uri: audit, model: 'entity ShipmentAudit {\n   stamp: NoSuchStamp\n}', basedOn: 'anything' },
-            { uri: returns, model: 'process Returns for Order {\n   task Refund\n}', basedOn: 'anything' }
+            { uri: audit, model: 'entity ShipmentAudit {\n   stamp: NoSuchStamp\n}', baseVersion: 'any' },
+            { uri: returns, model: 'process Returns for Order {\n   task Refund\n}', baseVersion: 'any' }
          ]
       });
 
-      expect(written.diagnostics.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchStamp')]);
+      expect(written.model?.diagnostics?.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchStamp')]);
    });
 });

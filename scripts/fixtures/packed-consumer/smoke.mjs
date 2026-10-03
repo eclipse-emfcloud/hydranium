@@ -44,8 +44,8 @@ try {
    await data.waitForReady();
    const document = await data.getModelDocument({ uri, includeDiagnostics: true });
    assert.equal(document.uri, uri);
-   assert.equal(document.root?.$type, 'BookstoreModel');
-   assert.equal(document.root.nodes.length, 2);
+   assert.equal(document.model?.root.$type, 'BookstoreModel');
+   assert.equal(document.model.root.nodes.length, 2);
 } finally {
    rpc?.dispose();
    socket?.destroy();

@@ -194,8 +194,8 @@ describe('order-flow data port', () => {
       const document = await session!.openDocument({ uri: uriOf(FULFILLMENT_PROCESS) });
 
       expect(document.uri).toBe(uriOf(FULFILLMENT_PROCESS));
-      expect(document.root?.$type).toBe('ProcessModel');
-      expect((document.root as ProcessModel).name).toBe('Fulfillment');
+      expect(document.model?.root?.$type).toBe('ProcessModel');
+      expect((document.model!.root as ProcessModel).name).toBe('Fulfillment');
    });
 
    it('does not deliver a spurious update for merely opening a cold document', async () => {
@@ -259,7 +259,7 @@ describe('order-flow data port', () => {
          uri,
          clientId: session!.clientId,
          model: `${diskText(FULFILLMENT_PROCESS)}\n`.replace('task Ship ', 'task Ship2 '),
-         basedOn: 'anything'
+         baseVersion: 'any'
       });
 
       await waitFor(() => updates.length >= 1, { message: `no onDocumentUpdated for ${uri}` });

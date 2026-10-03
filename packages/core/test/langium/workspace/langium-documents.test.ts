@@ -8,8 +8,13 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type AstNode, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
-import type { CanonicalUri } from '@hydranium/protocol';
+import { type AstNode, DocumentState, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
+import { type CanonicalUri, UNRECORDED_VERSION } from '@hydranium/protocol';
+import { TextDocument } from 'vscode-languageserver-textdocument';
+import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
+import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
+import type { ServerSharedServices } from '../../../src/langium/module.js';
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
@@ -24,6 +29,8 @@ interface HarnessOptions {
    readonly loadable?: boolean;
    /** Register a document from inside the failing load, modelling a lost create race. */
    readonly raceInsert?: boolean;
+   /** The text store to bind. Defaults to none. */
+   readonly store?: HydraniumTextDocuments;
 }
 
 interface Harness {
@@ -34,6 +41,7 @@ interface Harness {
    readonly fabricated: string[];
    /** Documents passed to `CstResidencyService.rehydrate`. */
    readonly rehydrated: LangiumDocument<AstNode>[];
+   readonly ledger: DefaultModelLedger;
 }
 
 /** A second spelling of {@link TARGET}, which canonicalises to it. */
@@ -64,6 +72,7 @@ function harness(options: HarnessOptions = {}): Harness {
       // without it cannot reach the extension ladder the class guards.
       ServiceRegistry: makeStubServiceRegistry([{ languageId: 'text', fileExtensions: ['.txt'], services: {} }]),
       workspace: {
+         TextDocuments: options.store,
          DocumentUriPolicy: options.loadable === false ? new UnloadableUriPolicy() : new DefaultDocumentUriPolicy(),
          CstResidencyService: { rehydrate: (document: LangiumDocument<AstNode>) => rehydrated.push(document) },
          LangiumDocumentFactory: {
@@ -83,7 +92,11 @@ function harness(options: HarnessOptions = {}): Harness {
    });
    const documents = new HydraniumLangiumDocuments(services);
    wired.instance = documents;
-   return { documents, loads, fabricated, rehydrated };
+   const ledger = new DefaultModelLedger();
+   services.workspace.LangiumDocuments = documents;
+   services.workspace.ModelLedger = ledger;
+   services.workspace.VersionSyncService = new DefaultVersionSyncService(services as unknown as ServerSharedServices);
+   return { documents, loads, fabricated, rehydrated, ledger };
 }
 
 describe('HydraniumLangiumDocuments.getOrCreateDocument on a failed load', () => {
@@ -156,6 +169,91 @@ describe('HydraniumLangiumDocuments.getOrCreateDocument on a failed load', () =>
 
       expect(document.parseResult.value.$type).toBe('Raced');
       expect(rehydrated).toEqual([document]);
+   });
+});
+
+describe('HydraniumLangiumDocuments.addDocument', () => {
+   const FIRST = 'first';
+   const SECOND = 'second';
+
+   /** A store whose closed sequence for {@link TARGET} stands at version 1, on {@link SECOND}. */
+   function storeAtVersionOne(): HydraniumTextDocuments {
+      const store = new HydraniumTextDocuments(
+         makeNoopSharedServices<ServerSharedServices>({ workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() } })
+      );
+      store.reconcileExternalContent(TARGET.toString(), FIRST);
+      store.reconcileExternalContent(TARGET.toString(), SECOND);
+      return store;
+   }
+
+   function documentOf(text: string, state: DocumentState): LangiumDocument<AstNode> {
+      const textDocument = TextDocument.create(TARGET.toString(), 'plaintext', 0, text);
+      return makeFakeDocument(TARGET, makeFakeAstNode<AstNode>({ $type: 'Parsed' }), { text, textDocument, state });
+   }
+
+   it("stamps a parsed document with the store's version of its text", () => {
+      const store = storeAtVersionOne();
+      const { documents, ledger } = harness({ store });
+      const document = documentOf(SECOND, DocumentState.Parsed);
+
+      documents.addDocument(document);
+
+      expect({ root: ledger.versionOf(document.parseResult.value), text: document.textDocument.version }).toEqual({ root: 1, text: 1 });
+   });
+
+   it('leaves the sequence alone when the registration is rejected as a duplicate', () => {
+      const store = storeAtVersionOne();
+      const { documents } = harness({ store });
+      documents.addDocument(documentOf(SECOND, DocumentState.Parsed));
+
+      expect(() => documents.addDocument(documentOf(FIRST, DocumentState.Parsed))).toThrow(/already present/);
+      expect(store.textState(TARGET.toString())?.version).toBe(1);
+   });
+
+   it('leaves the sequence alone for a placeholder the builder registers before parsing', () => {
+      const store = storeAtVersionOne();
+      const { documents } = harness({ store });
+
+      documents.addDocument(documentOf(FIRST, DocumentState.Changed));
+
+      expect(store.textState(TARGET.toString())?.version).toBe(1);
+   });
+
+   it('records no version for a placeholder, though its creation recorded one', () => {
+      const { documents, ledger } = harness({ store: storeAtVersionOne() });
+      const document = documentOf(FIRST, DocumentState.Changed);
+      ledger.record(document.parseResult.value, 1);
+
+      documents.addDocument(document);
+
+      expect({
+         placeholder: ledger.isPlaceholder(document.parseResult.value),
+         version: ledger.versionOf(document.parseResult.value)
+      }).toEqual({
+         placeholder: true,
+         version: UNRECORDED_VERSION
+      });
+   });
+
+   it('takes a parsed root of a type named INVALID for no placeholder, also once a rebuild resets it', () => {
+      const { documents, ledger } = harness({ store: storeAtVersionOne() });
+      const textDocument = TextDocument.create(TARGET.toString(), 'plaintext', 0, SECOND);
+      const document = makeFakeDocument(TARGET, makeFakeAstNode<AstNode>({ $type: 'INVALID' }), {
+         text: SECOND,
+         textDocument,
+         state: DocumentState.Parsed
+      });
+
+      documents.addDocument(document);
+      document.state = DocumentState.Changed;
+
+      expect({
+         placeholder: ledger.isPlaceholder(document.parseResult.value),
+         version: ledger.versionOf(document.parseResult.value)
+      }).toEqual({
+         placeholder: false,
+         version: 1
+      });
    });
 });
 

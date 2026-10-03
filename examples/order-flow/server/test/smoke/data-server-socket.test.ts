@@ -175,10 +175,10 @@ describe('order-flow data-server socket smoke', () => {
       const document = await proxy.getModelDocument({ uri: uriOf(WORKSPACE_FILES.fulfillmentProcess), includeDiagnostics: true });
 
       expect(document.uri).toBe(uriOf(WORKSPACE_FILES.fulfillmentProcess));
-      expect(document.root?.$type).toBe('ProcessModel');
+      expect(document.model?.root?.$type).toBe('ProcessModel');
       // The clean file: whatever else it carries, not the workspace's one
       // intended error, which lives in a `.domain` file.
-      const messages = (document.diagnostics ?? []).map(diagnostic => diagnostic.message).join('\n');
+      const messages = (document.model?.diagnostics ?? []).map(diagnostic => diagnostic.message).join('\n');
       expect(messages).not.toContain('AuditStamp');
    });
 });

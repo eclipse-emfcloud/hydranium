@@ -15,7 +15,7 @@
  * **Why this is not the framework's own unit test over again.** Those drive the
  * four outcomes by making a fake `ModelService.update` throw, which settles what
  * each branch DOES. What a stub cannot show is that the gate ever ARMS in a real
- * head: the based-on version travels from `setSourceRoot` through the recording
+ * head: the base version travels from `setSourceRoot` through the recording
  * command's capture into the session's `updateAll`, and one stale link anywhere
  * along that chain turns every conflict into an ordinary write that silently
  * clobbers the other writer, with no error to show for it.
@@ -58,7 +58,7 @@ import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testin
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { waitFor } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
@@ -79,7 +79,7 @@ interface OpenDiagram {
    /**
     * Write the `.process` file as ANOTHER client would — a text editor saving
     * over the document the diagram has open. Bumps the document's version, which
-    * is what leaves the diagram's captured based-on version stale and the
+    * is what leaves the diagram's captured base version stale and the
     * conflict gate armed.
     */
    readonly foreignWrite: (text: string) => Promise<void>;
@@ -134,7 +134,7 @@ async function openDiagram(): Promise<OpenDiagram> {
          const models = services.shared.model.ModelService;
          const editor = models.getSession('text-editor') ?? models.createSession('text-editor', 'text-editor');
          await editor.open(rootUri);
-         await editor.update({ uri: rootUri, model: text, basedOn: 'anything' });
+         await editor.update({ uri: rootUri, model: text, baseVersion: 'any' });
       },
       apply: async action => {
          const before = harness.actions.length;
@@ -241,5 +241,29 @@ describe('order-flow .process glsp state — a foreign write between base and sa
       // re-persisted the merged primary — a merge writes the whole set, not just
       // the document the gate guarded.
       expect(diagram.layoutText()).toContain('node NewTask at 320, 480');
+   });
+
+   it('keeps a second foreign edit that lands between the refetch and the merged write', async () => {
+      const diagram = await openDiagram();
+      await diagram.foreignWrite(
+         diagram.text().replace('   transition Pay -> PaymentOk', '   task Refund reads Order.id\n   transition Pay -> PaymentOk')
+      );
+      const state = diagram.harness.state as unknown as { refetch(): Promise<unknown> };
+      const refetch = state.refetch.bind(state);
+      vi.spyOn(state, 'refetch').mockImplementationOnce(async () => {
+         const refetched = await refetch();
+         await diagram.foreignWrite(
+            diagram.text().replace('   transition Pay -> PaymentOk', '   task Audit reads Order.id\n   transition Pay -> PaymentOk')
+         );
+         return refetched;
+      });
+
+      await diagram.apply(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE, { location: { x: 320, y: 480 } }));
+
+      expect({
+         refund: diagram.text().includes('task Refund'),
+         audit: diagram.text().includes('task Audit'),
+         created: diagram.text().includes('task NewTask')
+      }).toEqual({ refund: true, audit: true, created: true });
    });
 });

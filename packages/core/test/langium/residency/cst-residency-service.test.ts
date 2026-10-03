@@ -8,8 +8,9 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
-import { Disposable, type Tracer } from '@hydranium/protocol';
+import { type CstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
+import { asMutable, Disposable, type Tracer } from '@hydranium/protocol';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import {
    CST_REHYDRATION_RESET_STATE,
@@ -31,6 +32,7 @@ function makeService(options: CstResidencyOptions): {
    open: Set<string>;
    clock: FakeClock;
    traces: string[];
+   ledger: DefaultModelLedger;
    addDoc: (uriText: string) => LangiumDocument;
 } {
    const open = new Set<string>();
@@ -38,6 +40,7 @@ function makeService(options: CstResidencyOptions): {
    const clock = makeFakeClock();
    let captured: CapturedPass | undefined;
    const traces: string[] = [];
+   const ledger = new DefaultModelLedger();
    const tracer = {
       for: () => tracer,
       trace: () => tracer,
@@ -52,6 +55,7 @@ function makeService(options: CstResidencyOptions): {
       workspace: {
          TextDocuments: { isOpenInAnyClient: (uri: string) => open.has(uri) },
          LangiumDocuments: { getDocument: (uri: URI) => docs.get(uri.toString()) },
+         ModelLedger: ledger,
          BuildPhasePassService: {
             register: (pass: CapturedPass) => {
                captured = pass;
@@ -69,7 +73,7 @@ function makeService(options: CstResidencyOptions): {
       docs.set(document.uri.toString(), document);
       return document;
    };
-   return { service, pass: captured, open, clock, traces, addDoc };
+   return { service, pass: captured, open, clock, traces, ledger, addDoc };
 }
 
 /** A two-node AST document with CST attached to every node and one reference. */
@@ -189,6 +193,23 @@ describe('CstResidencyService', () => {
       // 2 nodes × 1000 bytes → ~2 KB.
       expect(shedTrace).toContain('reclaimed est.');
       expect(shedTrace).toMatch(/~.*B reclaimed est\./);
+   });
+
+   it('keeps the text a recorded root was parsed from once its CST is shed', () => {
+      const { pass, clock, ledger, addDoc } = makeService({ strategy: { kind: 'shed-closed-when-idle', idleMs: 0 } });
+      const doc = addDoc('file:///a.a');
+      const root = doc.parseResult.value;
+      asMutable(root).$cstNode = { root: { fullText: 'name: a\n' } } as CstNode;
+      ledger.record(root, 3);
+
+      pass.run([doc]);
+      clock.advance(1);
+
+      expect({ shed: root.$cstNode, text: ledger.textOf(root), version: ledger.versionOf(root) }).toEqual({
+         shed: undefined,
+         text: 'name: a\n',
+         version: 3
+      });
    });
 });
 

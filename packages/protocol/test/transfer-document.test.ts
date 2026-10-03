@@ -16,17 +16,25 @@ interface FakeRoot extends TransferElement {
 }
 
 describe('TransferDocument.create', () => {
-   it('builds an envelope with uri / version / root and an empty diagnostics array by default', () => {
-      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 3, { $type: 'FakeRoot', name: 'a' });
-      expect(doc.uri).toBe('file:///A.fake');
-      expect(doc.version).toBe(3);
-      expect(doc.root).toEqual({ $type: 'FakeRoot', name: 'a' });
-      expect(doc.diagnostics).toEqual([]);
+   it('builds an envelope with a model block, and no diagnostics or text unless given', () => {
+      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 3, { $type: 'FakeRoot', name: 'a' }, 'hash');
+      expect(doc).toEqual({ uri: 'file:///A.fake', model: { root: { $type: 'FakeRoot', name: 'a' }, version: 3, hash: 'hash' } });
+      expect(TransferDocument.isLoaded(doc)).toBe(true);
    });
 
-   it('accepts an explicit diagnostics array', () => {
+   it('accepts an explicit diagnostics array and text block', () => {
       const diags: TransferDiagnostic[] = [{ type: 'validation-error', severity: 'error', message: 'boom', element: 'a', code: 'x' }];
-      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 1, { $type: 'FakeRoot', name: 'a' }, diags);
-      expect(doc.diagnostics).toBe(diags);
+      const text = { version: 4, hash: 'text', dirty: true };
+      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 1, { $type: 'FakeRoot', name: 'a' }, 'hash', diags, text);
+      expect(doc.model?.diagnostics).toBe(diags);
+      expect(doc.text).toBe(text);
+   });
+});
+
+describe('TransferDocument.absent', () => {
+   it('carries neither a model nor a text block', () => {
+      const doc = TransferDocument.absent<FakeRoot>('file:///A.fake');
+      expect(doc).toEqual({ uri: 'file:///A.fake' });
+      expect(TransferDocument.isLoaded(doc)).toBe(false);
    });
 });

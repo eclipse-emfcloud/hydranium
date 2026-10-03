@@ -100,10 +100,8 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * as every document request here does. The document is read from disk
     * unless a client has it open already, so the request carries no
     * `languageId`, `version` or `text` seed. Returns the document at
-    * the server's configured target phase — the same shape
-    * {@link getModelDocument} returns, except that `version` is taken from the
-    * text-document store so the caller's first `basedOn` write cannot
-    * self-conflict. A repeat open changes nothing.
+    * the server's configured target phase, as {@link getModelDocument} does.
+    * A repeat open changes nothing.
     *
     * Pair with {@link watchModelDocument} to receive subsequent build-phase
     * events (open returns a one-shot snapshot; later validation diagnostics

@@ -7,74 +7,59 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type BasedOn, type ConflictResolver, type Logger, isConflictError } from '@hydranium/protocol';
+import { type BaseVersion, type Logger, type ReconcileWriteHooks, reconcileWrite } from '@hydranium/protocol';
 
-/**
- * The I/O and policy a {@link reconcileSourceModelWrite} call needs. Deliberately
- * a plain record rather than a base class: the states that use it differ in what
- * "persist" and "project" mean but not at all in how a conflict is handled, and
- * pulling the orchestration out is what keeps that second half from being
- * written once per state.
- */
-export interface SourceModelWriteHooks<TModel> {
-   /**
-    * Write `model` and record the resulting state. Called with the caller's own
-    * `basedOn` on the first attempt (opting into the `ConflictError` gate) and
-    * with `'anything'` on the merged / forced retries, where the reconcile has
-    * already decided to win and the point is to land the write.
-    */
-   persist(model: TModel, basedOn: BasedOn): Promise<void>;
-   /** Current server-side projection, or `undefined` when unavailable. */
-   refetch(): Promise<TModel | undefined>;
-   /** The last in-sync projection the user's intent is measured against. */
-   readonly base: TModel | undefined;
-   readonly conflictResolver: ConflictResolver;
+/** The I/O and policy a {@link reconcileSourceModelWrite} call needs. */
+export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<TModel>, 'onUnavailable'> {
    readonly logger: Logger;
    /** Invoked when the edit is dropped, so the caller can resync its own state. */
    onConflictDropped(): void;
 }
 
 /**
- * Persist `model`, and on a `ConflictError` reconcile the user's intent against
- * the current server state via the injected policy and act on the outcome.
- *
- * One declarative policy shared by forward-write, undo and redo: force =
- * last-writer-wins, reconciling = field-level merge. A non-conflict error is
- * re-thrown untouched — this function only knows how to handle the specific
- * failure of "the based-on version was superseded".
+ * {@link reconcileWrite} for a diagram edit: logs the outcome, resyncs through
+ * `onConflictDropped` when the edit is dropped, and forces the edit based on
+ * `'any'` when the refetch is unavailable.
  */
 export async function reconcileSourceModelWrite<TModel extends object>(
    model: TModel,
-   basedOn: BasedOn,
+   baseVersion: BaseVersion,
    hooks: SourceModelWriteHooks<TModel>
 ): Promise<void> {
-   try {
-      await hooks.persist(model, basedOn);
-   } catch (err) {
-      if (!isConflictError(err)) {
-         throw err;
+   const outcome = await reconcileWrite(model, baseVersion, {
+      persist: (candidate, candidateBaseVersion) => hooks.persist(candidate, candidateBaseVersion),
+      refetch: () => hooks.refetch(),
+      base: hooks.base,
+      conflictResolver: hooks.conflictResolver,
+      maxWrites: hooks.maxWrites,
+      onUnavailable: async (candidate, conflict) => {
+         hooks.logger.warn(
+            `updateSourceModel refetch unavailable (model v${conflict.baseVersion} / text v${conflict.actualVersion}); forcing without version`
+         );
+         await hooks.persist(candidate, 'any');
       }
-      const outcome = await hooks.conflictResolver.resolve(hooks.base ?? model, model, () => hooks.refetch());
-      switch (outcome.status) {
-         case 'merged':
-            await hooks.persist(outcome.merged, 'anything');
-            return;
-         case 'no-op':
-            hooks.logger.debug(`updateSourceModel no-op (v${err.expectedVersion} → v${err.actualVersion}); already in sync`);
-            return;
-         case 'conflict':
-            hooks.logger.warn(
-               `updateSourceModel conflict (v${err.expectedVersion} → v${err.actualVersion}); dropping the diagram edit — ` +
-                  'a foreign writer changed the same field'
-            );
-            hooks.onConflictDropped();
-            return;
-         case 'unavailable':
-            hooks.logger.warn(
-               `updateSourceModel refetch unavailable (v${err.expectedVersion} → v${err.actualVersion}); forcing without version`
-            );
-            await hooks.persist(model, 'anything');
-            return;
-      }
+   });
+   if (outcome.status === 'persisted' || outcome.status === 'unavailable') {
+      return;
+   }
+   const { conflict, writes } = outcome;
+   const versions = `model v${conflict.baseVersion} / text v${conflict.actualVersion}`;
+   switch (outcome.status) {
+      case 'merged':
+         hooks.logger.debug(`updateSourceModel merged (${versions}); landed on write ${writes}`);
+         return;
+      case 'unchanged':
+         hooks.logger.debug(`updateSourceModel no-op (${versions}); the diagram is behind, its update catches it up`);
+         return;
+      case 'conflict':
+         hooks.logger.warn(`updateSourceModel conflict (${versions}); dropping the diagram edit — a foreign writer changed the same field`);
+         hooks.onConflictDropped();
+         return;
+      case 'dropped':
+         hooks.logger.warn(
+            `updateSourceModel still conflicting after ${writes} ${writes === 1 ? 'write' : 'writes'} (${versions}); dropping the diagram edit`
+         );
+         hooks.onConflictDropped();
+         return;
    }
 }

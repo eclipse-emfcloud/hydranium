@@ -218,7 +218,7 @@ because the client cannot see the server's answer: `vscode-jsonrpc` rejects
 every pending request when its connection is disposed. That test holds the
 write on the server until the transport is gone, then asserts on the server's
 own outcome. Its red control: send the held write with the current version as
-`basedOn` instead of the stale one. The released write then applies, and the
+`baseVersion` instead of the stale one. The released write then applies, and the
 assertion that the server answered with a conflict fails.
 
 Teardown is quiet because the harness attaches the way a server entry point

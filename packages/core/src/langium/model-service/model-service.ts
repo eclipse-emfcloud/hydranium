@@ -15,13 +15,15 @@ import {
    ObservableValue,
    TIMED_OUT,
    type TransferElement,
-   type Tracer
+   type TextVersion,
+   type Tracer,
+   UNRECORDED_VERSION
 } from '@hydranium/protocol';
-import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
+import { type AstNode, DocumentState, type LangiumDocument, OperationCancelled, UriUtils, type URI } from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
-import { type CancellationToken, type Disposable } from 'vscode-languageserver';
+import { CancellationToken, type Disposable } from 'vscode-languageserver';
 import { AstDocument, type AstDocumentSavedEvent, type AstDocumentUpdatedEvent } from '../../documents/ast-document-manager.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -84,6 +86,17 @@ export interface ModelServiceOptions extends LogNameOptions {
     * flipped without a restart.
     */
    readonly allowReentrantBuilds?: MaybeObservableValue<boolean>;
+}
+
+/** Options for a {@link DefaultModelService} wait on one document. */
+export interface SyncedWaitOptions {
+   /**
+    * Build a root parsed from text older than the store's at the call, and
+    * reject once that build, or one the builder re-queues, is given up. Without
+    * it, such a root is left to other builds, and a wait they never end stays
+    * pending until its token is cancelled.
+    */
+   readonly sync?: boolean;
 }
 
 /**
@@ -151,11 +164,22 @@ export interface ModelServiceOptions extends LogNameOptions {
  * by URI happens here so consumers can subscribe per-document without
  * implementing the URI gate at each callsite.
  *
- * **Two families, and the distinction matters more than the names suggest.**
- * `waitFor*` requests no build of its own: a wait on a URI with no document
- * rejects, and one on a document no build will carry is re-queued by the
- * builder's wait. `ensureDocumentState` and the phase shorthands over it
- * *dispatch*: warm documents are awaited, cold ones are built.
+ * **Two families.** `waitFor*` only waits: it rejects for a URI with no
+ * document, and for a root behind the store's text it waits for whatever
+ * builds it next, so it never ends if nothing does. `ensureDocumentState` and
+ * the phase shorthands over it build a missing document, and build a root
+ * behind its text, rejecting when that build fails twice. Both re-queue a
+ * document the builder's last build left short of the state.
+ *
+ * Both resolve at the state with a root parsed from text no older than the
+ * store's version at the call; inside the write lock, at the state alone, since
+ * the build that would sync the document to that version cannot start until
+ * it is released.
+ *
+ * Do not await one inside a build phase listener: a browser host installs no
+ * write-lock scope, so the wait cannot tell it is inside a build and waits for
+ * one that cannot start. Nor inside a `WorkspaceLock.read`: the lock starts no
+ * write, the build included, while a read runs.
  *
  * **Diagnostics are typed `never` below `Validated`.** Validation is the last
  * phase, so at any earlier landmark the array either is not yet computed or
@@ -171,8 +195,8 @@ export interface ModelServiceOptions extends LogNameOptions {
  * The waits resolve at or ABOVE their target, so an already-validated document
  * does carry usable diagnostics and the `never` over-forbids there. That
  * direction is the safe one: the alternative permits stale reads silently. A
- * member taking a phase as a PARAMETER cannot judge statically and so returns
- * `TDiagnostic`, leaving the choice to the caller.
+ * member taking a phase as a PARAMETER returns `TDiagnostic`, and leaves them
+ * absent for a phase below `Validated`.
  *
  * **Generic parameters.**
  * - `TAst` — the AST root type each consumer expects on the returned
@@ -203,14 +227,20 @@ export interface ModelService<
     */
    readonly ready: Promise<void>;
 
-   // Pure waits — never trigger a build.
+   // Wait only; a root behind its text is left to another build.
    waitForDocumentState(uri: string, state: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    waitForDocumentSettled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
    waitForBuilderState(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
 
-   // Wait if warm, build if cold.
+   // Build what is missing or behind its text, then wait.
    ensureDocumentState(uri: string, state?: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
    rebuild(uri: string, state?: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   /**
+    * Throw where {@link rebuild} would reject as reentrant. A write calls it
+    * before applying its text: a text applied and then refused stays applied
+    * with no build to follow it.
+    */
+   assertCanBuild(uri: string): void;
    parsed(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
    linked(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
    settled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>>;
@@ -379,9 +409,12 @@ export class DefaultModelService<
    // ============================================================
 
    /**
-    * Wait for the document at `uri` to reach `state`. Pure wait — does
-    * not trigger a build. If `uri` is not yet in the document registry
-    * the call rejects; for the cold-start case use {@link rebuild} instead.
+    * Wait for the document at `uri` to reach `state` with a root no older than
+    * the store's text at the call. Rejects if `uri` is not in the document
+    * registry. A root behind its text is not built: the wait lasts until
+    * something else builds it, so use {@link ensureDocumentState} where
+    * nothing may. Builds that keep failing leave the wait pending, to its
+    * cancellation token.
     *
     * Wrapped in a debug-level timing log via {@link Tracer.time} so
     * slow per-URI waits surface in build telemetry; the URI is
@@ -395,15 +428,12 @@ export class DefaultModelService<
     * Wait for the document at `uri` to reach the integrity-settled landmark
     * ({@link IntegrityService.SettledState}) — the earliest phase at which the
     * AST + serialised text are stable post-integrity. Convenience wrapper over
-    * {@link waitForDocumentState} for the common "wait until content is stable"
-    * case (e.g. settling a save). Pure wait — does not trigger a build.
+    * {@link waitForDocumentState}, and like it builds nothing behind its text.
     */
    async waitForDocumentSettled(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, never>> {
-      return (await this.waitForDocumentStateCanonical(
-         this.uriPolicy.canonicalUri(uri),
-         IntegrityService.SettledState,
-         cancelToken
-      )) as AstDocument<TAst, never>;
+      return this.withoutDiagnostics(
+         await this.waitForDocumentStateCanonical(this.uriPolicy.canonicalUri(uri), IntegrityService.SettledState, cancelToken)
+      );
    }
 
    /**
@@ -415,21 +445,108 @@ export class DefaultModelService<
     * the identity once instead of re-running the (filesystem-touching) `realpath`
     * at every wait. The `CanonicalUri` parameter type enforces that — a raw
     * `string` cannot be passed without minting through the URI policy.
+    *
+    * With `options.sync`, a root behind the store's text is built, as in
+    * {@link ensureDocumentState}; without it, the root is left to other builds,
+    * as in {@link waitForDocumentState}. Below `Validated` the envelope has no
+    * diagnostics: see {@link withoutDiagnostics}.
     */
    protected async waitForDocumentStateCanonical(
       uri: CanonicalUri,
       state: DocumentState,
-      cancelToken?: CancellationToken
+      cancelToken?: CancellationToken,
+      options: SyncedWaitOptions = {}
    ): Promise<AstDocument<TAst, TDiagnostic>> {
       const documentUri = UriUtils.toUri(uri);
+      // Read at call time: a later edit must not extend this wait.
+      const textVersion = isInsideWriteLock() ? undefined : this.services.workspace.TextDocuments.textState(uri)?.version;
       await this.tracer
          .withUri(uri)
          .time(
             `Wait for document state '${DocumentState[state]}'`,
-            () => this.services.workspace.DocumentBuilder.waitUntil(state, documentUri, cancelToken),
+            () => this.waitUntilSynced(documentUri, state, textVersion, cancelToken, options),
             'debug'
          );
-      return this.toAstDocument(documentUri);
+      const document = this.toAstDocument(documentUri);
+      return state >= DocumentState.Validated ? document : this.withoutDiagnostics(document);
+   }
+
+   /**
+    * Wait for `state` with a root parsed from text at `textVersion` or later. A
+    * root no factory recorded counts as synced, since no build records it.
+    * With `options.sync`, a root still behind is built through
+    * `VersionSyncService.syncTo`, and the wait rejects once that build, or one
+    * the builder re-queues to reach `state`, is given up. Without it, the wait
+    * lasts until another build parses the text, and stays pending when the
+    * builder gives up re-queuing the document.
+    */
+   protected async waitUntilSynced(
+      uri: URI,
+      state: DocumentState,
+      textVersion: TextVersion | undefined,
+      cancelToken?: CancellationToken,
+      options: SyncedWaitOptions = {}
+   ): Promise<void> {
+      const builder = this.services.workspace.DocumentBuilder;
+      const sync = this.services.workspace.VersionSyncService;
+      const waitOptions = { rejectWhenStuck: options.sync === true };
+      await builder.waitUntil(state, uri, cancelToken, waitOptions);
+      if (textVersion === undefined) {
+         return;
+      }
+      while (!sync.isSyncedTo(uri, textVersion)) {
+         const build = options.sync === true ? sync.syncTo(uri, textVersion) : undefined;
+         this.tracer
+            .withUri(uri.toString())
+            .debug(`waiting for ${uri.toString()} to reach ${DocumentState[state]} at v${textVersion} or later`);
+         await this.nextParseOrDeletion(uri, cancelToken, build);
+         await builder.waitUntil(state, uri, cancelToken, waitOptions);
+      }
+   }
+
+   /**
+    * Resolves once a parse of `uri` has been recorded or a build has deleted
+    * it, rejecting with `OperationCancelled` when `cancelToken` is cancelled
+    * first, and with an error when `build`, the build requested for it, is
+    * given up. A `Parsed` phase listener cannot serve: a cancel right after the
+    * parse skips it, and the resumed build does not parse again.
+    */
+   protected nextParseOrDeletion(
+      uri: URI,
+      cancelToken: CancellationToken = CancellationToken.None,
+      build?: Promise<boolean>
+   ): Promise<void> {
+      const builder = this.services.workspace.DocumentBuilder;
+      return new Promise<void>((resolve, reject) => {
+         // A cancelled token's listener runs a macrotask later, after a build
+         // that started meanwhile may have parsed.
+         if (cancelToken.isCancellationRequested) {
+            reject(OperationCancelled);
+            return;
+         }
+         const done = (settle: () => void): void => {
+            parsed.dispose();
+            deleted.dispose();
+            cancelled.dispose();
+            settle();
+         };
+         const parsed = this.services.workspace.VersionSyncService.onDidRecordModel(document => {
+            if (UriUtils.equals(document.uri, uri)) {
+               done(resolve);
+            }
+         });
+         const deleted = builder.onUpdate((_changed, deletedUris) => {
+            if (deletedUris.some(deletedUri => UriUtils.equals(deletedUri, uri))) {
+               done(resolve);
+            }
+         });
+         const cancelled = cancelToken.onCancellationRequested(() => done(() => reject(OperationCancelled)));
+         void build?.then(built => {
+            if (!built) {
+               done(() => reject(new Error(`The build that would sync ${uri.toString()} to its text failed`)));
+            }
+         });
+      });
    }
 
    /**
@@ -523,28 +640,28 @@ export class DefaultModelService<
       // A caller already inside the lock would cancel its own build and stall in
       // the wait below; `allowReentrantBuilds` builds it unlocked, and without a
       // tracker it cannot be told apart from any other caller.
-      const inside = isInsideWriteLock();
-      if (this.allowReentrantBuilds.value && (inside || !isWriteLockScopeInstalled())) {
+      if (this.allowReentrantBuilds.value && (isInsideWriteLock() || !isWriteLockScopeInstalled())) {
          await this.services.workspace.DocumentBuilder.update([documentUri], [], cancelToken);
       } else {
-         if (inside) {
-            throw new ReentrantWriteLockError(uri);
-         }
+         this.assertCanBuild(uri);
          // The build runs on the lock's own token, which a later write cancels;
          // the caller's token governs only the phase wait below.
          await this.services.workspace.DocumentBuilder.scheduleUpdate([documentUri], []);
       }
-      return this.waitForDocumentStateCanonical(uri, state ?? IntegrityService.SettledState, cancelToken);
+      return this.waitForDocumentStateCanonical(uri, state ?? IntegrityService.SettledState, cancelToken, { sync: true });
+   }
+
+   assertCanBuild(uri: string): void {
+      if (isInsideWriteLock() && !this.allowReentrantBuilds.value) {
+         throw new ReentrantWriteLockError(uri);
+      }
    }
 
    /**
     * Per-state typed convenience methods. Each ensures the document at
     * `uri` reaches the named phase and returns the AST envelope with
-    * the narrowest accurate diagnostics type for that phase. Smart
-    * dispatch internally: warm path (URI already in the document
-    * registry) just waits via {@link waitForDocumentState}; cold path
-    * triggers a build via {@link rebuild}. Consumers do not need to
-    * know which path was taken.
+    * the narrowest accurate diagnostics type for that phase, building as
+    * {@link ensureDocumentState} does.
     *
     * Phase invariants encoded in the return type:
     * - `parsed` / `linked` / `settled` / `indexed` return
@@ -590,18 +707,13 @@ export class DefaultModelService<
    /**
     * Ensure the document at `uri` reaches `state` (or the integrity-settled
     * landmark {@link IntegrityService.SettledState} if omitted) and return its
-    * AST envelope. Smart
-    * dispatch: warm path (URI already in `LangiumDocuments`) just waits
-    * via {@link waitForDocumentState}; cold path forces a build via
-    * {@link rebuild}.
-    *
-    * Pairs with {@link rebuild} — same default phase, but `rebuild`
-    * always builds while this skips the build for an already-loaded
-    * document. Also pairs with {@link waitForDocumentState} — the verb
-    * difference (`ensure` vs `waitFor`) signals the side-effect
-    * difference. The per-state convenience methods (`parsed` / `linked`
-    * / `settled` / `indexed` / `validated`) all delegate here with an
-    * explicit phase.
+    * AST envelope, with a root no older than the store's text at the call.
+    * A document not in `LangiumDocuments` is built via {@link rebuild}; a
+    * loaded one whose root is behind its text is built through
+    * `VersionSyncService.syncTo`. Until `state` is reached, the call rejects
+    * once that build, or one the builder re-queues, has failed twice, or the
+    * builder stops re-queuing the document. A loaded, current document is only
+    * awaited.
     */
    async ensureDocumentState(uri: string, state?: DocumentState, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
       return this.ensureDocumentStateCanonical(this.uriPolicy.canonicalUri(uri), state, cancelToken);
@@ -624,13 +736,14 @@ export class DefaultModelService<
    ): Promise<AstDocument<TAst, TDiagnostic>> {
       const target = state ?? IntegrityService.SettledState;
       if (this.services.workspace.LangiumDocuments.hasDocument(UriUtils.toUri(uri))) {
-         return this.waitForDocumentStateCanonical(uri, target, cancelToken);
+         return this.waitForDocumentStateCanonical(uri, target, cancelToken, { sync: true });
       }
       return this.rebuild(uri, target, cancelToken);
    }
 
    /**
-    * Wait for the document at `uri` to reach the integrity-settled landmark and
+    * Wait for the document at `uri` to reach the integrity-settled landmark,
+    * building a root behind its text as {@link ensureDocumentState} does, and
     * drain any in-flight write-path applyEdit sync chain (see {@link syncChains})
     * so every language client reflects the latest content before a save returns.
     * No-op tail for headless adopters — `syncChains` is empty without an LSP
@@ -648,7 +761,7 @@ export class DefaultModelService<
       // One race over both waits, so the bound is one deadline for the pair;
       // a race per wait would let the save take twice the bound.
       const settled = (async (): Promise<void> => {
-         await this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken);
+         await this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken, { sync: true });
          await this.syncChains.get(key);
       })();
       try {
@@ -673,7 +786,9 @@ export class DefaultModelService<
 
    /**
     * Snapshot of `uri` as it stands RIGHT NOW — the synchronous sibling of the
-    * phase reads, which all wait. `undefined` when no document is registered.
+    * phase reads, which all wait. `undefined` when no document is registered,
+    * or only the builder's placeholder for one its build has not parsed yet:
+    * that root is no parse of any text, and its version gates no write.
     *
     * **This is what a writer wants, and {@link getDocument} is not.** The
     * envelope's `version` is copied by value at projection time, so it cannot
@@ -681,18 +796,18 @@ export class DefaultModelService<
     * whatever the server is at *now*, which is the number an optimistic gate is
     * about to compare it against.
     *
-    * Diagnostics only from a document that has reached `Validated`, and an
-    * empty array otherwise. Unlike the phase reads this one names no phase, so
+    * Diagnostics only from a document that has reached `Validated`, and absent
+    * otherwise. Unlike the phase reads this one names no phase, so
     * the state it finds is the only thing that can say whether the array
     * describes the content being handed back or whatever an earlier build left.
     * A caller that needs them unconditionally waits, via {@link validated}.
     */
    snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined {
       const document = this.getDocument(uri);
-      if (!document) {
+      if (!document || this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
          return undefined;
       }
-      const envelope = AstDocument.from<TAst, TDiagnostic>(document);
+      const envelope = this.services.workspace.AstDocumentManager.toAstDocument(document) as AstDocument<TAst, TDiagnostic>;
       return document.state >= DocumentState.Validated ? envelope : this.withoutDiagnostics(envelope);
    }
 
@@ -705,7 +820,7 @@ export class DefaultModelService<
     * still resolves to the one document the build keys by its real path. Returns
     * `undefined` if no document is registered for `uri`.
     *
-    * **Live, so do not take a based-on version off it.** `textDocument` is the
+    * **Live, so do not take a base version off it.** `textDocument` is the
     * store's own object rather than a copy, so `.version` read here answers for
     * the moment of the READ, not the moment of the earlier content — pass it to
     * a write and the server compares its current version against itself, the
@@ -1037,21 +1152,23 @@ export class DefaultModelService<
 
    /**
     * Build an {@link AstDocument} envelope from the current
-    * {@link LangiumDocument} state via the shared {@link AstDocument.from}
-    * projection. Returns an empty envelope (built via
+    * {@link LangiumDocument} state via `AstDocumentManager.toAstDocument`,
+    * the projection events use too. Returns an empty envelope (built via
     * {@link AstDocument.create}) when the document is absent from the
-    * registry — adopters that prefer to throw override on their subclass.
+    * registry — adopters that prefer to throw override on their subclass. Its
+    * version is {@link UNRECORDED_VERSION}, so a write based on it conflicts.
     */
    protected toAstDocument(uri: URI): AstDocument<TAst, TDiagnostic> {
       const document = this.services.workspace.LangiumDocuments.getDocument(uri);
       return document
-         ? AstDocument.from<TAst, TDiagnostic>(document)
-         : AstDocument.create<TAst, TDiagnostic>(uri.toString(), 0, undefined as unknown as TAst, []);
+         ? (this.services.workspace.AstDocumentManager.toAstDocument(document) as AstDocument<TAst, TDiagnostic>)
+         : AstDocument.create<TAst, TDiagnostic>(uri.toString(), UNRECORDED_VERSION, undefined as unknown as TAst);
    }
 
    /**
     * The same envelope with no diagnostics, for a read that names a phase below
-    * `Validated`.
+    * `Validated`. Absent rather than `[]`, which says the document was validated
+    * and found clean.
     *
     * Langium fills `LangiumDocument.diagnostics` from inside `validateDocument`
     * and from nowhere else, so below that phase the array holds whatever an
@@ -1065,6 +1182,7 @@ export class DefaultModelService<
     * one it also keeps.
     */
    protected withoutDiagnostics(document: AstDocument<TAst, TDiagnostic>): AstDocument<TAst, never> {
-      return { ...document, diagnostics: [] };
+      const { diagnostics: _diagnostics, ...rest } = document;
+      return rest;
    }
 }

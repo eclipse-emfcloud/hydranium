@@ -35,6 +35,8 @@ import { DefaultTransferEncoder, type TransferEncoder } from '../langium/transfe
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
+import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
+import { DefaultVersionSyncService, type VersionSyncService } from '../documents/version-sync-service.js';
 import type { FakeDocumentOptions } from './fake-document.js';
 import { makeStubDocumentBuilder, type StubDocumentBuilder } from './stub-document-builder.js';
 import { makeStubIndexManager, type StubIndexManager } from './stub-index-manager.js';
@@ -109,6 +111,10 @@ export interface TestSharedServices<
        * through this tree and let a reentrant write pass unnoticed.
        */
       WorkspaceLock: WorkspaceLock;
+      /** The REAL ledger: it is a weak map with no dependencies. */
+      ModelLedger: ModelLedger;
+      /** The REAL service, over this tree's stubs; it reconciles nothing against the stub store. */
+      VersionSyncService: VersionSyncService;
    };
    readonly model: {
       TransferEncoder: TransferEncoder<TTransferDiagnostic>;
@@ -266,6 +272,7 @@ export interface TestServicesBundle<
    readonly selfSaveRegistry: StubSelfSaveRegistry;
    readonly projectManager: StubProjectManager<TProject>;
    readonly documentUriPolicy: DocumentUriPolicy;
+   readonly modelLedger: ModelLedger;
    /**
     * The registry bound on the `ServiceRegistry` slot, or `undefined` when no
     * {@link MakeTestServicesOptions.languages} were declared.
@@ -320,7 +327,8 @@ export function makeTestServices<
    const selfSaveRegistry = makeStubSelfSaveRegistry();
    const fileSystem = makeStubWritableFileSystem(selfSaveRegistry);
    const projectManager = makeStubProjectManager<TProject>(options.seedProjects);
-   const astDocumentManager = makeStubAstDocumentManager<TAst, TDiagnostic>(textDocuments, fileSystem, documents);
+   const modelLedger = new DefaultModelLedger();
+   const astDocumentManager = makeStubAstDocumentManager<TAst, TDiagnostic>(textDocuments, fileSystem, documents, modelLedger);
    const documentUriPolicy = options.documentUriPolicy ?? new DefaultDocumentUriPolicy();
    const serviceRegistry = options.languages
       ? makeStubServiceRegistry(options.languages, { openLanguageIds: options.openLanguageIds })
@@ -368,7 +376,10 @@ export function makeTestServices<
          // be genuinely ABSENT, not present-and-undefined, when no index was seeded.
          ...(indexManager ? { IndexManager: indexManager } : {}),
          WorkspaceLock: workspaceLock,
-         FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: documentUriPolicy } })
+         FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: documentUriPolicy } }),
+         ModelLedger: modelLedger,
+         // Patched in below: it reads the tree it belongs to.
+         VersionSyncService: {} as VersionSyncService
       },
       model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic>['model'],
       ServerLocale: {} as ServerLocale,
@@ -378,6 +389,7 @@ export function makeTestServices<
 
    // Patched in after the literal, like `model` below: both read the tree they
    // belong to, and the renderer reads the locale service.
+   services.workspace.VersionSyncService = new DefaultVersionSyncService(sharedServices);
    const mutableMessages = services as { ServerLocale: ServerLocale; MessageRenderer: MessageRenderer };
    const serverLocale = new DefaultServerLocale(sharedServices);
    if (options.locale) {
@@ -414,6 +426,7 @@ export function makeTestServices<
       selfSaveRegistry,
       projectManager,
       documentUriPolicy,
+      modelLedger,
       serviceRegistry,
       indexManager,
       modelService,

@@ -9,9 +9,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-   type BasedOn,
-   asSnapshotVersion,
-   type SnapshotVersion,
+   type BaseVersion,
+   asModelVersion,
+   type ModelVersion,
    type ConflictResolver,
    ForceConflictResolver,
    ReconcilingConflictResolver
@@ -57,14 +57,14 @@ function makeFakeLogger(log: LogCapture): unknown {
 
 interface FakeRecordingState {
    sourceModel: TestSourceModel;
-   updateCalls: Array<{ model: TestSourceModel; basedOn: BasedOn | undefined }>;
+   updateCalls: Array<{ model: TestSourceModel; baseVersion: BaseVersion | undefined }>;
    sourceUri: string;
    version: number;
-   basedOn: SnapshotVersion;
+   baseVersion: ModelVersion;
    logger: unknown;
    tracer: unknown;
    conflictResolver: ConflictResolver;
-   updateSourceModel(model: TestSourceModel, basedOn?: BasedOn): Promise<void>;
+   updateSourceModel(model: TestSourceModel, baseVersion?: BaseVersion): Promise<void>;
 }
 
 function makeFakeState(
@@ -79,12 +79,12 @@ function makeFakeState(
       updateCalls: [],
       sourceUri: 'file:///test.a',
       version: initialVersion,
-      basedOn: asSnapshotVersion(initialVersion),
+      baseVersion: asModelVersion(initialVersion),
       logger: observability,
       tracer: observability,
       conflictResolver,
-      async updateSourceModel(model: TestSourceModel, basedOn?: BasedOn): Promise<void> {
-         state.updateCalls.push({ model: JSON.parse(JSON.stringify(model)) as TestSourceModel, basedOn });
+      async updateSourceModel(model: TestSourceModel, baseVersion?: BaseVersion): Promise<void> {
+         state.updateCalls.push({ model: JSON.parse(JSON.stringify(model)) as TestSourceModel, baseVersion });
          state.sourceModel = model;
       }
    };
@@ -214,7 +214,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.updateCalls).toHaveLength(0);
    });
 
-   it('threads the state.basedOn taken at execute() start through updateSourceModel', async () => {
+   it('threads the state.baseVersion taken at execute() start through updateSourceModel', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 5);
       const command = makeCommand(state, 'Add node', () => {
@@ -224,10 +224,10 @@ describe('HydraniumGlspRecordingCommand', () => {
       await command.execute();
 
       expect(state.updateCalls).toHaveLength(1);
-      expect(state.updateCalls[0].basedOn).toBe(5);
+      expect(state.updateCalls[0].baseVersion).toBe(5);
    });
 
-   it('takes the version at command start; later state.basedOn drift does not affect the threaded value', async () => {
+   it('takes the version at command start; later state.baseVersion drift does not affect the threaded value', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 5);
       const command = makeCommand(state, 'Add node', () => {
@@ -236,12 +236,12 @@ describe('HydraniumGlspRecordingCommand', () => {
          // the version threaded to updateSourceModel must still be the
          // start-of-execute one, not the post-drift value.
          state.version = 9;
-         state.basedOn = asSnapshotVersion(9);
+         state.baseVersion = asModelVersion(9);
       });
 
       await command.execute();
 
-      expect(state.updateCalls[0].basedOn).toBe(5);
+      expect(state.updateCalls[0].baseVersion).toBe(5);
    });
 
    it('skips undo (no write) when a foreign edit changed the same field since execute', async () => {
@@ -306,7 +306,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.sourceModel.nodes[0].label).toBe('first');
    });
 
-   it('runs undo/redo postChange based on anything — only a fresh execute carries a version', async () => {
+   it('runs undo/redo postChange based on any version — only a fresh execute carries a version', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 5);
       const command = makeCommand(state, 'Add node', () => {
@@ -317,11 +317,11 @@ describe('HydraniumGlspRecordingCommand', () => {
       await command.undo();
       await command.redo();
 
-      // execute → carries the v5 snapshot version; undo and redo run after execute
-      // completes (activeBasedOn reset) so they fall through as 'anything'.
+      // execute → carries the v5 model version; undo and redo run after execute
+      // completes (activeBaseVersion reset) so they fall through as 'any'.
       expect(state.updateCalls).toHaveLength(3);
-      expect(state.updateCalls[0].basedOn).toBe(5);
-      expect(state.updateCalls[1].basedOn).toBe('anything');
-      expect(state.updateCalls[2].basedOn).toBe('anything');
+      expect(state.updateCalls[0].baseVersion).toBe(5);
+      expect(state.updateCalls[1].baseVersion).toBe('any');
+      expect(state.updateCalls[2].baseVersion).toBe('any');
    });
 });

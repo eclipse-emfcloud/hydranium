@@ -14,18 +14,18 @@
  * content rather than whatever was on disk when the store last reconciled. The
  * two come apart: restoring the pre-re-parse number satisfies the first and
  * leaves the second wrong, at which point the next open steps the version again
- * and every based-on version taken from this build is stale before it is used.
+ * and every base version taken from this build is stale before it is used.
  *
  * Every layer has to be the real one for the question to exist: the renumbering
  * this pins is Langium's document factory re-reading a closed document into a
  * text document that counts from zero, so a stubbed builder or text store cannot
- * produce it — and the value being discarded is one the store's own Parsed-phase
- * reconciliation put there, which needs a real version sequence behind it.
+ * produce it — and the value being discarded is one the store's reconciliation
+ * at the factory's re-parse put there, which needs a real version sequence behind it.
  *
  * Both integrity phases are covered, because `resyncDocument` reconciles the
  * document differently at each and only one of them has an example rule. The
- * Linked case registers its own: `reparseAndRelink` re-fires the Parsed
- * notification, so the store's reconciliation DOES run there — against the text
+ * Linked case registers its own: `reparseAndRelink` re-parses through the
+ * factory, so the store's reconciliation DOES run there — against the text
  * on disk, which is the pre-repair text, which is exactly why the branch cannot
  * rely on it.
  *
@@ -114,8 +114,8 @@ describe('an integrity repair of a closed document lands on the store version se
       await builder.waitUntil(DocumentState.Validated, uri);
       textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: uriString } });
 
-      // A content transition while closed — the shape the store's Parsed-phase
-      // reconciliation exists for. Driven directly rather than through a watcher.
+      // A content transition while closed — the shape the store's
+      // reconciliation at the re-parse exists for. Driven directly rather than through a watcher.
       // Under the write lock, as production builds are by default: unlocked, this build
       // overlaps the close's revert, and the assertions read a repair still in flight.
       writeFileSync(workspace.resolve(FILE), diskWhileClosed, 'utf8');
@@ -145,11 +145,12 @@ describe('an integrity repair of a closed document lands on the store version se
       const sequenceVersion = textDocuments.version(uriString);
       expect(sequenceVersion).toBeGreaterThan(0);
       expect(document.textDocument.version).toBe(sequenceVersion);
+      expect(harness.shared.workspace.ModelLedger.versionOf(root)).toBe(sequenceVersion);
 
       // And the sequence has to describe the REPAIRED text, not the text that was
       // on disk when the store last reconciled. Otherwise the next open hashes
       // the repair, finds a mismatch, steps the version again, and every
-      // based-on version taken from this build is stale before anyone can use it.
+      // base version taken from this build is stale before anyone can use it.
       // Reconciling is idempotent when the content already matches, so the same
       // version coming back IS the assertion.
       // Reconstructed through the SAME chain the repair used — serialize, then
@@ -190,5 +191,61 @@ describe('an integrity repair of a closed document lands on the store version se
          prepare: harness => harness.domain.integrity.IntegrityService.register(linkedRenameRule)
       });
       await expectVersionLandsOnTheSequence('Marked__linked');
+   });
+});
+
+describe('a staged repair of a closed document', () => {
+   /** Land {@link DUPLICATES} on the closed file in `'editor'` mode, which stages the repair and leaves disk unrepaired. */
+   async function stageRepair(): Promise<{ harness: ScratchOrderFlowHarness['harness']; uri: URI }> {
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraLanguageModules: [
+            { integrity: { IntegrityService: services => new DefaultIntegrityService(services, { syncMode: 'editor' }) } }
+         ]
+      });
+      const { harness, workspace } = scratch;
+      const uri = URI.file(workspace.resolve(FILE));
+      writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
+      await harness.shared.workspace.WorkspaceLock.write(token => harness.shared.workspace.DocumentBuilder.update([uri], [], token));
+      return { harness, uri };
+   }
+
+   it('keeps its version through a rebuild with nothing changed', async () => {
+      const { harness, uri } = await stageRepair();
+      const store = harness.shared.workspace.TextDocuments;
+      const repaired = store.version(uri.toString());
+
+      await harness.shared.workspace.WorkspaceLock.write(token => harness.shared.workspace.DocumentBuilder.update([uri], [], token));
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(uri)!.parseResult.value;
+      if (!isDomainModel(root)) {
+         throw new Error(`Expected a DomainModel root, got ${root.$type}`);
+      }
+
+      expect({
+         names: root.declarations.map(declaration => declaration.name),
+         text: store.version(uri.toString()),
+         model: harness.shared.workspace.ModelLedger.versionOf(root)
+      }).toEqual({
+         names: ['Dup', 'Dup__1'],
+         text: repaired,
+         model: repaired
+      });
+   });
+
+   it('is parsed from the store’s text once a session opens the staged repair', async () => {
+      const { harness, uri } = await stageRepair();
+      const store = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.open(uri.toString());
+      const document = harness.shared.workspace.LangiumDocuments.getDocument(uri)!;
+
+      expect({
+         parsedIsStoreText:
+            harness.shared.workspace.ModelLedger.textOf(document.parseResult.value) === store.get(uri.toString())?.getText(),
+         model: harness.shared.workspace.ModelLedger.versionOf(document.parseResult.value)
+      }).toEqual({
+         parsedIsStoreText: true,
+         model: store.version(uri.toString())
+      });
    });
 });

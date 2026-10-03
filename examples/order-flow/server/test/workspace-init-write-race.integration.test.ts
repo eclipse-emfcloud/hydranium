@@ -174,7 +174,7 @@ describe.each(BARRIER_PHASES)('a write that lands during workspace initializatio
          const write = session.update({
             uri: domainUri,
             model: DOMAIN_TEXT_WITHOUT_STATUS,
-            basedOn: 'anything'
+            baseVersion: 'any'
          });
          releaseInit.resolve();
 

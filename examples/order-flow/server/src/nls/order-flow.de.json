@@ -15,7 +15,7 @@
   "hydranium/core/no-such-path": "Datei oder Verzeichnis nicht gefunden: {uri}",
   "hydranium/core/unsupported-write": "{uri} kann nicht geschrieben werden: Das URI-Schema verweist auf keinen Speicherort im Dateisystem",
   "hydranium/protocol/session-closed": "Die Bearbeitungssitzung ist beendet.",
-  "hydranium/protocol/stale-based-update": "Die Änderung an {uri} wurde nicht übernommen: Sie wurde an einer älteren Version des Dokuments vorgenommen.",
+  "hydranium/protocol/stale-base-version-update": "Die Änderung an {uri} wurde nicht übernommen: Sie wurde an einer älteren Version des Dokuments vorgenommen.",
   "hydranium/protocol/document-not-open": "Das Dokument {uri} ist in dieser Bearbeitungssitzung nicht geöffnet.",
   "hydranium/protocol/duplicate-client-id": "Die Bearbeitungssitzung konnte nicht gestartet werden: Die Kennung der Sitzung wird noch von einem anderen Editor verwendet.",
   "hydranium/data-server/no-active-profile": "Es läuft keine Profiling-Aufzeichnung; rufen Sie zuerst startProfiling auf.",

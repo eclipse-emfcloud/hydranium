@@ -10,7 +10,7 @@
 import { type AnyObject, type JsonModelState, JsonRecordingCommand, type MaybePromise } from '@eclipse-glsp/server';
 import { type AstNode } from '@hydranium/langium';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
-import { type BasedOn } from '@hydranium/protocol';
+import { type BaseVersion } from '@hydranium/protocol';
 
 /**
  * Source-model state shape consumed by {@link HydraniumGlspRecordingCommand}.
@@ -50,7 +50,7 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  * framework lift overrides `postChange` so it also threads the snapshot
  * version taken at command start — letting the downstream
  * session `update` opt into the `ConflictError` gate. Undo / redo
- * postChange calls pass `'anything'`: the user authored against the recorded
+ * postChange calls pass `'any'`: the user authored against the recorded
  * patch, not against a specific server version, so re-applying it should
  * succeed regardless of intervening edits. The recorded patch itself encodes
  * the semantic intent.
@@ -62,10 +62,10 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
     * What the command was authored against, taken at {@link execute} start and
     * threaded into {@link postChange} so
     * {@link AbstractHydraniumGlspState.updateSourceModel} gates on it. Reset to
-    * `'anything'` after `execute` returns so undo / redo paths fall through
+    * `'any'` after `execute` returns so undo / redo paths fall through
     * ungated.
     */
-   protected activeBasedOn: BasedOn = 'anything';
+   protected activeBaseVersion: BaseVersion = 'any';
 
    /**
     * Source-model snapshots captured at {@link execute} — the state the
@@ -99,19 +99,19 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
     * via {@link AbstractHydraniumGlspState.updateSourceModel}). The label combines
     * the operation name with the source-uri-stamped logger.
     *
-    * Takes {@link AbstractHydraniumGlspState.basedOn} at start so {@link postChange}
+    * Takes {@link AbstractHydraniumGlspState.baseVersion} at start so {@link postChange}
     * can thread it into `updateSourceModel`. Scoped with `try`/`finally` so undo
     * / redo paths invoked later do not see a stale value.
     */
    override async execute(): Promise<void> {
       const logger = this.modelState.logger.for('HydraniumGlspRecordingCommand');
-      this.activeBasedOn = this.modelState.basedOn;
-      logger.debug(`Executing '${this.label}' (based-on doc.version=v${this.modelState.version})`);
+      this.activeBaseVersion = this.modelState.baseVersion;
+      logger.debug(`Executing '${this.label}' (base version v${this.modelState.version})`);
       this.beforeSnapshot = this.deepClone(await this.getJsonObject());
       try {
          await this.modelState.tracer.for('HydraniumGlspRecordingCommand').time(`Execute command '${this.label}'`, () => super.execute());
       } finally {
-         this.activeBasedOn = 'anything';
+         this.activeBaseVersion = 'any';
       }
       this.afterSnapshot = this.deepClone(await this.getJsonObject());
    }
@@ -119,15 +119,15 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
    /**
     * Override of GLSP's {@link JsonRecordingCommand.postChange} so the
     * call to {@link AbstractHydraniumGlspState.updateSourceModel} threads the
-    * based-on version alongside the new model.
+    * base version alongside the new model.
     *
-    * During {@link execute} it is the snapshot version taken at command start;
-    * during {@link undo} / {@link redo} it is `'anything'` — replaying a
+    * During {@link execute} it is the model version taken at command start;
+    * during {@link undo} / {@link redo} it is `'any'` — replaying a
     * recorded patch does not author against a specific server version, so no
     * gate applies.
     */
    protected override postChange(newModel: TSourceModel): MaybePromise<void> {
-      return this.modelState.updateSourceModel(newModel, this.activeBasedOn);
+      return this.modelState.updateSourceModel(newModel, this.activeBaseVersion);
    }
 
    /**

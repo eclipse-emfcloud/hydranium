@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// Generic payload types the data protocol shares with core: the based-on
+// Generic payload types the data protocol shares with core: the base
 // version, which the server's model service checks writes against, and the
 // reference candidates, which core's scope and completion code produce.
 
-export * from './based-on';
+export * from './base-version';
 export * from './reference-candidate';

@@ -56,8 +56,8 @@ protected method (`registerOpen`, `createDocument`, `updateDocument`,
 `updateDocuments`, `saveDocument`, `closeDocument`), and a session class of
 your own overrides one of them to change how its sessions open or write. `save`
 writes through `updateDocument`, so an override of it applies to saves too. The
-open check and the `basedOn` gate are the session's own `assertOpen` and
-`assertBasedOn`. Turning a model into text (`modelToText`) and `rebuild` live on
+open check and the `baseVersion` gate are the session's own `assertOpen` and
+`assertBaseVersion`. Turning a model into text (`modelToText`) and `rebuild` live on
 the `ModelService` bound on `model.ModelService`, which the session writes
 through.
 
@@ -67,7 +67,7 @@ through.
 | --- | --- |
 | `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
 | `openOptions(uri)` | The options this session opened `uri` with |
-| `create(uri, text)` | Create a document with `text` and open it; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
+| `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
 | `close(uri)` | Close this session's open of `uri` |
@@ -76,7 +76,7 @@ through.
 | `dispose(cause?)` | End the session: close everything it has open and free its id |
 
 `update` and `save` take `ClientSessionWriteArgs` (`uri`, `model`,
-`basedOn`), and `updateAll` takes a `ClientSessionUpdateAllArgs` whose
+`baseVersion`), and `updateAll` takes a `ClientSessionUpdateAllArgs` whose
 `updates` lists them: the session supplies its own client id. The data
 protocol's requests carry `clientId`; the data server maps each to a session
 call.
@@ -108,7 +108,7 @@ open or fails: a session that sends an update and then closes the document
 before the update applies gets `DocumentNotOpenError` for the update, and the
 document is not reopened behind it.
 
-The `basedOn` gate works as it does for any write, and a stale write still fails
+The `baseVersion` gate works as it does for any write, and a stale write still fails
 with `ConflictError`. It is checked again in the step that applies the text, so
 of two writes based on one version, the second fails. An integrity repair of an
 open document is a new version authored by `integrity`: a write based on the
@@ -147,7 +147,7 @@ session closes the document or ends.
 ## `updateAll`
 
 `updateAll({ updates })` writes several documents in one step. Every document is
-serialised first; then the open check and the `basedOn` gate run for every
+serialised first; then the open check and the `baseVersion` gate run for every
 document and every text applies, in one synchronous step. A `ConflictError` or
 `DocumentNotOpenError` for any document of the set is thrown before any text
 applies, so a set never ends half-written. It resolves to the rebuilt
@@ -164,10 +164,13 @@ lets another write land between two documents of the set.
 from `@hydranium/core`. Like `ConflictError`, each is a JSON-RPC `ResponseError`
 with its own code (`SESSION_CLOSED_ERROR_CODE`, `DOCUMENT_NOT_OPEN_ERROR_CODE`,
 `DUPLICATE_CLIENT_ID_ERROR_CODE`, `RESERVED_CLIENT_ID_ERROR_CODE`) and its
-fields in `data`, since the class does not survive the trip to a client and the
-code, message and data do. A client recognises them with
-`isSessionClosedError`, `isDocumentNotOpenError`, `isDuplicateClientIdError`
-and `isReservedClientIdError`, never with `instanceof`. All but
+fields in `data`, since only the code, message and data cross the wire.
+`createRpcProxy` revives a rejection carrying one of these codes into its class,
+through `reviveProtocolError`, so a client calling through it reads the getters.
+A client still recognises them with `isSessionClosedError`,
+`isDocumentNotOpenError`, `isDuplicateClientIdError` and
+`isReservedClientIdError`, which also match a rejection that reached it by
+another path. All but
 `ReservedClientIdError` carry a message identity, so the data server renders
 their sentence in the reader's locale where the adopter supplied a catalogue.
 
@@ -224,7 +227,7 @@ connection holds with a `DuplicateClientIdError`. `isReservedClientIdError` and
 `isDuplicateClientIdError` recognise these and the server's refusals alike.
 
 <!-- snippet-preamble
-import type { TransferElement } from '@hydranium/protocol';
+import { type TransferElement, TransferDocument } from '@hydranium/protocol';
 import type { DataConnection } from '@hydranium/protocol/client';
 declare const connection: DataConnection<TransferElement>;
 declare const uri: string;
@@ -233,7 +236,9 @@ declare const model: string;
 
 ```ts
 const form = connection.createSession('form');
-await form.withOpenDocument({ uri }, opened => form.saveDocument({ uri, model, basedOn: opened.version }));
+await form.withOpenDocument({ uri }, opened =>
+   form.saveDocument({ uri, model, baseVersion: TransferDocument.assertLoaded(opened).model.version })
+);
 ```
 
 | Member | Meaning |
@@ -277,7 +282,8 @@ the re-open lost it.
 
 It decides by text, not by version: a revert moves a document's version on,
 and a restarted server numbers versions afresh. Every document the data head
-sends that it holds carries a `textHash` of its text, equal for equal text. For
+sends that it holds carries a `text` block whose `hash` is of the text alone,
+equal for equal text. For
 each document it wrote since its last save, the session keeps the hash of the
 text its first such write was based on, its last write, and that write's
 answer. After the re-open and the re-watch:
@@ -286,7 +292,7 @@ answer. After the re-open and the re-watch:
   the revert grace or no one changed it, needs nothing.
 - A document back at the text the first unsaved write was based on, because
   the server reverted it to disk after the grace or restarted, is written
-  again: the last written model, based on the re-opened version. It is an
+  again: the last written model, based on the re-opened model's version. It is an
   ordinary write, so an edit that lands between the re-open and the write
   makes it conflict.
 - Any other document was changed by another client while the connection was
@@ -300,12 +306,12 @@ set, and those whose write conflicted, which is not retried. It forgets their
 unsaved edits; they stay open. A document closed while the restore runs is
 left out.
 
-A write's base is known when its `basedOn` is a version one of the session's
-own calls was answered with, or a version a read of the document still
+A write's base is known when its `baseVersion` is the `text.version` one of the
+session's own calls was answered with, or the one a read of the document still
 answers; the session reads the document once, for a document's first unsaved
-write, when it needs to. A write based on `'anything'` has no base, so after a
+write, when it needs to. A write based on `'any'` has no base, so after a
 revert or a restart it is reported rather than written again. A server that
-sends no `textHash` gets no write either, and a document counts as keeping the
+sends no `text` gets no write either, and a document counts as keeping the
 write there only at the version the write was answered with.
 
 The session drops what it keeps of a document on its own save, on a close,
@@ -385,16 +391,17 @@ the session, which closes everything it has open.
 
 `ReconcilingMultiDocumentGlspState` writes the documents of the write set that
 changed in one `updateAll` on the session, so a conflict on any of them leaves
-every one as it was. Each is gated: the source document on the `basedOn` the
-recording command took, each other document on `secondaryBasedOn`, by default
+every one as it was. Each is gated: the source document on the `baseVersion` the
+recording command took, each other document on `secondaryBaseVersion`, by default
 the version it had when the source root was last read. Override
-`secondaryBasedOn` to return `'anything'` to force a document's writes. A
+`secondaryBaseVersion` to return `'any'` to force a document's writes. A
 conflict on any document goes to the state's conflict resolver for the whole
-set, and a write based on `'anything'`, which a merged retry and an undo or
-redo pass, forces every document. Before writing, the state opens each document
-of the set through `openForWrite`; a state whose write set can name a document
-that does not exist yet overrides it to `create` the document, since the
-session's writes open nothing. The single-document states write through the session's
+set, and a merged retry is gated on the versions its refetch read. A write
+based on `'any'`, which an undo or redo pass and a retry whose refetch is
+unavailable make, forces every document. Before writing, the state opens each
+document of the set through `openForWrite`; a state whose write set can name a
+document that does not exist yet overrides it to create the document through
+`createSecondaryDocument`, since the session's writes open nothing. The single-document states write through the session's
 `update`. Every state refuses to write without a session, so a write after the
 diagram ended fails.
 
@@ -411,17 +418,17 @@ element was read. A new file goes through `create`:
 <!-- snippet-preamble
 import type { AbstractHydraniumGlspState } from '@hydranium/glsp-server';
 import type { AstNode } from '@hydranium/langium';
-import type { SnapshotVersion } from '@hydranium/protocol';
+import type { ModelVersion } from '@hydranium/protocol';
 declare const state: AbstractHydraniumGlspState<AstNode>;
 declare const uri: string;
 declare const model: string;
-declare const basedOn: SnapshotVersion;
+declare const baseVersion: ModelVersion;
 -->
 
 ```ts
 const session = state.modelSession;
 if (session) {
-   await session.withOpen(uri, () => session.update({ uri, model, basedOn }));
+   await session.withOpen(uri, () => session.update({ uri, model, baseVersion }));
 }
 ```
 
@@ -501,18 +508,28 @@ reads or writes the file:
 - an integrity repair written to a file some client holds takes the repair.
 
 A document released after its last close is not dirty, and a dirty one
-announces the change. `TextDocuments.onDidChangeDirty` fires on each change of
+announces the change once its revert to disk has parsed the file, at that
+text's version, even when a later write then cancels the revert; a revert
+cancelled before its parse or that fails requests a build of the document in
+its place and announces it once that build has parsed the file, and one that
+removed the document, or whose build did or failed, announces it without `text`. A first open before that announces it instead, when it opens clean. `TextDocuments.onDidChangeDirty` fires on each change of
 the answer, and `updateDiskBaseline(uri, text)` records a write your own code
 made; a save your code announces through `notifyDidSaveTextDocument` with its
 text moves the baseline too.
 
 Over the data head, every transfer document the head sends that it holds
-carries the current answer as `dirty`, and a watcher is sent
-`onDocumentDirtyChanged({ uri, dirty })` on each change;
-`DataEvents.onDidChangeDocumentDirty` fans it out. After a reconnect, a
-`DataSession` reads each document it restores once its watch is in place, and
-tells the connection's client the answer where it differs from the last one
-the client was told since its open, so a flip while the connection was down
+carries the current answer as `text.dirty`, and a watcher is sent
+`onDocumentDirtyChanged({ uri, text })` on each change;
+`DataEvents.onDidChangeDocumentDirty` fans it out. Its `text` is the
+`TextState` of the text the answer was decided on, absent when the document
+no longer exists or the build after its release failed. A flip for an edit is
+sent when the text changes, before the build that follows, so its `text.version`
+can be ahead of the `model.version` a client holds; [Comparing the two
+versions](document-layers.md#comparing-the-two-versions) says what a client
+does then. After a reconnect, a `DataSession` reads each document it
+restores once its watch is in place, and tells the connection's client the
+answer that read's `text` carries where it differs from the last one the
+client was told since its open, so a flip while the connection was down
 reaches it.
 
 A diagram's dirty state is the same answer over every document the diagram's
@@ -679,15 +696,15 @@ otherwise work on:
 <!-- snippet-preamble
 import type { ClientSession } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
-import type { SnapshotVersion } from '@hydranium/protocol';
+import type { ModelVersion } from '@hydranium/protocol';
 declare const session: ClientSession<AstNode>;
 declare const uri: string;
 declare const model: string;
-declare const basedOn: SnapshotVersion;
+declare const baseVersion: ModelVersion;
 -->
 
 ```ts
-await session.withOpen(uri, () => session.save({ uri, model, basedOn }));
+await session.withOpen(uri, () => session.save({ uri, model, baseVersion }));
 ```
 
 ## `create`
@@ -730,6 +747,8 @@ editor's included, before the document is removed.
 
 Reads take no session and live on `ModelService`: the phase reads and the waits
 beside them, `snapshot`, `getDocument`, `isOpen` and the `on…` subscriptions.
+[Waiting for a current model](document-layers.md#waiting-for-a-current-model)
+says what each wait does for a missing document or a root behind its text.
 
 ## One LSP connection per server process
 

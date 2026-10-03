@@ -78,11 +78,11 @@ class FakeServer {
 }
 
 function updated(uri: string): TransferDocumentUpdatedEvent<FakeTransfer, TransferDiagnostic> {
-   return { document: TransferDocument.create(uri, 1, ROOT), reason: 'changed', sourceClientId: 'client-a' };
+   return { document: TransferDocument.create(uri, 1, ROOT, 'hash'), reason: 'changed', sourceClientId: 'client-a' };
 }
 
 function saved(uri: string): TransferDocumentSavedEvent<FakeTransfer, TransferDiagnostic> {
-   return { document: TransferDocument.create(uri, 1, ROOT), sourceClientId: 'client-a' };
+   return { document: TransferDocument.create(uri, 1, ROOT, 'hash'), sourceClientId: 'client-a' };
 }
 
 function projectsChanged(): ProjectsChangedEvent<Project> {

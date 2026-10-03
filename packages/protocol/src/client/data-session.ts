@@ -11,12 +11,12 @@ import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock } from '../clock';
 import type { DataServerProtocol, DiagnosticOf, TransferDocumentDirtyChangedEvent, TransferDocumentUpdatedEvent } from '../data';
 import { isConflictError, SessionClosedError } from '../errors';
-import { type BasedOn, isSnapshotVersion, type SnapshotVersion } from '../model-service/based-on';
+import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import type { OpenModelArgs } from '../model-server';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
-import type { TransferDocument } from '../transfer-document';
+import type { TextState, TransferDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 
 /**
@@ -27,6 +27,12 @@ import type { TransferElement } from '../transfer-element';
 export const DATA_SESSION_RESTORE_FAILED = defineMessage(
    'hydranium/protocol/data-session-restore-failed',
    'Could not restore {uri} after reconnecting to the data server: {detail}'
+);
+
+/** A write or open of `{uri}` that the data server answered without a model. */
+export const DATA_SESSION_ANSWER_WITHOUT_MODEL = defineMessage(
+   'hydranium/protocol/data-session-answer-without-model',
+   'The data server answered a write of {uri} without a model; the session counts that answer as older than every version.'
 );
 
 /**
@@ -110,14 +116,18 @@ export interface DataSessionUnsavedWrite<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > {
    /**
-    * The {@link TransferDocument.textHash} of the text the first of these
-    * writes was based on. `undefined` when the session could not tell, for a
-    * write based on `'anything'` or on a version it could not read back, and
-    * such a write is never sent again: the session cannot tell another
-    * client's text from the text it wrote over.
+    * The `text.hash` of the text the first of these writes was based on.
+    * `undefined` when the session could not tell, for a write based on
+    * `'any'` or on a version it could not read back, and such a write is
+    * never sent again: the session cannot tell another client's text from the
+    * text it wrote over.
     */
    readonly baseHash: string | undefined;
-   readonly answer: Pick<DataSessionDocument<TTransfer, TServer>, 'version' | 'textHash'>;
+   /**
+    * The model version the last of these writes was answered with, which
+    * orders its answers, and the `text.hash` of that answer.
+    */
+   readonly answer: { readonly version: ModelVersion; readonly hash?: string };
    /**
     * The call that made the last write, and for an `updateDocuments` call this
     * URI's index in it. Records whose `updates` is the same object were
@@ -251,18 +261,18 @@ export class DataSession<
    /** Per URI written since its last save, what {@link restore} needs to write it again. */
    protected readonly unsavedWrites = new Map<string, DataSessionUnsavedWrite<TTransfer, TServer>>();
    /**
-    * Per URI this session has open, the version and text hash of the last
-    * document one of its own calls was answered with, which spares the read a
-    * first unsaved write otherwise makes for its base; see {@link baseHashOf}.
+    * Per URI this session has open, the text of the last document one of its
+    * own calls was answered with, which spares the read a first unsaved write
+    * otherwise makes for its base; see {@link baseHashOf}.
     */
-   protected readonly lastAnswers = new Map<string, Pick<DataSessionDocument<TTransfer, TServer>, 'version' | 'textHash'>>();
+   protected readonly lastAnswers = new Map<string, TextState>();
    /**
-    * Per URI this session has open, the version its last save of it was
+    * Per URI this session has open, the model version its last save of it was
     * answered with; see {@link recordWrite}. Only a save sets it: an open
     * answers at the version of a write still in flight as well, and that
     * write is not saved.
     */
-   protected readonly savedVersions = new Map<string, SnapshotVersion>();
+   protected readonly savedVersions = new Map<string, ModelVersion>();
    /** Per URI, this session's calls still in flight on it, which a close waits for. */
    protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
    /** This session's saves still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
@@ -347,8 +357,8 @@ export class DataSession<
     * view misreads as a concurrent third-party write, losing whatever the user
     * had typed.
     *
-    * Note that the returned snapshot's empty `diagnostics` does not mean
-    * valid: `open` settles at the integrity landmark, not at validation.
+    * Note that the returned snapshot's model usually has no `diagnostics`:
+    * `open` settles at the integrity landmark, not at validation.
     * Validity arrives asynchronously on `onDocumentUpdated`, or synchronously
     * from `getModelDocument({ includeDiagnostics: true })`.
     */
@@ -389,7 +399,7 @@ export class DataSession<
       }
       this.openUris.add(uri);
       this.serverUris.set(uri, document.uri);
-      this.lastAnswers.set(uri, { version: document.version, textHash: document.textHash });
+      this.recordText(uri, document);
       // Keyed as the server keys its notifications, which may not be how the
       // caller spelled the URI.
       this.host.forgetDirty?.(document.uri);
@@ -444,7 +454,7 @@ export class DataSession<
       return this.track([args.uri], async () => {
          const server = await this.connected();
          const update = { ...args };
-         const baseHash = await this.baseHashOf(server, args.uri, args.basedOn);
+         const baseHash = await this.baseHashOf(server, args.uri, args.baseVersion);
          const document = await server.updateModelDocument({ ...args, clientId: this.clientId });
          this.recordWrite(args.uri, document, baseHash, { update });
          return document;
@@ -464,7 +474,7 @@ export class DataSession<
             // records together.
             const updates = { ...args, updates: args.updates.map(update => ({ ...update })) };
             const server = await this.connected();
-            const baseHashes = await Promise.all(args.updates.map(update => this.baseHashOf(server, update.uri, update.basedOn)));
+            const baseHashes = await Promise.all(args.updates.map(update => this.baseHashOf(server, update.uri, update.baseVersion)));
             const documents = await server.updateModelDocuments({ ...args, clientId: this.clientId });
             args.updates.forEach((update, index) => this.recordWrite(update.uri, documents[index], baseHashes[index], { updates, index }));
             return documents;
@@ -483,11 +493,12 @@ export class DataSession<
          if (this.unsavedWrites.get(args.uri) === unsaved) {
             this.unsavedWrites.delete(args.uri);
          }
-         this.lastAnswers.set(args.uri, { version: document.version, textHash: document.textHash });
+         const answer = this.answerOf(args.uri, document);
+         this.recordText(args.uri, document);
          // The higher of two saves' answers, which may arrive out of order.
          const saved = this.savedVersions.get(args.uri);
-         if (saved === undefined || document.version > saved) {
-            this.savedVersions.set(args.uri, document.version);
+         if (saved === undefined || answer.version > saved) {
+            this.savedVersions.set(args.uri, answer.version);
          }
          return document;
       });
@@ -620,7 +631,7 @@ export class DataSession<
     * can still be reported lost that way.
     */
    protected forgetSavedWrite(event: TransferDocumentDirtyChangedEvent): void {
-      if (event.dirty) {
+      if (event.text?.dirty) {
          return;
       }
       // The flip names the server's key, which is not always the caller's
@@ -675,7 +686,7 @@ export class DataSession<
     * what it wrote since their last save where the re-open lost it, and tell
     * the host which of them lost it for good.
     *
-    * Decided per document by the re-opened {@link TransferDocument.textHash},
+    * Decided per document by the re-opened document's `text.hash`,
     * in {@link restoreOutcome}. Versions cannot decide a write: a revert moves
     * the version on and a restarted server numbers afresh, so the version the
     * last write was answered with never matches where a write is needed, and
@@ -717,7 +728,7 @@ export class DataSession<
             await server.watchModelDocument({ uri, clientId: this.clientId });
             if (this.openUris.has(uri)) {
                this.serverUris.set(uri, document.uri);
-               this.lastAnswers.set(uri, { version: document.version, textHash: document.textHash });
+               this.recordText(uri, document);
             }
             reopened.set(uri, document);
          } catch (error: unknown) {
@@ -742,12 +753,12 @@ export class DataSession<
          if (!this.openUris.has(uri)) {
             continue;
          }
-         // A failed read leaves the client's dirty state as it was; the
-         // document is restored all the same.
+         // A failed read, or one without text, leaves the client's dirty
+         // state as it was; the document is restored all the same.
          const current = await server.getModelDocument({ uri }).catch(() => undefined);
-         if (current?.dirty !== undefined) {
+         if (current?.text !== undefined) {
             try {
-               this.host.restoreDirty?.({ uri: current.uri, dirty: current.dirty });
+               this.host.restoreDirty?.({ uri: current.uri, text: current.text });
             } catch {
                // The client's listener failed, not the restore: the server
                // has the document open and watched, so it stays restored.
@@ -765,20 +776,21 @@ export class DataSession<
     * `write` (`'kept'`), holds the text the write started from, so the write
     * can be sent again (`'resend'`), or holds something else (`'lost'`).
     *
-    * A document without a text hash comes from a server that sends none, and
-    * counts as kept only at the version the write was answered with.
+    * A document without `text` comes from a server that sends none, and
+    * counts as kept only at the version the write was answered with. One
+    * without a model has no version to send the write again on.
     */
    protected restoreOutcome(
       write: DataSessionUnsavedWrite<TTransfer, TServer>,
       document: DataSessionDocument<TTransfer, TServer>
    ): 'kept' | 'resend' | 'lost' {
-      if (document.textHash === undefined) {
-         return document.version === write.answer.version ? 'kept' : 'lost';
+      if (document.text === undefined) {
+         return document.model?.version === write.answer.version ? 'kept' : 'lost';
       }
-      if (document.textHash === write.answer.textHash) {
+      if (document.text.hash === write.answer.hash) {
          return 'kept';
       }
-      return write.baseHash !== undefined && document.textHash === write.baseHash ? 'resend' : 'lost';
+      return document.model && write.baseHash !== undefined && document.text.hash === write.baseHash ? 'resend' : 'lost';
    }
 
    /**
@@ -808,7 +820,7 @@ export class DataSession<
       // on from the re-opened version, not from the one the record holds.
       for (const { uri, write, document, outcome } of outcomes) {
          if (outcome === 'kept' && document) {
-            this.unsavedWrites.set(uri, { ...write, answer: { version: document.version, textHash: document.textHash } });
+            this.unsavedWrites.set(uri, { ...write, answer: this.answerOf(uri, document) });
          }
       }
       // A document that could not be re-opened is forgotten, and was reported
@@ -823,7 +835,7 @@ export class DataSession<
       // In the order of the call's updates, which is the order of its answers.
       const resend = outcomes
          .flatMap(({ uri, write, document, outcome }) =>
-            outcome === 'resend' && document ? [{ uri, write, basedOn: document.version }] : []
+            outcome === 'resend' && document?.model ? [{ uri, write, baseVersion: document.model.version }] : []
          )
          .sort((left, right) => indexOf(left.write) - indexOf(right.write));
       if (resend.length === 0) {
@@ -833,15 +845,15 @@ export class DataSession<
       try {
          const { call } = resend[0].write;
          if ('update' in call) {
-            documents = [await server.updateModelDocument({ ...call.update, basedOn: resend[0].basedOn, clientId: this.clientId })];
+            documents = [await server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, clientId: this.clientId })];
          } else {
-            const basedOn = new Map(resend.map(member => [indexOf(member.write), member.basedOn]));
+            const baseVersion = new Map(resend.map(member => [indexOf(member.write), member.baseVersion]));
             documents = await server.updateModelDocuments({
                ...call.updates,
                clientId: this.clientId,
                updates: call.updates.updates.flatMap((update, index) => {
-                  const version = basedOn.get(index);
-                  return version === undefined ? [] : [{ ...update, basedOn: version }];
+                  const version = baseVersion.get(index);
+                  return version === undefined ? [] : [{ ...update, baseVersion: version }];
                })
             });
          }
@@ -849,13 +861,13 @@ export class DataSession<
          if (isConflictError(error)) {
             return lose();
          }
-         for (const { uri, write, basedOn } of resend) {
+         for (const { uri, write, baseVersion } of resend) {
             this.host.reportError?.(error, resolve(DATA_SESSION_RESTORE_FAILED, { uri, detail: describeError(error) }));
             // Kept for the next restore, and numbered from the re-opened
             // version, as the kept records are: a record numbered by a server
             // that has since restarted would have later answers ignored.
             if (current(uri, write)) {
-               this.unsavedWrites.set(uri, { ...write, answer: { ...write.answer, version: basedOn } });
+               this.unsavedWrites.set(uri, { ...write, answer: { ...write.answer, version: baseVersion } });
             }
          }
          return [];
@@ -872,7 +884,7 @@ export class DataSession<
    }
 
    /**
-    * The text hash of the version `basedOn` names for `uri`, for a write that
+    * The text hash of the version `baseVersion` names for `uri`, for a write that
     * starts the URI's record in {@link unsavedWrites}; `undefined` for any
     * other write, whose record keeps the base it has.
     *
@@ -881,16 +893,16 @@ export class DataSession<
     * changes only with its version, so the text at a version is the text the
     * write, once it passes the gate, was applied to.
     */
-   protected async baseHashOf(server: RpcProxy<TServer>, uri: string, basedOn: BasedOn): Promise<string | undefined> {
-      if (this.unsavedWrites.has(uri) || !isSnapshotVersion(basedOn)) {
+   protected async baseHashOf(server: RpcProxy<TServer>, uri: string, baseVersion: BaseVersion): Promise<string | undefined> {
+      if (this.unsavedWrites.has(uri) || !isModelVersion(baseVersion)) {
          return undefined;
       }
       const known = this.lastAnswers.get(uri);
-      if (known?.version === basedOn) {
-         return known.textHash;
+      if (known?.version === baseVersion) {
+         return known.hash;
       }
       const read = await server.getModelDocument({ uri }).catch(() => undefined);
-      return read?.version === basedOn ? read.textHash : undefined;
+      return read?.text?.version === baseVersion ? read.text.hash : undefined;
    }
 
    /**
@@ -910,7 +922,7 @@ export class DataSession<
       baseHash: string | undefined,
       call: DataSessionUnsavedWrite<TTransfer, TServer>['call']
    ): void {
-      const answer = { version: document.version, textHash: document.textHash };
+      const answer = this.answerOf(uri, document);
       const kept = this.unsavedWrites.get(uri);
       if (kept && answer.version < kept.answer.version) {
          return;
@@ -920,7 +932,33 @@ export class DataSession<
          return;
       }
       this.unsavedWrites.set(uri, { baseHash: kept ? kept.baseHash : baseHash, answer, call });
-      this.lastAnswers.set(uri, answer);
+      this.recordText(uri, document);
+   }
+
+   /**
+    * What {@link DataSessionUnsavedWrite.answer} keeps of `document`. Every write
+    * and open answers with a model; one without is reported and counted older
+    * than every version, so it never replaces a real answer.
+    */
+   protected answerOf(
+      uri: string,
+      document: DataSessionDocument<TTransfer, TServer>
+   ): DataSessionUnsavedWrite<TTransfer, TServer>['answer'] {
+      if (!document.model) {
+         const reported = resolve(DATA_SESSION_ANSWER_WITHOUT_MODEL, { uri });
+         this.host.reportError?.(new Error(reported.text), reported);
+         return { version: UNRECORDED_VERSION, hash: document.text?.hash };
+      }
+      return { version: document.model.version, hash: document.text?.hash };
+   }
+
+   /** Keep `document`'s text in {@link lastAnswers}, or forget it for a server that sends none. */
+   protected recordText(uri: string, document: DataSessionDocument<TTransfer, TServer>): void {
+      if (document.text) {
+         this.lastAnswers.set(uri, document.text);
+      } else {
+         this.lastAnswers.delete(uri);
+      }
    }
 
    /** Run `call`, counted as in flight on each of `uris` until it settles. */

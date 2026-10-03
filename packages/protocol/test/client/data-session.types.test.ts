@@ -23,7 +23,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { DataSession } from '../../src/client/data-session';
-import { asSnapshotVersion } from '../../src/model-service/based-on';
+import { asModelVersion } from '../../src/model-service/base-version';
 import type { DataServerProtocol, TransferSaveDocumentArgs } from '../../src/data';
 import type { CloseModelArgs, OpenModelArgs } from '../../src/model-server';
 import type { TransferDiagnostic } from '../../src/transfer-diagnostic';
@@ -67,24 +67,24 @@ async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Roo
    // Not on open, which takes only the URI and the open's options.
    const opened = await widened.openDocument({ uri: URI_A, options: { mode: 'compact' } });
    await widened.closeDocument({ uri: URI_A, extra: 'close-field' });
-   await widened.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' });
+   await widened.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', baseVersion: 'any' });
 
    // Accepted: and the adopter's diagnostic survives the return, which is the
    // half the self-referential bound on `TServer` buys.
-   const ruleId: string | undefined = opened.diagnostics[0]?.ruleId;
+   const ruleId: string | undefined = opened.model?.diagnostics?.[0]?.ruleId;
    void ruleId;
 
    // Accepted: the default instantiation still takes the framework's own fields.
-   await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, basedOn: asSnapshotVersion(1) });
+   await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: asModelVersion(1) });
 
    // @ts-expect-error a session's open reads the file, so it takes no seed
    await plain.openDocument({ uri: URI_A, languageId: 'plaintext' });
    // @ts-expect-error nor an adopter's open field, which the server's session path ignores
    await widened.openDocument({ uri: URI_A, extra: 'open-field' });
-   // @ts-expect-error same, on the save path. `basedOn` is supplied so the only
+   // @ts-expect-error same, on the save path. `baseVersion` is supplied so the only
    // thing wrong with this call is `extra` — a missing required field would
    // satisfy the directive too, and it cannot report which error it absorbed.
-   await plain.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', basedOn: 'anything' });
+   await plain.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', baseVersion: 'any' });
    // @ts-expect-error the session owns `clientId`, widened server or not
    await widened.openDocument({ uri: URI_A, clientId: 'someone-else' });
    // @ts-expect-error the default server answers the framework diagnostic

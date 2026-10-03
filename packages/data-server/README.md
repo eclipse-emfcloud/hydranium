@@ -29,8 +29,8 @@ Installed by the server process that already composes
   (`DataServerOptions.subscriptionPhase`, `DocumentState.Validated` by default),
   `onDocumentSaved` on a separate channel, `onDocumentDirtyChanged` when a
   subscribed document starts or stops differing from its file (every document
-  the head sends that it holds also carries its current `dirty`, and a
-  `textHash` of its text), `onDocumentDeleted` (a deleted document has no built
+  the head sends that it holds also carries its `text` block: version, hash
+  and current `dirty`), `onDocumentDeleted` (a deleted document has no built
   state to carry, and the build-phase path never runs for one),
   `onDocumentsBuilt` once per build for the documents nobody watches — chiefly
   those rebuilt as a cascade, which no filesystem watcher can see because their

@@ -97,7 +97,7 @@ describe('a save followed by the last close', () => {
 
       const session = models.createSession('form', 'form');
       await session.open(uri);
-      await session.update({ uri, model: EDITED, basedOn: 'anything' });
+      await session.update({ uri, model: EDITED, baseVersion: 'any' });
       let rebuilds = 0;
       shared.workspace.DocumentBuilder.onUpdate(changed => {
          rebuilds += changed.filter(changedUri => changedUri.toString() === uri).length;

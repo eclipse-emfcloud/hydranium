@@ -37,6 +37,8 @@ import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js
 import { DefaultAstDocumentManager, type AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
 import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from '../documents/self-save-registry.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
+import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
+import { DefaultVersionSyncService, type VersionSyncService } from '../documents/version-sync-service.js';
 import {
    DefaultEmptyFileSystemProvider,
    DefaultFileSystemProviderRegistry,
@@ -279,6 +281,10 @@ export interface ServerAddedSharedServices<
        * strategy (`shed-closed-when-idle`) to enable shedding.
        */
       CstResidencyService: CstResidencyService;
+      /** The version of the text each root was parsed from. */
+      ModelLedger: ModelLedger;
+      /** Reconciles each produced root with the store, and owns every build that syncs a root to its text or recovers one. */
+      VersionSyncService: VersionSyncService;
    };
    /**
     * In-process workspace facade ({@link ModelService}) + AST→transfer
@@ -553,7 +559,9 @@ export function createServerSharedModule(
          BuildPhasePassService: services => new DefaultBuildPhasePassService(services),
          // Eagerly constructed, so its `Validated` pass registers before the
          // first build.
-         CstResidencyService: services => new DefaultCstResidencyService(services)
+         CstResidencyService: services => new DefaultCstResidencyService(services),
+         ModelLedger: () => new DefaultModelLedger(),
+         VersionSyncService: services => new DefaultVersionSyncService(services)
       },
       model: {
          // Generic walker — adopters with a typed `$type → wire shape` overlay
