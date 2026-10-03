@@ -50,9 +50,11 @@ export interface ReferenceCandidate {
  * node's subtree, NOT the whole document root — callers that want the full
  * document fetch it via `getModelDocument(uri)`.
  *
- * Generic over the transfer root type so adopters get their typed overlay.
+ * `TElement` is the type of the target node, not of a document root. A server
+ * answers with the structural base, since a reference can name any node; a
+ * caller that knows what the reference targets may narrow it.
  */
-export interface ReferenceTarget<TTransfer extends TransferElement = TransferElement> extends ReferenceCandidate {
+export interface ReferenceTarget<TElement extends TransferElement = TransferElement> extends ReferenceCandidate {
    /** The resolved target node, encoded as a transfer subtree. */
-   element: TTransfer;
+   element: TElement;
 }

@@ -256,7 +256,7 @@ function driveConnection(services: OrderFlowHarness): DataConformanceDriver<Orde
       // reference methods are reachable through it once the server registers
       // them — the cast states that, and keeps the kit exercising the WIRE
       // rather than calling the server object in-process.
-      references: harness.proxy as unknown as ReferenceServerProtocol<OrderFlowTransfer>,
+      references: harness.proxy as unknown as ReferenceServerProtocol,
       dispose: () => {
          harness.server.dispose();
          harness.dispose();
