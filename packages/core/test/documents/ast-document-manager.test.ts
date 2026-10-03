@@ -890,6 +890,24 @@ describe('AstDocumentManager disk queue', () => {
          expect(announced).toHaveLength(2);
       });
 
+      it('resolves a save to the version it wrote, and a skipped save to the version written in its place', async () => {
+         const { manager, textDocuments, fileSystem } = makeManagerHarness({ managerOptions: { coalesceSaves: true } });
+         await openForSave(manager, URI_A, 'first\n');
+         const reads = parkReads(fileSystem);
+
+         const firstVersion = textDocuments.version(URI_A);
+         const first = manager.save(URI_A, 'c1');
+         await waitFor(() => reads.parked() === 1);
+         await manager.update(URI_A, 'second\n', 'c1');
+         const second = manager.save(URI_A, 'c1');
+         await manager.update(URI_A, 'third\n', 'c1');
+         const thirdVersion = textDocuments.version(URI_A);
+         const third = manager.save(URI_A, 'c1');
+         reads.releaseAll();
+
+         expect(await Promise.all([first, second, third])).toEqual([firstVersion, thirdVersion, thirdVersion]);
+      });
+
       it("takes the newer save's failure for a skipped save", async () => {
          // Disk then holds neither text, so reporting the skipped save as
          // landed would claim a write that never happened.

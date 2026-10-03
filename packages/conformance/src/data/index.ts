@@ -691,6 +691,11 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
 
                const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, baseVersion: 'any' });
                assert.strictEqual(saved.text?.dirty, false, `the save of ${uri} answered dirty: ${String(saved.text?.dirty)}, not false`);
+               assert.strictEqual(
+                  saved.persisted?.version,
+                  saved.text?.version,
+                  `the save of ${uri} answered it wrote v${String(saved.persisted?.version)}, not the v${String(saved.text?.version)} it holds`
+               );
                const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: unsaved, baseVersion: 'any' });
                assert.strictEqual(
                   edited.text?.dirty,
@@ -704,6 +709,53 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                   `the second save of ${uri} answered dirty: ${String(resaved.text?.dirty)}, not false`
                );
                await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `persisting writes the text a document holds as it is, and refuses a stale base version ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               // Trailing blank lines no serialiser writes, so a head that
+               // persists a re-serialised model rather than the text shows.
+               const held = `${model.text}\n\n`;
+               const uri = siblingOf(model.uri, `conformance-persisted-${globalThis.crypto.randomUUID()}-`);
+               const writer = await startSession(driver, 'conformance-writer');
+               const created = await driver.proxy.createModelDocument({ uri, clientId: writer, text: model.text });
+               const written = await driver.proxy.updateModelDocument({ uri, clientId: writer, model: held, baseVersion: 'any' });
+               const persister = await openAs(driver, uri, 'conformance-persister');
+
+               const stale = await rejectionOf(
+                  driver.proxy.persistModelDocument({
+                     uri,
+                     clientId: persister,
+                     baseVersion: TransferDocument.assertLoaded(created).model.version
+                  })
+               );
+               assert.ok(isConflictError(stale), `persisting ${uri} on a stale base version did not conflict: ${String(stale)}`);
+               const base = TransferDocument.assertLoaded(written).model.version;
+               const persisted = await driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: base });
+               assert.strictEqual(
+                  persisted.persisted?.version,
+                  base,
+                  `the persist of ${uri} answered it wrote v${String(persisted.persisted?.version)}, not the v${base} it was based on`
+               );
+               assert.strictEqual(persisted.text?.dirty, false, `the persist of ${uri} answered dirty: ${String(persisted.text?.dirty)}`);
+               assert.strictEqual(persisted.text?.hash, written.text?.hash, `persisting ${uri} changed the text it holds`);
+
+               // Read after the last close, which serves the file: read before
+               // it, the held text answers and a file written wrong passes.
+               await driver.proxy.closeSession({ clientId: writer });
+               await driver.proxy.closeSession({ clientId: persister });
+               const reader = await openAs(driver, uri, 'conformance-reader');
+               const reread = await driver.proxy.getModelDocument({ uri });
+               assert.strictEqual(reread.text?.hash, written.text?.hash, `the file persisted for ${uri} is not the text it held`);
+               await driver.proxy.closeSession({ clientId: reader });
             } finally {
                driver.dispose();
             }

@@ -49,6 +49,7 @@ const CONNECTION_END = 'ending a connection ends its sessions';
 const UNREGISTERED = 'a document request under an id no session was registered for fails';
 const WRITE_ANSWER = 'a write of the invalid model answers with its diagnostics';
 const DIRTY = 'a document is dirty while its text differs from its file, and clean once saved';
+const PERSIST = 'persisting writes the text a document holds as it is, and refuses a stale base version';
 const TEXT_HASH = "a document's text hash is equal for equal text and differs for different text";
 const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
@@ -118,7 +119,7 @@ describe('the /data battery discriminates', () => {
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(26);
+      expect(titles).toHaveLength(27);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -143,11 +144,12 @@ describe('the /data battery discriminates', () => {
          UNREGISTERED,
          WRITE_ANSWER,
          DIRTY,
+         PERSIST,
          TEXT_HASH,
          LAST_CLOSE,
          UNSAVED_CREATE
       ];
-      expect(matching(titles, covered)).toHaveLength(26);
+      expect(matching(titles, covered)).toHaveLength(27);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -164,7 +166,7 @@ describe('the /data battery discriminates', () => {
          // head that cannot report a whole one cannot be based on it either.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET]
+         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET, PERSIST]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       {
@@ -182,15 +184,16 @@ describe('the /data battery discriminates', () => {
          // Also the gate, and necessarily: a head that stores no edit never
          // advances a version, so nothing a caller holds can go stale. And the
          // set check, whose current set carries an edit, and the dirty,
-         // text-hash and last-close checks, whose second text is an edit.
+         // text-hash, last-close and persist checks, whose second text is an
+         // edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, TEXT_HASH, LAST_CLOSE]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE]
       },
       {
          label: 'a write accepted whatever version it claims',
          defects: { ungatedWrites: true },
-         expected: [CONFLICT_GATE, SET]
+         expected: [CONFLICT_GATE, SET, PERSIST]
       },
       {
          // Also the dependent's credit, which the check reads off the update
@@ -247,14 +250,27 @@ describe('the /data battery discriminates', () => {
          // Also every check that goes on to write, save or close what it created.
          label: 'a create that leaves the document closed',
          defects: { createLeavesClosed: true },
-         expected: [CREATE, DIRTY, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE]
+         expected: [CREATE, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE]
       },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
+      { label: 'a persist that reformats the text', defects: { persistReformats: true }, expected: [PERSIST] },
+      { label: 'a persist that ignores its base version', defects: { persistUngated: true }, expected: [PERSIST] },
+      {
+         label: 'a save or persist answering without the version it wrote',
+         defects: { persistedVersionOmitted: true },
+         expected: [DIRTY, PERSIST]
+      },
       { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
       { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },
       { label: 'every document reported clean', defects: { neverDirty: true }, expected: [DIRTY] },
-      { label: 'a text hash that follows the version', defects: { textHashByVersion: true }, expected: [TEXT_HASH] },
+      {
+         // Also the persist check, which compares the hash of one text across
+         // the versions its last close adds.
+         label: 'a text hash that follows the version',
+         defects: { textHashByVersion: true },
+         expected: [TEXT_HASH, PERSIST]
+      },
       { label: 'a last close keeping a saved document’s unsaved text', defects: { releaseKeepsText: true }, expected: [LAST_CLOSE] },
       { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },
       {

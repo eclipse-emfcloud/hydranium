@@ -69,6 +69,7 @@ through.
 | `openOptions(uri)` | The options this session opened `uri` with |
 | `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
+| `persist({ uri, baseVersion })` | Persist the text the store holds, with no update and no serialisation; fails as `save` does |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
 | `close(uri)` | Close this session's open of `uri` |
 | `withOpen(uri, fn)` | Open, run `fn`, and close again when `fn` settles, unless the session already had `uri` open |
@@ -76,6 +77,7 @@ through.
 | `dispose(cause?)` | End the session: close everything it has open and free its id |
 
 `update` and `save` take `ClientSessionWriteArgs` (`uri`, `model`,
+`baseVersion`), `persist` takes `ClientSessionPersistArgs` (`uri`,
 `baseVersion`), and `updateAll` takes a `ClientSessionUpdateAllArgs` whose
 `updates` lists them: the session supplies its own client id. The data
 protocol's requests carry `clientId`; the data server maps each to a session
@@ -143,6 +145,18 @@ checks the open once more when it takes that text, after the rebuild: a session
 that closes the document while it is being built gets `DocumentNotOpenError`,
 and nothing is written. Once the text is taken, the write completes even if the
 session closes the document or ends.
+
+A persist writes that shared text as it is, without a model of its own, so
+another participant's edits keep their formatting. It checks the open and
+`baseVersion` in the step that takes the text: text that moved on past the
+named version fails with `ConflictError`, and `'any'` persists whatever is
+there. The saved event names the persisting session, also when another
+participant wrote the text.
+
+A save and a persist both answer with the document and, in `persisted.version`,
+the version of the text they wrote. The document's model can be older or
+newer than that text, since writes land between the build and the take, so a
+client that marks a version saved takes `persisted.version`.
 
 ## `updateAll`
 
@@ -246,6 +260,7 @@ await form.withOpenDocument({ uri }, opened =>
 | `openDocument(args)` | Open and watch the document, in that order, returning the opened snapshot |
 | `createDocument({ uri, text })` | Create a document open and watched for the session |
 | `updateDocument(args)` / `saveDocument(args)` | Write, or write and persist, a document the session has open |
+| `persistDocument({ uri, baseVersion })` | Persist the text the server holds for a document the session has open |
 | `updateDocuments({ updates })` | Write several documents the session has open, all or none |
 | `closeDocument(args)` | Close the document and its watch |
 | `withOpenDocument(args, fn)` | Open, run `fn` with the snapshot, and close again, unless the session already had the document open |

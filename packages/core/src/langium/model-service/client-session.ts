@@ -21,7 +21,7 @@ import {
 } from '@hydranium/protocol';
 import { type AstNode, type DocumentBuilder, DocumentState, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
-import { type AstDocument } from '../../documents/ast-document-manager.js';
+import { type AstDocument, type SavedAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -43,6 +43,9 @@ export interface ClientSessionWriteArgs<TTransfer> {
    baseVersion: BaseVersion;
 }
 
+/** What a session's `persist` writes: the text the store holds for `uri`. */
+export type ClientSessionPersistArgs = Omit<ClientSessionWriteArgs<never>, 'model'>;
+
 /** What a session's `updateAll` writes, all or none. */
 export interface ClientSessionUpdateAllArgs<TTransfer> {
    updates: ClientSessionWriteArgs<TTransfer>[];
@@ -52,11 +55,11 @@ export interface ClientSessionUpdateAllArgs<TTransfer> {
  * One participant's handle on the documents it works on, started by
  * `ModelService.createSession`.
  *
- * The session writes only what it has open: `update` and `save` fail with
- * `DocumentNotOpenError` unless this session has the URI open when the text is
- * applied, and the check and the apply are one synchronous step, so a write
- * either lands while the document is open or fails. A document stays open until
- * this session closes it, the session ends, or the file is deleted.
+ * The session writes only what it has open: `update`, `save` and `persist`
+ * fail with `DocumentNotOpenError` unless this session has the URI open in the
+ * synchronous step that applies or takes the text, so a write either lands
+ * while the document is open or fails. A document stays open until this
+ * session closes it, the session ends, or the file is deleted.
  *
  * One open per URI, without reference counting: opening a URI the session
  * already has open changes nothing, and one `close` ends it.
@@ -112,7 +115,14 @@ export interface ClientSession<
     */
    updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
    /** Write `args.model` as {@link update} does, then persist the document. */
-   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
+   /**
+    * Persist the text the store holds for `args.uri` as it is, with no update
+    * and no serialisation, and resolve to the document as {@link save} does.
+    * The saved event names this session, also when another client wrote the
+    * text.
+    */
+   persist(args: ClientSessionPersistArgs, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
    /** Close this session's open of `uri`, at once. A no-op when it does not have `uri` open. */
    close(uri: string): Promise<void>;
    /**
@@ -241,9 +251,14 @@ export class DefaultClientSession<
       return this.updateDocuments(args, cancelToken);
    }
 
-   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.saveDocument(args, cancelToken);
+   }
+
+   persist(args: ClientSessionPersistArgs, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>> {
+      this.assertLive();
+      return this.persistDocument(args, cancelToken);
    }
 
    close(uri: string): Promise<void> {
@@ -412,12 +427,32 @@ export class DefaultClientSession<
    protected async saveDocument(
       args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>> {
+   ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
       const doc = await this.updateDocument(args, cancelToken);
       const uri = this.canonicalKey(args.uri);
       this.assertOpen(uri);
-      await this.services.workspace.AstDocumentManager.save(uri, this.clientId);
-      return doc;
+      const version = await this.services.workspace.AstDocumentManager.save(uri, this.clientId);
+      return { ...doc, persisted: { version } };
+   }
+
+   /**
+    * Persist the store's text for `args.uri` under this session's id.
+    *
+    * The open check and the `baseVersion` gate sit in the same synchronous step
+    * as the manager taking the text: an await between them lets another
+    * client's write land after the gate, and its text is then persisted under
+    * this session's id without this session ever having seen it.
+    */
+   protected async persistDocument(
+      args: ClientSessionPersistArgs,
+      cancelToken?: CancellationToken
+   ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
+      const uri = this.canonicalKey(args.uri);
+      this.assertOpen(uri);
+      this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri));
+      const version = await this.services.workspace.AstDocumentManager.save(uri, this.clientId);
+      const doc = await this.modelService.ensureDocumentState(uri, answerState(this.services.workspace.DocumentBuilder), cancelToken);
+      return { ...doc, persisted: { version } };
    }
 
    protected async closeDocument(uri: string): Promise<void> {

@@ -50,7 +50,7 @@ function makeConnection(saveGate?: Promise<void>): {
       watchModelDocument: async (): Promise<void> => undefined,
       saveModelDocument: async (args: { uri: string }): Promise<unknown> => {
          await saveGate;
-         return document(args.uri);
+         return { ...(document(args.uri) as object), persisted: { version: 1 } };
       }
    } as unknown as Server;
    const port = makeFakeDataPort({

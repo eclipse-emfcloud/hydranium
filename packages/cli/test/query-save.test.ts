@@ -46,7 +46,7 @@ function makeStubProxy(
          if (options.failSave) {
             throw new Error('disk refused');
          }
-         return TransferDocument.create<FakeRoot>(
+         const saved = TransferDocument.create<FakeRoot>(
             args.uri,
             1,
             {
@@ -55,7 +55,9 @@ function makeStubProxy(
             },
             'hash'
          );
+         return { ...saved, persisted: { version: 1 } };
       },
+      persistModelDocument: () => Promise.reject(new Error('not exercised')),
       async openModelDocument(args) {
          calls.sequence.push(`open ${args.clientId} ${args.uri}`);
          if (options.failOpen) {

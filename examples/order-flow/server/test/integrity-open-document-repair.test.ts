@@ -489,7 +489,7 @@ describe('a silent repair of a held URI whose source is what disk holds', () => 
       const manager = harness.shared.workspace.AstDocumentManager;
       writeFileSync(workspace.resolve(FILE), DUPLICATES, 'utf8');
 
-      let saved: Promise<void> | undefined;
+      let saved: Promise<number> | undefined;
       afterRead = async target => {
          // The integrity pass's read, not the one `open` makes before the store
          // has the document.

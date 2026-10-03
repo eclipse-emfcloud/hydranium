@@ -31,6 +31,7 @@ import {
    type DataServerProtocol,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
+   type TransferPersistDocumentArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
    DOCUMENT_CLIENT_PROTOCOL_METHODS,
@@ -95,7 +96,10 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
       },
       async saveModelDocument(args: TransferSaveDocumentArgs<FakeRoot>) {
          const root = typeof args.model === 'string' ? FakeRoot.make(args.model) : args.model;
-         return makeDocument(args.uri, root);
+         return { ...makeDocument(args.uri, root), persisted: { version: 1 } };
+      },
+      async persistModelDocument(args: TransferPersistDocumentArgs) {
+         return { ...makeDocument(args.uri, FakeRoot.make('persisted')), persisted: { version: 1 } };
       },
       async watchModelDocument(_args: WatchModelDocumentArgs) {
          // Nothing to return: a watch is a dispatch-table entry, not a handle.

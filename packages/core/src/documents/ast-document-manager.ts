@@ -117,6 +117,16 @@ export interface AstDocument<TAst extends AstNode, TDiagnostic extends AstDiagno
    version: ModelVersion;
 }
 
+/**
+ * What a session's save or persist resolves to: the document, and in
+ * `persisted` the version of the text it wrote to the file. That can differ
+ * from `version` either way, since writes land between the build and the
+ * take.
+ */
+export type SavedAstDocument<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = AstDocument<TAst, TDiagnostic> & {
+   persisted: { version: TextVersion };
+};
+
 export namespace AstDocument {
    /**
     * Construct an {@link AstDocument} envelope, its version marked as coming
@@ -192,8 +202,14 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
     * Write the document's current text to disk through `FileSystemTaskQueue`.
     * The text is taken when this is called, so saves of one file land in the
     * order they were called.
+    *
+    * Resolves to the version of the text on disk once it lands: the version
+    * taken, or under `coalesceSaves` the version of the newer save that wrote
+    * in its place. A caller reporting what it persisted takes it from here,
+    * since a version read beside the call names text a coalesced save never
+    * wrote.
     */
-   save(uri: string, clientId: string): Promise<void>;
+   save(uri: string, clientId: string): Promise<TextVersion>;
 
    onUpdate(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
    onSave(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void | Promise<void>): Disposable;
@@ -287,7 +303,7 @@ export class DefaultAstDocumentManager<
    protected readonly buildCauses = new Set<string>();
 
    /** Per canonical URI, the newest save queued for it, which {@link coalesceSaves} lets older queued saves defer to. */
-   protected readonly newestSaves = new Map<CanonicalUri, Promise<void>>();
+   protected readonly newestSaves = new Map<CanonicalUri, Promise<TextVersion>>();
    protected readonly coalesceSaves: boolean;
 
    protected readonly textDocuments: HydraniumTextDocuments<TextDocument>;
@@ -599,7 +615,7 @@ export class DefaultAstDocumentManager<
     *
     * Throws if no document is open for `uri`.
     */
-   async save(uri: string, clientId: string): Promise<void> {
+   async save(uri: string, clientId: string): Promise<TextVersion> {
       // Canonical throughout: the write and the read that gates it must address
       // the same file the store was keyed by, or a divergent spelling compares
       // one file and writes another.
@@ -609,8 +625,9 @@ export class DefaultAstDocumentManager<
          throw new Error(`Document ${uri} hasn't been opened for saving yet`);
       }
       const text = document.getText();
-      let supersededBy: Promise<void> | undefined;
-      const saved: Promise<void> = this.services.workspace.FileSystemTaskQueue.enqueue(canonical, async () => {
+      const version = document.version;
+      let supersededBy: Promise<TextVersion> | undefined;
+      const saved: Promise<TextVersion> = this.services.workspace.FileSystemTaskQueue.enqueue(canonical, async () => {
          const newest = this.newestSaves.get(canonical);
          if (this.coalesceSaves && newest !== saved) {
             supersededBy = newest;
@@ -618,7 +635,7 @@ export class DefaultAstDocumentManager<
          }
          await this.writeSave(canonical, text, clientId);
       })
-         .then(() => supersededBy)
+         .then(() => supersededBy ?? version)
          .finally(() => {
             if (this.newestSaves.get(canonical) === saved) {
                this.newestSaves.delete(canonical);

@@ -17,7 +17,7 @@ Installed by the server process that already composes
   compose.
 - **A document lifecycle over the shared workspace:** `openModelDocument`,
   `getModelDocument`, `updateModelDocument`, `saveModelDocument`,
-  `closeModelDocument`, `watchModelDocument` / `unwatchModelDocument`, and
+  `persistModelDocument`, `closeModelDocument`, `watchModelDocument` / `unwatchModelDocument`, and
   `waitForReady` for clients that must not race workspace initialisation.
 - **Client sessions per connection:** `createSession` registers a participant,
   whose requests then write only what it has open; `createModelDocument` and

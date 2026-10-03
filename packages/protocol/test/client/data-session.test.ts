@@ -25,7 +25,7 @@ import type { CloseModelArgs, OpenModelArgs } from '../../src/model-server';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { makeFakeDataPort } from '../../src/testing/data-doubles';
 import { makeDuplexConnectionPair } from '../../src/testing/node';
-import type { TransferDocument } from '../../src/transfer-document';
+import type { TransferDocument, TransferSavedDocument } from '../../src/transfer-document';
 import type { TransferElement } from '../../src/transfer-element';
 
 interface ProbeElement extends TransferElement {
@@ -50,13 +50,13 @@ interface WidenedCloseArgs extends CloseModelArgs {
 interface WidenedServer extends DataServerProtocol<ProbeElement> {
    openModelDocument(args: WidenedOpenArgs): Promise<TransferDocument<ProbeElement>>;
    closeModelDocument(args: WidenedCloseArgs): Promise<void>;
-   saveModelDocument(args: WidenedSaveArgs): Promise<TransferDocument<ProbeElement>>;
+   saveModelDocument(args: WidenedSaveArgs): Promise<TransferSavedDocument<ProbeElement>>;
 }
 
 const URI_A = 'file:///a.x';
 
 function document(uri: string): unknown {
-   return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [] };
+   return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [], persisted: { version: 1 } };
 }
 
 /** Bind a server that keeps every argument object verbatim, keyed by method. */
