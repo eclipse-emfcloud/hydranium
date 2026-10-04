@@ -276,9 +276,11 @@ describe('makeLspServerConnection applyEdit', () => {
    it('rejects a wait that never sees its URI, leaving the capture and later waits live', async () => {
       const wire = listeningWire();
       try {
-         const doomed = wire.nextAppliedEdit(URI_A, 50);
+         // Handled from the start: the timer can fire before the round trip
+         // below returns, and a rejection with no handler yet is unhandled.
+         const doomed = expect(wire.nextAppliedEdit(URI_A, 50)).rejects.toThrow(/Timed out waiting for a workspace\/applyEdit/);
          await wire.serverConnection.workspace.applyEdit(replaceIn(URI_B, 'b'));
-         await expect(doomed).rejects.toThrow(/Timed out waiting for a workspace\/applyEdit/);
+         await doomed;
 
          const afterTimeout = wire.nextAppliedEdit(URI_A);
          await wire.serverConnection.workspace.applyEdit(replaceIn(URI_A, 'a'));
