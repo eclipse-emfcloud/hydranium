@@ -30,8 +30,8 @@
  *   the first input that can tell "reflects the head" apart from "reflects the
  *   only language it has" — the assertion a single-grammar example cannot make.
  *   The sharpest form of it is the cross-grammar reference chain
- *   `LayoutModel.process → ProcessModel → Entity`, which no single language
- *   contributes on its own.
+ *   `DiagramNode.flowNode → FlowNode`, then `ProcessModel.subject → Entity`,
+ *   which no single language contributes on its own.
  *
  * Every case asserts BOTH the exit status and the report content, because either
  * alone passes against a broken half: a subcommand that prints the right report
@@ -204,7 +204,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
          // three grammars, layout → process → domain. It renders only when one
          // reflection holds all of them, so it separates "reflected the head"
          // from "reflected whichever language answered first".
-         expect(run.stdout).toContain('- `LayoutModel.process` → `ProcessModel`');
+         expect(run.stdout).toContain('- `DiagramNode.flowNode` → `FlowNode`');
          expect(run.stdout).toContain('- `ProcessModel.subject` → `Entity`');
       },
       SPAWN_TIMEOUT_MS

@@ -40,7 +40,7 @@ import {
 } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode, type ParseResult } from '@hydranium/langium';
-import { URI } from '@hydranium/langium';
+import { URI, UriUtils } from '@hydranium/langium';
 import {
    type AstDocument,
    type AstDocumentSavedEvent,
@@ -96,15 +96,16 @@ export const SOURCE_URI_MISSING = defineMessage(
  * Rendered at the raise site, like its two siblings above and for the same
  * reason: every member of GLSP's status action is prose or an enum.
  *
- * It names the recovery rather than the fault, because the fault already has a
- * surface — the squiggle and the problems list, both of which say WHICH
- * character — and repeating it here would put a second, less precise account of
- * the same error on screen. What no other surface says is that the diagram is
- * waiting on it.
+ * It names the document and the recovery rather than the fault, because the
+ * fault already has a surface — the squiggle and the problems list, both of which
+ * say WHICH character — and repeating it here would put a second, less precise
+ * account of the same error on screen. What no other surface says is that the
+ * diagram is waiting on it, and the document it waits on need not be the one
+ * the diagram was opened on.
  */
 export const DIAGRAM_READONLY_PARSE_ERROR = defineMessage(
    'hydranium/glsp-server/diagram-readonly-parse-error',
-   'Read-only: this document has a syntax error. Fix it to edit the diagram again.'
+   'Read-only: {document} has a syntax error. Fix it to edit the diagram again.'
 );
 
 /**
@@ -275,15 +276,6 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected disposed = false;
    /** Saves of the diagram's own that GLSP's save handler awaits; see {@link handleDirtyChanged}. */
    protected ownSavesPending = 0;
-
-   /**
-    * Whether an external resubmit has ever been dispatched. Gates the
-    * keep-the-last-valid-GModel branch, which needs to know a canvas is already
-    * standing — not what is on it. The content comparison that decides whether a
-    * resubmit is worth dispatching lives on the submission handler, which is the
-    * only place that sees operation submits too.
-    */
-   protected hasSubmittedExternally = false;
 
    /**
     * Trailing-edge debounce for the external resubmit. Rescheduled on each
@@ -715,7 +707,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // snapshot — the event can arrive while a re-entered document is mid-rebuild.
       const document = await this.sharedServices.model.ModelService.settled(rootUri);
       this.state.setSourceRoot(rootUri, document.root as TRoot);
-      this.refreshParseErrorStatus(eventDocument);
+      const broken = this.refreshParseErrorStatus(eventDocument);
 
       // Skip the external submit until the initial requestModel completes; submitting too
       // early bumps root.revision and the client's stale first computedBounds is dropped,
@@ -723,9 +715,11 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.submissionHandler.hasPendingInitialRequest()) {
          return [];
       }
-      // While the AST is structurally broken, keep the last valid GModel so the canvas
-      // doesn't blank mid-typing. The parse-error status still makes it read-only.
-      if (this.isStructurallyBroken(eventDocument) && this.hasSubmittedExternally) {
+      // While a document of the write set is structurally broken, keep the GModel the
+      // client has, which the initial request has delivered by now, so the canvas
+      // doesn't blank or lose its layout mid-typing. The parse-error status still
+      // makes it read-only.
+      if (broken.length > 0) {
          return [];
       }
       // Read the handler's signature BEFORE submitting and again after: it records
@@ -739,16 +733,32 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.submissionHandler.lastSubmittedSignature === previousSignature) {
          return [];
       }
-      this.hasSubmittedExternally = true;
       return submitActions;
    }
 
    /**
-    * Set {@link DiagramStatus.PARSE_ERROR} to {@link parseErrorStatus} while
-    * `document` is structurally broken, and withdraw it once it parses.
+    * Set {@link DiagramStatus.PARSE_ERROR} to {@link parseErrorStatus} while any
+    * document the diagram writes is structurally broken, and withdraw it once
+    * they all parse. Answers the documents that are broken.
+    *
+    * The secondaries count as much as the primary: an operation writes them from
+    * the AST their parse recovered, which drops what the parser skipped, so a
+    * write into a broken secondary overwrites the user's text.
     */
-   protected refreshParseErrorStatus(document: AstDocument<AstNode>): void {
-      this.state.setStatus(DiagramStatus.PARSE_ERROR, this.isStructurallyBroken(document) ? this.parseErrorStatus(document) : undefined);
+   protected refreshParseErrorStatus(primary: AstDocument<AstNode>): AstDocument<AstNode>[] {
+      const broken = [primary, ...this.secondaryDocuments(primary.uri)].filter(document => this.isStructurallyBroken(document));
+      this.state.setStatus(DiagramStatus.PARSE_ERROR, broken.length > 0 ? this.parseErrorStatus(broken) : undefined);
+      return broken;
+   }
+
+   /** The write-set secondaries that exist, other than `primaryUri`. */
+   protected secondaryDocuments(primaryUri: string): AstDocument<AstNode>[] {
+      const { ModelService } = this.sharedServices.model;
+      return this.state.secondaryUris
+         .filter(uri => uri !== primaryUri)
+         .map(uri => ModelService.getDocument(uri))
+         .filter(document => document !== undefined)
+         .map(document => this.sharedServices.workspace.AstDocumentManager.toAstDocument(document));
    }
 
    /**
@@ -771,17 +781,19 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Seam: the {@link DiagramStatus.PARSE_ERROR} status while the document is
-    * structurally broken. Default: read-only, with the
-    * {@link DIAGRAM_READONLY_PARSE_ERROR} band as its message.
+    * Seam: the {@link DiagramStatus.PARSE_ERROR} status while `brokenDocuments`
+    * do not parse, the primary first when it is among them. Default: a read-only
+    * error whose {@link DIAGRAM_READONLY_PARSE_ERROR} message names the first.
     *
     * A read-only status needs a message. Read-only withdraws the tool palette,
     * and without a message nothing on the canvas says why.
     */
-   protected parseErrorStatus(_document: AstDocument<AstNode>): DiagramStatusEntry {
+   protected parseErrorStatus(brokenDocuments: AstDocument<AstNode>[]): DiagramStatusEntry {
       return {
-         message: this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_READONLY_PARSE_ERROR),
-         severity: 'WARNING',
+         message: this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_READONLY_PARSE_ERROR, {
+            document: UriUtils.basename(URI.parse(brokenDocuments[0].uri))
+         }),
+         severity: 'ERROR',
          readonly: true
       };
    }

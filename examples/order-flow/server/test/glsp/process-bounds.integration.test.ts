@@ -31,6 +31,7 @@ import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
@@ -53,9 +54,9 @@ interface OpenDiagram {
 let open: OpenDiagram | undefined;
 let scratch: ScratchWorkspace | undefined;
 
-/** Boot the real GLSP container over a scratch copy and open one `.process` file. */
-async function openDiagram(relativePath: string): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+/** Boot the real GLSP container over a scratch copy, after `prepare` has edited it, and open one `.process` file. */
+async function openDiagram(relativePath: string, prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
+   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
    scratch = workspace;
    const sourceUri = workspace.resolve(relativePath);
    const harness = makeGlspHarness<OrderFlowGlspState>({
@@ -175,7 +176,7 @@ describe('order-flow .process change-bounds', () => {
       // The state's `openForWrite` creates the missing layout, which the write fills.
       const layout = diagram.layoutText();
       expect(layout).toBeDefined();
-      expect(layout).toContain('layout ReturnsLayout for Returns');
+      expect(layout).toContain('layout {');
       expect(layout).toContain('node Receive at 20, 20 size 140, 50');
       expect(diagram.harness.state.layoutRoot.nodes).toHaveLength(1);
    });
@@ -338,5 +339,32 @@ describe('order-flow .process change-bounds', () => {
       // like an orphaned transition would.
       expect(layoutFor(diagram, 'Ship')).toBeUndefined();
       expect(diagram.text()).not.toContain('node Ship');
+   });
+
+   it('moves the entry the diagram draws and removes the ones it overrides', async () => {
+      // The diagram draws a node's LAST entry, so a drag that updated an earlier
+      // one would snap back to the later one on the next render.
+      const diagram = await openDiagram(WORKSPACE_FILES.fulfillmentProcess, workspace => {
+         const path = workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+         workspace.write(
+            WORKSPACE_FILES.fulfillmentDiagram,
+            readFileSync(path, 'utf8').replace(/\n\}\s*$/, '\n   node Pay at 300, 300\n}\n')
+         );
+      });
+      expect(diagram.harness.state.layoutRoot.nodes.filter(node => node.flowNode.$refText === 'Pay')).toHaveLength(2);
+
+      await diagram.apply(
+         ChangeBoundsOperation.create([
+            { elementId: idOf(diagram, 'Pay'), newPosition: { x: 80, y: 90 }, newSize: { width: 160, height: 60 } }
+         ])
+      );
+
+      const entries = diagram.harness.state.layoutRoot.nodes.filter(node => node.flowNode.$refText === 'Pay');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ x: 80, y: 90 });
+      // The surviving entry is the appended one, the one in force, so `Pay` is
+      // still the file's last entry rather than back at its original place.
+      expect(diagram.harness.state.layoutRoot.nodes.at(-1)).toBe(entries[0]);
+      expect(diagram.layoutText()?.match(/node Pay /g)).toHaveLength(1);
    });
 });

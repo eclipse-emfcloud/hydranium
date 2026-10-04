@@ -15,7 +15,7 @@ import { type DiagramNode, type LayoutModel, isDiagramNode, isLayoutModel } from
  * Serializer for the `*.layout` language.
  *
  * ```
- * layout <name> for <process> {
+ * layout {
  *    node <flow node> at <x>, <y> size <width>, <height>
  * }
  * ```
@@ -58,14 +58,12 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
    }
 
    private emitLayout(model: LayoutModel): string {
-      const process = this.serializeReferenceText(model.process) ?? '';
-      const header = `layout ${model.name} for ${process}`;
       if (model.nodes.length === 0) {
          // A layout file whose every entry was deleted stays a valid file rather
          // than becoming unparseable — the diagram is simply unpositioned.
-         return `${header} {}`;
+         return 'layout {}';
       }
-      return `${header} {\n${model.nodes.map(node => this.emitDiagramNode(node, 1)).join('\n')}\n}`;
+      return `layout {\n${model.nodes.map(node => this.emitDiagramNode(node, 1)).join('\n')}\n}`;
    }
 
    /**

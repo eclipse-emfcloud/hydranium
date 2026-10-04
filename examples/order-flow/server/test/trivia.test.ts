@@ -746,7 +746,7 @@ describe('trivia preservation', () => {
          '.layout',
          [
             '// ABOUT THE LAYOUT',
-            'layout L for Fulfillment {',
+            'layout {',
             '   // about Pay',
             '   node Pay at 40, 100 size 160, 60',
             '   node Pick at 440, 200 // trails pick',

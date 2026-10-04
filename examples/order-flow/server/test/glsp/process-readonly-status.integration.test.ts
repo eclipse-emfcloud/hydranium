@@ -21,16 +21,19 @@
 import 'reflect-metadata';
 import {
    type Action,
+   ChangeBoundsOperation,
    ComputedBoundsAction,
    EditMode,
    MarkersReason,
+   MessageAction,
    RejectAction,
    RequestBoundsAction,
    RequestModelAction,
    ServerModule,
    SetEditModeAction,
    SetMarkersAction,
-   StatusAction
+   StatusAction,
+   UpdateModelAction
 } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { DIAGRAM_READONLY_PARSE_ERROR } from '@hydranium/glsp-server/messages';
@@ -46,6 +49,8 @@ import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } f
 
 const INTACT = 'transition Pick -> Ship';
 const BROKEN = 'transition Pick ->';
+const LAYOUT_INTACT = 'layout {';
+const LAYOUT_BROKEN = 'layoxut {';
 
 interface OpenDiagram {
    readonly services: OrderFlowHarness;
@@ -64,6 +69,21 @@ function breakSyntax(workspace: ScratchWorkspace): void {
    workspace.write(WORKSPACE_FILES.fulfillmentProcess, before.replace(INTACT, BROKEN));
 }
 
+/** Misspell `fulfillment.layout`'s keyword, which error recovery parses as a layout with no entries. */
+function breakLayout(workspace: ScratchWorkspace): void {
+   const before = readFileSync(workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram), 'utf8');
+   if (!before.includes(LAYOUT_INTACT)) {
+      throw new Error('fulfillment.layout no longer contains the header this case breaks');
+   }
+   workspace.write(WORKSPACE_FILES.fulfillmentDiagram, before.replace(LAYOUT_INTACT, LAYOUT_BROKEN));
+}
+
+/** The text the workspace holds for `fulfillment.layout`, unsaved edits included. */
+function layoutText(diagram: OpenDiagram): string | undefined {
+   const uri = URI.file(diagram.workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram));
+   return diagram.services.shared.workspace.LangiumDocuments.getDocument(uri)?.textDocument.getText();
+}
+
 /** Open `fulfillment.process` and answer the bounds request as a client does. */
 async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
    const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
@@ -71,7 +91,7 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: 'order-flow-process',
       appModules: [new HydraniumGlspAppModule({ shared: services.shared })],
-      additionalClientActionKinds: [SetMarkersAction.KIND, SetEditModeAction.KIND]
+      additionalClientActionKinds: [SetMarkersAction.KIND, SetEditModeAction.KIND, MessageAction.KIND]
    });
    open = { services, harness, workspace };
    await harness.start();
@@ -125,7 +145,10 @@ describe('order-flow .process read-only status', () => {
 
       await afterLiveValidation(diagram, 0);
 
-      expect(lastOf(diagram, StatusAction.is)).toMatchObject({ message: DIAGRAM_READONLY_PARSE_ERROR.text, severity: 'WARNING' });
+      expect(lastOf(diagram, StatusAction.is)).toMatchObject({
+         message: DIAGRAM_READONLY_PARSE_ERROR.format({ document: 'fulfillment.process' }),
+         severity: 'ERROR'
+      });
       expect(lastOf(diagram, SetEditModeAction.is)?.editMode).toBe(EditMode.READONLY);
    });
 
@@ -135,7 +158,7 @@ describe('order-flow .process read-only status', () => {
       await afterLiveValidation(diagram, 0);
 
       const statuses = diagram.harness.actions.filter(StatusAction.is);
-      expect(statuses.some(status => status.message === DIAGRAM_READONLY_PARSE_ERROR.text)).toBe(false);
+      expect(statuses.some(status => status.message.startsWith('Read-only'))).toBe(false);
       expect(statuses.at(-1)?.severity ?? 'NONE').toBe('NONE');
       expect(diagram.harness.actions.some(SetEditModeAction.is)).toBe(false);
    });
@@ -198,5 +221,73 @@ describe('order-flow .process read-only status', () => {
          expect(diagram.harness.actions.slice(before).filter(SetEditModeAction.is).at(-1)?.editMode).toBe(EditMode.READONLY)
       );
       expect(diagram.harness.state.editMode).toBe(EditMode.READONLY);
+   });
+
+   it('makes a diagram read-only while its layout does not parse, naming the layout', async () => {
+      const diagram = await openDiagram(breakLayout);
+
+      await afterLiveValidation(diagram, 0);
+
+      expect(lastOf(diagram, StatusAction.is)).toMatchObject({
+         message: DIAGRAM_READONLY_PARSE_ERROR.format({ document: 'fulfillment.layout' }),
+         severity: 'ERROR'
+      });
+      expect(lastOf(diagram, SetEditModeAction.is)?.editMode).toBe(EditMode.READONLY);
+   });
+
+   it('refuses a drag while the layout does not parse, and leaves its text alone', async () => {
+      // A write would serialize the AST error recovery made of the layout, which
+      // has no entries, over the text the user is still editing.
+      const diagram = await openDiagram(breakLayout);
+      await afterLiveValidation(diagram, 0);
+      const before = layoutText(diagram);
+      const from = diagram.harness.actions.length;
+      const pay = diagram.harness.state.sourceRoot.nodes.find(node => node.name === 'Pay');
+      if (!pay) {
+         throw new Error('fulfillment.process no longer declares Pay');
+      }
+
+      diagram.harness.dispatch(
+         ChangeBoundsOperation.create([
+            { elementId: diagram.harness.state.index.createId(pay), newPosition: { x: 112, y: 42 }, newSize: { width: 160, height: 60 } }
+         ])
+      );
+
+      // GLSP answers an operation on a read-only diagram with a message, and an
+      // applied one with a new model; whichever arrives first settles the case.
+      const answered = (action: Action): boolean =>
+         MessageAction.is(action) || RequestBoundsAction.is(action) || UpdateModelAction.is(action);
+      await vi.waitFor(() => expect(diagram.harness.actions.slice(from).some(answered)).toBe(true));
+
+      expect(diagram.harness.actions.slice(from).find(answered)?.kind).toBe(MessageAction.KIND);
+      expect(layoutText(diagram)).toBe(before);
+   });
+
+   it('makes a diagram read-only while another client has its layout broken', async () => {
+      const diagram = await openDiagram();
+      await afterLiveValidation(diagram, 0);
+      const layoutPath = diagram.workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+      const layoutUri = URI.file(layoutPath).toString();
+      const form = diagram.services.shared.model.ModelService.createSession('form');
+      await form.open(layoutUri);
+      const from = diagram.harness.actions.length;
+
+      await form.update({
+         uri: layoutUri,
+         model: readFileSync(layoutPath, 'utf8').replace(LAYOUT_INTACT, LAYOUT_BROKEN),
+         baseVersion: 'any'
+      });
+
+      await vi.waitFor(() => expect(diagram.harness.state.editMode).toBe(EditMode.READONLY));
+      expect(diagram.harness.state.currentStatus?.message).toBe(DIAGRAM_READONLY_PARSE_ERROR.format({ document: 'fulfillment.layout' }));
+      // The canvas keeps the model it has: one built from the recovered layout
+      // would put every node back where client layout leaves it.
+      await nextMacrotask(0);
+      expect(diagram.harness.actions.slice(from).some(action => RequestBoundsAction.is(action))).toBe(false);
+
+      await form.update({ uri: layoutUri, model: readFileSync(layoutPath, 'utf8'), baseVersion: 'any' });
+
+      await vi.waitFor(() => expect(diagram.harness.state.editMode).toBe(EditMode.EDITABLE));
+      expect(diagram.harness.state.currentStatus).toBeUndefined();
    });
 });

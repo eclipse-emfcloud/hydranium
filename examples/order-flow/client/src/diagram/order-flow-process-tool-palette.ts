@@ -46,6 +46,21 @@ export class OrderFlowProcessToolPalette extends ToolPalette {
       this.syncToggleVisibility();
    }
 
+   /**
+    * Give focus back only when it is inside the palette.
+    *
+    * sprotty records `document.activeElement` when the palette shows and
+    * focuses it again when it hides. The palette hides when the canvas turns
+    * read-only, which happens while the reader is typing elsewhere, and
+    * restoring then moves the caret into whatever editor had focus when the
+    * page first showed the palette.
+    */
+   protected override restoreFocus(): void {
+      if (this.containerElement?.contains(document.activeElement)) {
+         super.restoreFocus();
+      }
+   }
+
    protected override addMinimizePaletteButton(): void {
       super.addMinimizePaletteButton();
       this.syncToggleVisibility();

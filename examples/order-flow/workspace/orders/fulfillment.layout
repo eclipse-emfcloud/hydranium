@@ -20,7 +20,7 @@
 // A `size` is a MINIMUM; a node grows past
 // it to fit its labels.
 
-layout FulfillmentLayout for Fulfillment {
+layout {
    node Pay at 40, 100 size 160, 60
    node PaymentOk at 260, 90
    node Pick at 440, 200 size 160, 60

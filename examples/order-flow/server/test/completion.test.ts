@@ -35,7 +35,7 @@ const harness: OrderFlowHarness = makeServices();
  * `node … at x, y`, where the grammar's next legal tokens are the optional
  * `size` clause and the `node` of a following entry.
  */
-const LAYOUT_SOURCE = `layout FulfillmentLayout for Fulfillment {
+const LAYOUT_SOURCE = `layout {
    node Pay at 40, 100 size 160, 60
    node PaymentOk at 322, 14 // does this feel slow
    node Pick at 505, 39 /* measured */ size 160, 60

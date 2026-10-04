@@ -33,7 +33,7 @@
  * carries `.domain` + `.process` + `.layout` content and the references that
  * cross those boundaries: `ProcessModel.subject` into a `.domain` `Entity`, the
  * three-deep `writes <Entity>.<field> = <literal>` effect chain, and
- * `LayoutModel.process` / `DiagramNode.flowNode` into a `.process`. Across
+ * `DiagramNode.flowNode` into the same-named `.process`. Across
  * projects it emits `requires` edges — a hub on the generated `gen-core`
  * library project plus a chain between consecutive consumers — so the
  * project-scope filter has real dependency graphs to walk rather than one edge.
@@ -318,8 +318,7 @@ ${lines.join('\n')}
  * optional, and the first entry's `y` is fractional because GLSP sends
  * client-measured bounds as floats.
  */
-function layoutText(plan: ProjectPlan, index: number, nodeNames: readonly string[], randomInt: RandomInt): string {
-   const processName = `${plan.prefix}Flow${index}`;
+function layoutText(nodeNames: readonly string[], randomInt: RandomInt): string {
    const positioned = nodeNames.slice(0, -1);
    const entries = positioned.map((nodeName, order) => {
       const x = 40 + (order % 4) * 220 + randomInt(0, 8);
@@ -330,7 +329,7 @@ function layoutText(plan: ProjectPlan, index: number, nodeNames: readonly string
    });
    return `${DO_NOT_EDIT}
 
-layout ${processName}Layout for ${processName} {
+layout {
 ${entries.join('\n')}
 }
 `;
@@ -405,7 +404,7 @@ export function generateLargeWorkspace(options: LargeWorkspaceOptions): LargeWor
                // carries the "no layout file yet" case as well as the laid-out one.
                if (index < sizes.processes - 1) {
                   const names = flowNodeNames(`${plan.prefix}Flow${index}`, extraSteps);
-                  writer.write(`${plan.id}/flow-${pad(index)}.layout`, layoutText(plan, index, names, writer.randomInt));
+                  writer.write(`${plan.id}/flow-${pad(index)}.layout`, layoutText(names, writer.randomInt));
                   files.layout++;
                }
             }

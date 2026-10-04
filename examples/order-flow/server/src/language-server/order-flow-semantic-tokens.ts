@@ -42,8 +42,8 @@ import {
  * and declare nothing, so their references are already coloured from their
  * targets' entries. `DiagramNode` has no name property at all, so the base's
  * declaration branch could not fire for it even with an entry, and nothing
- * references the type. `DomainModel` / `LayoutModel` are named roots, left
- * uncoloured because a whole-file root reads as noise in the gutter.
+ * references the type. `DomainModel` / `LayoutModel` are whole-file roots, left
+ * uncoloured because one reads as noise in the gutter.
  *
  * A missing entry means only "no kind of its own"; what the reader then sees is
  * the HOST's business. The VS Code and Theia extensions ship

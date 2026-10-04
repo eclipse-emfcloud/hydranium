@@ -67,10 +67,8 @@ describe('order-flow formatter', () => {
    });
 
    it('indents a cramped .layout and normalises the coordinate separators', async () => {
-      const source = 'layout L for Cramped {\nnode Pay at 40 , 40 size 160,60\n}';
-      expect(await format(harness, source, '.layout')).toBe(
-         ['layout L for Cramped {', '   node Pay at 40, 40 size 160, 60', '}'].join('\n')
-      );
+      const source = 'layout {\nnode Pay at 40 , 40 size 160,60\n}';
+      expect(await format(harness, source, '.layout')).toBe(['layout {', '   node Pay at 40, 40 size 160, 60', '}'].join('\n'));
    });
 
    it('honours the client tabSize rather than the serializer indent', async () => {
