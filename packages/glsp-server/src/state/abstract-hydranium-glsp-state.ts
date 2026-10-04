@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DefaultModelState, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
+import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable, optional } from 'inversify';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
@@ -30,6 +30,7 @@ import {
    TIMED_OUT,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
+import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
 import { ModelReadyTimeoutError } from './model-ready-timeout-error.js';
@@ -386,6 +387,66 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       return [...this._secondaryVersions.keys()];
    }
 
+   /** Active statuses, least recently set first. See {@link setStatus}. */
+   protected readonly statuses = new Map<DiagramStatus, DiagramStatusEntry>();
+
+   /** Backing emitter for {@link onStatusChanged}. */
+   protected readonly statusChangedEmitter = new Emitter<void>();
+
+   /**
+    * Set `status`'s entry, or withdraw it with `undefined`, and recompute
+    * {@link currentStatus} and {@link editMode} from every active entry.
+    *
+    * `editMode` is derived here and nowhere else: a writer that assigns it
+    * directly is overwritten by the next status change, and its write is not
+    * announced on {@link onStatusChanged}.
+    */
+   setStatus(status: DiagramStatus, entry: DiagramStatusEntry | undefined): void {
+      const previousEntry = this.statuses.get(status);
+      if (previousEntry === undefined && entry === undefined) {
+         return;
+      }
+      const previousStatus = this.currentStatus;
+      const previousEditMode = this.editMode;
+      // Re-inserted so iteration order is recency, which breaks a severity tie.
+      this.statuses.delete(status);
+      if (entry !== undefined) {
+         this.statuses.set(status, entry);
+      }
+      this.editMode = [...this.statuses.values()].some(active => active.readonly) ? EditMode.READONLY : EditMode.EDITABLE;
+      this.logger.debug(`Status ${status}: ${describeStatusEntry(previousEntry)} → ${describeStatusEntry(entry)}`);
+      if (this.currentStatus !== previousStatus || this.editMode !== previousEditMode) {
+         this.statusChangedEmitter.fire();
+      }
+   }
+
+   /** The active entry whose message the client shows: highest severity, then most recently set. */
+   get currentStatus(): DiagramStatusEntry | undefined {
+      let winner: DiagramStatusEntry | undefined;
+      for (const entry of this.statuses.values()) {
+         if (entry.message !== undefined && (!winner || severityRank(entry) >= severityRank(winner))) {
+            winner = entry;
+         }
+      }
+      return winner;
+   }
+
+   /** The active statuses that block editing; empty while the diagram is editable. */
+   get readonlyStatuses(): DiagramStatus[] {
+      return [...this.statuses].filter(([, entry]) => entry.readonly).map(([status]) => status);
+   }
+
+   /** The status that supplies {@link currentStatus}, for a log line naming it. */
+   get currentStatusSource(): DiagramStatus | undefined {
+      const current = this.currentStatus;
+      return [...this.statuses].find(([, entry]) => entry === current)?.[0];
+   }
+
+   /** Fires when {@link currentStatus} or {@link editMode} changes. */
+   get onStatusChanged(): Event<void> {
+      return this.statusChangedEmitter.event;
+   }
+
    /**
     * The base version of a write of `uri`: {@link baseVersion} for the primary,
     * the version taken at {@link trackSecondaryDocument} (refreshed by
@@ -597,4 +658,20 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * out as `'any'`.
     */
    abstract updateSourceModel(model: TSourceModel, baseVersion?: BaseVersion): MaybePromise<void>;
+}
+
+const SEVERITY_RANK: Readonly<Record<NonNullable<DiagramStatusEntry['severity']>, number>> = { INFO: 0, WARNING: 1, ERROR: 2, FATAL: 3 };
+
+/** A message without a severity ranks as `INFO`. */
+function severityRank(entry: DiagramStatusEntry): number {
+   return SEVERITY_RANK[entry.severity ?? 'INFO'];
+}
+
+function describeStatusEntry(entry: DiagramStatusEntry | undefined): string {
+   if (entry === undefined) {
+      return 'inactive';
+   }
+   const flags = [entry.message === undefined ? undefined : (entry.severity ?? 'INFO'), entry.readonly ? 'readonly' : undefined];
+   const message = entry.message === undefined ? '' : ` "${entry.message}"`;
+   return `${flags.filter(flag => flag !== undefined).join(' ') || 'active'}${message}`;
 }

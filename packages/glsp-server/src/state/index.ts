@@ -15,3 +15,4 @@ export * from './reconciling-multi-document-glsp-state.js';
 export * from './full-text-hydranium-glsp-state.js';
 export * from './hydranium-shared-core-services.js';
 export * from './model-ready-timeout-error.js';
+export * from './diagram-status.js';

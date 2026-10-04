@@ -9,10 +9,15 @@
 
 import {
    type ActionHandlerConstructor,
+   applyBindingTarget,
    type BindingTarget,
+   type ClientSessionInitializer,
    type CommandStack,
    DiagramModule,
-   type InstanceMultiBinding
+   type InstanceMultiBinding,
+   type MultiBinding,
+   RequestModelActionHandler,
+   SetEditModeActionHandler
 } from '@eclipse-glsp/server';
 import { injectable, type interfaces } from 'inversify';
 import type { LanguageMetaData } from '@hydranium/langium';
@@ -20,6 +25,9 @@ import { type ServerLanguageServices, type ServerSharedServices, typedMetadata }
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
+import { DefaultDiagramStatusReporter, DiagramStatusReporter } from '../status/diagram-status-reporter.js';
+import { HydraniumGlspRequestModelActionHandler } from '../status/hydranium-glsp-request-model-action-handler.js';
+import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-set-edit-mode-action-handler.js';
 
 /**
  * Bind {@link HydraniumTypes}.DiagramLanguage on a GLSP **session** container
@@ -28,9 +36,10 @@ import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-sta
  * Exported separately from {@link AbstractHydraniumGlspDiagramModule} for adopters
  * whose diagram module already extends an intermediate base of their own and
  * cannot take the framework base class; call it from `configure` after
- * `super.configure(...)`, add {@link HydraniumGlspRequestSaveModelActionHandler}
- * in `configureActionHandlers`, and return {@link HydraniumGlspCommandStack} from
- * `bindCommandStack`, all of which the base also does. The base class is the
+ * `super.configure(...)` and repeat what the base's own overrides of
+ * `configure`, `configureActionHandlers`, `configureClientSessionInitializers`
+ * and `bindCommandStack` do. Without the status bindings among them, nothing
+ * tells the client why its diagram is read-only. The base class is the
  * preferred entry point because it makes the declaration non-optional.
  *
  * **Why the session tier.** GLSP builds its app container once per process,
@@ -121,8 +130,22 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
       isBound: interfaces.IsBound,
       rebind: interfaces.Rebind
    ): void {
+      // Bound first: `super.configure` applies the session initializers, and the
+      // reporter's initializer entry refers to this binding.
+      applyBindingTarget({ bind, isBound }, DiagramStatusReporter, this.bindDiagramStatusReporter()).inSingletonScope();
       super.configure(bind, unbind, isBound, rebind);
       bindDiagramLanguage(bind, this.declareLanguage());
+   }
+
+   /** The {@link DiagramStatusReporter} of the session; {@link DefaultDiagramStatusReporter} by default. */
+   protected bindDiagramStatusReporter(): BindingTarget<DiagramStatusReporter> {
+      return DefaultDiagramStatusReporter;
+   }
+
+   /** Starts the {@link DiagramStatusReporter} with the session, since nothing else injects it. */
+   override configureClientSessionInitializers(binding: MultiBinding<ClientSessionInitializer>): void {
+      super.configureClientSessionInitializers(binding);
+      binding.add({ service: DiagramStatusReporter });
    }
 
    /** {@link HydraniumGlspCommandStack}, so the diagram is dirty exactly while a document it has open is. */
@@ -132,10 +155,14 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
 
    /**
     * Adds {@link HydraniumGlspRequestSaveModelActionHandler}, the save the
-    * Theia client sends, beside GLSP's own save handler.
+    * Theia client sends, beside GLSP's own save handler, and replaces the GLSP
+    * handlers that write the client's status or edit mode with ones that set a
+    * diagram status instead.
     */
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
       binding.add(HydraniumGlspRequestSaveModelActionHandler);
+      binding.rebind(RequestModelActionHandler, HydraniumGlspRequestModelActionHandler);
+      binding.rebind(SetEditModeActionHandler, HydraniumGlspSetEditModeActionHandler);
    }
 }

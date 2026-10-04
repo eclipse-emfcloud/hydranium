@@ -14,6 +14,7 @@ export * from './dispatcher/index.js';
 export * from './launcher/index.js';
 export * from './logging/index.js';
 export * from './state/index.js';
+export * from './status/index.js';
 export * from './storage/index.js';
 export * from './submission/index.js';
 export * from './util/index.js';

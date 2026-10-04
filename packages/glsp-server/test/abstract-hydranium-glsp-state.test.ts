@@ -8,13 +8,14 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } from '@eclipse-glsp/server';
+import { ClientId, EditMode, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
 import { AstDocument, DefaultModelLedger, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
+import { DiagramStatus } from '../src/state/diagram-status.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { ModelReadyTimeoutError } from '../src/state/model-ready-timeout-error.js';
 import { ReconcilingConflictResolver, UNRECORDED_VERSION } from '@hydranium/protocol';
@@ -177,6 +178,7 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
    const container = new Container();
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(sharedServices as unknown as ServerSharedServices);
    container.bind(HydraniumTypes.Tracer).toConstantValue({
+      ...childLogger,
       withUri: (uri: unknown) => {
          harness.logger.withUris.push(String(uri));
          return childLogger;
@@ -479,6 +481,60 @@ describe('AbstractHydraniumGlspState', () => {
          await state.updateSourceModel('second');
          await state.updateSourceModel('third');
          expect(state.updatedSourceModels).toEqual(['first', 'second', 'third']);
+      });
+   });
+
+   describe('setStatus', () => {
+      it('shows the highest-severity message, and the most recent one of equal severity', () => {
+         const { state } = createState(makeHarness());
+         state.setStatus(DiagramStatus.VALIDATION, { message: 'checking', severity: 'INFO' });
+         state.setStatus(DiagramStatus.PARSE_ERROR, { message: 'broken', severity: 'WARNING' });
+         state.setStatus('other', { message: 'later', severity: 'INFO' });
+         expect(state.currentStatus?.message).toBe('broken');
+
+         state.setStatus('another', { message: 'latest', severity: 'WARNING' });
+         expect(state.currentStatus?.message).toBe('latest');
+         expect(state.currentStatusSource).toBe('another');
+      });
+
+      it('falls back to the remaining statuses when the shown one is withdrawn', () => {
+         const { state } = createState(makeHarness());
+         state.setStatus(DiagramStatus.PARSE_ERROR, { message: 'broken', severity: 'WARNING' });
+         state.setStatus(DiagramStatus.VALIDATION, { message: 'checking', severity: 'INFO' });
+
+         state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
+         expect(state.currentStatus?.message).toBe('checking');
+         state.setStatus(DiagramStatus.VALIDATION, undefined);
+         expect(state.currentStatus).toBeUndefined();
+      });
+
+      it('is read-only while any status holds it, and editable once none does', () => {
+         const { state } = createState(makeHarness());
+         state.setStatus(DiagramStatus.PARSE_ERROR, { readonly: true });
+         state.setStatus(DiagramStatus.CLIENT_REQUEST, { readonly: true });
+
+         state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
+         expect(state.editMode).toBe(EditMode.READONLY);
+         expect(state.readonlyStatuses).toEqual([DiagramStatus.CLIENT_REQUEST]);
+         state.setStatus(DiagramStatus.CLIENT_REQUEST, undefined);
+         expect(state.editMode).toBe(EditMode.EDITABLE);
+      });
+
+      it('announces a change of the shown status or the edit mode, and nothing else', () => {
+         const { state } = createState(makeHarness());
+         let changes = 0;
+         state.onStatusChanged(() => changes++);
+
+         state.setStatus(DiagramStatus.PARSE_ERROR, { message: 'broken', severity: 'WARNING', readonly: true });
+         expect(changes).toBe(1);
+         // Outranked, so nothing the client sees changes.
+         state.setStatus(DiagramStatus.VALIDATION, { message: 'checking', severity: 'INFO' });
+         state.setStatus(DiagramStatus.VALIDATION, undefined);
+         state.setStatus('never-set', undefined);
+         expect(changes).toBe(1);
+
+         state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
+         expect(changes).toBe(2);
       });
    });
 });
