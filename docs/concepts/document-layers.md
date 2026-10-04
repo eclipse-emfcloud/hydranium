@@ -393,7 +393,7 @@ Every wait in the table shares these exceptions:
 | `baseVersion` (write field) | `BaseVersion` = `ModelVersion \| 'any'` | the writer | per write | the text the write was authored against; `'any'` writes ungated |
 | `ConflictError.baseVersion` / `.actualVersion` | `ModelVersion` / `TextVersion` | the session's gate | when it refuses a write | the write's base, and the text the gate found instead |
 | Dirty flip `text.version` | `TextVersion` | the text store | when `isDirty` changes; for an edit, before its build | the text the answer was decided on. Absent when the document no longer exists, or after a release whose follow-up build failed (see [Dirty state](client-sessions.md#dirty-state)) |
-| GLSP `baseVersion` / `baseVersionOf(uri)` | `ModelVersion` | the GLSP state: the source root's `ModelLedger.versionOf` in `setSourceRoot`; a secondary document's through `readModelVersion` | when the source root is read; for a secondary document, at `trackSecondaryDocument` and each `setSourceRoot` | the text the diagram's projection came from; `UNRECORDED_VERSION` for a document with no parsed root, so a write based on it conflicts; a secondary created through `createSecondaryDocument` takes the version the create gave it. A merged retry is gated on its refetch's `VersionedModel.baseVersion`, the store's version read in the tick its text is |
+| GLSP `baseVersion` / `baseVersionOf(uri)` | `ModelVersion` | the GLSP state: the source root's `ModelLedger.versionOf` in `captureSourceRoot`; a secondary document's `ModelLedger.versionOf` of the built root an operation copies it from | when the source root is read; for a secondary document, at `trackSecondaryDocument` (during an operation, the root the operation first reached) and each `captureSourceRoot` | the text the diagram's projection came from; `UNRECORDED_VERSION` for a document with no parsed root, so a write based on it conflicts; a secondary created through `createSecondaryDocument` takes the version the create gave it. A merged retry is gated on its refetch's `VersionedModel.baseVersion`, the store's version read in the tick its text is |
 | `text.hash` | `string` | the text store (once per version), or the data head for a text the store never held | when the document is sent | the text content alone, not its version or dirty state, so equal across a revert and a server restart |
 | `model.hash` | `string` | the data head's fingerprint | when the document is sent | the snapshot sent, never live state: its `root` + `diagnostics` (absent hashes apart from `[]`), or under the `'text-diagnostics'` strategy the text that root was parsed from + `diagnostics`. Never the version |
 
@@ -476,7 +476,7 @@ read. Two write styles are in play, and they read at different moments:
 - **Snapshot-diff** — project the model, edit the projection, write the result.
   The version to declare is the one the projection carried, because that is the
   state the edit is expressed against. `ReconcilingMultiDocumentGlspState` works
-  this way: it takes a base at `setSourceRoot` and diffs against it.
+  this way: it takes a base at `captureSourceRoot` and diffs against it.
 - **Read-then-write** — read the document, author the change from what the read
   returned, write it. The version to declare is the one that read returned,
   because that is the content the change assumed.
@@ -566,8 +566,10 @@ and a node under the old name that is identical under either reading. The
 comment follows the name, so it lands on a declaration its author never wrote
 it on. No rule over the two documents separates the two writes; only a caller
 recording which node it renamed could, and the transfer model has nowhere to
-put that. An in-place write — an integrity repair, a diagram gesture — is not
-affected, because there the comment is anchored to the node object itself.
+put that. An integrity repair is not affected, because it writes in place and
+the comment is anchored to the node object itself. A diagram gesture is: it
+edits a working copy and writes its transfer projection, as any transfer-model
+client does.
 
 Identity here is whatever `NameProviderOptions.nameProperties` names, so point
 that at the real identifier wherever `name` is a display label. A grammar that

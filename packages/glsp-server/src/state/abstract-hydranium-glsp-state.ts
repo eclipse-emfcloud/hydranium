@@ -10,7 +10,7 @@
 import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable, optional } from 'inversify';
-import { type AstNode, DocumentState, URI } from '@hydranium/langium';
+import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, URI } from '@hydranium/langium';
 import {
    type ClientSession,
    type HydraniumScopeProvider,
@@ -30,6 +30,7 @@ import {
    TIMED_OUT,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
+import { openOperationOf, workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -60,7 +61,7 @@ import { ModelReadyTimeoutError } from './model-ready-timeout-error.js';
  *   override only to change the error shape (richer per-adopter output comes
  *   from overriding `wsRelativePath` / `formatBuildStatus`).
  * - logging — see {@link baseTracer}. Adopters wanting a different label
- *   override `setSourceRoot` and derive via
+ *   override `captureSourceRoot` and derive via
  *   `this.baseTracer.for('Name').withUri(uri)`.
  *
  * **Lifecycle ordering.** Reading {@link sourceUri} or {@link sourceRoot}
@@ -69,7 +70,7 @@ import { ModelReadyTimeoutError } from './model-ready-timeout-error.js';
  * (typically from the storage `loadSourceModel` flow) before reading them.
  * The {@link logger}/{@link tracer} are the exception: the injected
  * {@link baseTracer} is always available, so the getters fall back to it
- * before {@link setSourceRoot} derives the URI-tagged {@link _tracer} —
+ * before {@link captureSourceRoot} derives the URI-tagged {@link _tracer} —
  * logging is never `undefined`.
  */
 @injectable()
@@ -95,7 +96,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * Per-class tracer, caller-tagged with this state's runtime subclass name by
-    * the `HydraniumTypes.Tracer` binding. {@link setSourceRoot} derives the
+    * the `HydraniumTypes.Tracer` binding. {@link captureSourceRoot} derives the
     * URI-tagged {@link _tracer} from it; the {@link tracer}/{@link logger}
     * getters fall back to it before then, so logging is never `undefined`.
     */
@@ -131,9 +132,25 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    protected _sourceUri!: string;
+   /**
+    * The root the last capture took, which every reader of the document
+    * shares. A projection that must see an operation's edits reads
+    * {@link sourceRoot}, which is a copy of it during an operation.
+    */
    protected _sourceRoot!: TRoot;
+   /** Settles when the last {@link runExclusive} call queued so far has. */
+   protected exclusiveTail: Promise<unknown> = Promise.resolve();
    protected _tracer?: Tracer;
    protected _baseVersion: ModelVersion = asModelVersion(0);
+   /**
+    * The built root each secondary's version was read from, keyed by
+    * canonical URI, and during an operation the root of any other document it
+    * first reached. An operation copies a secondary from here, so the copy,
+    * the base a conflict reconciles from and the version its write is gated
+    * on describe one revision; the registry's current root can be a later
+    * build's.
+    */
+   protected readonly capturedRoots = new Map<string, AstNode>();
    /** Model versions of the secondary write set, keyed by URI. See {@link trackSecondaryDocument}. */
    protected readonly _secondaryVersions = new Map<string, ModelVersion>();
 
@@ -147,15 +164,39 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    protected readyTimeoutMs: number = AbstractHydraniumGlspState.DEFAULT_READY_TIMEOUT_MS;
 
    /**
-    * Capture a freshly built source root alongside its URI, refresh the
-    * logger to label log lines with the URI, and re-index the AST so
-    * downstream GModel projection can resolve elements back to nodes.
+    * Capture a freshly built source root alongside its URI through
+    * {@link captureSourceRoot}, and index the AST so downstream GModel
+    * projection can resolve elements back to nodes.
     *
-    * Also mirrors `uri` into the inherited properties map under
-    * {@link SOURCE_URI_ARG} so legacy GLSP code paths (`state.get(...)`)
-    * stay consistent with the typed field.
+    * Capturing the document already captured keeps what the last GModel build
+    * registered in the index, which only the next build makes again, and drops
+    * an id added through `indexSemanticElement` whose node a rebuild replaced.
+    *
+    * Throws during an operation: a capture there swaps the root out from under
+    * the nodes a handler resolved, and the operation captures when it ends.
     */
    setSourceRoot(uri: string, root: TRoot): void {
+      if (openOperationOf(this)) {
+         throw new Error(`setSourceRoot(${uri}) during an operation: the operation captures the source root when it ends`);
+      }
+      const recapture = uri === this._sourceUri;
+      this.captureSourceRoot(uri, root);
+      if (recapture) {
+         this.index.reindexSemanticElements(root, uri);
+         this.index.remapSemanticAliases(node => (this.isCurrentBuiltNode(node) ? node : undefined));
+      } else {
+         this.index.indexSourceRoot(root, uri);
+      }
+   }
+
+   /**
+    * Take `root` as the source root and read everything derived from it: the
+    * base version, every tracked secondary version, the URI mirrored into the
+    * inherited properties map under {@link SOURCE_URI_ARG}, and the
+    * URI-labelled logger. Everything but the index, which
+    * {@link setSourceRoot} sets. Override to derive more from a capture.
+    */
+   protected captureSourceRoot(uri: string, root: TRoot): void {
       this._sourceUri = uri;
       this._sourceRoot = root;
       // The root's own version: the registry's current root can be a later
@@ -171,7 +212,6 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       this._tracer = this.baseTracer.withUri(uri);
       this.tracer.debug(`Captured source root at doc.version=v${this._baseVersion}`);
       this.checkDeclaredLanguage(uri);
-      this.index.indexSourceRoot(root, uri);
    }
 
    /**
@@ -183,8 +223,165 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       return this._sourceUri;
    }
 
+   /** The root operation handlers edit: during an operation a copy of the built root, outside one the built root. */
    get sourceRoot(): TRoot {
-      return this._sourceRoot;
+      return openOperationOf(this) && this._sourceRoot !== undefined ? (this.workingRootOf(this._sourceUri) as TRoot) : this._sourceRoot;
+   }
+
+   /**
+    * Run `run` once every earlier call has settled, thrown or not: the
+    * boundary that orders operations, undo and redo, and the storage's capture
+    * and render. Code running inside it never calls this again, since the
+    * call would wait for the section it runs in.
+    */
+   runExclusive<T>(run: () => MaybePromise<T>): Promise<T> {
+      const result = this.exclusiveTail.then(() => run());
+      this.exclusiveTail = result.catch(() => undefined);
+      return result;
+   }
+
+   /**
+    * The root of `uri` that operation handlers edit: during an operation a
+    * copy made on the first request and returned for the rest of it, outside
+    * one the root itself. The root is the built root of `uri`, or `orElse()`
+    * when `uri` has no document; `undefined` when neither gives one.
+    *
+    * A handler that edits another document than the source reaches its root
+    * through this, or the edit lands on the root every reader shares. An id
+    * added through `indexSemanticElement` for a node of that root names the
+    * node's copy from then on.
+    */
+   workingRootOf(uri: string, orElse?: () => AstNode | undefined): AstNode | undefined {
+      const key = this.workingKey(uri);
+      const primary = this._sourceUri !== undefined && key === this.workingKey(this._sourceUri);
+      const operation = openOperationOf(this);
+      if (!operation) {
+         return primary ? this._sourceRoot : (this.sharedServices.model.ModelService.getDocument(uri)?.parseResult.value ?? orElse?.());
+      }
+      let built: AstNode | undefined = primary ? this._sourceRoot : this.capturedRoots.get(key);
+      if (built === undefined) {
+         // First reached during the operation: frozen now, for the rest of it.
+         built = this.readBuiltRoot(uri);
+         if (built !== undefined) {
+            this.capturedRoots.set(key, built);
+         }
+      }
+      built ??= orElse?.();
+      return built === undefined ? undefined : operation.workingRootOf(key, built);
+   }
+
+   /** The copy of `uri` the open operation made, without making one. */
+   protected existingWorkingRootOf(uri: string): AstNode | undefined {
+      return openOperationOf(this)?.existingWorkingRootOf(this.workingKey(uri));
+   }
+
+   /**
+    * The key of `uri` among an operation's copies: its canonical form, so two
+    * spellings of one document share one copy.
+    */
+   protected workingKey(uri: string): string {
+      return this.sharedServices.workspace.DocumentUriPolicy.canonicalUri(uri);
+   }
+
+   /**
+    * The built node `node` was copied from during an operation; `node` itself
+    * for a built node, for a node the operation created, and outside one.
+    *
+    * A copy has no `$document`, so a lookup that reads its document, scope,
+    * reference candidates or project throws or answers for no document.
+    * Handlers pass the built node there and keep editing the copy.
+    */
+   builtNodeOf<T extends AstNode>(node: T): T {
+      return openOperationOf(this)?.builtNodeOf(node) ?? node;
+   }
+
+   /**
+    * A reference to `target` whose `ref` is `target` itself, a copy node
+    * included, so an identity comparison later in the operation finds it.
+    * `undefined` when no reference can be formed. Outside an operation the
+    * nodes are built ones and this is the `ReferenceBuilder`'s answer as is.
+    *
+    * With `tier: 'own'` the `$refText` is the target's own name as
+    * `toOwnReference` gives it, read off `target` itself, so a name the
+    * operation edited is the one written; the builder is the target's
+    * language's, which a copy node, having no `$document`, would not otherwise
+    * reach. `source` plays no part in that tier.
+    *
+    * By default it is `getReferenceName` from `source`'s context, with the
+    * builder of `source`'s language, since `$refText` encoding follows the
+    * grammar writing it. That call reads both nodes' projects, to pick the
+    * qualification and to refuse a reference across projects the target's is
+    * not visible to, and a copy node has none; so it is asked about the built
+    * target, which names a target as built, before any rename in the
+    * operation, and about {@link builtContextOf} the source. A target the
+    * operation created has no built node, and is asked about without a
+    * project.
+    */
+   referenceTo<T extends AstNode>(target: T, source?: AstNode, options: { readonly tier?: 'own' } = {}): Reference<T> | undefined {
+      const refText =
+         options.tier === 'own'
+            ? this.languageServicesFor(target)?.references.ReferenceBuilder.toOwnReference(target)?.$refText
+            : this.languageServicesFor(source ?? target)?.references.ReferenceBuilder.getReferenceName(
+                 this.builtNodeOf(target),
+                 source === undefined ? undefined : this.builtContextOf(source)
+              );
+      return refText === undefined ? undefined : { ref: target, $refText: refText };
+   }
+
+   /**
+    * The built node of `node`, or of its nearest container that has one: a
+    * node the operation created has no built node, but its container's
+    * document and project are its own.
+    */
+   protected builtContextOf(node: AstNode): AstNode {
+      const operation = openOperationOf(this);
+      for (let current: AstNode | undefined = node; current; current = current.$container) {
+         const built: AstNode = this.builtNodeOf(current);
+         if (built !== current || operation?.workingUriOf(current) === undefined) {
+            return built;
+         }
+      }
+      return node;
+   }
+
+   /**
+    * Take `root`, which a write of this state's own produced, as the source
+    * root; during an operation the operation takes it and captures it when it
+    * ends.
+    */
+   protected captureWrittenRoot(root: TRoot): void {
+      const operation = openOperationOf(this);
+      if (operation) {
+         operation.recordWrittenRoot(root);
+      } else {
+         this.setSourceRoot(this._sourceUri, root);
+      }
+   }
+
+   /**
+    * Resync after a write whose reconcile dropped the edit: during an
+    * operation the operation undoes its side effects, pushes nothing, and
+    * captures the document's current root when it ends.
+    */
+   protected writeDropped(): void {
+      const operation = openOperationOf(this);
+      if (operation) {
+         operation.recordDropped(this.sharedServices.model.ModelService.getDocument(this._sourceUri)?.parseResult.value);
+      } else {
+         this.refreshSourceRoot();
+      }
+   }
+
+   /**
+    * Whether `node` belongs to the root its document is built to now, or to no
+    * document; a root a rebuild replaced holds only stale nodes.
+    */
+   protected isCurrentBuiltNode(node: AstNode): boolean {
+      const root = AstUtils.findRootNode(node);
+      const document = root.$document;
+      return (
+         document === undefined || this.sharedServices.model.ModelService.getDocument(document.uri.toString())?.parseResult.value === root
+      );
    }
 
    /**
@@ -222,7 +419,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * the only defensible answer.
     */
    languageServicesFor(target: LanguageTarget | undefined): ServerLanguageServices | undefined {
-      return this.sharedServices.ServiceRegistry.getServicesFor(target) ?? this.diagramLanguage;
+      // A copy node has no `$document`; without its copy's URI it routes to the diagram's language.
+      const workingUri = isAstNode(target) ? workingUriOfCopy(target) : undefined;
+      return this.sharedServices.ServiceRegistry.getServicesFor(workingUri ?? target) ?? this.diagramLanguage;
    }
 
    /**
@@ -280,18 +479,18 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       return this.tracer;
    }
 
-   /** URI-tagged once {@link setSourceRoot} has run; the class-tagged injected {@link baseTracer} before that. */
+   /** URI-tagged once a source root is captured; the class-tagged injected {@link baseTracer} before that. */
    get tracer(): Tracer {
       return this._tracer ?? this.baseTracer;
    }
 
    /**
-    * Model version of the root the last {@link setSourceRoot} call captured,
+    * Model version of the root the last {@link captureSourceRoot} took,
     * frozen until the next one.
     *
-    * Threaded by `HydraniumGlspRecordingCommand` into
-    * {@link updateSourceModel} so the downstream session `update` / `save`
-    * gates against what the command was authored on. See
+    * The base an operation's write is gated on, taken when the operation
+    * opens; nothing captures during an operation, so it is the version of the
+    * root the operation's copies were made from. See
     * `@hydranium/protocol#ConflictError` for the detection contract.
     *
     * **This, not a number read at write time, is what a write must be gated
@@ -341,7 +540,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
          return;
       }
       const added = !this._secondaryVersions.has(uri);
-      this._secondaryVersions.set(uri, this.readModelVersion(uri));
+      const key = this.workingKey(uri);
+      // During an operation, the root the operation copied or first reached, not a later build's.
+      const root = (openOperationOf(this) ? this.capturedRoots.get(key) : undefined) ?? this.readBuiltRoot(uri);
+      this.recordSecondary(uri, root);
       if (added) {
          this.secondaryUrisChangedEmitter.fire();
       }
@@ -362,7 +564,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /**
     * Fires whenever the secondary write set gains or loses a URI — never when a
     * tracked document's model version is merely refreshed, which happens on
-    * every {@link setSourceRoot} and changes nothing a subscriber cares about.
+    * every {@link captureSourceRoot} and changes nothing a subscriber cares about.
     *
     * **This exists so no caller has to know when the set can change.** The set is
     * usually discovered rather than known, and the discovery point is an
@@ -450,7 +652,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /**
     * The base version of a write of `uri`: {@link baseVersion} for the primary,
     * the version taken at {@link trackSecondaryDocument} (refreshed by
-    * {@link setSourceRoot}) for a secondary, `undefined` for anything untracked.
+    * {@link captureSourceRoot}) for a secondary, `undefined` for anything untracked.
     *
     * `undefined` rather than v0 for an untracked URI deliberately: `0` is a real
     * version meaning "present but never edited", so collapsing the two would let
@@ -463,30 +665,39 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       return this._secondaryVersions.get(uri);
    }
 
-   /**
-    * The `ModelLedger` version of the document's current root, looked up through
-    * the model service's canonicalizing gateway so a symlinked URI does not strand
-    * without one. `UNRECORDED_VERSION`, which no write matches, for a URI with no
-    * parsed document: the store counts a file it has not built at `0`, and so does
-    * the placeholder the builder registers before its parse, and a write based on
-    * `0` overwrites text this state never read.
-    *
-    * Call this where the source root is read. Called later, it answers for the root
-    * a later build put there, and a write based on it passes the gate over edits the
-    * source root never saw.
-    */
-   protected readModelVersion(uri: string): ModelVersion {
-      const document = this.sharedServices.model.ModelService.getDocument(uri);
-      const ledger = this.sharedServices.workspace.ModelLedger;
-      const root = document?.parseResult.value;
-      return root && !ledger.isPlaceholder(root) ? ledger.versionOf(root) : UNRECORDED_VERSION;
+   /** Re-take every registered secondary's built root and the model version of that root. */
+   protected refreshSecondaryVersions(): void {
+      this.capturedRoots.clear();
+      for (const uri of [...this._secondaryVersions.keys()]) {
+         this.recordSecondary(uri, this.readBuiltRoot(uri));
+      }
    }
 
-   /** Re-take every registered secondary's model version from its built root. */
-   protected refreshSecondaryVersions(): void {
-      for (const uri of [...this._secondaryVersions.keys()]) {
-         this._secondaryVersions.set(uri, this.readModelVersion(uri));
+   /**
+    * The built root of `uri`, looked up through the model service's
+    * canonicalizing gateway so a symlinked URI does not strand without one;
+    * `undefined` for a URI with no parsed document, whose version is then
+    * `UNRECORDED_VERSION`, which no write matches. The store counts a file it
+    * has not built at `0`, and so does the placeholder the builder registers
+    * before its parse, and a write based on `0` overwrites text this state
+    * never read.
+    */
+   protected readBuiltRoot(uri: string): AstNode | undefined {
+      const root = this.sharedServices.model.ModelService.getDocument(uri)?.parseResult.value;
+      return root && !this.sharedServices.workspace.ModelLedger.isPlaceholder(root) ? root : undefined;
+   }
+
+   /** Take `root` as the secondary `uri` was read at, and its version, `UNRECORDED_VERSION` without one. */
+   protected recordSecondary(uri: string, root: AstNode | undefined): void {
+      if (root !== undefined) {
+         this.capturedRoots.set(this.workingKey(uri), root);
       }
+      this._secondaryVersions.set(uri, root ? this.sharedServices.workspace.ModelLedger.versionOf(root) : UNRECORDED_VERSION);
+   }
+
+   /** The root the secondary `uri` was read at; see {@link capturedRoots}. */
+   protected capturedRootOf(uri: string): AstNode | undefined {
+      return this.capturedRoots.get(this.workingKey(uri));
    }
 
    /**
@@ -497,7 +708,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * handlers) must see the root the freshly built document carries.
     */
    protected refreshSourceRoot(): void {
-      if (!this._sourceUri) {
+      // The operation captures when it ends.
+      if (!this._sourceUri || openOperationOf(this)) {
          return;
       }
       const document = this.sharedServices.model.ModelService.getDocument(this._sourceUri);
@@ -518,11 +730,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * read. The version is read in the tick the text is, so a write based on it
     * conflicts with any edit made after.
     *
-    * **Parsed afresh, never the built root.** Operation handlers edit the
-    * built root in place, so until a rebuild replaces it, it already holds
-    * the edit being reconciled, and replaying the edit onto it applies it
-    * twice. The root is parsed, not linked: an encoder hook reading a
-    * reference's `ref` sees `undefined` on it.
+    * **Parsed afresh, never the built root.** The built root can lag the
+    * store, and a root behind the text it is versioned with makes the replay
+    * drop the edits it lacks. The root is parsed, not linked: an encoder hook
+    * reading a reference's `ref` sees `undefined` on it.
     */
    protected async readCurrentRoot(uri: string): Promise<{ root: AstNode; version: ModelVersion } | undefined> {
       const modelService = this.sharedServices.model.ModelService;
@@ -615,11 +826,13 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * Persist a new source-model representation back to the document store
-    * after an interactive edit. Adopters wire this against their
-    * language-services facade. The `HydraniumGlspRecordingCommand` calls
-    * it from its `postChange` hook to commit the edited AST back to the
-    * document store.
+    * Persist a new source-model representation back to the document store after
+    * an interactive edit. Adopters wire this against their language-services
+    * facade. An operation calls it once, with the model projected from its
+    * copies; an undo or redo calls it with the transition resolved onto the
+    * current model. An implementation takes the root it wrote through
+    * {@link captureWrittenRoot}, which during an operation leaves the capture
+    * to the operation.
     *
     * Adopters whose source model is a structured transfer projection
     * round-tripped through `ModelService` should extend
@@ -640,13 +853,11 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * `JsonModelState` shape meet the framework state via structural
     * intersection at the recording-command call site.
     *
-    * `baseVersion` is the model version taken at command start by
-    * `HydraniumGlspRecordingCommand.execute`. Adopters that write through the
-    * diagram's session forward it as the args' `baseVersion` field; adopters whose
-    * write path doesn't go through the session ignore it.
-    * `'any'` when the writer is not the recording command (an external
-    * storage refresh, an undo replaying a recorded patch), which is a write
-    * authored against no particular server version.
+    * `baseVersion` is what the write was authored against: an operation's
+    * write, and an undo's or redo's, passes the {@link baseVersion} it read
+    * the model at. Adopters that write through the diagram's session forward
+    * it as the args' `baseVersion` field; adopters whose write path doesn't go
+    * through the session ignore it.
     *
     * **Optional, and every implementation must default it to {@link baseVersion}
     * rather than to `'any'`.** Optional is forced: GLSP's `JsonModelState`

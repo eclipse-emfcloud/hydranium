@@ -550,10 +550,10 @@ DI container (not `(services, options)`), so they carry no `logName` field.
 `HydraniumTypes.Tracer` (`baseTracer`) — the binding (`start-glsp-server` /
 `glsp-harness`) labels it with the runtime subclass name (e.g. `OrderFlowGlspState`)
 via `getRequestParentName` — and derives the URI-tagged `_tracer` in
-`setSourceRoot` (`this._tracer = this.baseTracer.withUri(uri)`); the
+`captureSourceRoot` (`this._tracer = this.baseTracer.withUri(uri)`); the
 `tracer`/`logger` getters fall back to the injected base before then, so logging
 is never `undefined` (no `@postConstruct` needed). Adopters wanting a different
-label override `setSourceRoot` and derive via `this.baseTracer.for('Name').withUri(uri)`.
+label override `captureSourceRoot` and derive via `this.baseTracer.for('Name').withUri(uri)`.
 
 **Tests** fill a fake services tree's `Tracer` slot with `makeNoopTracer()` (or
 `makeCapturingTracer()` to assert on emitted output) from

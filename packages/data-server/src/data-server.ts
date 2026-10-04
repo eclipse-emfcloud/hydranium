@@ -946,7 +946,7 @@ export class DataServer<
       if (!resolved) {
          return undefined;
       }
-      // The caller's claim about the target's type; see `ReferenceServerProtocol.resolveReference`.
+      // `TElement` is the caller's claim about the target's type; nothing checks it.
       return { ...resolved.candidate, element: this.encoder.toTransfer(resolved.node) as TElement };
    }
 

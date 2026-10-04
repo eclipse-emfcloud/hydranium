@@ -171,13 +171,15 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * invariant.
  *
  * **The settled-root invariant.** Every {@link AbstractHydraniumGlspState.setSourceRoot}
- * the framework performs captures a root that has reached
+ * the storage performs captures a root that has reached
  * `IntegrityService.SettledState` (post-`Linked`, references indexed, on-build
- * integrity rules applied). The GModel factory therefore always walks a fully
- * linked + reprojected AST. The flow never captures off a transient mid-rebuild
- * snapshot — notably it re-`settled()`s in the resubmit path rather than trusting
- * the `onModelUpdated` event's document, which can arrive while a re-entered
- * document is still being rebuilt.
+ * integrity rules applied). The end of an operation captures the root its
+ * write produced, settled or not, and the operation's own submit waits for the
+ * settled one through `ready()`. The GModel factory therefore always walks a
+ * fully linked + reprojected AST. The storage never captures off a transient
+ * mid-rebuild snapshot — notably it re-`settled()`s in the resubmit path rather
+ * than trusting the `onModelUpdated` event's document, which can arrive while a
+ * re-entered document is still being rebuilt.
  *
  * Adopters with richer needs override the seams ({@link isStructurallyBroken},
  * {@link parseErrorStatus}, {@link onSourceModelSettled}) rather than the
@@ -455,7 +457,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * with no diagnostics yet.
     */
    protected async captureSettledRoot(rootUri: string, document: AstDocument<AstNode, never>): Promise<void> {
-      this.state.setSourceRoot(rootUri, document.root as TRoot);
+      await this.state.runExclusive(() => this.state.setSourceRoot(rootUri, document.root as TRoot));
       this.refreshParseErrorStatus(document);
       const actions = this.onSourceModelSettled(document);
       if (actions.length > 0) {
@@ -701,12 +703,29 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * cannot be relied on to have any: a document driven to the landmark arrives
     * pre-validation, and this path re-settles precisely to escape a transient
     * mid-rebuild snapshot.
+    *
+    * The settle is awaited outside {@link AbstractHydraniumGlspState.runExclusive},
+    * so an operation does not wait on a build; the capture and the render run
+    * inside it, the render's own wait for the document included, since an
+    * operation opened between that wait and the GModel build would be rendered.
     */
    protected async doUpdateAndSubmit(rootUri: string, eventDocument: AstDocument<AstNode>): Promise<Action[]> {
       // Settle-gate the capture: never setSourceRoot off the event's possibly-transient
       // snapshot — the event can arrive while a re-entered document is mid-rebuild.
       const document = await this.sharedServices.model.ModelService.settled(rootUri);
-      this.state.setSourceRoot(rootUri, document.root as TRoot);
+      return this.state.runExclusive(() => this.captureAndSubmit(rootUri, document.root as TRoot, eventDocument));
+   }
+
+   /**
+    * The part of {@link doUpdateAndSubmit} that runs inside the boundary.
+    * `root` is not captured when the state already holds a later one: an
+    * operation that ended while the settle was awaited captured its own
+    * write, which `root` predates.
+    */
+   protected async captureAndSubmit(rootUri: string, root: TRoot, eventDocument: AstDocument<AstNode>): Promise<Action[]> {
+      if (this.sharedServices.workspace.ModelLedger.versionOf(root) >= this.state.version) {
+         this.state.setSourceRoot(rootUri, root);
+      }
       const broken = this.refreshParseErrorStatus(eventDocument);
 
       // Skip the external submit until the initial requestModel completes; submitting too

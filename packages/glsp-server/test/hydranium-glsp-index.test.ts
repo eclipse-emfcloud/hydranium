@@ -302,6 +302,33 @@ describe('HydraniumGlspIndex', () => {
       });
    });
 
+   describe('indexSemanticElement aliases', () => {
+      it('keeps an alias across reindexSemanticElements, moves it with remapSemanticAliases, and drops it on undefined', () => {
+         const node = makeAstNode();
+         const moved = makeAstNode();
+         const { index } = createIndex(new Map());
+         index.indexSemanticElement('alias', node);
+         index.reindexSemanticElements({ $type: 'Root' } as AstNode, 'file:///m/diagram.a');
+         const kept = index.findSemanticElement('alias') === node;
+         index.remapSemanticAliases(() => moved);
+         const remapped = index.findSemanticElement('alias') === moved;
+         index.remapSemanticAliases(() => undefined);
+
+         expect({ kept, remapped, dropped: index.findSemanticElement('alias') }).toEqual({
+            kept: true,
+            remapped: true,
+            dropped: undefined
+         });
+      });
+
+      it('forgets aliases on indexSourceRoot', () => {
+         const { index } = createIndex(new Map());
+         index.indexSemanticElement('alias', makeAstNode());
+         index.indexSourceRoot({ $type: 'Root' } as AstNode);
+         expect(index.findSemanticElement('alias')).toBeUndefined();
+      });
+   });
+
    describe('registerElementId / findElementIds', () => {
       // Keyed by the element's stable id, so the represented node must resolve one.
       it('returns the ids registered as representing an element', () => {
@@ -339,6 +366,18 @@ describe('HydraniumGlspIndex', () => {
          index.registerElementId(node, 'gmodel-1');
          index.indexSourceRoot({ $type: 'Root' } as AstNode);
          expect(index.findElementIds(node)).toEqual([]);
+      });
+
+      it('keeps reverse registrations and rendered documents across reindexSemanticElements', () => {
+         const node = makeAstNode();
+         const { index } = createIndex(new Map([[node, 'elementStableId']]));
+         index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.a'));
+         index.registerElementId(node, 'gmodel-1');
+         index.reindexSemanticElements({ $type: 'Root' } as AstNode, 'file:///m/diagram.a');
+         expect({ ids: index.findElementIds(node), documents: [...index.renderedDocumentUris()].sort() }).toEqual({
+            ids: ['gmodel-1'],
+            documents: ['file:///m/diagram.a', 'file:///m/test.a']
+         });
       });
    });
 

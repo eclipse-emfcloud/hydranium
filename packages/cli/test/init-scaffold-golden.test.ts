@@ -75,9 +75,10 @@ describe('init scaffold golden', () => {
 
    /**
     * The three-head shape, pinned because the GLSP head is the largest thing
-    * `init` emits — eight files of DI wiring, type ids, an AST→GModel walk and
-    * the starter operation handler — and because it is the only golden where the
-    * derived dependency block carries the `@eclipse-glsp/*` set.
+    * `init` emits — DI wiring, type ids, an AST→GModel walk, the starter
+    * operation handler and the test that runs it — and because it is the only
+    * golden where the derived dependency block carries the `@eclipse-glsp/*`
+    * set.
     *
     * Single-grammar deliberately: with one grammar the diagram is derived rather
     * than marked, which is the shape a new adopter starting from `--heads

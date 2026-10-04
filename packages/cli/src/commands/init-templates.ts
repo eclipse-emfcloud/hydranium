@@ -1823,27 +1823,28 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
 // read-only is a deletion the compiler checks, while read-only → editable is
 // authoring against a seam you have not used yet.
 //
-// **It composes TEXT rather than mutating the AST.** The source model of
-// \`FullTextHydraniumGlspState\` is the document text, and reading it back through
-// \`state.sourceModel\` serialises the AST through the per-URI \`Serializer\`, which
-// this scaffold does not bind — so that getter throws until you do. Appending a
-// declaration to the text the parser last read needs no serializer, which is what
-// makes a scaffolded diagram editable on day one. Bind a \`Serializer\` at
-// \`services.serializer.Serializer\` and this becomes a
-// \`HydraniumGlspRecordingCommand\` over \`state.sourceModel\` instead — the same
-// binding the diagram's own save action needs.
+// **It edits the operation's working copy.** A handler runs inside an operation,
+// where \`sourceRoot\` is a copy of the built root: the recording command's
+// runnable appends to the copy, and the operation writes the copy's text through
+// the grammar's \`Serializer\` once, gated on the version the copy was made at,
+// with undo and redo replaying that one change. A command that writes the
+// document itself instead reads no text off the copy, which has no \`$document\`,
+// and the operation's own write then overwrites it.
 //
 // **The drop location is discarded.** \`needsClientLayout\` is \`true\` and the
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
 // Like \`types.ts\`, \`gmodel-factory.ts\` and \`diagram-configuration.ts\`, this file
-// knows the starter grammar's concrete syntax — the \`node\` keyword below is that
-// grammar's. Replacing the grammar means replacing these four together.
+// knows the starter grammar's shape — the \`nodes\` list and the \`__NODE_RULE__\`
+// it holds. Replacing the grammar means replacing these four together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
+import { appendChild } from '@hydranium/core';
+import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
 import { findNextUnique } from '@hydranium/protocol';
 import { injectable } from 'inversify';
+import type { __NODE_RULE__ } from '../../language-server/ast.js';
 import { ${upper}_NODE_TYPE } from './types.js';
 import type { __GRAMMAR__GlspState } from './state.js';
 
@@ -1862,34 +1863,14 @@ export class __GRAMMAR__CreateNodeOperationHandler extends JsonCreateNodeOperati
       if (!this.elementTypeIds.includes(operation.elementTypeId)) {
          return undefined;
       }
-      const state = this.modelState;
-      const before = this.documentText();
-      const after = this.withNode(
-         before,
-         findNextUnique(
+      return new HydraniumGlspRecordingCommand(this.modelState, this.label, () => {
+         const root = this.modelState.sourceRoot;
+         const name = findNextUnique(
             NODE_NAME_STEM,
-            state.sourceRoot.nodes.map(node => node.name)
-         )
-      );
-      // Whole-document undo, which is all a full-text source model can offer: it
-      // has exactly one field, so there is nothing to merge a concurrent edit into.
-      return {
-         execute: () => state.updateSourceModel({ text: after }),
-         undo: () => state.updateSourceModel({ text: before }),
-         redo: () => state.updateSourceModel({ text: after })
-      };
-   }
-
-   /** The text the captured source root was parsed from — the baseline an edit appends to. */
-   protected documentText(): string {
-      return this.modelState.sourceRoot.$document?.textDocument.getText() ?? '';
-   }
-
-   /** \`text\` with one more node declaration, under exactly one trailing newline. */
-   protected withNode(text: string, name: string): string {
-      const body = text.trimEnd();
-      const declaration = \`node \${name}\`;
-      return body.length === 0 ? \`\${declaration}\\n\` : \`\${body}\\n\${declaration}\\n\`;
+            root.nodes.map(node => node.name)
+         );
+         appendChild(root, 'nodes', root.nodes, { $type: '__NODE_RULE__', name } as __NODE_RULE__);
+      });
    }
 }
 `;
@@ -1987,6 +1968,76 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
 }
 `;
 
+   const diagramTest = `// The starter create-node handler, run the way a client runs it: an in-process
+// GLSP server opens a document, a create-node operation adds a node, and an undo
+// and a redo take it out and put it back. Every step must keep the nodes the
+// document already had, and its comments: the diagram writes the document from
+// its AST, which carries none.
+
+import 'reflect-metadata';
+import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
+import { initializeWorkspaceProgrammatically } from '@hydranium/core';
+import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
+import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
+import { waitFor } from '@hydranium/protocol/testing';
+import { afterEach, describe, expect, it } from 'vitest';
+import { __GRAMMAR__DiagramModule } from '../src/glsp/__GRAMMAR_ID__/diagram-module.js';
+import type { __GRAMMAR__GlspState } from '../src/glsp/__GRAMMAR_ID__/state.js';
+import { ${upper}_DIAGRAM_TYPE, ${upper}_NODE_TYPE } from '../src/glsp/__GRAMMAR_ID__/types.js';
+import { createServices } from '../src/services.js';
+
+let workspace: ScratchWorkspace | undefined;
+let diagram: GlspHarness<__GRAMMAR__GlspState> | undefined;
+
+afterEach(() => {
+   diagram?.dispose();
+   workspace?.dispose();
+   diagram = undefined;
+   workspace = undefined;
+});
+
+/** Send \`action\` and wait for the dirty state the server answers it with, which it sends once the edit is written. */
+async function send(harness: GlspHarness<__GRAMMAR__GlspState>, action: Action, reason: string): Promise<void> {
+   const before = harness.actions.length;
+   harness.dispatch(action);
+   await waitFor(() => harness.actions.slice(before).some(sent => SetDirtyStateAction.is(sent) && sent.reason === reason), {
+      message: \`no '\${reason}' dirty state\`
+   });
+}
+
+describe('__GRAMMAR__ diagram', () => {
+   it('creates a node after the existing ones, keeping their comments, and undoes and redoes it', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const original = '// keep this comment\\nnode first -> second\\n// about second\\nnode second';
+      const file = workspace.write('model.__EXTENSION__', original);
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: ${upper}_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+      const uri = workspace.uri('model.__EXTENSION__');
+      const text = (): string | undefined => shared.workspace.TextDocuments.get(uri)?.getText();
+
+      await send(diagram, CreateNodeOperation.create(${upper}_NODE_TYPE), 'operation');
+      const created = text();
+      await send(diagram, UndoAction.create(), 'undo');
+      const undone = text();
+      await send(diagram, RedoAction.create(), 'redo');
+
+      expect({ created, undone, redone: text() }).toEqual({
+         created: \`\${original}\\nnode Node\`,
+         undone: original,
+         redone: \`\${original}\\nnode Node\`
+      });
+   });
+});
+`;
+
    return [
       { path: `${dir}/types.ts`, content: render(types) },
       { path: `${dir}/state.ts`, content: render(state) },
@@ -1995,7 +2046,8 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
       { path: `${dir}/gmodel-factory.ts`, content: render(factory) },
       { path: `${dir}/diagram-configuration.ts`, content: render(configuration) },
       { path: `${dir}/create-node-operation-handler.ts`, content: render(createHandler) },
-      { path: `${dir}/diagram-module.ts`, content: render(module) }
+      { path: `${dir}/diagram-module.ts`, content: render(module) },
+      { path: `test/${grammar.grammarId}-diagram.test.ts`, content: render(diagramTest) }
    ];
 }
 

@@ -19,10 +19,11 @@
  * **Every shape is compiled, not just the smallest.** The head set and the
  * grammar count each select different templates, and the ones a single-grammar
  * `lsp,data` scaffold never reaches are the intricate ones: the GLSP head emits
- * eight further files of DI wiring, a type registry, an AST→GModel walk and the
- * starter operation handler, and the multi-grammar shape is the only one emitting
- * the shared terminal fragment and the `additionalLanguages` composition. Covering only the simplest case
- * would aim this tier away from the code most likely to break.
+ * further files of DI wiring, a type registry, an AST→GModel walk, the starter
+ * operation handler and the test that runs it, and the multi-grammar shape is
+ * the only one emitting the shared terminal fragment and the
+ * `additionalLanguages` composition. Covering only the simplest case would aim
+ * this tier away from the code most likely to break.
  *
  * Each case scaffolds in `--monorepo` mode, which emits the same TypeScript as
  * the standalone shape and additionally exercises what a rendered-template diff
@@ -59,7 +60,7 @@ interface CompileCase {
 
 const CASES: readonly CompileCase[] = [
    { label: 'the single-grammar default', name: 'Bookshelf', grammars: [{ name: 'Bookshelf', extensions: ['book'] }] },
-   // The largest emission: eight further files the other shapes never reach.
+   // The largest emission: further files the other shapes never reach.
    { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'] },
    // The only shape emitting common.langium and the additionalLanguages wiring.
    {
@@ -146,6 +147,15 @@ describe('the emitted scaffold compiles', () => {
             expect(() =>
                runTool(targetDir, 'node_modules/typescript/bin/tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.test.json')])
             ).not.toThrow();
+
+            // The diagram tests run the starter operation handler through an
+            // in-process GLSP server; the type check above cannot see what it
+            // writes to the document.
+            const diagramTests = fs.readdirSync(path.join(targetDir, 'test')).filter(file => file.endsWith('-diagram.test.ts'));
+            expect(diagramTests.length > 0).toBe(heads?.includes('glsp') ?? false);
+            for (const diagramTest of diagramTests) {
+               expect(() => runTool(targetDir, 'node_modules/vitest/vitest.mjs', ['run', `test/${diagramTest}`])).not.toThrow();
+            }
          } finally {
             // In `finally`, so a failing case cannot leave a directory that
             // makes the NEXT run fail for a different and misleading reason.

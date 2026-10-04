@@ -17,9 +17,13 @@ export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<
 }
 
 /**
- * {@link reconcileWrite} for a diagram edit: logs the outcome, resyncs through
- * `onConflictDropped` when the edit is dropped, and forces the edit based on
- * `'any'` when the refetch is unavailable.
+ * {@link reconcileWrite} for a diagram edit: logs the outcome, and resyncs
+ * through `onConflictDropped` when the edit is dropped.
+ *
+ * A conflict whose refetch is unavailable, the current text not readable to
+ * reconcile against, throws the `ConflictError` the write raised: forcing the
+ * edit would overwrite text the diagram never saw. An operation then rolls
+ * back and an undo or redo fails, as for any write that throws.
  */
 export async function reconcileSourceModelWrite<TModel extends object>(
    model: TModel,
@@ -31,19 +35,17 @@ export async function reconcileSourceModelWrite<TModel extends object>(
       refetch: () => hooks.refetch(),
       base: hooks.base,
       conflictResolver: hooks.conflictResolver,
-      maxWrites: hooks.maxWrites,
-      onUnavailable: async (candidate, conflict) => {
-         hooks.logger.warn(
-            `updateSourceModel refetch unavailable (model v${conflict.baseVersion} / text v${conflict.actualVersion}); forcing without version`
-         );
-         await hooks.persist(candidate, 'any');
-      }
+      maxWrites: hooks.maxWrites
    });
-   if (outcome.status === 'persisted' || outcome.status === 'unavailable') {
+   if (outcome.status === 'persisted') {
       return;
    }
    const { conflict, writes } = outcome;
    const versions = `model v${conflict.baseVersion} / text v${conflict.actualVersion}`;
+   if (outcome.status === 'unavailable') {
+      hooks.logger.warn(`updateSourceModel refetch unavailable (${versions}); the diagram edit fails rather than overwrite unread text`);
+      throw conflict;
+   }
    switch (outcome.status) {
       case 'merged':
          hooks.logger.debug(`updateSourceModel merged (${versions}); landed on write ${writes}`);

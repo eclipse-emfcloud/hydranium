@@ -65,6 +65,9 @@ interface FakeRecordingState {
    tracer: unknown;
    conflictResolver: ConflictResolver;
    updateSourceModel(model: TestSourceModel, baseVersion?: BaseVersion): Promise<void>;
+   runExclusive<T>(run: () => T | Promise<T>): Promise<T>;
+   index: { reindexSemanticElements(): void; remapSemanticAliases(): void };
+   sourceRoot: undefined;
 }
 
 function makeFakeState(
@@ -83,6 +86,10 @@ function makeFakeState(
       logger: observability,
       tracer: observability,
       conflictResolver,
+      // No AST: the command edits the projection itself, and the operation it opens has no root to copy.
+      runExclusive: async run => run(),
+      index: { reindexSemanticElements: () => undefined, remapSemanticAliases: () => undefined },
+      sourceRoot: undefined,
       async updateSourceModel(model: TestSourceModel, baseVersion?: BaseVersion): Promise<void> {
          state.updateCalls.push({ model: JSON.parse(JSON.stringify(model)) as TestSourceModel, baseVersion });
          state.sourceModel = model;
@@ -199,15 +206,12 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(redoBridgeCalls).toBe(1);
    });
 
-   it('undo without a recorded patch is a no-op (no postChange fired)', async () => {
+   it('writes nothing on undo when it never executed', async () => {
       const log = makeLog();
       const state = makeFakeState(log);
-      const command = makeCommand(state, 'No-op', () => {
-         // empty body — no recorded patch since execute() still snapshots and computes
-         // an empty patch when before/after are identical
+      const command = makeCommand(state, 'Never executed', () => {
+         state.sourceModel.nodes.push({ id: 'N1', label: 'first' });
       });
-      // Skip execute — manually clear undoPatch to simulate a never-executed command
-      (command as unknown as { undoPatch?: unknown }).undoPatch = undefined;
 
       await command.undo();
 
@@ -306,7 +310,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.sourceModel.nodes[0].label).toBe('first');
    });
 
-   it('runs undo/redo postChange based on any version — only a fresh execute carries a version', async () => {
+   it('gates the execute, the undo and the redo on the base version the model was read at', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 5);
       const command = makeCommand(state, 'Add node', () => {
@@ -317,11 +321,6 @@ describe('HydraniumGlspRecordingCommand', () => {
       await command.undo();
       await command.redo();
 
-      // execute → carries the v5 model version; undo and redo run after execute
-      // completes (activeBaseVersion reset) so they fall through as 'any'.
-      expect(state.updateCalls).toHaveLength(3);
-      expect(state.updateCalls[0].baseVersion).toBe(5);
-      expect(state.updateCalls[1].baseVersion).toBe('any');
-      expect(state.updateCalls[2].baseVersion).toBe('any');
+      expect(state.updateCalls.map(call => call.baseVersion)).toEqual([5, 5, 5]);
    });
 });

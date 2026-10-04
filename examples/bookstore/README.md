@@ -73,15 +73,15 @@ Deleting that file and its registration gives back a read-only viewer; no type
 hint changes either way, because creation is offered through the tool palette
 rather than through a hint.
 
-The handler composes text rather than round-tripping the AST, which is the
-smaller thing to read and does not depend on which serializer you kept. The
-full-text source model does round-trip: it serialises through the per-URI
-`Serializer`, which `init` emits as
-`server/src/language-server/bookstore-serializer.ts`, so `state.sourceModel` and
-a `SaveModelAction` reach a real emitter rather than the framework's throwing
-default. Either way a diagram edit reaches the file the way a real host works:
-the change lands in the text document, the language client receives it as a
-`workspace/applyEdit`, and the editor saves it.
+The handler appends the node to the operation's working copy of the AST, and
+the operation writes the copy's text once through the per-URI `Serializer`,
+which `init` emits as `server/src/language-server/bookstore-serializer.ts`; undo
+and redo replay that one change. `server/test/bookstore-diagram.test.ts` runs
+the handler through an in-process GLSP server and checks the document keeps its
+existing nodes across the create, the undo and the redo. A diagram edit reaches
+the file the way a real host works: the change lands in the text document, the
+language client receives it as a `workspace/applyEdit`, and the editor saves
+it.
 
 ## Why it is also a provenance target
 

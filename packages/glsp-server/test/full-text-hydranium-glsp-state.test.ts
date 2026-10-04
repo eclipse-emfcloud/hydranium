@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
-import { type AstNode } from '@hydranium/langium';
+import { type AstNode, type LangiumDocument } from '@hydranium/langium';
 import { type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import { type BaseVersion, asModelVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
@@ -19,6 +19,7 @@ import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspRecordingCommand, type HydraniumGlspRecordingState } from '../src/command/hydranium-glsp-recording-command.js';
+import { HydraniumGlspOperationCommand, runOperation } from '../src/command/hydranium-glsp-operation-command.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -64,6 +65,8 @@ interface Harness {
     * correctly refuses to redo.
     */
    onUpdate?: (text: string) => void;
+   /** The trivia service the stub language binds; absent unless a test sets one. */
+   trivia?: { extract(document: unknown): unknown; apply(text: string, trivia: unknown): string };
 }
 
 @injectable()
@@ -103,12 +106,24 @@ function createState(harness: Harness): TestFullTextState {
       {
          languageId: 'test',
          fileExtensions: ['.a'],
-         services: { serializer: { Serializer: { serializeAst: (root: TestRoot) => harness.serialize(root) } } }
+         services: {
+            serializer: { Serializer: { serializeAst: (root: TestRoot) => harness.serialize(root) } },
+            trivia: {
+               get TriviaService(): unknown {
+                  return harness.trivia;
+               }
+            }
+         }
       }
    ]);
    const sharedServices = {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      workspace: { TextDocuments: { get: () => undefined }, LangiumDocuments: { getDocument: () => undefined }, ModelLedger: ledger },
+      workspace: {
+         TextDocuments: { get: () => undefined },
+         LangiumDocuments: { getDocument: () => undefined },
+         ModelLedger: ledger,
+         DocumentUriPolicy: { canonicalUri: (uri: string) => uri }
+      },
       ServiceRegistry: registry,
       model: {
          ModelService: {
@@ -271,17 +286,72 @@ describe('FullTextHydraniumGlspState', () => {
          ]);
       });
 
-      it('replays an undo ungated, since a recorded patch is authored against no server version', async () => {
+      it('gates an undo on the version of the root the operation wrote, which it resolves the transition onto', async () => {
          const { harness, setText } = makeTextHarness('element Before {}');
          harness.documentVersion = 7;
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', parsedAt(harness.documentVersion));
+         harness.nextUpdatedRoot = parsedAt(8);
 
          const command = recordOver(state, 'Rename element', () => setText('element After {}'));
          await command.execute();
          await command.undo();
 
-         expect(harness.updateCalls.map(call => call.baseVersion)).toEqual([7, 'any']);
+         expect(harness.updateCalls.map(call => call.baseVersion)).toEqual([7, 8]);
       });
+   });
+});
+
+describe('FullTextHydraniumGlspState under an operation', () => {
+   it('writes the copy once, gated on the version the operation opened at, and captures the written root when it ends', async () => {
+      const harness = makeHarness();
+      harness.documentVersion = 3;
+      const built = parsedAt(3);
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', built);
+      harness.nextUpdatedRoot = parsedAt(5);
+      let during: { copy: boolean; writes: number } | undefined;
+      const command = new HydraniumGlspRecordingCommand<FullTextSourceModel>(state, 'Edit', () => {
+         (state.sourceRoot as { label: string }).label = 'edited';
+         during = { copy: state.sourceRoot !== built, writes: harness.updateCalls.length };
+      });
+
+      await runOperation(new HydraniumGlspOperationCommand<FullTextSourceModel>(state), () => command);
+
+      expect({
+         during,
+         writes: harness.updateCalls.map(call => [call.model, call.baseVersion]),
+         builtLabel: built.label,
+         capturedVersion: state.version
+      }).toEqual({
+         during: { copy: true, writes: 0 },
+         writes: [['serialized:edited', asModelVersion(3)]],
+         builtLabel: 'r1',
+         capturedVersion: 5
+      });
+   });
+});
+
+describe('FullTextHydraniumGlspState source model', () => {
+   it('re-attaches the comments of the document the captured root was parsed from', async () => {
+      const harness = makeHarness();
+      const document = { uri: 'file:///a.a' };
+      const extracted: unknown[] = [];
+      harness.trivia = {
+         extract: from => {
+            extracted.push(from);
+            return '// kept';
+         },
+         apply: (text, trivia) => `${String(trivia)}\n${text}`
+      };
+      const state = createState(harness);
+      state.setSourceRoot(
+         'file:///a.a',
+         makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r1', $document: document as unknown as LangiumDocument })
+      );
+
+      const model = await state.sourceModel;
+
+      expect({ model, fromDocument: extracted[0] === document }).toEqual({ model: { text: '// kept\nserialized:r1' }, fromDocument: true });
    });
 });

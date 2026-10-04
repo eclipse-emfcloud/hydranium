@@ -30,8 +30,9 @@ export interface FullTextSourceModel {
  * nothing beyond narrowing `TRoot` and their index:
  * - {@link sourceModel} serialises the source root through the per-URI
  *   `serializer.Serializer` reached via `sharedServices.ServiceRegistry`
- *   (so multi-grammar workspaces route to the right serializer). `MaybePromise`
- *   because serialization may be async; the sync fast path is preserved.
+ *   (so multi-grammar workspaces route to the right serializer), keeping the
+ *   document's comments. `MaybePromise` because serialization may be async;
+ *   the sync fast path is preserved.
  * - {@link updateSourceModel} pushes the text back through the diagram's
  *   session (`update` accepts a raw text payload) and captures the re-parsed
  *   root, gated on the caller's `baseVersion`; it throws without a session.
@@ -46,14 +47,27 @@ export class FullTextHydraniumGlspState<TRoot extends AstNode>
    extends AbstractHydraniumGlspState<TRoot, FullTextSourceModel>
    implements JsonModelState<FullTextSourceModel>
 {
+   /**
+    * The source root serialised, with the comments of the built document the
+    * captured root was parsed from re-attached through the language's trivia
+    * service, as a structured write's text gets them. The serializer emits
+    * none, so without them every write, undo and redo would delete them.
+    */
    get sourceModel(): MaybePromise<FullTextSourceModel> {
-      const serializer = this.sharedServices.ServiceRegistry.getServices(URI.parse(this._sourceUri)).serializer.Serializer;
-      const text = serializer.serializeAst(this._sourceRoot);
-      return isPromiseLike(text) ? text.then(value => ({ text: value })) : { text };
+      const uri = URI.parse(this._sourceUri);
+      const services = this.sharedServices.ServiceRegistry.getServices(uri);
+      const trivia = services.trivia?.TriviaService;
+      const document = this._sourceRoot.$document;
+      const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
+      const withTrivia = (text: string): FullTextSourceModel => ({
+         text: trivia !== undefined && extracted !== undefined ? trivia.apply(text, extracted, uri) : text
+      });
+      const text = services.serializer.Serializer.serializeAst(this.sourceRoot);
+      return isPromiseLike(text) ? text.then(withTrivia) : withTrivia(text);
    }
 
    async updateSourceModel(model: FullTextSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
       const document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, baseVersion });
-      this.setSourceRoot(this._sourceUri, document.root as TRoot);
+      this.captureWrittenRoot(document.root as TRoot);
    }
 }
