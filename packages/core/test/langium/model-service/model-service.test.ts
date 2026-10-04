@@ -877,6 +877,33 @@ describe('ModelService rebuild and save', () => {
       expect(bundle.textDocuments.saves).toContainEqual({ uri: URI_A, clientId: 'editor-1' });
    });
 
+   it('save based on a numbered version persists the text its own update wrote', async () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      });
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
+
+      await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: asModelVersion(bundle.textDocuments.version(URI_A)) });
+
+      expect(bundle.fileSystem.writes).toContainEqual({ uri: URI_A, content: 'name: saved\n' });
+   });
+
+   it('persist answers once the text is written, even when the build after it is given up', async () => {
+      class GivenUpModelService extends DefaultModelService<FakeRoot> {
+         override ensureDocumentState(): Promise<never> {
+            return Promise.reject(new Error('build given up'));
+         }
+      }
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
+         modelService: services => new GivenUpModelService(services)
+      });
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
+
+      await expect(session.persist({ uri: URI_A, baseVersion: 'any' })).resolves.toBe(bundle.textDocuments.version(URI_A));
+      expect(bundle.fileSystem.writes.map(write => write.uri)).toContain(URI_A);
+   });
+
    it("persist writes another session's text as it is, under this session, without an update", async () => {
       const bundle = makeTestServices<FakeRoot>({
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
@@ -914,7 +941,7 @@ describe('ModelService rebuild and save', () => {
       const persisted = await persisting;
 
       expect(bundle.textDocuments.version(URI_A)).toBeGreaterThan(taken);
-      expect(persisted.persisted.version).toBe(taken);
+      expect(persisted).toBe(taken);
    });
 
    it('save and persist report the version the manager wrote, which a coalesced save takes from a newer one', async () => {
@@ -932,7 +959,7 @@ describe('ModelService rebuild and save', () => {
       const persisted = await session.persist({ uri: URI_A, baseVersion: 'any' });
       const saved = await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: 'any' });
 
-      expect(persisted.persisted.version).toBe(written);
+      expect(persisted).toBe(written);
       expect(saved.persisted.version).toBe(written);
    });
 

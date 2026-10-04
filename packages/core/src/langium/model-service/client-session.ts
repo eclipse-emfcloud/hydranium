@@ -19,13 +19,12 @@ import {
    type Tracer,
    type TransferElement
 } from '@hydranium/protocol';
-import { type AstNode, type DocumentBuilder, DocumentState, UriUtils } from '@hydranium/langium';
+import { type AstNode, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type AstDocument, type SavedAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
-import { IntegrityService } from '../integrity/integrity-service.js';
 import { type ServerSharedServices } from '../module.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type ModelService } from './model-service.js';
@@ -118,11 +117,11 @@ export interface ClientSession<
    save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
    /**
     * Persist the text the store holds for `args.uri` as it is, with no update
-    * and no serialisation, and resolve to the document as {@link save} does.
-    * The saved event names this session, also when another client wrote the
-    * text.
+    * and no serialisation. Resolves with the version of the text written, once
+    * it is on disk, without waiting for a build. The saved event names this
+    * session, also when another client wrote the text.
     */
-   persist(args: ClientSessionPersistArgs, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
+   persist(args: ClientSessionPersistArgs): Promise<TextVersion>;
    /** Close this session's open of `uri`, at once. A no-op when it does not have `uri` open. */
    close(uri: string): Promise<void>;
    /**
@@ -142,21 +141,6 @@ export interface ClientSession<
     * reason reverts such a document at once.
     */
    dispose(cause?: SessionEndCause): void;
-}
-
-/**
- * The phase a session write waits for before it answers: `Validated`, or
- * {@link IntegrityService.SettledState} when rebuilds do not validate, since
- * no build then reaches `Validated` and the wait would never end. Read from
- * `updateBuildOptions`, which every rebuild takes; a document a
- * `shouldValidate` override skips is the builder's to resolve.
- *
- * Waiting for the write's own build is not enough: a later write cancels it,
- * and the build that takes over validates the document after the answer was
- * taken.
- */
-function answerState(builder: DocumentBuilder): DocumentState {
-   return builder.updateBuildOptions.validation ? DocumentState.Validated : IntegrityService.SettledState;
 }
 
 /**
@@ -256,9 +240,9 @@ export class DefaultClientSession<
       return this.saveDocument(args, cancelToken);
    }
 
-   persist(args: ClientSessionPersistArgs, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>> {
+   persist(args: ClientSessionPersistArgs): Promise<TextVersion> {
       this.assertLive();
-      return this.persistDocument(args, cancelToken);
+      return this.persistDocument(args);
    }
 
    close(uri: string): Promise<void> {
@@ -328,7 +312,10 @@ export class DefaultClientSession<
     *
     * Resolves with the latest build of the document, which may already carry
     * a newer write; that is logged at debug, and a slow update at warn when
-    * `ClientSessionFactoryOptions.slowUpdateWarnMs` is set.
+    * `ClientSessionFactoryOptions.slowUpdateWarnMs` is set. It waits for the
+    * builder's final phase rather than the write's own build: a later write
+    * cancels that build, and the one that takes over validates the document
+    * after the answer was taken.
     */
    protected async updateDocument(
       args: ClientSessionWriteArgs<TTransfer>,
@@ -353,7 +340,7 @@ export class DefaultClientSession<
       // An override that awaits before calling the base can outlast the build
       // this write already has, and then builds it twice; see
       // `ModelService.rebuild`.
-      const doc = await run('rebuild', () => service.rebuild(uri, answerState(this.services.workspace.DocumentBuilder), cancelToken));
+      const doc = await run('rebuild', () => service.rebuild(uri, this.services.workspace.DocumentBuilder.finalBuildState(), cancelToken));
       const finalVersion = textDocuments.version(uri);
       if (finalVersion > appliedVersion) {
          this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (changed again before it settled)`);
@@ -409,50 +396,45 @@ export class DefaultClientSession<
       check();
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], this.clientId));
       await Promise.all(applied);
-      const state = answerState(this.services.workspace.DocumentBuilder);
+      const state = this.services.workspace.DocumentBuilder.finalBuildState();
       return Promise.all(uris.map(uri => service.rebuild(uri, state, cancelToken)));
    }
 
    /**
-    * Write `args.model` through {@link updateDocument}, so an override of it
-    * applies to saves too, then persist the document.
+    * Write `args.model` through {@link updateDocument}, then persist it through
+    * {@link persistDocument}, so an override of either applies to saves too.
     *
     * Fails with `DocumentNotOpenError` and writes nothing when this session
-    * closes the URI while the text is being built: the check sits in the same
-    * synchronous step as the manager taking the text. Checked any earlier, a
-    * session that closes the URI during the rebuild still has the shared
-    * text, other clients' edits included, written in its name. Once taken,
-    * the write completes whatever the session does next.
+    * closes the URI while the text is being built. Persisted at `'any'`: the
+    * update already gated on `args.baseVersion` and moved the text past it.
     */
    protected async saveDocument(
       args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
       const doc = await this.updateDocument(args, cancelToken);
-      const uri = this.canonicalKey(args.uri);
-      this.assertOpen(uri);
-      const version = await this.services.workspace.AstDocumentManager.save(uri, this.clientId);
+      const version = await this.persistDocument({ uri: args.uri, baseVersion: 'any' });
       return { ...doc, persisted: { version } };
    }
 
    /**
-    * Persist the store's text for `args.uri` under this session's id.
+    * Persist the store's text for `args.uri` under this session's id. Every
+    * write to disk a session makes goes through here, so an override sees each
+    * of them.
     *
     * The open check and the `baseVersion` gate sit in the same synchronous step
     * as the manager taking the text: an await between them lets another
     * client's write land after the gate, and its text is then persisted under
-    * this session's id without this session ever having seen it.
+    * this session's id without this session ever having seen it. An override
+    * that awaits before calling the base lets a diagram save take its
+    * documents' texts at different moments, and a diagram that ends during the
+    * await fails the documents not yet taken with `DocumentNotOpenError`.
     */
-   protected async persistDocument(
-      args: ClientSessionPersistArgs,
-      cancelToken?: CancellationToken
-   ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
+   protected async persistDocument(args: ClientSessionPersistArgs): Promise<TextVersion> {
       const uri = this.canonicalKey(args.uri);
       this.assertOpen(uri);
       this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri));
-      const version = await this.services.workspace.AstDocumentManager.save(uri, this.clientId);
-      const doc = await this.modelService.ensureDocumentState(uri, answerState(this.services.workspace.DocumentBuilder), cancelToken);
-      return { ...doc, persisted: { version } };
+      return this.services.workspace.AstDocumentManager.save(uri, this.clientId);
    }
 
    protected async closeDocument(uri: string): Promise<void> {

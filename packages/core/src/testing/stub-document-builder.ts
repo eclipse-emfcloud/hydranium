@@ -18,7 +18,7 @@ import {
    type WorkspaceLock
 } from '@hydranium/langium';
 import { type CancellationToken, Disposable } from 'vscode-languageserver';
-import { type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
+import { HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -76,7 +76,7 @@ export interface StubWaitUntilGate {
 export interface StubDocumentBuilder
    extends
       Pick<DocumentBuilder, 'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'>,
-      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate'> {
+      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate' | 'finalBuildState'> {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
     * two overloads (`(state, cancelToken?): Promise<void>` and
@@ -162,6 +162,8 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
       // Langium's own default, so a session write waits for `Validated` here
       // as it does against the real builder.
       updateBuildOptions: { validation: { categories: ['built-in', 'fast'] } },
+      // The real rule, read off this stub's options, so the two cannot drift.
+      finalBuildState: () => HydraniumDocumentBuilder.prototype.finalBuildState.call(stub),
       get updateCalls() {
          return updateCalls;
       },

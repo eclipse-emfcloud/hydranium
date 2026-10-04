@@ -419,6 +419,24 @@ describe('DataServer', () => {
          }
       });
 
+      it('answers with the document and the version of the text it wrote', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            const written = bundle.textDocuments.version(URI_A);
+
+            const answer = await proxy.persistModelDocument({ uri: URI_A, clientId: 'editor-1', baseVersion: 'any' });
+
+            expect(answer.uri).toBe(URI_A);
+            expect(answer.model?.root.name).toBe('initial');
+            expect(answer.persisted).toEqual({ version: written });
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('fails on a stale base version with the conflict code and writes nothing', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });

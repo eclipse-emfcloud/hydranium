@@ -19,6 +19,7 @@ import {
    type AstDocument,
    type ClientSession,
    type ClientSessionFactory,
+   type ClientSessionPersistArgs,
    type ClientSessionWriteArgs,
    DefaultClientSession,
    DocumentNotOpenError,
@@ -30,7 +31,7 @@ import {
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { asModelVersion, isConflictError, type TransferElement } from '@hydranium/protocol';
+import { asModelVersion, isConflictError, type TextVersion, type TransferElement } from '@hydranium/protocol';
 import { type CancellationToken } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
@@ -850,6 +851,36 @@ describe('ClientSessionFactory', () => {
       await session.save({ uri, model: EDITED, baseVersion: 'any' });
 
       expect(session.updates).toBe(1);
+      expect(readFileSync(scratch.workspace.resolve(FILE), 'utf8')).toBe(EDITED);
+   });
+
+   it('writes a save and a persist to disk through the session subclass’s own persist', async () => {
+      class CountingSession extends DefaultClientSession<AstNode> {
+         persists = 0;
+         protected override persistDocument(args: ClientSessionPersistArgs): Promise<TextVersion> {
+            this.persists++;
+            return super.persistDocument(args);
+         }
+      }
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new CountingSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const uri = scratch.workspace.uri(FILE);
+      const session = scratch.harness.shared.model.ModelService.createSession('form') as CountingSession;
+      await session.open(uri);
+
+      await session.save({ uri, model: EDITED, baseVersion: 'any' });
+      await session.persist({ uri, baseVersion: 'any' });
+
+      expect(session.persists).toBe(2);
       expect(readFileSync(scratch.workspace.resolve(FILE), 'utf8')).toBe(EDITED);
    });
 

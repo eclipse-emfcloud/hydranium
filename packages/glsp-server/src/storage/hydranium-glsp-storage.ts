@@ -196,7 +196,7 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * open.
  *
  * **Default `saveSourceModel` flow.** Flushes the stored text of every
- * document the diagram's session has open via `AstDocumentManager.save`, with
+ * document the diagram's session has open through the session's `persist`, with
  * no serializer in the path — the update path already put the settled text in
  * the store. The bound {@link SaveDeliveryPolicy} (default
  * {@link DEFAULT_SAVE_DELIVERY_POLICY}, `await`) decides
@@ -852,21 +852,22 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     *
     * **A save therefore names documents the gesture did not aim at**, which is
     * why an unchanged one is not rewritten even though the user asked for a
-    * save: the mtime would move on a file they never touched.
-    * `AstDocumentManager.save` decides that per document and announces the save
-    * either way.
+    * save: the mtime would move on a file they never touched. With the default
+    * session, `AstDocumentManager.save` decides that per document and
+    * announces the save either way.
     *
     * The configured {@link SaveDeliveryPolicy} (see {@link saveDeliveryPolicy})
-    * decides await-vs-fire-and-forget and failure handling. It carries no
-    * base-version guard: the guard exists to stop a stale writer overwriting a newer
-    * document, and a flush persists the store — which already holds every other
-    * client's change, including the one that advanced the version.
+    * decides await-vs-fire-and-forget and failure handling. The save persists
+    * at `'any'`: the base-version guard exists to stop a stale writer
+    * overwriting a newer document, and a flush persists the store — which
+    * already holds every other client's change, including the one that
+    * advanced the version.
     *
     * Returns `MaybePromise<void>` to match upstream `SourceModelStorage`:
     * resolves with the flush under `await`, returns synchronously under
-    * `fire-and-forget`. Adopters that bypass `AstDocumentManager` (writing
-    * through `WritableFileSystemProvider` directly) still override the whole
-    * method.
+    * `fire-and-forget`. To change how each document is written, override the
+    * session class's `persistDocument`; an override of this method that writes
+    * past the session skips that override.
     */
    saveSourceModel(action: SaveModelAction): MaybePromise<void> {
       // Normalised for the same reason the load path is: `SaveModelAction.fileUri`
@@ -878,9 +879,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const uri = this.toSourceModelUri(this.getFileUri(action));
       if (this.saveDeliveryPolicy.kind === 'fire-and-forget') {
          // Log rather than leave an unhandled rejection: the promise is not
-         // returned, so nothing else will observe a failure.
+         // returned, so nothing else will observe a failure. Named for the
+         // diagram, since the document that failed may be a secondary.
          this.flushWriteSet(uri).catch(error =>
-            this.logger.error(`Save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`)
+            this.logger.error(`Diagram save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`)
          );
          return undefined;
       }
@@ -904,19 +906,23 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    /**
     * Save the stored text of `primaryUri`, every tracked secondary and every
     * document that left the write set since the last save, each only where
-    * the diagram's session has it open; then close those that left.
+    * the diagram's session has it open; then close those that left. Each goes
+    * through the session's `persist`, so an override of the session class's
+    * `persistDocument` applies to diagram saves too.
     *
     * Deduplicated, because a state that tracks its own primary as a secondary
     * would otherwise save it twice and fire two save notifications for one
     * save. Every save is called in one synchronous step, so each takes its text
     * before anything can close a document of the set: saved one after another,
-    * a GLSP session ending during the first write closes the rest unsaved.
+    * a GLSP session ending during the first write closes the rest unsaved. A
+    * `persistDocument` override that awaits before calling the base gives that
+    * up, and a session ending during its await fails the rest with
+    * `DocumentNotOpenError`.
     */
    protected async flushWriteSet(primaryUri: string): Promise<void> {
       // Refused like the load: without a session the client id's opens are
       // another participant's, and this would save them.
-      this.requireModelSession();
-      const documents = this.sharedServices.workspace.AstDocumentManager;
+      const session = this.requireModelSession();
       const textDocuments = this.sharedServices.workspace.TextDocuments;
       const clientId = this.state.clientId;
       // Taken with the targets: a document leaving the set during the writes
@@ -925,10 +931,33 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const targets = [...new Set([primaryUri, ...this.state.secondaryUris, ...departed])].filter(uri =>
          textDocuments.isOpenInClient(uri, clientId)
       );
-      await Promise.all(targets.map(target => documents.save(target, clientId)));
+      // Async, so a persist that throws instead of rejecting fails its own
+      // document rather than leaving the rest of the set uncalled. Settled in
+      // full before failing, or the save's dirty-state hold ends while the
+      // rest are still writing.
+      const results = await Promise.allSettled(targets.map(async target => session.persist({ uri: target, baseVersion: 'any' })));
+      const failures = results.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: targets[i], reason: result.reason }] : []));
+      if (failures.length > 0) {
+         // Logged per document, since the save fails with the first alone and
+         // its error need not name the document it came from.
+         for (const { uri, reason } of failures) {
+            this.logger.error(`Save failed for ${uri}: ${reason instanceof Error ? reason.message : String(reason)}`);
+         }
+         throw failures[0].reason;
+      }
       for (const uri of departed) {
          if (this.departedSecondaries.delete(uri) && uri !== this.state.sourceUri) {
-            await this.state.modelSession?.close(uri);
+            try {
+               await this.state.modelSession?.close(uri);
+            } catch (error: unknown) {
+               // A session that ended during the writes closed everything it
+               // had open; refusing the close must not fail a save that wrote.
+               // Caught around the call, since an ended session throws
+               // before it returns a promise.
+               if (!isSessionClosedError(error)) {
+                  throw error;
+               }
+            }
          }
       }
    }
