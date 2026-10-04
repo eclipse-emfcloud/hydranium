@@ -30,7 +30,7 @@
 import { describe, expect, it } from 'vitest';
 import { URI } from '@hydranium/langium';
 import { makeFakeClock } from '@hydranium/protocol/testing';
-import { DefaultSelfSaveRegistry } from '../../src/documents/self-save-registry.js';
+import { DefaultSelfSaveRegistry } from '../../src/langium/workspace/self-save-registry.js';
 import { makeStubSelfSaveRegistry, makeStubWritableFileSystem } from '../../src/testing/index.js';
 
 const URI_A = URI.parse('file:///ws/a.fake');

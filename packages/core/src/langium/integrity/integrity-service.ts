@@ -20,7 +20,7 @@ import {
 import { CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
-import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import { type WritableFileSystemProvider } from '../workspace/file-system-provider.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { Registry } from '../../util/registry.js';

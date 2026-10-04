@@ -23,13 +23,14 @@ and so does every other head package (`@hydranium/data-server`,
 - **A build pipeline you can hook by phase.** `HydraniumDocumentBuilder` and
   `BuildPipelineIntegration` dispatch work at Langium `DocumentState` phases,
   while the project tier (`ProjectManager`) discovers and groups documents.
-- **Multi-client document coordination.** `AstDocumentManager`,
-  `HydraniumTextDocuments`, `WritableFileSystemProvider` and `SelfSaveRegistry`
-  generalise the LSP document lifecycle to several co-editing heads, so an edit
-  made on one surface is observable on the others without a head-to-head
-  synchronisation protocol. A participant works through a `ClientSession` from
-  `ModelService.createSession`, which writes only what it has open; see
-  [client sessions](../../docs/concepts/client-sessions.md).
+- **Multi-client document coordination.** `AstDocumentManager` and
+  `HydraniumTextDocuments` generalise the LSP document lifecycle to several
+  co-editing heads, so an edit made on one surface is observable on the others
+  without a head-to-head synchronisation protocol. A participant works through
+  a `ClientSession` from `ModelService.createSession`, which writes only what it
+  has open; see [client sessions](../../docs/concepts/client-sessions.md). Saves
+  go through a `WritableFileSystemProvider`, and `SelfSaveRegistry` keeps the
+  server's own writes from coming back as external changes.
 - **The projection the non-LSP heads build on:** `ModelService` (the in-process
   workspace facade), `TransferEncoder` (AST → transfer model), and the
   `Serializer` slot.

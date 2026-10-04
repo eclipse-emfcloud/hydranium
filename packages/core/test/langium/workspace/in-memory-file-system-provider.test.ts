@@ -9,7 +9,7 @@
 
 import { URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
-import { type WritableFileSystemProvider } from '../../../src/documents/ast-document-manager.js';
+import { type WritableFileSystemProvider } from '../../../src/langium/workspace/file-system-provider.js';
 import {
    InMemoryFileSystemProvider,
    inMemoryFileSystem,

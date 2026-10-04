@@ -34,15 +34,16 @@ import { type HydraniumDocumentRegistry, HydraniumLangiumDocuments } from './wor
 import { type AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/document-uri-policy.js';
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
-import { DefaultAstDocumentManager, type AstDocumentManager, type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
-import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from '../documents/self-save-registry.js';
+import { DefaultAstDocumentManager, type AstDocumentManager } from '../documents/ast-document-manager.js';
+import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from './workspace/self-save-registry.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
 import { DefaultVersionSyncService, type VersionSyncService } from '../documents/version-sync-service.js';
 import {
    DefaultEmptyFileSystemProvider,
    DefaultFileSystemProviderRegistry,
-   type FileSystemProviderRegistry
+   type FileSystemProviderRegistry,
+   type WritableFileSystemProvider
 } from './workspace/file-system-provider.js';
 import { VIRTUAL_SCHEME, VirtualFileSystemProvider } from './workspace/virtual-document.js';
 import { type ServerLanguageServices } from './language-module.js';

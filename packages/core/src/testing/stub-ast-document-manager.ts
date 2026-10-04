@@ -14,9 +14,9 @@ import {
    AstDocument,
    type AstDocumentManager,
    type AstDocumentUpdatedEvent,
-   type UpdateAttribution,
-   type WritableFileSystemProvider
+   type UpdateAttribution
 } from '../documents/ast-document-manager.js';
+import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import { UNKNOWN_CLIENT_ID } from '../documents/client-ids.js';
 import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
 import { type CloseModelArgs, type OpenModelArgs } from '@hydranium/protocol';

@@ -15,5 +15,4 @@ export * from './hydranium-text-documents.js';
 export * from './model-ledger.js';
 export * from './version-sync-service.js';
 export * from './ast-document-manager.js';
-export * from './self-save-registry.js';
 export * from './file-system-task-queue.js';

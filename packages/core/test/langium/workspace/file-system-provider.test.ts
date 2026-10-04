@@ -9,9 +9,12 @@
 
 import { type FileSystemNode, URI } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
-import { type WritableFileSystemProvider } from '../../../src/documents/ast-document-manager.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
-import { DefaultEmptyFileSystemProvider, DefaultFileSystemProviderRegistry } from '../../../src/langium/workspace/file-system-provider.js';
+import {
+   DefaultEmptyFileSystemProvider,
+   DefaultFileSystemProviderRegistry,
+   type WritableFileSystemProvider
+} from '../../../src/langium/workspace/file-system-provider.js';
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 
 /**

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { SelfSaveRegistry } from '../documents/self-save-registry.js';
+import type { SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
 
 /**
  * Stub for the framework's {@link SelfSaveRegistry}. Records `register` calls

@@ -13,8 +13,8 @@ import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
-import { type SelfSaveRegistry } from '../documents/self-save-registry.js';
-import { type WritableFileSystemProvider } from '../documents/ast-document-manager.js';
+import { type SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
+import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import { type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { isConnectionGoneError } from '../util/connection-liveness.js';
 import {

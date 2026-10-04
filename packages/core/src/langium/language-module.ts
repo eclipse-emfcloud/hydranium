@@ -36,7 +36,10 @@ import { type UpdateRewriteContribution } from './update-rewrite/update-rewrite-
 import { DefaultUpdateRewriteService, type UpdateRewriteService } from './update-rewrite/update-rewrite-service.js';
 import { HydraniumDocumentValidator } from './validation/document-validator.js';
 import { type ValidationCheckContribution } from './validation/validation-contribution.js';
-import { ValidationContributionCollector } from './validation/validation-contribution-collector.js';
+import {
+   DefaultValidationContributionCollector,
+   type ValidationContributionCollector
+} from './validation/validation-contribution-collector.js';
 import { type ServerModuleContext, type ServerSharedServices } from './module.js';
 
 /**
@@ -246,7 +249,7 @@ export interface ServerAddedServices {
       ValidationContributionCollector: ValidationContributionCollector;
       /**
        * Declarative {@link ValidationCheckContribution} group. Each sub-key
-       * binds a contribution; the {@link ValidationContributionCollector}
+       * binds a contribution; the {@link DefaultValidationContributionCollector}
        * iterates this group at construction and calls each contribution's
        * `registerValidationChecks(registry)`, where `registry` is a thin
        * adapter over Langium's `ValidationRegistry`. The framework binds
@@ -391,7 +394,7 @@ export function createServerLanguageModule(
          // option values rebinds the slot with its own `new
          // HydraniumDocumentValidator(services, { … })`.
          DocumentValidator: services => new HydraniumDocumentValidator(services),
-         ValidationContributionCollector: services => new ValidationContributionCollector(services),
+         ValidationContributionCollector: services => new DefaultValidationContributionCollector(services),
          checks: {
             // Flags name-bearing nodes whose name value contains the
             // configured name separator, so qualified names can never collide

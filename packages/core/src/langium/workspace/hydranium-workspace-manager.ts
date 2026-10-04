@@ -24,7 +24,7 @@ import type { ServerLocale } from '../../locale/server-locale.js';
 import type { ProjectChangeEvent } from '../project/project-change-event.js';
 import type { ProjectManager } from '../project/project-manager.js';
 import type { ServerSharedServicesMinimal } from '../shared-services.js';
-import type { WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import type { WritableFileSystemProvider } from './file-system-provider.js';
 import { type DocumentUriPolicy, findRealpathDivergence } from './document-uri-policy.js';
 import { type AdditionalDocumentContribution, collectAdditionalDocuments } from './additional-document-contribution.js';
 import { onProcessEvent } from '../../util/environment.js';

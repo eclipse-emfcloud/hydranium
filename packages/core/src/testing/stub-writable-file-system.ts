@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import type { URI } from '@hydranium/langium';
-import type { WritableFileSystemProvider } from '../documents/ast-document-manager.js';
+import type { WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import type { StubSelfSaveRegistry } from './stub-self-save-registry.js';
 
 /**

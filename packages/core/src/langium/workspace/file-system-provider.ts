@@ -9,10 +9,61 @@
 
 import { type Tracer } from '@hydranium/protocol';
 import { EmptyFileSystemProvider } from '@hydranium/langium';
-import type { FileSystemNode, URI } from '@hydranium/langium';
-import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import type { FileSystemNode, FileSystemProvider, URI } from '@hydranium/langium';
+import { type SelfSaveRegistry } from './self-save-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
+
+/**
+ * File-system provider extension that supports writes. Langium's standard
+ * {@link FileSystemProvider} is read-only; `AstDocumentManager` needs to persist
+ * saves, so consumers wire in a provider that implements this superset.
+ *
+ * Implementations may optionally hold a reference to a
+ * {@link SelfSaveRegistry} so they can record their own write mtimes and
+ * help downstream file-watchers suppress echo events for those writes.
+ * The framework's `DefaultFileSystemProvider` reads it from
+ * `services.workspace.SelfSaveRegistry`; alternative implementations can do
+ * the same or leave the field unset.
+ */
+export interface WritableFileSystemProvider extends FileSystemProvider {
+   writeFile(uri: URI, content: string): Promise<void>;
+   /**
+    * Last-modified time (ms) of the file at `uri`, or `undefined` if it can't
+    * be determined (missing file, or a provider with no disk — in-memory /
+    * browser). Optional: the only consumer is self-save echo suppression
+    * (`didChangeWatchedFiles`), which simply lets a change through when the
+    * mtime is unavailable. Distinct from Langium's `stat` (whose
+    * `FileSystemNode` carries no mtime). Keeping disk access on the provider
+    * seam is what lets the LSP update handler avoid a direct `node:fs` import.
+    */
+   mtimeMs?(uri: URI): Promise<number | undefined>;
+   /**
+    * Resolve `uri` to its real on-disk identity (symlinks collapsed, `..`/`.`
+    * walked, case-folded on case-insensitive filesystems), or `undefined` *iff
+    * the filesystem knows the path is absent*. The single source of the
+    * "nothing loadable here" signal `RealpathDocumentUriPolicy` turns into
+    * the synthetic-placeholder branch of `getOrCreateDocument`.
+    *
+    * Contract for implementers:
+    * - A `file:`-backed provider returns the resolved URI when the file exists,
+    *   and `undefined` when it cannot resolve the path (missing / unreadable).
+    * - A non-`file:` URI (or any URI the provider cannot stat) passes through
+    *   **unchanged** — it is treated as present, never reported absent.
+    * - A provider with no disk to check (in-memory / browser / empty) simply
+    *   omits this method; the framework's `FileSystemProviderRegistry` then
+    *   returns the URI unchanged, and `RealpathDocumentUriPolicy` answers as
+    *   the syntactic `DefaultDocumentUriPolicy` does.
+    *
+    * Synchronous (a `realpath` is a kernel-cached syscall) and optional — the
+    * only consumers are the document-identity policy's `canonicalUri`/`loadUri`.
+    * Keeping the syscall on the provider seam is what lets the policy stay
+    * browser-neutral (no `node:fs` import).
+    */
+   realpath?(uri: URI): URI | undefined;
+   /** Registry the provider records its own writes against. Optional — providers without watcher integration may omit. */
+   readonly selfSaveRegistry?: SelfSaveRegistry;
+}
 
 /**
  * Empty-filesystem {@link WritableFileSystemProvider}. For browser / test / CLI

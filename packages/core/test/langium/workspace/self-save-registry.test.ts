@@ -9,7 +9,7 @@
 
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DefaultSelfSaveRegistry } from '../../src/documents/self-save-registry.js';
+import { DefaultSelfSaveRegistry } from '../../../src/langium/workspace/self-save-registry.js';
 
 /**
  * Exposes the entry map's size. Eviction has no public observable —

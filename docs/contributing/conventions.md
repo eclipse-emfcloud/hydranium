@@ -860,13 +860,7 @@ import/binding site. Three prefixes, plus bare descriptive names.
   forwarders, and multi-impl-family variants. The connection-handler family
   is bare (`AbstractSocketForwardingConnectionHandler` base, `DataServerConnectionHandler`,
   `GlspServerConnectionHandler`) — a transport-forwarder category distinct
-  from the `HydraniumGlsp*` runtime family. **A framework-original service
-  that is its own contract also stays bare** — a sole-implementation class
-  the framework authored from scratch (not specialising an upstream `Default*`,
-  so no `Hydranium` brand; no separate framework interface, so no `Default`
-  pairing) that adopters *extend by subclassing*: `ModelService`,
-  `TransferEncoder`, `AstDocumentManager`, `BuildPipelineIntegration`,
-  `ValidationContributionCollector`, `SelfSaveRegistry`, `CstResidencyService`.
+  from the `HydraniumGlsp*` runtime family.
 
 ### Service shape — an interface for every DI slot
 
