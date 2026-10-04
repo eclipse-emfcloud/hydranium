@@ -28,7 +28,7 @@ import {
    type IntervalHistogram,
    type PerformanceEntry
 } from 'node:perf_hooks';
-import { snapshotFilePath, writeHeapSnapshotToDir } from './process-memory.js';
+import { snapshotFilePath, writeHeapSnapshotToDir } from '@hydranium/protocol/node';
 
 export const DEFAULT_CPU_INTERVAL_MICROS = 1000;
 export const DEFAULT_ALLOCATION_INTERVAL_BYTES = 32768;

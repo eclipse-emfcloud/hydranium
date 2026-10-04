@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { formatProcessMemory, writeHeapSnapshotToDir } from '@hydranium/core/lib/node';
+import { formatProcessMemory, writeHeapSnapshotToDir } from '@hydranium/protocol/lib/node';
 import {
    HOST_DIAGNOSTICS_PATH,
    type DumpHostStateArgs,

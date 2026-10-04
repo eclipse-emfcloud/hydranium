@@ -74,7 +74,6 @@
   },
   "devDependencies": {
     "@hydranium/client-theia": "1.0.0-next",
-    "@hydranium/core": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
     "@theia/core": "^1.70.0",
     "@theia/workspace": "^1.70.0",
@@ -87,7 +86,6 @@
   },
   "peerDependencies": {
     "@hydranium/client-theia": "^1.0.0-next",
-    "@hydranium/core": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "@theia/core": "^1.70.0",
     "@theia/workspace": "^1.70.0",

@@ -364,6 +364,7 @@ const policyOverrides = [
          'packages/data-server/src/testing/**/*.ts',
          'packages/glsp-server/src/node/**/*.ts',
          'packages/glsp-server/src/testing/**/*.ts',
+         'packages/protocol/src/node/**/*.ts',
          'packages/protocol/src/testing/**/*.ts'
       ],
       rules: {
