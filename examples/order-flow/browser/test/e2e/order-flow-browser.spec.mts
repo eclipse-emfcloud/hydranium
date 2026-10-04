@@ -176,6 +176,9 @@ const PALETTE_TOGGLE = `${MOUNT} .minimize-palette-button`;
 /** GLSP's status band, the surface the server's read-only reason lands on. */
 const STATUS_BAND = `${MOUNT} .sprotty-status`;
 
+/** What the band says while the document does not parse. */
+const READONLY_REASON = 'Read-only: this document has a syntax error. Fix it to edit the diagram again.';
+
 /**
  * A character no `.process` token can start with, typed to make the document
  * fail LEXING rather than parsing.
@@ -574,9 +577,8 @@ test.describe('order-flow in a web worker', () => {
     * different owners and any of them can regress alone.** The palette is
     * withdrawn by `@eclipse-glsp/client` on the edit mode; the toggle is
     * withdrawn by this example's `OrderFlowProcessToolPalette`, because upstream
-    * leaves it standing; and the band is written by the framework's
-    * `onParseErrorChanged`. A test that only checked the palette would pass
-    * against a canvas with a dangling control and no stated reason, which is the
+    * leaves it standing; and the band is the framework's parse-error status. A
+    * test that only checked the palette would pass against a canvas with a dangling control and no stated reason, which is the
     * state this whole slice exists to remove.
     *
     * **The recovery half is not symmetry, it is the load-bearing half.** A
@@ -600,7 +602,7 @@ test.describe('order-flow in a web worker', () => {
       // server's own account: reaching it means the `StatusAction` travelled the
       // GLSP channel, which the two visibility assertions cannot distinguish from
       // a purely client-side reaction to a stale edit mode.
-      await expect(page.locator(STATUS_BAND)).toHaveText('Read-only: this document has a syntax error. Fix it to edit the diagram again.');
+      await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
       await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
       await expect(page.locator(PALETTE_TOGGLE)).toBeHidden();
 
@@ -609,6 +611,32 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator(STATUS_BAND)).toHaveText('');
       await expect(page.locator(`${MOUNT} .tool-palette`)).toBeVisible();
       await expect(page.locator(PALETTE_TOGGLE)).toBeVisible();
+   });
+
+   /**
+    * A diagram opened over a document that is already broken says why it is
+    * read-only, and keeps saying it.
+    *
+    * The band arrives during the load, and the server's first live validation
+    * runs about 100 ms after the model does, so the case has to outlast that
+    * validation. A second is ten times it.
+    */
+   test('a diagram opened over a document that does not parse keeps the reason on the canvas', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator(`${MOUNT} .tool-button`).first()).toBeVisible();
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(LEXING_ERROR_TEXT);
+      await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+
+      await page.reload();
+
+      await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
+      await page.waitForTimeout(1000);
+      await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
+      await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
    });
 
    test('highlighting comes from the server, not from a client grammar', async ({ page }) => {

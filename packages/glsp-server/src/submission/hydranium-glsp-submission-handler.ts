@@ -12,15 +12,19 @@ import {
    type DirtyStateChangeReason,
    type GModelRootSchema,
    type LayoutOperation,
+   MarkersReason,
    ModelState,
    ModelSubmissionHandler,
+   type ModelValidator,
    SetDirtyStateAction,
+   SetMarkersAction,
    type SetModelAction
 } from '@eclipse-glsp/server';
 import { IntegrityService } from '@hydranium/core';
 import { inject, injectable } from 'inversify';
 import { type AstNode, type DocumentState } from '@hydranium/langium';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
+import { DiagramStatus } from '../state/diagram-status.js';
 
 /**
  * GLSP {@link ModelSubmissionHandler} base shared by all hydranium adopters.
@@ -106,6 +110,21 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
    }
 
    protected _lastSubmittedSignature?: string;
+
+   /**
+    * Live validation as the {@link DiagramStatus.VALIDATION} status, rather than
+    * GLSP's own status writes, whose closing clear erases any status still in
+    * force, such as the reason a diagram is read-only.
+    */
+   protected override async performLiveValidation(validator: ModelValidator): Promise<void> {
+      this.modelState.setStatus(DiagramStatus.VALIDATION, { message: 'Validate Model...', severity: 'INFO' });
+      try {
+         const markers = await validator.validate([this.modelState.root], MarkersReason.LIVE);
+         await this.actionDispatcher.dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }));
+      } finally {
+         this.modelState.setStatus(DiagramStatus.VALIDATION, undefined);
+      }
+   }
 
    /**
     * Serialise the model-bearing actions of a submission into a comparable

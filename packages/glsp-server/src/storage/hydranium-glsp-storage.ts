@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { MarkersReason, MessageAction, SetMarkersAction, StatusAction } from '@eclipse-glsp/protocol';
+import { MarkersReason, MessageAction, SetMarkersAction } from '@eclipse-glsp/protocol';
 import {
    type Action,
    ActionDispatcher,
@@ -17,7 +17,6 @@ import {
    CommandStack,
    type DefaultCommandStack,
    type Disposable,
-   EditMode,
    GLSPServerError,
    Logger as GlspLogger,
    type MaybePromise,
@@ -28,7 +27,6 @@ import {
    SOURCE_URI_ARG,
    type SaveModelAction,
    SetDirtyStateAction,
-   SetEditModeAction,
    type SourceModelStorage,
    TEMPORARY_CLIENT_ID
 } from '@eclipse-glsp/server';
@@ -53,6 +51,7 @@ import {
 } from '@hydranium/core';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
+import { DiagramStatus, type DiagramStatusEntry } from '../state/diagram-status.js';
 import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-glsp-submission-handler.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { DEFAULT_SAVE_DELIVERY_POLICY, SaveDeliveryPolicy } from './save-delivery-policy.js';
@@ -88,7 +87,7 @@ export const SOURCE_URI_MISSING = defineMessage(
  * Why the canvas has stopped accepting edits.
  *
  * **A READONLY canvas is otherwise indistinguishable from a broken one.** The
- * client's answer to {@link SetEditModeAction} is to withdraw the tool palette,
+ * client's answer to a read-only edit mode is to withdraw the tool palette,
  * so the surface a reader was working in silently loses the only control it had,
  * with the cause — a syntax error in a document that may not even be open —
  * nowhere on screen. The mode flip is the mechanism; this is the only part of it
@@ -180,7 +179,7 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * document is still being rebuilt.
  *
  * Adopters with richer needs override the seams ({@link isStructurallyBroken},
- * {@link onParseErrorChanged}, {@link onSourceModelSettled}) rather than the
+ * {@link parseErrorStatus}, {@link onSourceModelSettled}) rather than the
  * whole flow, and select a {@link SaveDeliveryPolicy} via the bound option to
  * tune how {@link saveSourceModel} delivers its result.
  *
@@ -454,25 +453,19 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Capture the initial settled root and apply the initial edit mode. Edit-mode
-    * + settle-hook actions are dispatched on a macrotask so the initial
+    * Capture the initial settled root and its parse-error status. Settle-hook
+    * actions are dispatched on a macrotask so the initial
     * `requestModel → setModel` handshake isn't perturbed.
     *
-    * The initial edit mode is decided from the root's own parse (see
+    * The initial status is decided from the root's own parse (see
     * {@link isStructurallyBroken}), not from diagnostics: `settled()` can hand
     * back a document it drove to the integrity landmark, before validation,
     * with no diagnostics yet.
-    *
-    * **A correct decision is not a delivered one.** This dispatch happens inside
-    * the initial `requestModel`, before the client has the model — so the UI
-    * extensions that answer {@link onParseErrorChanged}'s actions are not yet
-    * constructed, and a canvas that opens READONLY over a broken document shows
-    * none of that feedback. The same timer carries {@link onSourceModelSettled},
-    * so an adopter's own initial actions have it too.
     */
    protected async captureSettledRoot(rootUri: string, document: AstDocument<AstNode, never>): Promise<void> {
       this.state.setSourceRoot(rootUri, document.root as TRoot);
-      const actions = [...this.refreshEditMode(document), ...this.onSourceModelSettled(document)];
+      this.refreshParseErrorStatus(document);
+      const actions = this.onSourceModelSettled(document);
       if (actions.length > 0) {
          // Defer through the injectable Clock (not raw setTimeout) so the dispatch is
          // testable and cancels on session disposal; parked on toDispose for that.
@@ -712,7 +705,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    /**
     * Re-settle to a guaranteed fully-linked + reprojected root, capture it, and
     * (unless suppressed) resubmit a deduped external GModel. Diagnostics for the
-    * edit-mode decision come from the event document, because the re-settled one
+    * parse-error status come from the event document, because the re-settled one
     * cannot be relied on to have any: a document driven to the landmark arrives
     * pre-validation, and this path re-settles precisely to escape a transient
     * mid-rebuild snapshot.
@@ -722,18 +715,18 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // snapshot — the event can arrive while a re-entered document is mid-rebuild.
       const document = await this.sharedServices.model.ModelService.settled(rootUri);
       this.state.setSourceRoot(rootUri, document.root as TRoot);
-      const editModeActions = this.refreshEditMode(eventDocument);
+      this.refreshParseErrorStatus(eventDocument);
 
       // Skip the external submit until the initial requestModel completes; submitting too
       // early bumps root.revision and the client's stale first computedBounds is dropped,
       // leaving the canvas empty.
       if (this.submissionHandler.hasPendingInitialRequest()) {
-         return editModeActions;
+         return [];
       }
       // While the AST is structurally broken, keep the last valid GModel so the canvas
-      // doesn't blank mid-typing. READONLY is still flipped for user feedback.
+      // doesn't blank mid-typing. The parse-error status still makes it read-only.
       if (this.isStructurallyBroken(eventDocument) && this.hasSubmittedExternally) {
-         return editModeActions;
+         return [];
       }
       // Read the handler's signature BEFORE submitting and again after: it records
       // every submission whatever the reason, so an unmoved signature means this
@@ -744,31 +737,25 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const previousSignature = this.submissionHandler.lastSubmittedSignature;
       const submitActions = await this.submissionHandler.submitModel('external');
       if (this.submissionHandler.lastSubmittedSignature === previousSignature) {
-         return editModeActions;
+         return [];
       }
       this.hasSubmittedExternally = true;
-      return [...submitActions, ...editModeActions];
+      return submitActions;
    }
 
    /**
-    * Recompute the desired edit mode from the document's structural-error state,
-    * flip {@link AbstractHydraniumGlspState.editMode}, and — only on a transition —
-    * return the {@link onParseErrorChanged} actions. No transition → no actions.
+    * Set {@link DiagramStatus.PARSE_ERROR} to {@link parseErrorStatus} while
+    * `document` is structurally broken, and withdraw it once it parses.
     */
-   protected refreshEditMode(document: AstDocument<AstNode>): Action[] {
-      const broken = this.isStructurallyBroken(document);
-      const previousEditMode = this.state.editMode;
-      this.state.editMode = broken ? EditMode.READONLY : EditMode.EDITABLE;
-      if (previousEditMode === this.state.editMode) {
-         return [];
-      }
-      return this.onParseErrorChanged(document, broken);
+   protected refreshParseErrorStatus(document: AstDocument<AstNode>): void {
+      this.state.setStatus(DiagramStatus.PARSE_ERROR, this.isStructurallyBroken(document) ? this.parseErrorStatus(document) : undefined);
    }
 
    /**
     * Seam: is the AST structurally broken (lexing/parsing errors)? Drives both
-    * READONLY mode and the GModel resubmit skip — keeping the last valid canvas
-    * instead of blanking it mid-typing. Default: the lexer and parser errors of
+    * the {@link DiagramStatus.PARSE_ERROR} status and the GModel resubmit
+    * skip — keeping the last valid canvas instead of blanking it mid-typing.
+    * Default: the lexer and parser errors of
     * the root's own parse, which exist from the parse on, so the answer does
     * not wait for validation; for a root its document has since replaced, any
     * error-severity diagnostic carrying a Langium `lexing-error` /
@@ -784,48 +771,19 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Seam: actions to emit when the structural-broken state transitions.
-    * Default: a {@link SetEditModeAction} toggling READONLY ↔ EDITABLE — editing
-    * is disabled while the syntax is broken but re-enabled once it parses, a
-    * sound generic for any Langium-backed diagram — plus the
-    * {@link DIAGRAM_READONLY_PARSE_ERROR} band that says why, cleared on the way
-    * back. Adopters override to add or replace the transition feedback. The
-    * {@link AbstractHydraniumGlspState.editMode} flip itself is owned by
-    * {@link refreshEditMode}.
+    * Seam: the {@link DiagramStatus.PARSE_ERROR} status while the document is
+    * structurally broken. Default: read-only, with the
+    * {@link DIAGRAM_READONLY_PARSE_ERROR} band as its message.
     *
-    * **Both actions or neither, which is why they are one seam rather than
-    * two.** The mode flip removes the tool palette and the band is the only
-    * account of that, so an override that keeps one and drops the other produces
-    * either an unexplained loss of the palette or a warning about a restriction
-    * that is not in force.
-    *
-    * **The status is dispatched with no `timeout`, so it persists** — a
-    * time-limited band would describe a condition that outlasts it.
-    *
-    * **The slot is SHARED, and the other writer wins on one path.**
-    * `ModelSubmissionHandler`'s live validation writes the same slot, clearing
-    * it with `severity: 'NONE'` when it finishes, and an adopter dispatching its
-    * own `StatusAction` replaces this one too. Nothing re-asserts it. That is
-    * harmless while a document is being edited, because a resubmit is skipped
-    * once the AST is broken (see {@link doUpdateAndSubmit}) — but NOT at load:
-    * the initial `requestModel` submit is not that skipped path, so a diagram
-    * opened on an already-broken document shows this band and then loses it to
-    * the validation clear a moment later. Measured on a browser host, polling the
-    * overlay: no element, empty, the sentence, empty again.
+    * A read-only status needs a message. Read-only withdraws the tool palette,
+    * and without a message nothing on the canvas says why.
     */
-   protected onParseErrorChanged(_document: AstDocument<AstNode>, broken: boolean): Action[] {
-      return [
-         SetEditModeAction.create(broken ? EditMode.READONLY : EditMode.EDITABLE),
-         broken
-            ? StatusAction.create(this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_READONLY_PARSE_ERROR), {
-                 severity: 'WARNING'
-              })
-            : // `NONE` is the client's own spelling for "clear", not a severity it
-              // renders: `StatusOverlay.handle` branches on it before touching the
-              // DOM. An empty message at any other severity leaves an empty band
-              // with a warning icon standing on the canvas.
-              StatusAction.create('', { severity: 'NONE' })
-      ];
+   protected parseErrorStatus(_document: AstDocument<AstNode>): DiagramStatusEntry {
+      return {
+         message: this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_READONLY_PARSE_ERROR),
+         severity: 'WARNING',
+         readonly: true
+      };
    }
 
    /**
