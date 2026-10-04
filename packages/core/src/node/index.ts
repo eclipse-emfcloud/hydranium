@@ -40,7 +40,6 @@ export * from './latency-from-env.js';
 export * from './measure-memory.js';
 export * from './memory-monitor.js';
 export * from './lint-grammar.js';
-export * from './process-memory.js';
 export * from './profile-capture.js';
 export * from './profile-digest.js';
 export * from './profiling-run.js';

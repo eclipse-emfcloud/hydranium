@@ -14,11 +14,11 @@
  * supplies through a `ProcessClassifier`.
  */
 
-import { Format } from '@hydranium/protocol';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as v8 from 'node:v8';
+import { Format } from '../logger';
 
 /**
  * Format a one-shot memory snapshot of the CURRENT process (heap, rss, external, V8 limit).

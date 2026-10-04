@@ -10,7 +10,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { snapshotFilePath } from '../../src/node/process-memory.js';
+import { snapshotFilePath } from '../../src/node/process-memory';
 
 describe('snapshotFilePath', () => {
    it('composes the origin-first prefix, sanitized label and extension (no timestamp) in the given directory', () => {

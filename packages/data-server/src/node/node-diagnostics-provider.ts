@@ -8,14 +8,8 @@
  ********************************************************************************/
 
 import type { ServerSharedServices } from '@hydranium/core';
-import {
-   formatPodMemory,
-   formatProfileReport,
-   formatServerState,
-   ProfileCapture,
-   recordServerSummaryEntry,
-   writeHeapSnapshotToDir
-} from '@hydranium/core/node';
+import { formatProfileReport, formatServerState, ProfileCapture, recordServerSummaryEntry } from '@hydranium/core/node';
+import { formatPodMemory, writeHeapSnapshotToDir } from '@hydranium/protocol/node';
 import type { DumpServerStateArgs, StartProfilingArgs, StopProfilingArgs, WriteServerHeapSnapshotArgs } from '@hydranium/protocol';
 import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from '../diagnostics-provider.js';
 

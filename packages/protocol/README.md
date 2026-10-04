@@ -60,13 +60,15 @@ names, a worked example — is in
 @hydranium/protocol               # transfer documents, references, RPC machinery
 @hydranium/protocol/data          # DataServerProtocol / DataClientProtocol
 @hydranium/protocol/client        # the host-neutral client tier
+@hydranium/protocol/node          # process memory and heap-snapshot helpers
 @hydranium/protocol/testing       # test doubles, waiters, catalogue audit
 @hydranium/protocol/testing/node  # the Node-only doubles
 ```
 
 The root barrel re-exports `data` and `client`, so those two subpaths buy a
-narrower surface rather than reach; `testing` is only reachable by its own
-specifier, which is what keeps the doubles out of a production bundle. The RPC
+narrower surface rather than reach; `node` and `testing` are only reachable by
+their own specifiers, which keeps `node:*` imports out of a browser bundle and
+the doubles out of a production bundle. The RPC
 machinery documents itself in [`src/rpc/README.md`](./src/rpc/README.md).
 
 ### Auditing a translation catalogue
