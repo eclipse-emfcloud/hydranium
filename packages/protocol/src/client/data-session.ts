@@ -11,12 +11,12 @@ import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock } from '../clock';
 import type { DataServerProtocol, DiagnosticOf, TransferDocumentDirtyChangedEvent, TransferDocumentUpdatedEvent } from '../data';
 import { isConflictError, SessionClosedError } from '../errors';
-import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
+import { type BaseVersion, isModelVersion, type ModelVersion, type TextVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import type { OpenModelArgs } from '../model-server';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
-import type { TextState, TransferDocument } from '../transfer-document';
+import type { TextState, TransferDocument, TransferSavedDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 
 /**
@@ -100,6 +100,12 @@ export type DataSessionSaveArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = DataSessionArgs<TServer['saveModelDocument']>;
+
+/** Persist the text the server holds through a session; the session supplies `clientId`. */
+export type DataSessionPersistArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['persistModelDocument']>;
 
 /** The document a session hands back, carrying its server's diagnostic shape. */
 export type DataSessionDocument<
@@ -267,12 +273,13 @@ export class DataSession<
     */
    protected readonly lastAnswers = new Map<string, TextState>();
    /**
-    * Per URI this session has open, the model version its last save of it was
-    * answered with; see {@link recordWrite}. Only a save sets it: an open
-    * answers at the version of a write still in flight as well, and that
-    * write is not saved.
+    * Per URI this session has open, the text version its last save or persist
+    * of it wrote, as its answer's `persisted` says; see {@link recordWrite}.
+    * Not the answer's model version, which can carry a write that landed
+    * after the text was taken. Only those set it: an open answers at the
+    * version of a write still in flight as well, and that write is not saved.
     */
-   protected readonly savedVersions = new Map<string, ModelVersion>();
+   protected readonly savedVersions = new Map<string, TextVersion>();
    /** Per URI, this session's calls still in flight on it, which a close waits for. */
    protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
    /** This session's saves still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
@@ -483,22 +490,38 @@ export class DataSession<
    }
 
    /** Persist `args.model` to disk as this session. The session must have `args.uri` open. */
-   saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      const saving = this.track([args.uri], async () => {
+   saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
+      return this.trackSave(args.uri, server => server.saveModelDocument({ ...args, clientId: this.clientId }));
+   }
+
+   /**
+    * Persist the text the server holds for `args.uri` as this session, with no
+    * model of its own. The session must have `args.uri` open.
+    */
+   persistDocument(args: DataSessionPersistArgs<TTransfer, TServer>): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
+      return this.trackSave(args.uri, server => server.persistModelDocument({ ...args, clientId: this.clientId }));
+   }
+
+   /** Run a save or persist of `uri` and record what it answered as saved. */
+   protected trackSave(
+      uri: string,
+      send: (server: RpcProxy<TServer>) => Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>>
+   ): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
+      const saving = this.track([uri], async () => {
          const server = await this.connected();
-         const unsaved = this.unsavedWrites.get(args.uri);
-         const document = await server.saveModelDocument({ ...args, clientId: this.clientId });
-         // A write that answered while the save ran made a record the save
-         // may not have persisted, which a restore still needs.
-         if (this.unsavedWrites.get(args.uri) === unsaved) {
-            this.unsavedWrites.delete(args.uri);
+         const document = await send(server);
+         // Kept only when its last answer is newer than the text written. Kept
+         // whenever it changed while the save ran, a record the save covered
+         // survives, and a restore then reports it lost.
+         const unsaved = this.unsavedWrites.get(uri);
+         if (unsaved && unsaved.answer.version <= document.persisted.version) {
+            this.unsavedWrites.delete(uri);
          }
-         const answer = this.answerOf(args.uri, document);
-         this.recordText(args.uri, document);
+         this.recordText(uri, document);
          // The higher of two saves' answers, which may arrive out of order.
-         const saved = this.savedVersions.get(args.uri);
-         if (saved === undefined || answer.version > saved) {
-            this.savedVersions.set(args.uri, answer.version);
+         const saved = this.savedVersions.get(uri);
+         if (saved === undefined || document.persisted.version > saved) {
+            this.savedVersions.set(uri, document.persisted.version);
          }
          return document;
       });

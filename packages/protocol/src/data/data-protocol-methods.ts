@@ -29,6 +29,7 @@ export const DOCUMENT_SERVER_PROTOCOL_METHODS = [
    'getModelDocument',
    'updateModelDocument',
    'saveModelDocument',
+   'persistModelDocument',
    'watchModelDocument',
    'unwatchModelDocument',
    'waitForReady'

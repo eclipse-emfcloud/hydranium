@@ -16,6 +16,7 @@ import {
    type CanonicalUri,
    createRpcProxy,
    Disposable,
+   isConflictError,
    isSessionClosedError,
    LatencyCollector,
    ReferenceSource,
@@ -293,6 +294,10 @@ describe('DataServer', () => {
             (proxy: TestHarness['proxy']) =>
                proxy.saveModelDocument({ uri: URI_A, clientId: unregistered, model: 'name:written', baseVersion: 'any' })
          ],
+         [
+            'persistModelDocument',
+            (proxy: TestHarness['proxy']) => proxy.persistModelDocument({ uri: URI_A, clientId: unregistered, baseVersion: 'any' })
+         ],
          ['closeModelDocument', (proxy: TestHarness['proxy']) => proxy.closeModelDocument({ uri: URI_A, clientId: unregistered })]
       ])('fails %s with the closed-session code and opens, writes and saves nothing', async (_method, request) => {
          const bundle = buildBundle();
@@ -370,6 +375,66 @@ describe('DataServer', () => {
                baseVersion: 'any'
             });
             expect(bundle.textDocuments.getAuthor(URI_A)).toBe('data-server-tools');
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
+   describe('persistModelDocument', () => {
+      it("writes another session's text unchanged, and the saved event names the persisting session", async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const savedEvents: { uri: string; sourceClientId: string }[] = [];
+         const { client: localClient } = makeCapturingDataClient<FakeRoot, FakeDiagnostic>({
+            onDocumentSaved: event => void savedEvents.push({ uri: event.document.uri, sourceClientId: event.sourceClientId })
+         });
+         const pair = makeDuplexConnectionPair();
+         new TestDataServer(pair.left, bundle.services);
+         const proxy = createRpcProxy<DataServerProtocol<FakeRoot, FakeDiagnostic>, DataClientProtocol<FakeRoot, FakeDiagnostic>>(
+            pair.right,
+            {
+               methodNamespace: DATA_SERVER_WIRE_PREFIX,
+               localTarget: localClient,
+               localMethods: DATA_CLIENT_PROTOCOL_METHODS
+            }
+         );
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            await openAs(proxy, bundle, 'editor-2');
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            await proxy.updateModelDocument({ uri: URI_A, clientId: 'editor-2', model: 'name:   spaced\n\n', baseVersion: 'any' });
+
+            await proxy.persistModelDocument({
+               uri: URI_A,
+               clientId: 'editor-1',
+               baseVersion: asModelVersion(bundle.textDocuments.version(URI_A))
+            });
+
+            expect(bundle.fileSystem.writes.map(write => write.content)).toEqual(['name:   spaced\n\n']);
+            await waitFor(() => savedEvents.length === 1);
+            expect(savedEvents).toEqual([{ uri: URI_A, sourceClientId: 'editor-1' }]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('fails on a stale base version with the conflict code and writes nothing', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            const seen = asModelVersion(bundle.textDocuments.version(URI_A));
+            await proxy.updateModelDocument({ uri: URI_A, clientId: 'editor-1', model: 'name:moved', baseVersion: 'any' });
+
+            const failure = await proxy.persistModelDocument({ uri: URI_A, clientId: 'editor-1', baseVersion: seen }).then(
+               () => undefined,
+               (error: unknown) => error
+            );
+
+            expect(isConflictError(failure)).toBe(true);
+            expect(bundle.fileSystem.writes).toEqual([]);
          } finally {
             pair.dispose();
          }

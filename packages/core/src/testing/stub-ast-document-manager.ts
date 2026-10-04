@@ -155,10 +155,12 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
          // (step iff the content changed) — no fabricated version numbers.
          return textDocuments.applyContentChange(uri, text, clientId);
       },
-      async save(uri: string, clientId: string): Promise<void> {
+      async save(uri: string, clientId: string): Promise<number> {
          const text = textDocuments.get(uri)?.getText() ?? '';
+         const version = textDocuments.version(uri);
          await fileSystem.writeFile(UriUtils.toUri(uri), text);
          textDocuments.notifyDidSaveTextDocument({ textDocument: { uri }, text }, clientId);
+         return version;
       },
       // Registers the listener but never calls it by itself — the real manager
       // emits from a `DocumentBuilder.onDocumentPhase(Validated)` hook and the

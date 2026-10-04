@@ -27,7 +27,7 @@ import { asModelVersion } from '../../src/model-service/base-version';
 import type { DataServerProtocol, TransferSaveDocumentArgs } from '../../src/data';
 import type { CloseModelArgs, OpenModelArgs } from '../../src/model-server';
 import type { TransferDiagnostic } from '../../src/transfer-diagnostic';
-import type { TransferDocument } from '../../src/transfer-document';
+import type { TransferDocument, TransferSavedDocument } from '../../src/transfer-document';
 import type { TransferElement } from '../../src/transfer-element';
 
 interface Root extends TransferElement {
@@ -57,7 +57,7 @@ interface RichDiagnostic extends TransferDiagnostic {
 interface WidenedServer extends DataServerProtocol<Root, RichDiagnostic> {
    openModelDocument(args: WidenedOpenArgs): Promise<TransferDocument<Root, RichDiagnostic>>;
    closeModelDocument(args: WidenedCloseArgs): Promise<void>;
-   saveModelDocument(args: WidenedSaveArgs): Promise<TransferDocument<Root, RichDiagnostic>>;
+   saveModelDocument(args: WidenedSaveArgs): Promise<TransferSavedDocument<Root, RichDiagnostic>>;
 }
 
 const URI_A = 'file:///a.x';

@@ -40,6 +40,7 @@ import {
    type Tracer,
    type TransferDiagnostic,
    TransferDocument,
+   type TransferSavedDocument,
    type TransferElement,
    UNKNOWN_CLIENT_ID,
    textHash
@@ -60,6 +61,7 @@ import {
    type CreateSessionArgs,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
+   type TransferPersistDocumentArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
    type TransferDocumentSavedEvent,
@@ -768,9 +770,14 @@ export class DataServer<
       return this.encodeDocument(astDocument);
    }
 
-   async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+   async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
       const astDocument = await this.requireSession(args.clientId).save(this.toSessionWrite(args));
-      return this.encodeDocument(astDocument);
+      return { ...this.encodeDocument(astDocument), persisted: astDocument.persisted };
+   }
+
+   async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
+      const astDocument = await this.requireSession(args.clientId).persist({ uri: args.uri, baseVersion: args.baseVersion });
+      return { ...this.encodeDocument(astDocument), persisted: astDocument.persisted };
    }
 
    /**

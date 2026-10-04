@@ -85,6 +85,19 @@ export type LoadedTransferDocument<TTransfer extends TransferElement, TDiagnosti
    model: TransferModelSnapshot<TTransfer, TDiagnostic>;
 };
 
+/**
+ * What a save or a persist answers: the document, and in `persisted` the
+ * version of the text it wrote to the file. That can differ from
+ * `model.version` either way, since writes land between the build and the
+ * take, so a client marking a version saved takes it from here.
+ */
+export type TransferSavedDocument<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic> = TransferDocument<
+   TTransfer,
+   TDiagnostic
+> & {
+   persisted: { version: TextVersion };
+};
+
 export namespace TransferDocument {
    /**
     * Whether the server had this document. Branch on it where absence is an

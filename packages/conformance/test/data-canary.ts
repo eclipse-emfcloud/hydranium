@@ -56,7 +56,8 @@ import type {
    ReferenceCandidate,
    ReferenceContext,
    TransferDiagnostic,
-   TransferElement
+   TransferElement,
+   TransferSavedDocument
 } from '@hydranium/protocol';
 import type {
    CloseSessionArgs,
@@ -66,6 +67,7 @@ import type {
    GetProjectForUriArgs,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
+   TransferPersistDocumentArgs,
    TransferSaveDocumentArgs,
    TransferUpdateDocumentArgs,
    TransferUpdateDocumentsArgs,
@@ -206,6 +208,12 @@ export interface CanaryDefects {
    readonly partialSets?: boolean;
    /** A session's save of a document it has not opened opens it. */
    readonly saveOpensImplicitly?: boolean;
+   /** A persist writes the text with its trailing whitespace trimmed, as a head re-serialising the model would. */
+   readonly persistReformats?: boolean;
+   /** A persist ignores its base version. */
+   readonly persistUngated?: boolean;
+   /** A save or persist answers without the version it wrote. */
+   readonly persistedVersionOmitted?: boolean;
    /** Closing a connection leaves its sessions live. */
    readonly sessionsOutliveConnection?: boolean;
    /** A write answers with no diagnostics, as a head answering before its document is validated does. */
@@ -527,13 +535,33 @@ export class CanaryDataServer {
       this.releaseIfClosed(args.uri);
    }
 
-   async saveModelDocument(args: TransferSaveDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+   async saveModelDocument(args: TransferSaveDocumentArgs<CanaryRoot>): Promise<TransferSavedDocument<CanaryRoot, TransferDiagnostic>> {
       if (this.defects.saveOpensImplicitly) {
          this.sessions.get(args.clientId)?.add(args.uri);
       }
       await this.updateModelDocument(args);
       this.disk.set(args.uri, typeof args.model === 'string' ? args.model : args.model.text);
-      return this.envelope(args.uri);
+      return this.savedEnvelope(args.uri);
+   }
+
+   async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<CanaryRoot, TransferDiagnostic>> {
+      this.assertSessionMayWrite(args.clientId, args.uri);
+      if (!this.defects.persistUngated) {
+         this.assertBaseVersion(args.uri, args.baseVersion);
+      }
+      const text = this.documents.get(args.uri)?.text ?? '';
+      this.disk.set(args.uri, this.defects.persistReformats ? text.trimEnd() : text);
+      return this.savedEnvelope(args.uri);
+   }
+
+   /** The answer to a save or persist: nothing writes between the take and the answer here, so the version written is the one stored. */
+   private savedEnvelope(uri: string): TransferSavedDocument<CanaryRoot, TransferDiagnostic> {
+      const envelope = this.envelope(uri);
+      if (this.defects.persistedVersionOmitted) {
+         // The defect is the missing field, which the declared type cannot hold.
+         return envelope as TransferSavedDocument<CanaryRoot, TransferDiagnostic>;
+      }
+      return { ...envelope, persisted: { version: this.documents.get(uri)?.version ?? 0 } };
    }
 
    private envelope(uri: string): TransferDocument<CanaryRoot, TransferDiagnostic> {

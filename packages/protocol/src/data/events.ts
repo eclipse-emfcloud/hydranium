@@ -72,8 +72,8 @@ export type TransferDocumentUpdatedListener<
 
 /**
  * Delivered on the data-server when a document was persisted to disk via
- * `DataServerProtocol.saveModelDocument`. Distinct from
- * {@link TransferDocumentUpdatedEvent}: subscribers that only care about
+ * `DataServerProtocol.saveModelDocument` or `persistModelDocument`. Distinct
+ * from {@link TransferDocumentUpdatedEvent}: subscribers that only care about
  * persistence (external sync, editor "saved" indicators, dirty-flag
  * clear) listen for this event family instead of filtering an update
  * stream for `reason: 'saved'`.
@@ -89,10 +89,11 @@ export interface TransferDocumentSavedEvent<
 > {
    document: TransferDocument<TTransfer, TDiagnostic>;
    /**
-    * The client whose `saveModelDocument` call produced this. Every subscriber
-    * receives the event including the originator, which already had the same
-    * state as the RPC response — compare against your own id to drop the echo
-    * rather than re-rendering from it.
+    * The client whose `saveModelDocument` or `persistModelDocument` call
+    * produced this, also when another client wrote the persisted text. Every
+    * subscriber receives the event including the originator, which already had
+    * the same state as the RPC response — compare against your own id to drop
+    * the echo rather than re-rendering from it.
     */
    sourceClientId: string;
 }

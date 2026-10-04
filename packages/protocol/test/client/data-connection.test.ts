@@ -53,7 +53,7 @@ interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
 }
 
-type Method = 'createSession' | 'closeSession' | 'open' | 'create' | 'watch' | 'close' | 'update' | 'updates' | 'save';
+type Method = 'createSession' | 'closeSession' | 'open' | 'create' | 'watch' | 'close' | 'update' | 'updates' | 'save' | 'persist';
 
 interface ServerCall {
    readonly method: Method;
@@ -114,6 +114,9 @@ interface ServerBehaviour {
    updateGate?: Promise<void>;
    /** Held before a save answers. */
    saveGate?: Promise<void>;
+   /** Per URI, the version a persist answers it wrote; absent, the version the server holds. */
+   persistedVersions?: Map<string, number>;
+   persistGate?: Promise<void>;
    /** Refuse every registration as a duplicate id. */
    refuseSessions?: boolean;
    failWatch?: boolean;
@@ -248,10 +251,26 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       },
       saveModelDocument: async (args: { uri: string; clientId: string; model: unknown }): Promise<unknown> => {
          record('save', args);
+         // Taken on arrival: a write landing while the save waits is not
+         // what it wrote.
+         const taken = versionOf(args.uri);
          await behaviour.saveGate;
          const textHash = written(args.uri, args.model);
          behaviour.dirty?.set(args.uri, false);
-         return document(answered(args.uri), versionOf(args.uri), undefined, textHash);
+         return {
+            ...(document(answered(args.uri), versionOf(args.uri), undefined, textHash) as object),
+            persisted: { version: taken }
+         };
+      },
+      persistModelDocument: async (args: { uri: string; clientId: string; baseVersion: unknown }): Promise<unknown> => {
+         record('persist', args);
+         const taken = versionOf(args.uri);
+         await behaviour.persistGate;
+         behaviour.dirty?.set(args.uri, false);
+         return {
+            ...(document(answered(args.uri), versionOf(args.uri), undefined, behaviour.texts?.get(args.uri)) as object),
+            persisted: { version: behaviour.persistedVersions?.get(args.uri) ?? taken }
+         };
       }
    };
    bindRpcMethods(
@@ -268,7 +287,8 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          'closeModelDocument',
          'updateModelDocument',
          'updateModelDocuments',
-         'saveModelDocument'
+         'saveModelDocument',
+         'persistModelDocument'
       ],
       { methodNamespace: DATA_SERVER_WIRE_PREFIX }
    );
@@ -1390,6 +1410,105 @@ describe('DataSession after a dropped connection', () => {
          await panel.connected();
 
          expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps no record of a write that a persist of the document saved', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const { connection, calls, port, dropTransport, dispose } = harness({ texts });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const edited = await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.persistDocument({ uri: URI_A, baseVersion: edited.model!.version });
+         const before = calls.length;
+
+         // The re-open finds another client's text, which a record of the
+         // persisted write would report as the write lost.
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls, 'persist')).toEqual([{ method: 'persist', clientId: 'panel', uri: URI_A, baseVersion: edited.model!.version }]);
+         expect(of(calls.slice(before), 'update')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the record of a write that landed after a persist took its text, whatever order they answer in', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const held = gate();
+      const behaviour: ServerBehaviour = { texts, versions, updateGate: held.promise, persistedVersions: new Map([[URI_A, 1]]) };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
+         // The persist wrote the text at version 1, and the write lands at 2
+         // before the persist answers with the model built from it.
+         versions.set(URI_A, 2);
+         texts.set(URI_A, 'edited');
+         await panel.persistDocument({ uri: URI_A, baseVersion: 'any' });
+         held.release();
+         await late;
+         const before = calls.length;
+
+         // A restarted server, whose file holds what the persist wrote.
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         versions.set(URI_A, 1);
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update').map(call => call.model)).toEqual(['edited']);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('drops the record of a write that answered while a persist ran, when the persist wrote it', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const versions = new Map([[URI_A, 1]]);
+      const updating = gate();
+      const persisting = gate();
+      const behaviour: ServerBehaviour = {
+         texts,
+         versions,
+         updateGate: updating.promise,
+         persistGate: persisting.promise,
+         persistedVersions: new Map([[URI_A, 2]])
+      };
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         const write = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
+         const persisted = panel.persistDocument({ uri: URI_A, baseVersion: 'any' });
+         await waitFor(() => of(calls, 'persist').length === 1, { message: 'the persist never reached the server' });
+         // The write lands at 2, the persist takes it, and the write answers
+         // while the persist is still writing.
+         versions.set(URI_A, 2);
+         updating.release();
+         await write;
+         persisting.release();
+         await persisted;
+         const before = calls.length;
+
+         // The re-open finds another client's text, which a record of the
+         // persisted write would report as the write lost.
+         dropTransport();
+         texts.set(URI_A, 'theirs');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update')).toEqual([]);
          expect(port.reported).toEqual([]);
       } finally {
          dispose();

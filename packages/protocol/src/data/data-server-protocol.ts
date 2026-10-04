@@ -10,7 +10,7 @@
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
-import type { TransferDocument } from '../transfer-document';
+import type { TransferDocument, TransferSavedDocument } from '../transfer-document';
 import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
 import type {
@@ -27,6 +27,7 @@ import type {
    CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   TransferPersistDocumentArgs,
    TransferSaveDocumentArgs,
    WatchModelDocumentArgs,
    TransferUpdateDocumentArgs,
@@ -138,12 +139,22 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
 
    /**
     * Write a document as the session `clientId`, which must have it open, and
-    * persist it to disk. The response is the post-save document
-    * state (matches the file on disk). Save semantics depend on the
-    * filesystem-provider wiring; rejection paths surface as awaited
-    * promise rejections.
+    * persist it to disk. The response is the latest build of the document,
+    * with the version of the text written in `persisted`. Save semantics
+    * depend on the filesystem-provider wiring; rejection paths surface as
+    * awaited promise rejections.
     */
-   saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+   saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
+
+   /**
+    * Persist the text the server holds for a document the session `clientId`
+    * has open, as it is: no update and no serialisation, so another client's
+    * unsaved text keeps its formatting. `baseVersion` is checked in the step
+    * that takes the text, so text that moved on fails with a `ConflictError`
+    * code. The saved event names this session, whoever wrote the text.
+    * Responds as {@link saveModelDocument} does.
+    */
+   persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
 
    /**
     * Start watching `(uri, clientId)`. The server starts dispatching

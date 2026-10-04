@@ -3,7 +3,8 @@
 Use this when a non-LSP client needs one domain operation over the data head.
 Do not add a method for a document lifecycle operation already provided by
 `DataServer`; use `openModelDocument`, `updateModelDocument`,
-`saveModelDocument`, and the watch methods for those jobs.
+`saveModelDocument`, `persistModelDocument`, and the watch methods for those
+jobs.
 
 Heads: data
 

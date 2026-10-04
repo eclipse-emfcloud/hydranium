@@ -867,13 +867,90 @@ describe('ModelService rebuild and save', () => {
       const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
       // Pass `model` as a string to bypass the rewrite + serialize path; no
       // `version` so the conflict gate is inert (covered elsewhere).
-      await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: 'any' });
+      const saved = await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: 'any' });
+      expect(saved.persisted.version).toBe(bundle.textDocuments.version(URI_A));
       // update applied the new text...
       const change = bundle.textDocuments.changes.find(entry => entry.text === 'name: saved\n');
       expect(change).toBeDefined();
       // ...then save persisted through the file system and recorded the save.
       expect(bundle.fileSystem.writes.map(write => write.uri)).toContain(URI_A);
       expect(bundle.textDocuments.saves).toContainEqual({ uri: URI_A, clientId: 'editor-1' });
+   });
+
+   it("persist writes another session's text as it is, under this session, without an update", async () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      });
+      const writer = openSession(bundle.modelService, bundle.textDocuments, 'editor-2');
+      const persister = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
+      await writer.update({ uri: URI_A, model: 'name:   spaced\n\n', baseVersion: 'any' });
+      const changes = bundle.textDocuments.changes.length;
+
+      await persister.persist({ uri: URI_A, baseVersion: asModelVersion(bundle.textDocuments.version(URI_A)) });
+
+      expect(bundle.fileSystem.writes).toContainEqual({ uri: URI_A, content: 'name:   spaced\n\n' });
+      expect(bundle.textDocuments.saves).toContainEqual({ uri: URI_A, clientId: 'editor-1' });
+      expect(bundle.textDocuments.changes).toHaveLength(changes);
+   });
+
+   it('persist reports the version of the text it wrote, not of a write that landed during the write', async () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      });
+      const writer = openSession(bundle.modelService, bundle.textDocuments, 'editor-2');
+      const persister = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
+      const taken = bundle.textDocuments.version(URI_A);
+      let release = (): void => undefined;
+      const writing = new Promise<void>(resolve => (release = resolve));
+      const writeFile = bundle.fileSystem.writeFile.bind(bundle.fileSystem);
+      bundle.fileSystem.writeFile = async (uri, content) => {
+         await writing;
+         return writeFile(uri, content);
+      };
+
+      const persisting = persister.persist({ uri: URI_A, baseVersion: asModelVersion(taken) });
+      await writer.update({ uri: URI_A, model: 'name:later\n', baseVersion: 'any' });
+      release();
+      const persisted = await persisting;
+
+      expect(bundle.textDocuments.version(URI_A)).toBeGreaterThan(taken);
+      expect(persisted.persisted.version).toBe(taken);
+   });
+
+   it('save and persist report the version the manager wrote, which a coalesced save takes from a newer one', async () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      });
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'editor-1');
+      const written = asModelVersion(bundle.textDocuments.version(URI_A) + 5);
+      const save = bundle.astDocumentManager.save.bind(bundle.astDocumentManager);
+      bundle.astDocumentManager.save = async (uri, clientId) => {
+         await save(uri, clientId);
+         return written;
+      };
+
+      const persisted = await session.persist({ uri: URI_A, baseVersion: 'any' });
+      const saved = await session.save({ uri: URI_A, model: 'name: saved\n', baseVersion: 'any' });
+
+      expect(persisted.persisted.version).toBe(written);
+      expect(saved.persisted.version).toBe(written);
+   });
+
+   it('persist refuses a stale base version and writes nothing', async () => {
+      const { bundle, session } = buildConflictBundle(3);
+      await expect(session.persist({ uri: URI_A, baseVersion: asModelVersion(1) })).rejects.toBeInstanceOf(ConflictError);
+      expect(bundle.fileSystem.writes).toEqual([]);
+      expect(bundle.textDocuments.saves).toEqual([]);
+   });
+
+   it('persist refuses a document the session does not have open and writes nothing', async () => {
+      const bundle = makeTestServices<FakeRoot>({
+         seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
+      });
+      openSession(bundle.modelService, bundle.textDocuments, 'editor-2');
+      const stranger = bundle.modelService.createSession('test', 'editor-1');
+      await expect(stranger.persist({ uri: URI_A, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      expect(bundle.fileSystem.writes).toEqual([]);
    });
 });
 
