@@ -536,7 +536,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * older repair then puts text on disk that no participant holds. The
     * skipped repair loses nothing: the edit drives a build of its own, and a
     * save writes the store's text. A file that cannot be read is left alone
-    * too: there is no evidence it matches.
+    * too: there is no evidence it matches. So is a file an editor opened in the
+    * meantime: the editor receives the repair as an unsaved change, and writing
+    * it would change the file under the editor.
     */
    protected async persistIfDiskMatches(document: TextDocument, parsedFrom: string): Promise<void> {
       const uri = UriUtils.toUri(document.uri);
@@ -558,6 +560,10 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          }
          if (this.textDocuments.get(document.uri)?.getText() !== repaired) {
             this.tracer.with(document.uri).debug('Held document changed while disk was read, repair left to that change');
+            return;
+         }
+         if (this.textDocuments.isOpenInLanguageClient(document.uri)) {
+            this.tracer.with(document.uri).debug('Editor attached while disk was read, repair left to its save');
             return;
          }
          await this.fileSystemProvider.writeFile(uri, repaired);
