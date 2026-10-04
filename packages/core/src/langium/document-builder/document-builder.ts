@@ -27,6 +27,7 @@ import {
 // namespace helper to read the `string | MarkupContent` union without
 // restating it.
 import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
+import type { HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
@@ -154,8 +155,22 @@ export interface ScheduledUpdate {
     * the text version of each changed URI the text store holds at that point.
     */
    takenVersions?: Map<string, number>;
+   /** Set with {@link takenVersions}: the clients holding each changed URI in the text store at that point. */
+   takenClients?: Map<string, readonly string[]>;
    /** The lock's promise for this write: settles when the build completes or is cancelled. */
    readonly promise: Promise<void>;
+}
+
+/**
+ * Whether `store` reports the clients holding a document. Checked by shape,
+ * because importing the store's class here closes an import cycle.
+ */
+function tracksClients(store: object | undefined): store is Pick<HydraniumTextDocuments, 'clientsOf'> {
+   return store !== undefined && 'clientsOf' in store && typeof store.clientsOf === 'function';
+}
+
+function sameClients(taken: readonly string[] | undefined, current: readonly string[]): boolean {
+   return taken !== undefined && taken.length === current.length && taken.every((client, i) => client === current[i]);
 }
 
 /**
@@ -681,13 +696,29 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * from the running `update`'s `onUpdate` call, which reported the store as
     * it was when the build started; at an unchanged version that is the store
     * the request sees.
+    *
+    * The clients holding each URI must be unchanged too. Phase listeners that
+    * ask who holds a document, such as the push to an editor, may already have
+    * run for it, so a client that attached since would get no build that sees it.
     */
    protected canJoinRunningUpdate(scheduled: ScheduledUpdate, changed: URI[], deleted: URI[]): boolean {
       const taken = scheduled.takenVersions;
+      const takenClients = scheduled.takenClients;
       if (!taken || deleted.length > 0) {
          return false;
       }
-      return changed.every(uri => taken.has(uri.toString()) && taken.get(uri.toString()) === this.textDocuments?.get(uri)?.version);
+      return changed.every(
+         uri =>
+            taken.has(uri.toString()) &&
+            taken.get(uri.toString()) === this.textDocuments?.get(uri)?.version &&
+            sameClients(takenClients?.get(uri.toString()), this.clientsHolding(uri))
+      );
+   }
+
+   /** The clients holding `uri` in the text store, or none when the store does not track them. */
+   protected clientsHolding(uri: URI): readonly string[] {
+      const store = this.textDocuments;
+      return tracksClients(store) ? store.clientsOf(uri.toString()) : [];
    }
 
    /**
@@ -700,12 +731,15 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected async runScheduledUpdate(request: ScheduledUpdate, token: CancellationToken): Promise<void> {
       try {
          const taken = new Map<string, number>();
+         const takenClients = new Map<string, readonly string[]>();
          for (const [key, uri] of request.changed) {
             const version = this.textDocuments?.get(uri)?.version;
             if (version !== undefined) {
                taken.set(key, version);
             }
+            takenClients.set(key, this.clientsHolding(uri));
          }
+         request.takenClients = takenClients;
          request.takenVersions = taken;
          if (request.reason !== undefined) {
             this.markNextReason(request.reason);
