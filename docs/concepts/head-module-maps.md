@@ -161,8 +161,9 @@ mirrors that structure over `HydraniumGlspWorkerServerLauncher` and drops the
 socket lifecycle; its `context` is a required transferred `MessagePort`. Per
 diagram open, `HydraniumGlspStorage` registers the GLSP client id as a client
 session and loads the document through it, the adopter GModel factory renders
-it, and user operations run through `HydraniumGlspRecordingCommand` back into
-the shared AST ([client sessions](client-sessions.md#over-the-glsp-head)).
+it, and each user operation edits a working copy of the source root, written
+back to the shared document once when the operation completes
+([client sessions](client-sessions.md#over-the-glsp-head)).
 Detail + gotchas: the `hydranium-glsp-server` skill.
 
 ---

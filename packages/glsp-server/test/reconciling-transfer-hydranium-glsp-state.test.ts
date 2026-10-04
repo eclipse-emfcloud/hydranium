@@ -11,13 +11,15 @@ import { describe, expect, it } from 'vitest';
 import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
-import { type AstNode, DocumentState } from '@hydranium/langium';
+import { type AstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { AstDocument, type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import { type BaseVersion, asModelVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
+import { HydraniumGlspOperationCommand, runOperation } from '../src/command/hydranium-glsp-operation-command.js';
+import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -114,6 +116,9 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
       debug: (msg: string) => harness.debugs.push(msg),
       async time<T>(_label: string, callback: () => Promise<T> | T): Promise<T> {
          return await callback();
+      },
+      for(): unknown {
+         return childLogger;
       }
    };
    const sharedServices = {
@@ -125,6 +130,7 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
       },
       workspace: {
          ModelLedger: ledger,
+         DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
          },
@@ -388,20 +394,21 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(harness.warns.some(msg => msg.includes('conflict'))).toBe(true);
       });
 
-      it('on an unavailable outcome, force-persists based on any version and warns', async () => {
+      it('on an unavailable outcome, writes nothing more, throws the conflict and warns', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
-         harness.nextUpdatedRoot = makeRoot('forced');
          harness.resolve = async () => ({ status: 'unavailable' });
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         const before = makeRoot('before');
+         state.setSourceRoot('file:///a.a', before);
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
+         await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5))).rejects.toBeInstanceOf(
+            ConflictError
+         );
 
-         expect(harness.updateCalls).toHaveLength(2);
-         expect(harness.updateCalls[1].baseVersion).toBe('any');
-         expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
-         expect(harness.warns.some(msg => msg.includes('unavailable') || msg.includes('forcing'))).toBe(true);
+         expect(harness.updateCalls).toHaveLength(1);
+         expect(state.sourceRoot).toBe(before);
+         expect(harness.warns.some(msg => msg.includes('unavailable'))).toBe(true);
       });
 
       it('re-throws a non-conflict error from persist', async () => {
@@ -448,5 +455,236 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          state.setSourceRoot('file:///a.a', makeRoot());
          expect(state.get<string>(SOURCE_URI_ARG)).toBe('file:///a.a');
       });
+   });
+});
+
+describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
+   it('writes the projection of the copy once when the operation ends, and leaves the built root unedited', async () => {
+      const harness = makeHarness();
+      const built = makeRoot('built');
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', built);
+      let during: { copy: boolean; writes: number } | undefined;
+      const command = new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Edit', () => {
+         (state.sourceRoot as { label: string }).label = 'first';
+         (state.sourceRoot as { label: string }).label = 'second';
+         during = { copy: state.sourceRoot !== built, writes: harness.updateCalls.length };
+      });
+
+      const executed = await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => command);
+
+      expect({ executed, during, writes: harness.updateCalls.map(call => call.model.label), builtLabel: built.label }).toEqual({
+         executed: 'executed',
+         during: { copy: true, writes: 0 },
+         writes: ['second'],
+         builtLabel: 'built'
+      });
+   });
+
+   it('writes nothing and captures the built root again when a command throws', async () => {
+      const harness = makeHarness();
+      const built = makeRoot('built');
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', built);
+      const command = new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Fail', () => {
+         (state.sourceRoot as { label: string }).label = 'edited';
+         throw new Error('command failed');
+      });
+
+      const run = runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => command);
+
+      await expect(run).rejects.toThrow('command failed');
+      expect({ writes: harness.updateCalls.length, sourceRoot: state.sourceRoot === built, label: built.label }).toEqual({
+         writes: 0,
+         sourceRoot: true,
+         label: 'built'
+      });
+   });
+
+   it('refuses setSourceRoot while an operation is open', async () => {
+      const state = createState(makeHarness());
+      state.setSourceRoot('file:///a.a', makeRoot('built'));
+
+      const run = runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         state.setSourceRoot('file:///a.a', makeRoot('other'));
+         return undefined;
+      });
+
+      await expect(run).rejects.toThrow('setSourceRoot');
+   });
+
+   it('gives two spellings of one document one working copy', async () => {
+      const state = createState(makeHarness());
+      const services = (state as unknown as { sharedServices: { workspace: { DocumentUriPolicy: unknown } } }).sharedServices;
+      services.workspace.DocumentUriPolicy = { canonicalUri: (uri: string) => uri.toLowerCase() };
+      state.setSourceRoot('file:///a.a', makeRoot('built'));
+      let same: boolean | undefined;
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         same = state.workingRootOf('file:///A.A') === state.sourceRoot;
+         return undefined;
+      });
+
+      expect(same).toBe(true);
+   });
+
+   it('asks the reference builder about the built nodes and points the reference at the copy', async () => {
+      const state = createState(makeHarness());
+      const asked: AstNode[][] = [];
+      const builder = {
+         getReferenceName: (target: AstNode, source: AstNode) => {
+            asked.push([target, source]);
+            return 'qualified';
+         },
+         toOwnReference: (target: AstNode & { name?: string }) => (target.name ? { ref: target, $refText: target.name } : undefined)
+      };
+      const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown } }).sharedServices;
+      services.ServiceRegistry = { getServicesFor: () => ({ references: { ReferenceBuilder: builder } }) };
+      const item = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'a' });
+      const built = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r', members: [item] });
+      state.setSourceRoot('file:///a.a', built);
+      let observed: { visible: unknown[]; own: string | undefined } | undefined;
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const copy = state.sourceRoot as unknown as { members: Array<AstNode & { name: string }> };
+         copy.members[0].name = 'renamed';
+         const visible = state.referenceTo(copy.members[0], state.sourceRoot);
+         const own = state.referenceTo(copy.members[0], undefined, { tier: 'own' });
+         observed = { visible: [visible?.$refText, visible?.ref === copy.members[0]], own: own?.$refText };
+         return undefined;
+      });
+
+      expect({ observed, asked: asked.map(([target, source]) => [target === item, source === built]) }).toEqual({
+         observed: { visible: ['qualified', true], own: 'renamed' },
+         asked: [[true, true]]
+      });
+   });
+
+   it('asks about the nearest built container of a source the operation created', async () => {
+      const state = createState(makeHarness());
+      const asked: AstNode[] = [];
+      const builder = {
+         getReferenceName: (_target: AstNode, source: AstNode) => {
+            asked.push(source);
+            return 'qualified';
+         }
+      };
+      const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown } }).sharedServices;
+      services.ServiceRegistry = { getServicesFor: () => ({ references: { ReferenceBuilder: builder } }) };
+      const item = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'a' });
+      const built = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r', members: [item] });
+      state.setSourceRoot('file:///a.a', built);
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const copy = state.sourceRoot as unknown as AstNode & { members: AstNode[] };
+         const fresh = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'new', $container: copy });
+         copy.members.push(fresh);
+         state.referenceTo(copy.members[0], fresh);
+         return undefined;
+      });
+
+      expect(asked.map(source => source === built)).toEqual([true]);
+   });
+
+   it('runs the next exclusive call after one that threw', async () => {
+      const state = createState(makeHarness());
+      const failed = state.runExclusive(() => {
+         throw new Error('run failed');
+      });
+      const next = state.runExclusive(() => 'ran');
+
+      await expect(failed).rejects.toThrow('run failed');
+      await expect(next).resolves.toBe('ran');
+   });
+
+   it('gives a copied multi-reference targets in the copy, not shared with the built root', async () => {
+      const state = createState(makeHarness());
+      const item = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'a' });
+      const link = { $refText: 'a', items: [{ ref: item }] };
+      const built = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r', members: [item], link, links: [link] });
+      state.setSourceRoot('file:///a.a', built);
+      let observed: { shared: boolean; target: boolean; arrayTarget: boolean } | undefined;
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const copy = state.sourceRoot as unknown as {
+            members: AstNode[];
+            link: { items: Array<{ ref: AstNode }> };
+            links: Array<{ items: Array<{ ref: AstNode }> }>;
+         };
+         observed = {
+            shared: copy.link === link || copy.links[0] === link,
+            target: copy.link.items[0].ref === copy.members[0],
+            arrayTarget: copy.links[0].items[0].ref === copy.members[0]
+         };
+         return undefined;
+      });
+
+      expect(observed).toEqual({ shared: false, target: true, arrayTarget: true });
+   });
+});
+
+/** A node of `$type` contained in `root`'s `members`, so it routes by `root`'s document. */
+function memberOf(root: AstNode, $type: string): AstNode {
+   const members = (root as unknown as { members: AstNode[] }).members;
+   const member = makeFakeAstNode<AstNode>({ $type, $container: root, $containerProperty: 'members', $containerIndex: members.length });
+   members.push(member);
+   return member;
+}
+
+describe('the copy nodes of an operation', () => {
+   it('answer every node-routed seam as the built node they were copied from, on the primary and a foreign-language secondary', async () => {
+      const harness = makeHarness();
+      const state = createState(harness);
+      const keyProviderFor = (prefix: string): { getElementKey(node?: AstNode): string | undefined } => ({
+         getElementKey: node => (node ? `${prefix}:${node.$type}` : undefined)
+      });
+      const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown } }).sharedServices;
+      services.ServiceRegistry = makeStubServiceRegistry([
+         { languageId: 'test', fileExtensions: ['.a'], services: { references: { ElementKeyProvider: keyProviderFor('dgm') } } },
+         { languageId: 'other', fileExtensions: ['.other'], services: { references: { ElementKeyProvider: keyProviderFor('other') } } }
+      ]);
+      const foreignUri = 'file:///b.other';
+      const foreignRoot = makeFakeAstNode<AstNode>({
+         $type: 'ForeignRoot',
+         $document: { uri: URI.parse(foreignUri) } as unknown as LangiumDocument,
+         members: []
+      });
+      const foreignItem = memberOf(foreignRoot, 'ForeignItem');
+      harness.documents.set(foreignUri, {
+         uri: { toString: () => foreignUri },
+         state: DocumentState.Validated,
+         parseResult: { value: foreignRoot }
+      });
+      const primaryRoot = makeFakeAstNode<TestRoot>({
+         $type: 'TestRoot',
+         label: 'r',
+         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+         members: []
+      });
+      const primaryItem = memberOf(primaryRoot, 'PrimaryItem');
+      state.setSourceRoot('file:///a.a', primaryRoot);
+      state.index.indexSemanticElement(state.index.findId(foreignItem)!, foreignItem);
+      const seams = (node: AstNode): unknown => ({
+         findId: state.index.findId(node),
+         createId: state.index.createId(node),
+         resolves: state.index.findSemanticElement(state.index.findId(node) ?? '') !== undefined,
+         language: state.languageServicesFor(node)?.LanguageMetaData.languageId
+      });
+      const built = { primary: seams(primaryItem), foreign: seams(foreignItem) };
+      let copied: unknown;
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const primaryCopy = (state.sourceRoot as unknown as { members: AstNode[] }).members[0];
+         const foreignCopy = (state.workingRootOf(foreignUri) as unknown as { members: AstNode[] }).members[0];
+         copied = {
+            copies: primaryCopy !== primaryItem && foreignCopy !== foreignItem,
+            primary: seams(primaryCopy),
+            foreign: seams(foreignCopy),
+            resolvesToCopy: state.index.findSemanticElement(state.index.findId(foreignCopy) ?? '') === foreignCopy
+         };
+         return undefined;
+      });
+
+      expect(copied).toEqual({ copies: true, primary: built.primary, foreign: built.foreign, resolvesToCopy: true });
    });
 });

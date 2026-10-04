@@ -407,18 +407,19 @@ the session, which closes everything it has open.
 `ReconcilingMultiDocumentGlspState` writes the documents of the write set that
 changed in one `updateAll` on the session, so a conflict on any of them leaves
 every one as it was. Each is gated: the source document on the `baseVersion` the
-recording command took, each other document on `secondaryBaseVersion`, by default
-the version it had when the source root was last read. Override
+operation read the model at, each other document on `secondaryBaseVersion`, by
+default the version it had when the source root was last read. Override
 `secondaryBaseVersion` to return `'any'` to force a document's writes. A
 conflict on any document goes to the state's conflict resolver for the whole
-set, and a merged retry is gated on the versions its refetch read. A write
-based on `'any'`, which an undo or redo pass and a retry whose refetch is
-unavailable make, forces every document. Before writing, the state opens each
-document of the set through `openForWrite`; a state whose write set can name a
-document that does not exist yet overrides it to create the document through
-`createSecondaryDocument`, since the session's writes open nothing. The single-document states write through the session's
-`update`. Every state refuses to write without a session, so a write after the
-diagram ended fails.
+set, and a merged retry is gated on the versions its refetch read. A conflict
+whose refetch is unavailable fails the write with its `ConflictError` rather
+than forcing it. A write based on `'any'` forces every document. Before writing,
+the state opens each document of the set through `openForWrite`; a state whose
+write set can name a document that does not exist yet overrides it to create the
+document through `createSecondaryDocument`, since the session's writes open
+nothing. The single-document states write through the session's `update`. Every
+state refuses to write without a session, so a write after the diagram ended
+fails.
 
 A save persists the text of every document the session has open: the source
 document, the write set, and the documents that left the write set since the

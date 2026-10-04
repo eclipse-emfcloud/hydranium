@@ -87,10 +87,10 @@ Build the app container, load `HydraniumGlspAppModule` plus your own app modules
 and hand the result to `startGlspServer` (or `startGlspServerInWorker`, whose
 `context` is a required transferred `MessagePort` whose page end connects
 through `createMessagePortTransport`). Per diagram open, storage
-loads the document, your GModel factory renders it, and user operations travel
-back into the shared AST through the recording command, after which the GModel is
-re-derived and every listener on that document is notified. The module-by-module
-map is in
+loads the document, your GModel factory renders it, and each user operation
+edits a working copy of the source root, written back to the shared document
+once when the operation completes, after which the GModel is re-derived and
+every listener on that document is notified. The module-by-module map is in
 [`docs/concepts/head-module-maps.md`](../../docs/concepts/head-module-maps.md);
 the worker bringup and its two bundler accommodations are in
 [`docs/concepts/browser-hosting.md`](../../docs/concepts/browser-hosting.md); the

@@ -269,6 +269,7 @@ interface SubscriptionLog {
 function makeSubscriptionRecordingServices(): { services: ServerSharedServices; log: SubscriptionLog } {
    const log: SubscriptionLog = { subscribed: [], disposed: [] };
    const services = makeNoopSharedServices<ServerSharedServices>({
+      workspace: { DocumentUriPolicy: { canonicalUri: (uri: string) => uri } },
       model: {
          ModelService: {
             ...makeSessionModelService(),
@@ -338,6 +339,7 @@ function createPolicyStorage(options: {
       makeNoopSharedServices<ServerSharedServices>({
          workspace: {
             ModelLedger: new DefaultModelLedger(),
+            DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
             AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
             TextDocuments: {
                isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
@@ -469,6 +471,7 @@ describe('HydraniumGlspStorage', () => {
             },
             workspace: {
                ModelLedger: new DefaultModelLedger(),
+               DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
                AstDocumentManager: {
                   save: async (uri: string) => {
                      calls.push(`save ${uri}`);

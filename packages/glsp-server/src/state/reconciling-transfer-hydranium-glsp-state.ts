@@ -27,8 +27,8 @@ import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
  *   field-level shape is what lets `fast-json-patch` diff per field, so undo /
  *   redo and forward-write reconcile act per field instead of clobbering the
  *   whole document.
- * - {@link base} — the last in-sync projection, captured on every
- *   {@link setSourceRoot}. A forward-write conflict reconciles the user's
+ * - {@link base} — the last in-sync projection, taken on every capture of
+ *   the built root. A forward-write conflict reconciles the user's
  *   intent (base → ours) against the server's current root (theirs).
  * - {@link updateSourceModel} — the concrete reconcile template: persist,
  *   and on a `ConflictError` consult the injected `conflictResolver` and act
@@ -51,11 +51,8 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
    implements JsonModelState<TSourceModel>
 {
    /**
-    * Last in-sync source-model projection, captured on every
-    * {@link setSourceRoot} (initial load + post-update). The base a
-    * forward-write conflict reconciles against: it stays the pre-command
-    * state because operation handlers mutate `_sourceRoot` in place during
-    * `execute` while `setSourceRoot` only re-runs once the write commits.
+    * The projection a forward-write conflict reconciles the user's intent
+    * from, taken from the built root on every capture.
     */
    protected base!: TSourceModel;
 
@@ -68,11 +65,11 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * Synchronous — the encoder walks the in-memory AST without serialising.
     */
    get sourceModel(): TSourceModel {
-      return this.sharedServices.model.TransferEncoder.toTransfer(this._sourceRoot, 'grammar') as unknown as TSourceModel;
+      return this.sharedServices.model.TransferEncoder.toTransfer(this.sourceRoot, 'grammar') as unknown as TSourceModel;
    }
 
-   override setSourceRoot(uri: string, root: TRoot): void {
-      super.setSourceRoot(uri, root);
+   protected override captureSourceRoot(uri: string, root: TRoot): void {
+      super.captureSourceRoot(uri, root);
       this.base = this.sourceModel;
    }
 
@@ -91,13 +88,13 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
       return reconcileSourceModelWrite<TSourceModel>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
             const { root } = await this.persist(candidate, candidateBaseVersion);
-            this.setSourceRoot(this._sourceUri, root);
+            this.captureWrittenRoot(root);
          },
          refetch: () => this.refetch(),
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
-         onConflictDropped: () => this.refreshSourceRoot(),
+         onConflictDropped: () => this.writeDropped(),
          maxWrites: this.maxSourceModelWrites
       });
    }

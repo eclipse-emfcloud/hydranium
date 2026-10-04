@@ -16,8 +16,10 @@ import {
    DiagramModule,
    type InstanceMultiBinding,
    type MultiBinding,
+   OperationActionHandler,
    RequestModelActionHandler,
-   SetEditModeActionHandler
+   SetEditModeActionHandler,
+   UndoRedoActionHandler
 } from '@eclipse-glsp/server';
 import { injectable, type interfaces } from 'inversify';
 import type { LanguageMetaData } from '@hydranium/langium';
@@ -25,6 +27,8 @@ import { type ServerLanguageServices, type ServerSharedServices, typedMetadata }
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
+import { HydraniumGlspOperationActionHandler } from '../command/hydranium-glsp-operation-action-handler.js';
+import { HydraniumGlspUndoRedoActionHandler } from '../command/hydranium-glsp-undo-redo-action-handler.js';
 import { DefaultDiagramStatusReporter, DiagramStatusReporter } from '../status/diagram-status-reporter.js';
 import { HydraniumGlspRequestModelActionHandler } from '../status/hydranium-glsp-request-model-action-handler.js';
 import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-set-edit-mode-action-handler.js';
@@ -39,8 +43,10 @@ import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-
  * `super.configure(...)` and repeat what the base's own overrides of
  * `configure`, `configureActionHandlers`, `configureClientSessionInitializers`
  * and `bindCommandStack` do. Without the status bindings among them, nothing
- * tells the client why its diagram is read-only. The base class is the
- * preferred entry point because it makes the declaration non-optional.
+ * tells the client why its diagram is read-only; without the operation and
+ * undo handlers, operation handlers edit the built root every reader shares.
+ * The base class is the preferred entry point because it makes the
+ * declaration non-optional.
  *
  * **Why the session tier.** GLSP builds its app container once per process,
  * before any document exists, so a per-language service bound there can only
@@ -155,14 +161,19 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
 
    /**
     * Adds {@link HydraniumGlspRequestSaveModelActionHandler}, the save the
-    * Theia client sends, beside GLSP's own save handler, and replaces the GLSP
+    * Theia client sends, beside GLSP's own save handler; replaces the GLSP
     * handlers that write the client's status or edit mode with ones that set a
-    * diagram status instead.
+    * diagram status instead; and runs operations, undo and redo through
+    * {@link HydraniumGlspOperationActionHandler} and
+    * {@link HydraniumGlspUndoRedoActionHandler}, without which handlers edit
+    * the built root every reader shares.
     */
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
       binding.add(HydraniumGlspRequestSaveModelActionHandler);
       binding.rebind(RequestModelActionHandler, HydraniumGlspRequestModelActionHandler);
       binding.rebind(SetEditModeActionHandler, HydraniumGlspSetEditModeActionHandler);
+      binding.rebind(OperationActionHandler, HydraniumGlspOperationActionHandler);
+      binding.rebind(UndoRedoActionHandler, HydraniumGlspUndoRedoActionHandler);
    }
 }

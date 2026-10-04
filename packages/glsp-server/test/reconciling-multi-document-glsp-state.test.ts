@@ -169,6 +169,7 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: {
          ModelLedger: ledger,
+         DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
          LangiumDocuments: {
             getDocument: (uri: { toString(): string }) => harness.documents.get(uri.toString())
          },

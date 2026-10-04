@@ -13,6 +13,7 @@ import { type AstNode } from '@hydranium/langium';
 import { type ClientSession, type ClientSessionWriteArgs } from '@hydranium/core';
 import { asModelVersion, type BaseVersion, type ModelVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
+import { openOperationOf } from '../command/hydranium-glsp-operation-command.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
 /**
@@ -76,9 +77,9 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    implements JsonModelState<MultiDocumentSourceModel<TPrimary>>
 {
    /**
-    * Last in-sync projection across the whole write set, captured on every
-    * {@link setSourceRoot}. Same role as the single-document base: the state a
-    * forward-write conflict reconciles the user's intent against.
+    * The projection across the whole write set that a forward-write conflict
+    * reconciles the user's intent from, taken from the built roots on every
+    * capture.
     */
    protected base!: MultiDocumentSourceModel<TPrimary>;
 
@@ -101,25 +102,66 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
             secondaries[uri] = projection;
          }
       }
-      return { primary: this.projectRoot(this._sourceRoot), secondaries };
+      return { primary: this.projectRoot(this.sourceRoot), secondaries };
    }
 
-   override setSourceRoot(uri: string, root: TRoot): void {
-      super.setSourceRoot(uri, root);
+   protected override captureSourceRoot(uri: string, root: TRoot): void {
+      super.captureSourceRoot(uri, root);
       this.trackWriteSet(uri);
       this.base = this.sourceModel;
    }
 
    /**
+    * Also takes a secondary first tracked during an operation into the base
+    * and into the operation's projection from before its command, both from
+    * the root its version was read from: a conflict on it reconciles from the
+    * revision the operation's copy describes, and undoing the operation
+    * restores it. A document that does not exist yet has no projection to
+    * restore, so an undo leaves what the operation wrote into it.
+    */
+   override trackSecondaryDocument(uri: string): void {
+      const added = uri !== this._sourceUri && !this.secondaryUris.includes(uri);
+      super.trackSecondaryDocument(uri);
+      const root = this.capturedRootOf(uri);
+      if (root === undefined) {
+         return;
+      }
+      const projection = this.projectRoot(root);
+      if (this.base !== undefined && !(uri in this.base.secondaries)) {
+         this.base = { ...this.base, secondaries: { ...this.base.secondaries, [uri]: projection } };
+      }
+      if (added) {
+         openOperationOf(this)?.amendBefore(before =>
+            isMultiDocumentModel(before) ? { ...before, secondaries: { ...before.secondaries, [uri]: projection } } : before
+         );
+      }
+   }
+
+   /**
+    * During an operation, also drops the untracked documents from its
+    * projection from before its command: they are not written, so the
+    * operation's undo and redo leave them as they are.
+    */
+   override untrackSecondaryDocuments(): void {
+      const untracked = this.secondaryUris;
+      super.untrackSecondaryDocuments();
+      openOperationOf(this)?.amendBefore(before =>
+         isMultiDocumentModel(before)
+            ? { ...before, secondaries: Object.fromEntries(Object.entries(before.secondaries).filter(([uri]) => !untracked.includes(uri))) }
+            : before
+      );
+   }
+
+   /**
     * Register the secondary documents that belong to the primary at `uri`, via
     * {@link AbstractHydraniumGlspState.trackSecondaryDocument}. Called on every
-    * {@link setSourceRoot}, after the primary is captured (so `sourceUri` is
-    * current) and BEFORE the base is taken (so the base includes them).
+    * capture, after the primary is captured (so `sourceUri` is current) and
+    * BEFORE the base is taken (so the base includes them).
     * Default: no secondaries.
     *
     * This hook exists because that ordering is a trap an adopter would otherwise
-    * hit silently. Registering from an overridden `setSourceRoot` *after*
-    * `super.setSourceRoot(...)` runs too late — the base has already been
+    * hit silently. Registering from an overridden `captureSourceRoot` *after*
+    * `super.captureSourceRoot(...)` runs too late — the base has already been
     * captured without the secondaries, so the first conflict reconcile measures
     * the user's intent against a base missing half the write set and the
     * secondary edits look like foreign changes. Registering *before* the super
@@ -141,7 +183,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
             const { root } = await this.persist(candidate, candidateBaseVersion, secondaryVersions);
-            this.setSourceRoot(this._sourceUri, root);
+            this.captureWrittenRoot(root);
          },
          refetch: async () => {
             const refetched = await this.refetch();
@@ -151,7 +193,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
-         onConflictDropped: () => this.refreshSourceRoot(),
+         onConflictDropped: () => this.writeDropped(),
          maxWrites: this.maxSourceModelWrites
       });
    }
@@ -280,9 +322,16 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       return { model: { primary: this.projectRoot<TPrimary>(theirs.root), secondaries }, baseVersion: theirs.version, secondaryVersions };
    }
 
-   /** Project a currently-loaded document's root, or `undefined` when it is not loaded. */
+   /**
+    * Project a currently-loaded document's root, or `undefined` when it is not
+    * loaded: the open operation's copy of it when there is one, which is where
+    * a handler's edit of it is, else the root its version was read from.
+    */
    protected projectDocument(uri: string): TransferElement | undefined {
-      const root = this.sharedServices.model.ModelService.getDocument(uri)?.parseResult?.value;
+      const root =
+         this.existingWorkingRootOf(uri) ??
+         this.capturedRootOf(uri) ??
+         this.sharedServices.model.ModelService.getDocument(uri)?.parseResult?.value;
       return root ? this.projectRoot(root) : undefined;
    }
 
@@ -290,4 +339,8 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
    protected projectRoot<T extends TransferElement = TransferElement>(root: AstNode): T {
       return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as unknown as T;
    }
+}
+
+function isMultiDocumentModel(value: object): value is MultiDocumentSourceModel {
+   return 'secondaries' in value && typeof value.secondaries === 'object' && value.secondaries !== null;
 }

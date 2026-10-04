@@ -684,10 +684,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 26 multi-grammar files + the eight for the one diagram.
-      expect(captured?.files).toHaveLength(34);
+      // 26 multi-grammar files + the nine for the one diagram.
+      expect(captured?.files).toHaveLength(35);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (34 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (35 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });

@@ -21,18 +21,19 @@ import { type OrderFlowGlspState, type OrderFlowSourceModel } from './order-flow
  * **What the framework base does, so the operation handlers do not.** A handler
  * mutates the `.process` AST in its `runnable`; the base snapshots the
  * *transfer* projection either side of that mutation, derives a JSON patch
- * from the difference, and bridges `postChange` to
- * `updateSourceModel(model, version)` with the document version captured at
- * command start. Persistence, the `ConflictError` gate and the
+ * from the difference, and the operation it executes in writes the result
+ * once when it ends, gated on the document version the operation opened at.
+ * Persistence, the `ConflictError` gate and the
  * reconcile-on-conflict all live on {@link OrderFlowGlspState}'s base,
  * `ReconcilingMultiDocumentGlspState`.
  *
  * The consequence worth stating for anyone writing a new handler: **the
- * mutated AST is a vehicle, not the output.** It is discarded once the patch
- * is derived — the document is rewritten by serializing the transfer model and
- * re-parsing. So a handler must produce a mutation that the transfer encoder
- * can see (a node reachable by containment, references carrying `$refText`),
- * and it must not rely on anything it hangs off the AST surviving the update.
+ * mutated AST is a vehicle, not the output.** It is the operation's copy,
+ * discarded once the write is done — the document is rewritten by serializing
+ * the transfer model and re-parsing. So a handler must produce a mutation that
+ * the transfer encoder can see (a node reachable by containment, references
+ * carrying `$refText`), and it must not rely on anything it hangs off the AST
+ * surviving the update.
  */
 export class OrderFlowCommand extends HydraniumGlspRecordingCommand<OrderFlowSourceModel> {
    constructor(

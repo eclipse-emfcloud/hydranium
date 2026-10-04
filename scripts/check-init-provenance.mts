@@ -359,8 +359,8 @@ const BOOKSTORE_MANIFEST: Manifest = {
    // `hydranium-cli query` / `save` / `projects` / `watch` with no hand edits.
    'src/data-server-main.ts': { verdict: 'identical', reason: 'the stdio data head the CLI subcommands spawn, as emitted' },
    'src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port commands, as emitted' },
-   // The seven diagram files plus the starter operation handler. These are the
-   // reason this target exists: nothing else in the repo executes them.
+   // The diagram files, the starter operation handler and the test that runs it.
+   // These are the reason this target exists: nothing else in the repo executes them.
    'src/glsp/bookstore/types.ts': { verdict: 'identical', reason: 'the emitted diagram type ids' },
    'src/glsp/bookstore/state.ts': { verdict: 'identical', reason: 'the emitted full-text state' },
    'src/glsp/bookstore/storage.ts': { verdict: 'identical', reason: 'the emitted storage subclass' },
@@ -369,6 +369,10 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'src/glsp/bookstore/diagram-configuration.ts': { verdict: 'identical', reason: 'the emitted type hints' },
    'src/glsp/bookstore/create-node-operation-handler.ts': { verdict: 'identical', reason: 'the emitted starter operation handler' },
    'src/glsp/bookstore/diagram-module.ts': { verdict: 'identical', reason: 'the emitted diagram DI wiring' },
+   'test/bookstore-diagram.test.ts': {
+      verdict: 'identical',
+      reason: 'the scaffolded diagram test, which runs the starter operation handler through an in-process GLSP server'
+   },
    'test/services.test.ts': { verdict: 'identical', reason: 'the scaffolded composition test, which is the one this example needs' },
    // The only tier in this repo that runs a SCAFFOLDED serializer against a real
    // parse rather than a golden or a typecheck.

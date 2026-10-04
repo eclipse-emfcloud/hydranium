@@ -65,11 +65,13 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
    protected pendingLayoutRoot?: LayoutModel;
 
    /**
-    * The layout AST for this process — the loaded `.layout` document's root, or
-    * an empty in-memory one when that file does not exist yet.
+    * The layout AST for this process — the loaded `.layout` document's root,
+    * or an empty in-memory one when that file does not exist yet — read
+    * through {@link workingRootOf}, so a handler edits the operation's copy of
+    * either and an edit the operation drops stays out of both.
     *
     * **Never `undefined`, and that is load-bearing rather than convenience.** An
-    * operation handler mutates the AST in place and the recording command derives
+    * operation handler edits this root and the recording command derives
     * its patch from the before / after `sourceModel` projections. If a
     * never-laid-out process had no layout root, the first drag would have nothing
     * to mutate, the projection would be absent in both snapshots, and the patch
@@ -79,15 +81,20 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     * {@link openForWrite} creates the file before that diff is written.
     */
    get layoutRoot(): LayoutModel {
+      const root = this.workingRootOf(this.layoutUri, () => this.builtLayoutRoot());
+      return isLayoutModel(root) ? root : this.builtLayoutRoot();
+   }
+
+   /** The loaded `.layout` document's root, or the in-memory one while that file does not exist. */
+   protected builtLayoutRoot(): LayoutModel {
       const loaded = this.sharedServices.model.ModelService.getDocument(this.layoutUri)?.parseResult?.value;
       if (isLayoutModel(loaded)) {
-         // A real document supersedes the placeholder, so a later drag mutates
-         // the parsed root rather than a stale in-memory copy of it.
+         // A real document supersedes the placeholder, so a later drag edits
+         // the document's root rather than a stale in-memory stand-in for it.
          this.pendingLayoutRoot = undefined;
          return loaded;
       }
-      this.pendingLayoutRoot ??= this.createLayoutRoot();
-      return this.pendingLayoutRoot;
+      return (this.pendingLayoutRoot ??= this.createLayoutRoot());
    }
 
    /** An empty layout root for this process. */
@@ -100,13 +107,15 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
    }
 
    /**
-    * Project the layout secondary from {@link layoutRoot} rather than from the
-    * document store, so a not-yet-created `.layout` contributes an empty layout
-    * to the snapshot instead of being omitted. Every other URI keeps the base
-    * behaviour.
+    * Project the layout secondary from the operation's copy of it or
+    * {@link builtLayoutRoot}, rather than from the document store, so a
+    * not-yet-created `.layout` contributes an empty layout to the snapshot
+    * instead of being omitted. Every other URI keeps the base behaviour.
     */
    protected override projectDocument(uri: string): TransferElement | undefined {
-      return uri === this.layoutUri ? this.projectRoot(this.layoutRoot) : super.projectDocument(uri);
+      return uri === this.layoutUri
+         ? this.projectRoot(this.existingWorkingRootOf(uri) ?? this.capturedRootOf(uri) ?? this.builtLayoutRoot())
+         : super.projectDocument(uri);
    }
 
    /**

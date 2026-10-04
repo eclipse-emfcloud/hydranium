@@ -12,6 +12,7 @@ import { inject, injectable, optional } from 'inversify';
 import { type AstNode, AstUtils, type URI } from '@hydranium/langium';
 import * as uuid from 'uuid';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
+import { workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
 
 /**
@@ -45,6 +46,16 @@ export class HydraniumGlspIndex extends GModelIndex {
    @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
 
    protected idToSemanticNode = new Map<string, AstNode>();
+
+   /**
+    * The entries {@link indexSemanticElement} added outside the walk, by id.
+    * Kept across {@link reindexSemanticElements}, which walks containment
+    * only and so cannot rebuild them, and moved with {@link remapSemanticAliases}.
+    */
+   protected semanticAliases = new Map<string, AstNode>();
+
+   /** Whether {@link reindexSemanticElements} is walking, so an entry it adds is not an alias. */
+   protected walking = false;
 
    /**
     * The language services of the diagram's OWN document, captured from the
@@ -155,7 +166,9 @@ export class HydraniumGlspIndex extends GModelIndex {
     * {@link indexSourceRoot} needs no per-node lookup and does not pay for one.
     */
    protected elementKeyProviderFor(node?: AstNode): ElementKeyProvider | undefined {
-      const language = this.sharedServices.ServiceRegistry.getServicesFor(node) ?? this.diagramLanguage ?? this.declaredLanguage;
+      // A copy node has no `$document`; it routes by its working root's URI.
+      const route = node === undefined ? undefined : workingUriOfCopy(node);
+      const language = this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage ?? this.declaredLanguage;
       return language?.references.ElementKeyProvider;
    }
 
@@ -186,14 +199,31 @@ export class HydraniumGlspIndex extends GModelIndex {
    }
 
    /**
-    * Walk the source root and index every reachable AST node with a resolvable
-    * id.
+    * Index `root` as a new source root: forget what {@link registerElementId}
+    * and {@link indexSemanticElement} recorded, seed the diagram document as
+    * rendered, and index the nodes through {@link reindexSemanticElements}.
+    */
+   indexSourceRoot(root: AstNode, uri?: URI | string): void {
+      this.semanticAliases.clear();
+      this.elementToIds.clear();
+      this.renderedDocUris.clear();
+      this.addRenderedDocUri(root);
+      this.reindexSemanticElements(root, uri);
+   }
+
+   /**
+    * Index the nodes of `root` by id, keeping what {@link registerElementId}
+    * and, outside the walk, {@link indexSemanticElement} recorded. For a root
+    * carrying the same ids as the one indexed, such as a working copy: those
+    * are made only when the GModel is built, and clearing them leaves
+    * diagnostics with no marker and an alias resolving to nothing until the
+    * next build. An alias still names its node; move it with
+    * {@link remapSemanticAliases}.
     *
-    * `uri` is the diagram document's URI, supplied by
-    * `AbstractHydraniumGlspState.setSourceRoot`, and is used only to
-    * resolve the diagram's language when `root` carries no `$document` —
-    * always the case for a synthesised root, and the more authoritative signal
-    * either way since it is what the caller declared it was loading.
+    * `uri` is the diagram document's URI and is used only to resolve the
+    * diagram's language when `root` carries no `$document` — always the case
+    * for a synthesised root or a working copy, and the more authoritative
+    * signal either way since it is what the caller declared it was loading.
     *
     * The walk resolves the key provider ONCE and threads it: `streamAllContents`
     * is containment-only, so every node it yields has `root` as its root node
@@ -202,15 +232,37 @@ export class HydraniumGlspIndex extends GModelIndex {
     * languageId, file name, extension — for an answer already in hand, on every
     * diagram open and every source-root refresh.
     */
-   indexSourceRoot(root: AstNode, uri?: URI | string): void {
+   reindexSemanticElements(root: AstNode, uri?: URI | string): void {
       this.idToSemanticNode.clear();
-      this.elementToIds.clear();
-      this.renderedDocUris.clear();
       const registry = this.sharedServices.ServiceRegistry;
       this.diagramLanguage = registry.getServicesFor(root) ?? registry.getServicesFor(uri);
-      this.addRenderedDocUri(root);
       const keyProvider = this.elementKeyProviderFor(root);
-      AstUtils.streamAllContents(root).forEach(node => this.indexAstNode(node, keyProvider));
+      this.walking = true;
+      try {
+         AstUtils.streamAllContents(root).forEach(node => this.indexAstNode(node, keyProvider));
+      } finally {
+         this.walking = false;
+      }
+      for (const [id, node] of this.semanticAliases) {
+         this.idToSemanticNode.set(id, node);
+      }
+   }
+
+   /**
+    * Point every alias {@link indexSemanticElement} added at `map(node)`, or
+    * drop it where that is `undefined`: the node it named is gone.
+    */
+   remapSemanticAliases(map: (node: AstNode) => AstNode | undefined): void {
+      for (const [id, node] of [...this.semanticAliases]) {
+         const mapped = map(node);
+         if (mapped === undefined) {
+            this.semanticAliases.delete(id);
+            this.idToSemanticNode.delete(id);
+         } else {
+            this.semanticAliases.set(id, mapped);
+            this.idToSemanticNode.set(id, mapped);
+         }
+      }
    }
 
    /**
@@ -242,7 +294,7 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /** Record `node`'s document uri (if it has one) as contributing rendered elements. */
    protected addRenderedDocUri(node: AstNode): void {
-      const uri = AstUtils.findRootNode(node).$document?.uri.toString();
+      const uri = AstUtils.findRootNode(node).$document?.uri.toString() ?? workingUriOfCopy(node);
       if (uri !== undefined) {
          this.renderedDocUris.add(uri);
       }
@@ -266,6 +318,9 @@ export class HydraniumGlspIndex extends GModelIndex {
    /** Insert an AST node under `id` directly — for adopters that need to seed entries outside the standard walk. */
    indexSemanticElement<T extends AstNode>(id: string, element: T): void {
       this.idToSemanticNode.set(id, element);
+      if (!this.walking) {
+         this.semanticAliases.set(id, element);
+      }
    }
 
    /** Look up the AST node previously indexed under `id`. */
