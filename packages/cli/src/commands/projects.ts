@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { LogThreshold, Project, TransferElement } from '@hydranium/protocol';
+import type { Project, TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
-import { logLevelEnv } from '../log-level.js';
+import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
 
 /**
@@ -17,7 +17,7 @@ import { withDataServer } from '../spawn-data-server.js';
  * `serverArgs` mirror what an adopter would pass to spawn the data-server
  * subprocess.
  */
-export interface ProjectsCommandOptions {
+export interface ProjectsCommandOptions extends LogOptions {
    /**
     * Command-line tokens used to spawn the data-server child. Mirrors
     * the `--server "<cmd> [args...]"` shape on the CLI surface — split
@@ -26,8 +26,6 @@ export interface ProjectsCommandOptions {
    readonly serverCommand: string;
    readonly serverArgs?: readonly string[];
    readonly cwd?: string;
-   /** Log threshold for the spawned server, set on its `HYDRANIUM_LOG_LEVEL` env. */
-   readonly logLevel?: LogThreshold;
    /**
     * Output sink. Default: `process.stdout.write`. Tests inject a
     * capturing stub.
@@ -60,7 +58,7 @@ export async function runProjects(options: ProjectsCommandOptions): Promise<void
          command: options.serverCommand,
          args: options.serverArgs,
          cwd: options.cwd,
-         env: options.logLevel ? logLevelEnv(options.logLevel) : undefined
+         env: logEnv(options)
       },
       async server => {
          const projects = await server.getProjects();

@@ -7,14 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { LogThreshold, TransferElement } from '@hydranium/protocol';
+import type { TransferElement } from '@hydranium/protocol';
 import type {
    DataClientProtocol,
    DataServerProtocol,
    TransferDocumentDeletedEvent,
    TransferDocumentUpdatedEvent
 } from '@hydranium/protocol/data';
-import { logLevelEnv } from '../log-level.js';
+import { logEnv, type LogOptions } from '../log-level.js';
 import { spawnDataServer } from '../spawn-data-server.js';
 
 /**
@@ -27,12 +27,10 @@ import { spawnDataServer } from '../spawn-data-server.js';
  * — production CLI wires SIGINT directly. `__handleForTest` bypasses
  * the spawn step for unit tests.
  */
-export interface WatchCommandOptions {
+export interface WatchCommandOptions extends LogOptions {
    readonly serverCommand: string;
    readonly serverArgs?: readonly string[];
    readonly cwd?: string;
-   /** Log threshold for the spawned server, set on its `HYDRANIUM_LOG_LEVEL` env. */
-   readonly logLevel?: LogThreshold;
    readonly uri: string;
    readonly clientId?: string;
    readonly write?: (line: string) => void;
@@ -169,7 +167,7 @@ export async function runWatch(options: WatchCommandOptions): Promise<void> {
             command: options.serverCommand,
             args: options.serverArgs,
             cwd: options.cwd,
-            env: options.logLevel ? logLevelEnv(options.logLevel) : undefined
+            env: logEnv(options)
          },
          localClient
       );

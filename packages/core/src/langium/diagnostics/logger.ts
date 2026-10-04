@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Format } from '@hydranium/protocol';
+import { Format, LEVEL_ORDER, type LogLevel, Logger, type LogThreshold } from '@hydranium/protocol';
 import { currentMemoryUsage, onProcessEvent, processPid } from '../../util/environment.js';
 
 /** Only append a memory suffix when the heap has moved by at least this much since the last log line. */
@@ -119,9 +119,15 @@ function flushPendingLogLines(): void {
  * until every token is supplied via {@link resolveLogFilePlaceholder}.
  * Called by the `LspLogger` constructor's
  * one-time `HYDRANIUM_LOG_FILE` env baseline (and by tests).
+ *
+ * `level` becomes `Logger.setFileLevel`, cleared with the target and when
+ * omitted. Setting the file level apart from the target lets it outlive the
+ * file, and every sender keeps building lines above the process threshold
+ * that nothing writes.
  */
-export function setLogFilePath(path: string | undefined): void {
+export function setLogFilePath(path: string | undefined, level?: LogThreshold): void {
    logFileTemplate = path && path.length > 0 ? path : undefined;
+   Logger.setFileLevel(logFileTemplate ? level : undefined);
    logFilePlaceholders.clear();
    pendingLogLines.length = 0;
    resolvedLogFilePath = undefined;
@@ -173,13 +179,14 @@ export function getLogFilePath(): string | undefined {
 
 /**
  * Fan a single already-formatted log line out to the file-tee target, if one is
- * configured. Called by `LspLogger`'s emit in
+ * configured and `level` is within the file's threshold
+ * (`Logger.getFileLevel() ?? Logger.getLevel()`). Called by `LspLogger`'s emit in
  * addition to the LSP/console sink — log sinks fan out, they don't replace.
  * While the target is still pending (unresolved `{placeholder}`), the line is
  * buffered instead of dropped.
  */
-export function teeLogLine(formatted: string): void {
-   if (!logFileTemplate) {
+export function teeLogLine(level: LogLevel, formatted: string): void {
+   if (!logFileTemplate || LEVEL_ORDER[level] > LEVEL_ORDER[Logger.getFileLevel() ?? Logger.getLevel()]) {
       return;
    }
    const line = `${formatted}\n`;

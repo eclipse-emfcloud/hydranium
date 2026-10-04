@@ -306,6 +306,75 @@ describe('LspLogger file-tee', () => {
       });
    });
 
+   describe('file threshold', () => {
+      let entryLevel: LogThreshold;
+      let clientLines: string[];
+      beforeEach(() => {
+         entryLevel = Logger.getLevel();
+         clientLines = [];
+      });
+      afterEach(() => {
+         Logger.setLevel(entryLevel);
+      });
+
+      function loggerWithClient(): LspLogger {
+         const record = (line: string): void => {
+            clientLines.push(line);
+         };
+         const remoteConsole = { error: record, warn: record, info: record, debug: record, log: record };
+         return new LspLogger({
+            lsp: { Connection: { console: remoteConsole } },
+            Clock: new SystemClock()
+         } as unknown as ServerSharedServices);
+      }
+
+      it('writes lines below the process threshold to the file and not to the client', () => {
+         const path = join(tmpDir, 'file-wider.log');
+         setLogFilePath(path, 'debug');
+         Logger.setLevel('info');
+         const logger = loggerWithClient();
+
+         logger.debug('debug-line');
+         logger.info('info-line');
+
+         const contents = readFileSync(path, 'utf-8');
+         expect(contents).toContain('debug-line');
+         expect(contents).toContain('info-line');
+         expect(clientLines.join('\n')).not.toContain('debug-line');
+         expect(clientLines.join('\n')).toContain('info-line');
+      });
+
+      it('clears the file level with the target', () => {
+         // A file level that outlives its file widens `isLevelEnabled` for
+         // lines nothing writes.
+         Logger.setLevel('info');
+         setLogFilePath(join(tmpDir, 'cleared.log'), 'debug');
+         setLogFilePath(undefined);
+         expect(Logger.getFileLevel()).toBeUndefined();
+         expect(Logger.isLevelEnabled('debug')).toBe(false);
+      });
+
+      it('ignores a file level given without a target', () => {
+         setLogFilePath('', 'debug');
+         expect(Logger.getFileLevel()).toBeUndefined();
+      });
+
+      it('keeps lines below the file threshold out of the file', () => {
+         const path = join(tmpDir, 'file-narrower.log');
+         setLogFilePath(path, 'info');
+         Logger.setLevel('debug');
+         const logger = loggerWithClient();
+
+         logger.debug('debug-line');
+         logger.info('info-line');
+
+         const contents = readFileSync(path, 'utf-8');
+         expect(contents).not.toContain('debug-line');
+         expect(contents).toContain('info-line');
+         expect(clientLines.join('\n')).toContain('debug-line');
+      });
+   });
+
    describe('emit fan-out', () => {
       it('appends formatted lines to the configured file', () => {
          const path = join(tmpDir, 'append.log');

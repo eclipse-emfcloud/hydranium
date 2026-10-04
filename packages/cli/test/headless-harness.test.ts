@@ -15,7 +15,7 @@
  * without spawning anything.
  */
 
-import { DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
+import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -207,6 +207,22 @@ describe('the log threshold reaches the driver child', () => {
       // Not on the argv too: the driver has no such flag, so a forwarded one
       // would be rejected as unknown by the child that must not see it.
       expect(argv).not.toContain('--log-level');
+   });
+
+   it.each(PARENTS)('$name: sets the log-file variables on the child env', async ({ run }) => {
+      let captured: Record<string, string> | undefined;
+      await run({
+         servicesModule: './svc.js',
+         workspace: '/ws',
+         logFile: '/logs/{workspace}.log',
+         logFileLevel: 'debug',
+         __spawnForTest: (_execArgs, env) => {
+            captured = env;
+            return Promise.resolve(0);
+         }
+      });
+
+      expect(captured).toEqual({ [DEFAULT_LOG_FILE_ENV]: '/logs/{workspace}.log', [DEFAULT_LOG_FILE_LEVEL_ENV]: 'debug' });
    });
 
    it.each(PARENTS)('$name: leaves the child env alone when no level was asked for', async ({ run }) => {

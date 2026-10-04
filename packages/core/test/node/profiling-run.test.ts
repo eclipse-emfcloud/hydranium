@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_LOG_FILE_ENV, LatencyCollector } from '@hydranium/protocol';
+import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV, LatencyCollector } from '@hydranium/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ProfilingRun, recordServerSummaryEntry } from '../../src/node/profiling-run.js';
 import type { ProfileReport } from '../../src/node/profile-capture.js';
@@ -208,6 +208,51 @@ describe('ProfilingRun', () => {
       const manifest = await run.finish();
       expect(manifest.artifacts.some(entry => entry.kind === 'server-log')).toBe(false);
       expect(process.env[DEFAULT_LOG_FILE_ENV]).toBe(before);
+   });
+
+   describe('server.log level', () => {
+      const names = [DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV];
+      const entry = names.map(name => process.env[name]);
+      afterEach(() => {
+         names.forEach((name, i) => {
+            if (entry[i] === undefined) {
+               delete process.env[name];
+            } else {
+               process.env[name] = entry[i];
+            }
+         });
+      });
+
+      it('freezes the launch level for the run and restores the previous value', async () => {
+         // Unset, the file follows the process threshold, which a log-level
+         // setting arriving mid-run moves.
+         delete process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
+         process.env[DEFAULT_LOG_LEVEL_ENV] = 'warn';
+         const run = await ProfilingRun.start({ directory: parent, sessionId: 'profiling-level-launch' });
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('warn');
+         await run.finish();
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBeUndefined();
+      });
+
+      it('falls back to info when no level is set', async () => {
+         delete process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
+         delete process.env[DEFAULT_LOG_LEVEL_ENV];
+         const run = await ProfilingRun.start({ directory: parent, sessionId: 'profiling-level-default' });
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('info');
+         await run.finish();
+      });
+
+      it('prefers the logFileLevel option, then a pre-set file level', async () => {
+         process.env[DEFAULT_LOG_FILE_LEVEL_ENV] = 'debug';
+         process.env[DEFAULT_LOG_LEVEL_ENV] = 'warn';
+         const preset = await ProfilingRun.start({ directory: parent, sessionId: 'profiling-level-preset' });
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('debug');
+         await preset.finish();
+         const explicit = await ProfilingRun.start({ directory: parent, sessionId: 'profiling-level-option', logFileLevel: 'trace' });
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('trace');
+         await explicit.finish();
+         expect(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]).toBe('debug');
+      });
    });
 
    it('attaches an arbitrary json artifact into the session', async () => {

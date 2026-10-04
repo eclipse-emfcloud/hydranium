@@ -313,6 +313,17 @@ describe('the headless-harness subcommands', () => {
       expect(parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR], onError).profile).toBeUndefined();
    });
 
+   it('measure-memory: refuses --log-file beside --profile, whose session log would replace it', () => {
+      expect(() => parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--profile', 'cpu', '--log-file', 'out.log'], onError)).toThrow(
+         /--log-file cannot be combined with --profile/
+      );
+      expect(
+         parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--profile', 'cpu', '--log-file-level', 'debug'], onError)
+      ).toMatchObject({
+         logFileLevel: 'debug'
+      });
+   });
+
    it('measure-memory: takes --json as presence, off by default', () => {
       expect(parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--json'], onError).json).toBe(true);
       // `false` rather than absent, so the parent's argv builder reads a decision
@@ -334,7 +345,7 @@ describe('the headless-harness subcommands', () => {
       const SERVICES_COMMANDS: ReadonlyArray<{
          name: string;
          flags: readonly string[];
-         parse: (args: string[], onError: UsageError) => { logLevel?: LogThreshold };
+         parse: (args: string[], onError: UsageError) => { logLevel?: LogThreshold; logFile?: string; logFileLevel?: LogThreshold };
          /** The positionals this command needs after `--services`, so the parse reaches its flags. */
          tail: readonly string[];
       }> = [
@@ -363,6 +374,21 @@ describe('the headless-harness subcommands', () => {
          // Absent rather than defaulted, so the parent leaves the child's
          // inherited environment alone and an ambient level still wins.
          expect(parse(['--services', 'M', ...tail], onError).logLevel).toBeUndefined();
+      });
+
+      it.each(SERVICES_COMMANDS)('$name: declares --log-file and --log-file-level', ({ flags, parse, tail }) => {
+         expect(flags).toEqual(expect.arrayContaining(['--log-file', '--log-file-level']));
+         // Resolved against the caller's directory, because the child may run
+         // under `--cwd` and would put a relative log there.
+         expect(
+            parse(['--services', 'M', ...tail, '--log-file', 'logs/{workspace}.log', '--log-file-level', 'trace'], onError)
+         ).toMatchObject({
+            logFile: path.resolve('logs/{workspace}.log'),
+            logFileLevel: 'trace'
+         });
+         expect(() => parse(['--services', 'M', ...tail, '--log-file-level', 'chatty'], onError)).toThrow(
+            /^Invalid --log-file-level: chatty/
+         );
       });
 
       it.each(SERVICES_COMMANDS)('$name: refuses a level the protocol does not define', ({ parse, tail }) => {
@@ -447,6 +473,15 @@ describe('the data-server subcommands', () => {
             logLevel: 'trace'
          }
       );
+   });
+
+   it('projects: takes the log-file flags and resolves the file against the caller', () => {
+      expect(
+         parseProjectsArgs(['--server', 'node /srv/server.js', '--log-file', 'out.log', '--log-file-level', 'debug'], onError)
+      ).toMatchObject({
+         logFile: path.resolve('out.log'),
+         logFileLevel: 'debug'
+      });
    });
 
    it('projects: demands --server, naming its own help', () => {

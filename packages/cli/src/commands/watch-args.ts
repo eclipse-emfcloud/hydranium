@@ -11,6 +11,7 @@ import {
    assertRequired,
    exitWithUsage,
    helpRequested,
+   logHelpLines,
    parseFlagOptions,
    parseServerSpawnOptions,
    printHelp,
@@ -35,7 +36,7 @@ export const WATCH_VALUE_FLAGS: readonly string[] = WATCH_FLAGS;
 
 /** The `--help` text, as data, held to {@link WATCH_FLAGS} by a test. */
 export const WATCH_HELP: readonly string[] = [
-   'Usage: hydranium-cli watch --server "<cmd>..." --uri <uri> [--client-id <id>] [--cwd <dir>] [--log-level <level>]',
+   'Usage: hydranium-cli watch --server "<cmd>..." --uri <uri> [--client-id <id>] [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Subscribe to document updates at `<uri>` and print events as newline-delimited',
    'JSON. Long-running — exits cleanly on SIGINT (Ctrl-C).',
@@ -45,18 +46,20 @@ export const WATCH_HELP: readonly string[] = [
    '  --uri <uri>           Document URI (required).',
    '  --client-id <id>      Subscriber identity. Default: hydranium-cli.',
    '  --cwd <dir>           Working directory for the spawned child. Default: cwd.',
-   '  --log-level <lvl>     Log threshold for the spawned server (off|error|warn|info|debug|trace).'
+   ...logHelpLines(22, 'the spawned server')
 ];
 
 /** Parse the argv; the abort signal is the entry point's to supply, not the command line's. */
 export function parseWatchArgs(args: string[], onError: UsageError = exitWithUsage): WatchCommandOptions {
-   const { serverCommand, serverArgs, cwd, logLevel, extra } = parseServerSpawnOptions(args, 'watch', onError);
+   const { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel, extra } = parseServerSpawnOptions(args, 'watch', onError);
    const { uri, clientId } = parseFlagOptions(extra, 'watch', OWN_FLAGS, onError);
    return {
       serverCommand,
       serverArgs,
       cwd,
       logLevel,
+      logFile,
+      logFileLevel,
       uri: assertRequired(uri, '--uri', 'watch', onError),
       clientId
    };

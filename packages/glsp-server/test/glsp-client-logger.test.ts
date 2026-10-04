@@ -37,7 +37,10 @@ describe('GlspClientLogger', () => {
    // The framework threshold is a process-global, so a test that moves it must
    // put it back or it leaks into every later suite in the same worker.
    const originalLevel = Logger.getLevel();
-   afterEach(() => Logger.setLevel(originalLevel));
+   afterEach(() => {
+      Logger.setLevel(originalLevel);
+      Logger.setFileLevel(undefined);
+   });
 
    describe('logLevel tracks the framework threshold', () => {
       it.each<[LogThreshold, LogLevel]>([
@@ -66,6 +69,18 @@ describe('GlspClientLogger', () => {
          Logger.setLevel('error');
          expect(logger.logLevel).toBe(LogLevel.error);
          expect(logger.testEnabled(LogLevel.debug)).toBe(false);
+      });
+
+      it('widens to a more verbose file threshold', () => {
+         // GLSP gates its own calls on `logLevel`, so following the process
+         // threshold alone keeps GLSP debug lines out of a debug log file.
+         const logger = new TestableGlspClientLogger(stubServices);
+         Logger.setLevel('info');
+         Logger.setFileLevel('debug');
+         expect(logger.logLevel).toBe(LogLevel.debug);
+
+         Logger.setFileLevel('error');
+         expect(logger.logLevel).toBe(LogLevel.info);
       });
 
       it('an explicit option pins the level against a later global change', () => {

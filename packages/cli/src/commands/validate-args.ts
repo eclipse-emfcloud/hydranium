@@ -10,9 +10,9 @@
 import {
    exitWithUsage,
    helpRequested,
-   LOG_LEVEL_FLAG,
-   logLevelHelpLine,
-   logLevelOption,
+   LOG_VALUE_FLAGS,
+   logHelpLines,
+   logOptions,
    parseHarnessArgs,
    printHelp,
    SERVICES_FLAG,
@@ -21,7 +21,7 @@ import {
 import { OUT_FILE_FLAG } from './headless-harness.js';
 import { runValidate, type ValidateCommandOptions } from './validate.js';
 
-const VALUE_FLAGS = [OUT_FILE_FLAG, LOG_LEVEL_FLAG] as const;
+const VALUE_FLAGS = [OUT_FILE_FLAG, ...LOG_VALUE_FLAGS] as const;
 const BOOL_FLAGS = ['--strict', '--json'] as const;
 
 /**
@@ -36,7 +36,7 @@ export const VALIDATE_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_
 
 /** The `--help` text, as data, held to {@link VALIDATE_FLAGS} by a test. */
 export const VALIDATE_HELP: readonly string[] = [
-   'Usage: hydranium-cli validate --services <module> <workspace> [--strict] [--json] [--out-file <file>] [--log-level <lvl>]',
+   'Usage: hydranium-cli validate --services <module> <workspace> [--strict] [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Build a workspace headlessly and report its validation diagnostics — a CI gate:',
    'the process exits non-zero when any error is found. `<module>` is an ESM module',
@@ -52,7 +52,7 @@ export const VALIDATE_HELP: readonly string[] = [
    '                        still decides the exit code, and the file is written only',
    '                        once the report exists, unlike a shell redirection, which',
    '                        truncates the file before the workspace is even built.',
-   logLevelHelpLine(22)
+   ...logHelpLines(22)
 ];
 
 export function parseValidateArgs(args: string[], onError: UsageError = exitWithUsage): ValidateCommandOptions {
@@ -63,7 +63,7 @@ export function parseValidateArgs(args: string[], onError: UsageError = exitWith
       strict: options['--strict'] === 'true',
       json: options['--json'] === 'true',
       outFile: options[OUT_FILE_FLAG],
-      logLevel: logLevelOption(options[LOG_LEVEL_FLAG])
+      ...logOptions(options)
    };
 }
 

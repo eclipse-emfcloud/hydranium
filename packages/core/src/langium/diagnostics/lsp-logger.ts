@@ -11,7 +11,9 @@ import {
    AbstractLogger,
    type Clock,
    DEFAULT_LOG_FILE_ENV,
+   DEFAULT_LOG_FILE_LEVEL_ENV,
    DEFAULT_LOG_LEVEL_ENV,
+   LEVEL_ORDER,
    Logger,
    type LogLevel,
    type LogThreshold,
@@ -79,9 +81,10 @@ export class LspLogger extends AbstractLogger implements Logger {
       options: LspLoggerOptions = {}
    ) {
       super(options.component);
-      // Apply the framework env baselines (`HYDRANIUM_LOG_LEVEL` and
-      // `HYDRANIUM_LOG_FILE`) exactly once, on the first logger construction,
-      // before any setting is read. Unconditional and process-global, so it
+      // Apply the framework env baselines (`HYDRANIUM_LOG_LEVEL`,
+      // `HYDRANIUM_LOG_FILE` and `HYDRANIUM_LOG_FILE_LEVEL`) exactly once, on
+      // the first logger construction, before any setting is read.
+      // Unconditional and process-global, so it
       // needs no root detection and is never re-applied by derived children —
       // which would otherwise clobber a live setting. These are the single env
       // vars for level / file-tee (an adopter brands them by renaming the
@@ -97,7 +100,11 @@ export class LspLogger extends AbstractLogger implements Logger {
             // which threshold the rest of the file was written at.
             const envLogFile = env[DEFAULT_LOG_FILE_ENV];
             if (envLogFile) {
-               setLogFilePath(envLogFile);
+               const fileLevel = parseLogLevel(env[DEFAULT_LOG_FILE_LEVEL_ENV]);
+               setLogFilePath(envLogFile, fileLevel);
+               if (fileLevel) {
+                  this.logAt(fileLevel, `Log file level ${fileLevel} (${DEFAULT_LOG_FILE_LEVEL_ENV})`);
+               }
             }
             const envLevel = parseLogLevel(env[DEFAULT_LOG_LEVEL_ENV]);
             if (envLevel) {
@@ -200,7 +207,11 @@ export class LspLogger extends AbstractLogger implements Logger {
       // shutdown diagnostics and the workspace manager's own
       // unhandled-rejection handler. A log sink that throws turns a diagnostic
       // into a crash, so a dead channel degrades to stderr instead.
-      if (!connection || !sendViaConnection(connection, level, formatted)) {
+      //
+      // `send` admits a line either threshold takes, so the client sink checks
+      // its own; the file-tee filters for itself.
+      const toClient = LEVEL_ORDER[level] <= LEVEL_ORDER[Logger.getLevel()];
+      if (toClient && (!connection || !sendViaConnection(connection, level, formatted))) {
          if (!writeStderr(`${formatted}\n`)) {
             // Browser only. In Node every level goes to STDERR, including the
             // three that `console.*` would put on stdout (`info` / `debug` /
@@ -215,7 +226,7 @@ export class LspLogger extends AbstractLogger implements Logger {
       }
       // File-tee fan-out for headless capture (see `setLogFilePath`). Always runs
       // in addition to the LSP/console sink — log sinks fan out, they don't replace.
-      teeLogLine(formatted);
+      teeLogLine(level, formatted);
    }
 
    protected derive(component: string): this {

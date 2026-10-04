@@ -11,6 +11,7 @@ import {
    assertRequired,
    exitWithUsage,
    helpRequested,
+   logHelpLines,
    parseFlagOptions,
    parseServerSpawnOptions,
    printHelp,
@@ -36,7 +37,7 @@ export const SAVE_VALUE_FLAGS: readonly string[] = SAVE_FLAGS;
 
 /** The `--help` text, as data, held to {@link SAVE_FLAGS} by a test. */
 export const SAVE_HELP: readonly string[] = [
-   'Usage: hydranium-cli save --server "<cmd>..." --uri <uri> --content <text|@file> [--client-id <id>] [--cwd <dir>] [--log-level <level>]',
+   'Usage: hydranium-cli save --server "<cmd>..." --uri <uri> --content <text|@file> [--client-id <id>] [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Update the document at `<uri>` with `<content>` and persist via saveModelDocument.',
    'Output is the post-save envelope as a single JSON line.',
@@ -48,17 +49,19 @@ export const SAVE_HELP: readonly string[] = [
    '                        (escape with `\\@` for literal `@`-leading content).',
    '  --client-id <id>      clientId for authorship attribution. Default: hydranium-cli.',
    '  --cwd <dir>           Working directory for the spawned child. Default: cwd.',
-   '  --log-level <lvl>     Log threshold for the spawned server (off|error|warn|info|debug|trace).'
+   ...logHelpLines(22, 'the spawned server')
 ];
 
 export function parseSaveArgs(args: string[], onError: UsageError = exitWithUsage): SaveCommandOptions {
-   const { serverCommand, serverArgs, cwd, logLevel, extra } = parseServerSpawnOptions(args, 'save', onError);
+   const { serverCommand, serverArgs, cwd, logLevel, logFile, logFileLevel, extra } = parseServerSpawnOptions(args, 'save', onError);
    const { uri, content, clientId } = parseFlagOptions(extra, 'save', OWN_FLAGS, onError);
    return {
       serverCommand,
       serverArgs,
       cwd,
       logLevel,
+      logFile,
+      logFileLevel,
       uri: assertRequired(uri, '--uri', 'save', onError),
       content: assertRequired(content, '--content', 'save', onError),
       clientId

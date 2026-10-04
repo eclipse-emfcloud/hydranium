@@ -19,7 +19,11 @@
 
 import {
    DEFAULT_LOG_FILE_ENV,
+   DEFAULT_LOG_FILE_LEVEL_ENV,
+   DEFAULT_LOG_LEVEL_ENV,
+   parseLogLevel,
    PROFILING_SCHEMA_VERSION,
+   type LogThreshold,
    type LatencyCollector,
    type ProfilingArtifact,
    type ProfilingArtifactKind,
@@ -59,6 +63,22 @@ export interface ProfilingRunOptions {
     * build with no request traffic leaves it empty.
     */
    latency?: LatencyCollector;
+   /**
+    * Threshold `server.log` is written at. Defaults to `HYDRANIUM_LOG_FILE_LEVEL`,
+    * then `HYDRANIUM_LOG_LEVEL`, then `'info'`, read at {@link ProfilingRun.start}
+    * and held for the run, so a log-level setting arriving mid-run leaves the log
+    * alone. Above `'info'` the framework's own debug profile sessions run inside
+    * the captured windows and show up in the profiles.
+    */
+   logFileLevel?: LogThreshold;
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+   if (value === undefined) {
+      delete process.env[name];
+   } else {
+      process.env[name] = value;
+   }
 }
 
 /** A cgroup memory controller signals we are inside a container/pod. */
@@ -80,6 +100,8 @@ export class ProfilingRun {
    protected finished = false;
    /** The `HYDRANIUM_LOG_FILE` value seen before this run pointed it at the session (restored on {@link finish}). */
    protected readonly previousLogFileEnv?: string;
+   /** The `HYDRANIUM_LOG_FILE_LEVEL` value seen before this run set it (restored on {@link finish}). */
+   protected readonly previousLogFileLevelEnv?: string;
    /** Absolute path of the session's teed server log. */
    readonly serverLogPath: string;
 
@@ -101,6 +123,9 @@ export class ProfilingRun {
       // process-local `setLogFilePath` would only reach this module's own copy.
       this.previousLogFileEnv = process.env[DEFAULT_LOG_FILE_ENV];
       process.env[DEFAULT_LOG_FILE_ENV] = this.serverLogPath;
+      this.previousLogFileLevelEnv = process.env[DEFAULT_LOG_FILE_LEVEL_ENV];
+      process.env[DEFAULT_LOG_FILE_LEVEL_ENV] =
+         options.logFileLevel ?? parseLogLevel(this.previousLogFileLevelEnv) ?? parseLogLevel(process.env[DEFAULT_LOG_LEVEL_ENV]) ?? 'info';
    }
 
    static async start(options: ProfilingRunOptions = {}): Promise<ProfilingRun> {
@@ -179,11 +204,8 @@ export class ProfilingRun {
       this.finished = true;
       // Restore the prior log-file env, then record the log as an artefact only
       // if the run actually produced one.
-      if (this.previousLogFileEnv === undefined) {
-         delete process.env[DEFAULT_LOG_FILE_ENV];
-      } else {
-         process.env[DEFAULT_LOG_FILE_ENV] = this.previousLogFileEnv;
-      }
+      restoreEnv(DEFAULT_LOG_FILE_ENV, this.previousLogFileEnv);
+      restoreEnv(DEFAULT_LOG_FILE_LEVEL_ENV, this.previousLogFileLevelEnv);
       if (fs.existsSync(this.serverLogPath)) {
          this.artifacts.push({ kind: 'server-log', path: 'server.log' });
       }
