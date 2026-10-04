@@ -1525,6 +1525,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       return this.isOpenInClient(uri, LANGUAGE_CLIENT_ID);
    }
 
+   /** The clients that have `uri` open, in the order they opened it. */
+   clientsOf(uri: DocumentUri): string[] {
+      return this.__sessions.clientsOf(this.documentKey(uri));
+   }
+
    isOnlyOpenInClient(uri: DocumentUri, client: string): boolean {
       const clients = this.__sessions.clientsOf(this.documentKey(uri));
       return clients.length === 1 && clients[0] === client;

@@ -29,6 +29,8 @@
 
 import { makeLspServerConnection, type LspServerConnection } from '@hydranium/core/testing/node';
 import { startLanguageServer } from '@hydranium/core/lsp';
+import { DocumentState } from '@hydranium/langium';
+import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DidChangeTextDocumentNotification } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -124,4 +126,37 @@ describe('order-flow language-client attach over the real transport', () => {
 
       expect(shared.workspace.TextDocuments.get(URI)?.getText()).toBe(AUTHORED);
    });
+
+   it('pushes the authored text to an editor that attaches while the write is still validating', { timeout: 10_000 }, async () => {
+      const { composed, shared } = await composeServer();
+
+      // The push is decided when the document settles, before validation. Held
+      // there, the write's build has made that decision with no editor open.
+      const held = holdValidation(shared);
+      await shared.model.ModelService.createSession('diagram', 'diagram').create(URI, AUTHORED);
+      await held.reached;
+
+      const pushed = composed.nextAppliedEdit(URI);
+      composed.openDocument(URI, ON_DISK, PROCESS_LANGUAGE_ID);
+      await waitFor(() => shared.workspace.TextDocuments.isOpenInLanguageClient(URI), { message: 'the editor never attached' });
+      held.release();
+
+      expect((await pushed).text).toBe(AUTHORED);
+   });
 });
+
+/** Hold the next validation of {@link URI} until `release` runs. */
+function holdValidation(shared: OrderFlowSharedServices): { reached: Promise<void>; release(): void } {
+   let reach!: () => void;
+   let release!: () => void;
+   const reached = new Promise<void>(resolve => (reach = resolve));
+   const released = new Promise<void>(resolve => (release = resolve));
+   const listener = shared.workspace.DocumentBuilder.onDocumentPhase(DocumentState.Validated, async document => {
+      if (document.uri.toString() === URI) {
+         listener.dispose();
+         reach();
+         await released;
+      }
+   });
+   return { reached, release };
+}
