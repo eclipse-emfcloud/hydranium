@@ -18,7 +18,6 @@ import {
    SourceModelStorage,
    UndoAction
 } from '@eclipse-glsp/server';
-import type { AstDocument } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync, unlinkSync } from 'node:fs';
@@ -343,7 +342,7 @@ describe('the working copies a handler edits', () => {
          return older;
       });
       const storage = diagram.sessionContainer.get<SourceModelStorage>(SourceModelStorage) as unknown as {
-         captureAndSubmit(rootUri: string, root: AstNode, document: AstDocument<AstNode>): Promise<Action[]>;
+         captureAndSubmit(rootUri: string, root: AstNode): Promise<Action[]>;
       };
       const captured = vi.spyOn(storage, 'captureAndSubmit');
 

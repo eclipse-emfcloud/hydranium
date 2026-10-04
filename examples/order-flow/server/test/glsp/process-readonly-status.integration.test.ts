@@ -32,6 +32,7 @@ import {
    ServerModule,
    SetEditModeAction,
    SetMarkersAction,
+   SourceModelStorage,
    StatusAction,
    UpdateModelAction
 } from '@eclipse-glsp/server';
@@ -39,7 +40,7 @@ import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { DIAGRAM_READONLY_PARSE_ERROR } from '@hydranium/glsp-server/messages';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
-import { URI } from '@hydranium/langium';
+import { DocumentState, URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { setTimeout as nextMacrotask } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -289,5 +290,43 @@ describe('order-flow .process read-only status', () => {
 
       await vi.waitFor(() => expect(diagram.harness.state.editMode).toBe(EditMode.EDITABLE));
       expect(diagram.harness.state.currentStatus).toBeUndefined();
+   });
+
+   it('decides the status from the text as it stands when a build has parsed it but not yet validated it', async () => {
+      const diagram = await openDiagram();
+      await afterLiveValidation(diagram, 0);
+      const processPath = diagram.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const processUri = URI.file(processPath).toString();
+      const intact = readFileSync(processPath, 'utf8');
+      const form = diagram.services.shared.model.ModelService.createSession('form');
+      await form.open(processUri);
+      // Holds a build past the integrity landmark, where the resubmit's settle
+      // resolves, and short of Validated, where an update event would follow.
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>(resolve => {
+         release = resolve;
+      });
+      let hold = false;
+      diagram.services.shared.workspace.DocumentBuilder.onBuildPhase(DocumentState.IndexedReferences, async () => {
+         if (hold) {
+            await gate;
+         }
+      });
+      const storage = diagram.harness.sessionContainer.get<SourceModelStorage>(SourceModelStorage) as unknown as {
+         captureAndSubmit(...args: unknown[]): Promise<Action[]>;
+      };
+      const captured = vi.spyOn(storage, 'captureAndSubmit');
+
+      // A valid edit by another client schedules the resubmit; a broken one
+      // is parsed before the resubmit runs, and validated only after.
+      await form.update({ uri: processUri, model: `${intact}\n`, baseVersion: 'any' });
+      hold = true;
+      const broken = form.update({ uri: processUri, model: intact.replace(INTACT, BROKEN), baseVersion: 'any' });
+      await vi.waitFor(() => expect(captured).toHaveBeenCalled(), { timeout: 2_000 });
+      await captured.mock.results[0].value;
+
+      expect(diagram.harness.state.currentStatus?.message).toBe(DIAGRAM_READONLY_PARSE_ERROR.format({ document: 'fulfillment.process' }));
+      release();
+      await broken;
    });
 });

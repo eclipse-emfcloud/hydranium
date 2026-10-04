@@ -27,7 +27,7 @@ import { Disposable } from 'vscode-languageserver';
 import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languageserver-protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { type ServerSharedServices } from '../langium/module.js';
-import { type HydraniumDocumentBuilder, labelPhaseListener } from '../langium/document-builder/index.js';
+import { type HydraniumDocumentBuilder } from '../langium/document-builder/index.js';
 import { UNKNOWN_CLIENT_ID } from './client-ids.js';
 import { type HydraniumTextDocuments } from './hydranium-text-documents.js';
 import { type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
@@ -38,9 +38,8 @@ export interface UpdateInfo {
 }
 
 /**
- * Server-internal document envelope at the AST layer. Emitted by
- * {@link AstDocumentManager.onUpdate} / {@link AstDocumentManager.onSave}
- * for in-process subscribers (`ModelService`, integrity service, etc.).
+ * Server-internal document envelope at the AST layer, which `ModelService`
+ * reads and events hand to in-process callers.
  *
  * `root` is the live AST the build holds, not an encoded copy like
  * `TransferDocument.model`, so mutating it changes the model every reader sees.
@@ -83,12 +82,12 @@ export namespace AstDocument {
    }
 }
 
-/** Update event delivered by {@link AstDocumentManager.onUpdate} — typed alias over the generic event wrapper. */
+/** The update event a document's build delivers, typed over the generic event wrapper. */
 export type AstDocumentUpdatedEvent<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = TransferUpdatedEvent<
    AstDocument<TAst, TDiagnostic>
 >;
 
-/** Save event delivered by {@link AstDocumentManager.onSave} — typed alias over the generic event wrapper. */
+/** The event a save delivers, typed over the generic event wrapper. */
 export type AstDocumentSavedEvent<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = TransferSavedEvent<
    AstDocument<TAst, TDiagnostic>
 >;
@@ -120,8 +119,8 @@ export interface AstDocumentManagerOptions extends LogNameOptions {
 
 /**
  * The document slot the model server and the integrity service talk to:
- * open/close/update/save plus the AST-typed event streams, with the LSP
- * plumbing hidden.
+ * open/close/update/save and the attribution of update events, with the LSP
+ * plumbing hidden. Events are `ModelService`'s, which builds them from here.
  *
  * Generic over `<TAst extends AstNode, TDiagnostic>` so each consumer projects
  * its own AST root type and diagnostic shape into the emitted
@@ -152,10 +151,6 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
     */
    save(uri: string, clientId: string): Promise<TextVersion>;
 
-   onUpdate(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
-   onSave(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void | Promise<void>): Disposable;
-   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
-
    getDocument(uri: string): LangiumDocument | undefined;
 
    /**
@@ -174,12 +169,13 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
 
    /**
     * The reason, source and cause of an update event for `document` emitted
-    * now, from a phase listener of the build that carries it. Every head takes
-    * its update events' attribution from here, so they name the same client
-    * for one build. For a document a client opened, while rebuilds validate,
-    * the answer changes once its `Validated` listeners have all run: a later
-    * event at that version is `'rebuilt'`. `TransferDocumentUpdateReason`
-    * names the cases that fall back to the last update.
+    * now, from a phase listener of the build that carries it. `ModelService`
+    * takes its update events' attribution from here, once per document and
+    * phase, so every subscriber names the same client for one build. For a
+    * document a client opened, while rebuilds validate, the answer changes
+    * once its `Validated` listeners have all run: a later event at that
+    * version is `'rebuilt'`. `TransferDocumentUpdateReason` names the cases
+    * that fall back to the last update.
     */
    attributeUpdate(document: LangiumDocument): UpdateAttribution;
 }
@@ -327,64 +323,6 @@ export class DefaultAstDocumentManager<
       }
       const languages = this.services.ServiceRegistry.all;
       return languages.length === 1 ? languages[0].LanguageMetaData.languageId : 'plaintext';
-   }
-
-   /**
-    * Subscribe to the save event of the document at `uri`. The callback fires only when the
-    * URI of the saved document matches `uri` (compared by canonical form).
-    */
-   onSave(uri: string, listener: (event: TransferSavedEvent<AstDocument<TAst, TDiagnostic>>) => void | Promise<void>): Disposable {
-      const target = this.uriPolicy.canonicalUri(uri);
-      return this.textDocuments.onDidSave(async event => {
-         if (this.uriPolicy.canonicalUri(event.document.uri) !== target) {
-            return undefined;
-         }
-         // Look the document up by its canonical URI: the adopter's
-         // `LangiumDocuments` keys by the canonical form, while the saved
-         // event carries the (possibly symlinked) client-facing URI.
-         const documentURI = UriUtils.toUri(target);
-         if (documentURI !== undefined && this.langiumDocs.hasDocument(documentURI)) {
-            const document = await this.langiumDocs.getOrCreateDocument(documentURI);
-            return listener({
-               document: this.toAstDocument(document),
-               sourceClientId: event.clientId
-            });
-         }
-         return undefined;
-      });
-   }
-
-   /** Fires when `clientId` detaches from the document at `uri` (matched by canonical form). */
-   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable {
-      const target = this.uriPolicy.canonicalUri(uri);
-      return this.textDocuments.onDidClose(event => {
-         if (event.clientId === clientId && this.uriPolicy.canonicalUri(event.document.uri) === target) {
-            listener();
-         }
-      });
-   }
-
-   /** Fires when the document at `uri` reaches `Validated` after each rebuild. */
-   onUpdate(uri: string, listener: (event: TransferUpdatedEvent<AstDocument<TAst, TDiagnostic>>) => void): Disposable {
-      const target = this.uriPolicy.canonicalUri(uri);
-      const emitUpdate = (document: LangiumDocument): void => {
-         if (this.uriPolicy.canonicalUri(document.uri) !== target) {
-            return;
-         }
-         // No `'deleted'` reason: `DocumentBuilder.update` drops a deleted
-         // document from `LangiumDocuments` before deriving the rebuild set
-         // from it, so a deleted URI is never built and never reaches this
-         // phase listener. A subscriber needing deletions has to be told on
-         // a channel that does not require a built document.
-         const event: TransferUpdatedEvent<AstDocument<TAst, TDiagnostic>> = {
-            document: this.toAstDocument(document),
-            ...this.attributeUpdate(document)
-         };
-         this.tracer.with(uri).trace(`emitUpdate start: source=${event.sourceClientId}, reason=${event.reason}, cause=${event.causedBy}`);
-         listener(event);
-         this.tracer.with(uri).trace('emitUpdate listener returned');
-      };
-      return this.documentBuilder.onDocumentPhase(DocumentState.Validated, labelPhaseListener(emitUpdate, 'AstDocumentManager.onUpdate'));
    }
 
    /**

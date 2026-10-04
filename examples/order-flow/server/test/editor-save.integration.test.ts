@@ -152,9 +152,12 @@ function onDisk(): string {
 /** Record every announced save of `uri` by author. */
 function recordSaves(services: ReturnType<typeof createOrderFlowServices>, uri: string): string[] {
    const savedBy: string[] = [];
-   services.shared.model.ModelService.onModelSaved(uri, event => {
-      savedBy.push(event.sourceClientId);
-   });
+   services.shared.model.ModelService.onModelSaved(
+      event => {
+         savedBy.push(event.sourceClientId);
+      },
+      { uri }
+   );
    return savedBy;
 }
 

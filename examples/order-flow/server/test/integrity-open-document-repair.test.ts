@@ -404,7 +404,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
          const textDocuments = harness.shared.workspace.TextDocuments;
          const modelService = harness.shared.model.ModelService;
          const sources: string[] = [];
-         harness.shared.workspace.AstDocumentManager.onUpdate(uriString, event => sources.push(event.sourceClientId));
+         modelService.onModelUpdated(event => sources.push(event.sourceClientId), { uri: uriString });
 
          const session = modelService.createSession('data', 'data-client');
          await session.open(uriString);

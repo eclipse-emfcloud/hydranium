@@ -23,6 +23,7 @@ import {
    type CloseModelArgs,
    type HydraniumMessageData,
    type HydraniumResponseError,
+   type CanonicalUri,
    type Disposable,
    type ElementSource,
    type FindNextNameArgs,
@@ -120,22 +121,23 @@ import type { DataServerDiagnosticsProvider, DataServerProfileCapture } from './
 import type {
    ClientSession,
    ClientSessionWriteArgs,
-   ClientTextDocumentChangeEvent,
-   DocumentDirtyChangedEvent,
    HydraniumLanguageServices,
    LogNameOptions,
    AstDiagnostic,
    AstDocument,
+   AstDocumentSavedEvent,
    EncodedTransferDocument,
+   ModelDeletedEvent,
+   ModelDirtyChangedEvent,
    ModelService,
+   ModelUpdatedEvent,
    ProjectChangeEvent,
    ServerSharedServices,
    SessionEndCause,
    TransferEncoder
 } from '@hydranium/core';
-import type { TextDocument } from 'vscode-languageserver-textdocument';
-import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type URI } from '@hydranium/langium';
-import { type CancellationToken, type MessageConnection, ResponseError } from 'vscode-jsonrpc';
+import { type AstNode, DocumentState, UriUtils, type URI } from '@hydranium/langium';
+import { type MessageConnection, ResponseError } from 'vscode-jsonrpc';
 
 /**
  * Domain separator between text and diagnostics inputs of
@@ -151,18 +153,6 @@ const FINGERPRINT_SEPARATOR = '\0';
  * dependency of this package.
  */
 const SERVER_CANCELLED = -32802;
-
-/**
- * A session a data connection registered with a resume token, and how to end
- * it from another connection. See {@link DataServer.resumableSessions}.
- */
-export interface ResumableSession {
-   readonly token: string;
-   /** End the session as its connection closing would. */
-   readonly end: () => void;
-}
-
-const resumableByModelService = new WeakMap<object, Map<string, ResumableSession>>();
 
 /**
  * Which observable state {@link DataServer.computeDocumentFingerprint} hashes to
@@ -428,11 +418,11 @@ export interface DataServerUriWatchRecord {
  * any names supplied via {@link DataServerOptions.additionalMethods}) and
  * builds the {@link DataClientProtocol} notification proxy on the same
  * connection in one {@link createRpcProxy} call (binding `this` as its
- * `localTarget`) under the configured namespace, and subscribes two listeners
- * at the configured phase: a `DocumentBuilder.onDocumentPhase` one dispatching
- * per-document `clientProxy.onDocumentUpdated` for watched URIs, and a
- * `DocumentBuilder.onBuildPhase` one dispatching a single
- * `clientProxy.onDocumentsBuilt` naming the batch's unwatched documents.
+ * `localTarget`) under the configured namespace, and follows documents
+ * through `ModelService`'s events: at the configured phase, `onModelUpdated`
+ * dispatches per-document `clientProxy.onDocumentUpdated` for watched URIs and
+ * `onModelsBuilt` a single `clientProxy.onDocumentsBuilt` naming the batch's
+ * unwatched documents.
  *
  * The data-server requires the full {@link ServerSharedServices}
  * shape — `HydraniumTextDocuments` for client-attributed updates,
@@ -536,8 +526,8 @@ export class DataServer<
          // framework's own rejections.
          renderErrorMessage: error => this.services.MessageRenderer.renderError(error)
       });
-      this.disposables.push(this.services.workspace.DocumentBuilder.onUpdate((_changed, deleted) => this.dispatchDeleteEvents(deleted)));
-      this.subscribeToDocumentBuilder();
+      this.disposables.push(this.modelService.onModelDeleted(event => this.dispatchDeleteEvent(event)));
+      this.subscribeToModelUpdates();
       this.subscribeToTextDocumentSaves();
       this.subscribeToDirtyChanges();
       this.subscribeToTextDocumentCloses();
@@ -577,7 +567,7 @@ export class DataServer<
       }
       // AFTER `disposables.dispose()`, deliberately: ending a session releases
       // each document it was the last to hold, and this server's own
-      // `onDidCloseLastOpen` listener would otherwise mark a revert broadcast
+      // `onModelReleased` subscription would otherwise mark a revert broadcast
       // for a connection that is already gone.
       this.disposables.dispose();
       for (const [clientId, session] of this.clientSessions) {
@@ -603,20 +593,11 @@ export class DataServer<
       if (this.disposed) {
          throw new SessionClosedError(args.clientId);
       }
-      const resumable = this.resumableSessions();
-      const previous = resumable.get(args.clientId);
-      if (previous && args.resumeToken !== undefined && previous.token === args.resumeToken) {
-         previous.end();
-      }
-      const session = this.modelService.createSession(args.label, args.clientId);
+      const session = this.modelService.createSession(args.label, args.clientId, { resumeToken: args.resumeToken });
       this.clientSessions.set(args.clientId, session);
-      if (args.resumeToken !== undefined) {
-         // Taken over by a client registering again after its connection
-         // dropped, so the old session ends as lost: the documents it was the
-         // last to have open wait out the grace, and the new session's opens
-         // find their unsaved text.
-         resumable.set(args.clientId, { token: args.resumeToken, end: () => this.endSession(args.clientId, session, 'lost') });
-      }
+      // A client registering again on another connection ends this session
+      // there, and its watches here would otherwise outlive it.
+      session.onDidDispose(() => this.dropWatches(args.clientId));
    }
 
    /**
@@ -637,37 +618,16 @@ export class DataServer<
       session: ClientSession<AstNode, AstDiagnostic, TTransfer>,
       cause: SessionEndCause = 'closed'
    ): void {
+      this.dropWatches(clientId);
+      session.dispose(cause);
+   }
+
+   protected dropWatches(clientId: string): void {
       for (const [uri, record] of this.uriWatchRecords) {
          if (record.watchers.delete(clientId)) {
             this.pruneUriWatchRecord(uri);
          }
       }
-      session.dispose(cause);
-   }
-
-   /**
-    * The resumable sessions of this services tree, by client id, across all of
-    * its data connections: a client resumes on another connection than the one
-    * that registered it. An entry leaves when its session ends, by any path, so
-    * it keeps no ended connection alive.
-    *
-    * A takeover by resume token ends the old session even when its connection
-    * is still alive, so two clients that shared an id and its token would end
-    * each other's sessions. And the token is a guard against colliding with a
-    * session the server has not yet seen end, not a secret: the wire carries no
-    * authentication, and a peer that learns the token can end the session.
-    */
-   protected resumableSessions(): Map<string, ResumableSession> {
-      let sessions = resumableByModelService.get(this.modelService);
-      if (!sessions) {
-         const created = new Map<string, ResumableSession>();
-         // Subscribed once per services tree, and never disposed: it lives as
-         // long as the text store it listens to.
-         this.services.workspace.TextDocuments.onDidCloseSession(event => created.delete(event.clientId));
-         resumableByModelService.set(this.modelService, created);
-         sessions = created;
-      }
-      return sessions;
    }
 
    async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
@@ -1019,79 +979,32 @@ export class DataServer<
    }
 
    /**
-    * Pick the language that owns a reference source, in order:
+    * Pick the language that owns a reference source: the registry's
+    * `getLanguageFor` over the source's declared language, URI and AST type,
+    * with an {@link isElementSource} routed by the document that holds the
+    * element (see {@link findElementDocumentUri}) before its type, and
+    * {@link fallbackReferenceLanguage}, adopter policy, last.
     *
-    * 0. A {@link isSyntheticSource} naming its own `language` routes there.
-    *    First because every step below infers, and an inference must not
-    *    override a caller that has said which grammar it means.
-    * 1. A URI-bearing source ({@link isDocumentSource}/{@link isSyntheticSource})
-    *    whose URI resolves to a registered language routes by URI.
-    * 2. A single-language workspace always routes to that one language — so
-    *    single-language adopters never reach the steps below, and never pay
-    *    for them.
-    * 3. An {@link isElementSource} source carries no URI, so in a
-    *    multi-language workspace it is routed via the document that holds the
-    *    element (see {@link findElementDocumentUri}).
-    * 4. A source carrying an AST type is routed by that type when exactly one
-    *    registered grammar can produce it (see
-    *    {@link resolveReferenceLanguageByType}, over the registry's own type
-    *    index). This is what resolves a create-element flow's synthetic source
-    *    on a bare directory URI without asking the adopter.
-    * 5. Anything still unresolved falls to {@link fallbackReferenceLanguage},
-    *    which is adopter policy.
+    * An unregistered declared language falls through rather than failing: the
+    * id crosses the wire, so a client built against a head with one more
+    * grammar would otherwise lose queries the other signals answer.
     */
    protected resolveReferenceLanguage(source: ReferenceSource): HydraniumLanguageServices | undefined {
       const registry = this.services.ServiceRegistry;
-      if (isSyntheticSource(source) && source.language !== undefined) {
-         const declared = registry.getServicesById(source.language);
-         if (declared) {
-            return declared;
-         }
-         // Falling through on an UNREGISTERED id rather than failing: the id
-         // crosses the wire, so a client built against a head with one more
-         // grammar would otherwise lose queries the steps below can answer.
-      }
-      // `getServicesFor` (non-throwing, one ladder walk) gates the URI lookup:
-      // an extensionless / unregistered URI falls through to the steps below
-      // rather than throwing "no services for the extension ''".
-      const uri = isDocumentSource(source) || isSyntheticSource(source) ? UriUtils.toUri(source.uri) : undefined;
-      const byUri = uri && registry.getServicesFor(uri);
-      if (byUri) {
-         return byUri;
-      }
-      const all = registry.all;
-      if (all.length === 1) {
-         return all[0];
-      }
       if (isElementSource(source)) {
-         const documentUri = this.findElementDocumentUri(source);
-         const byDocument = documentUri && registry.getServicesFor(documentUri);
-         if (byDocument) {
-            return byDocument;
-         }
+         // The index lookup runs only once the cheaper signals abstained.
+         return (
+            registry.getLanguageFor({}) ??
+            registry.getLanguageFor({ target: this.findElementDocumentUri(source), type: source.type }) ??
+            this.fallbackReferenceLanguage(source)
+         );
       }
-      const byType = this.resolveReferenceLanguageByType(source);
-      return byType ?? this.fallbackReferenceLanguage(source);
-   }
-
-   /**
-    * Route a reference source by the AST type it carries — a
-    * {@link isSyntheticSource}'s `type` (the transient node being created) or an
-    * {@link isElementSource}'s optional narrowing `type`.
-    *
-    * Answers only when EXACTLY ONE registered grammar can produce the type.
-    * Several can when the type comes from a grammar both import, and then the
-    * type genuinely does not identify a language — that is a fall-through to
-    * adopter policy, not a coin toss. Note this asks which grammar can *produce*
-    * the type, not which mentions it: a grammar that merely cross-references a
-    * type can never hold a node of it.
-    */
-   protected resolveReferenceLanguageByType(source: ReferenceSource): HydraniumLanguageServices | undefined {
-      const type = isSyntheticSource(source) ? source.type : isElementSource(source) ? source.type : undefined;
-      // The registry owns the type index — it is the one place that knows when
-      // the registered set changed, so unlike a private memo here it cannot go
-      // stale on a language registered after the first lookup.
-      return type ? this.services.ServiceRegistry.soleServicesByType(type) : undefined;
+      const hint = isSyntheticSource(source)
+         ? { languageId: source.language, target: source.uri, type: source.type }
+         : isDocumentSource(source)
+           ? { target: source.uri }
+           : {};
+      return registry.getLanguageFor(hint) ?? this.fallbackReferenceLanguage(source);
    }
 
    /**
@@ -1101,15 +1014,14 @@ export class DataServer<
     * disambiguates names that repeat across types (honouring grammar
     * subtyping through `AstReflection.isSubtype`).
     *
-    * Only reached on the multi-language, name-based path (step 3 of
-    * {@link resolveReferenceLanguage}); single-language adopters return at
-    * step 2.
+    * Only reached in a multi-language workspace, once the declared language
+    * and the URI have abstained.
     *
     * Abstains when the name matches elements in more than one DOCUMENT — the
     * index spans every language and is filled in build order, so "the
-    * first match" would be file-watch order rather than an answer. Step 3
-    * then falls through to the type-based step 4, which abstains on ties
-    * in the same way, and finally to adopter policy.
+    * first match" would be file-watch order rather than an answer. Routing
+    * then falls through to the element's type, which abstains on ties in the
+    * same way, and finally to adopter policy.
     */
    protected findElementDocumentUri(source: ElementSource): URI | undefined {
       const matches = this.services.workspace.IndexManager.getElementsByName(source.name, source.type);
@@ -1226,24 +1138,15 @@ export class DataServer<
    }
 
    /**
-    * Subscribe one listener at the configured {@link DataServerOptions.subscriptionPhase}.
-    * The listener dispatches subscription events for every matching URI. A
-    * single listener (rather than one per subscription) keeps the cost flat
-    * regardless of subscriber count.
+    * Follow every document at the configured
+    * {@link DataServerOptions.subscriptionPhase}, once per connection rather
+    * than once per watch, so the cost stays flat in the number of watches.
     */
-   protected subscribeToDocumentBuilder(): void {
-      this.disposables.push(
-         this.services.workspace.DocumentBuilder.onDocumentPhase(this.options.subscriptionPhase, (document, cancelToken) =>
-            this.dispatchPhaseEvent(document, cancelToken)
-         )
-      );
-      // The BUILD-phase hook, not the per-document one: this notification is one
-      // message per build rather than one per document, and Langium hands the
-      // whole batch over here. It also does not fire for a cancelled build,
-      // which is what the per-document dispatch has to check by hand.
-      this.disposables.push(
-         this.services.workspace.DocumentBuilder.onBuildPhase(this.options.subscriptionPhase, built => this.dispatchBuiltEvent(built))
-      );
+   protected subscribeToModelUpdates(): void {
+      const phase = this.options.subscriptionPhase;
+      this.disposables.push(this.modelService.onModelUpdated(event => this.dispatchPhaseEvent(event), { phase }));
+      // One message per build rather than one per document.
+      this.disposables.push(this.modelService.onModelsBuilt(event => this.dispatchBuiltEvent(event.uris), { phase }));
    }
 
    /**
@@ -1274,17 +1177,9 @@ export class DataServer<
     * dependents produces nothing at all, and workspace initialisation produces
     * nothing because it does not build to this phase. The ceiling is a
     * whole-workspace rebuild at the subscription phase: one message, URIs only.
-    *
-    * The URI is canonicalised for the same reason {@link uriWatchRecords} is keyed
-    * that way, and is untested for the same reason as its twin in
-    * {@link dispatchDeleteEvents}: the builder reports URIs out of its own
-    * store, so a non-canonical one cannot be produced without a fixture
-    * asserting a shape the real system never emits.
     */
-   protected dispatchBuiltEvent(built: readonly LangiumDocument[]): void {
-      const uris = built
-         .map(document => this.canonicalKey(document.uri.toString()))
-         .filter(uri => !this.uriWatchRecords.get(uri)?.watchers.size);
+   protected dispatchBuiltEvent(built: readonly CanonicalUri[]): void {
+      const uris = built.map(uri => this.canonicalKey(uri)).filter(uri => !this.uriWatchRecords.get(uri)?.watchers.size);
       if (uris.length === 0) {
          return;
       }
@@ -1293,13 +1188,12 @@ export class DataServer<
    }
 
    /**
-    * Subscribe to the universal save event on `HydraniumTextDocuments` so a
-    * single `onDocumentSaved` wire notification fires for ANY save of a
-    * subscribed URI — regardless of whether the save originated from the
-    * data-server's RPC `saveModelDocument`, the LSP head's text-editor save,
-    * or any other client writing through `notifyDidSaveTextDocument`.
+    * Follow every save so a single `onDocumentSaved` wire notification fires
+    * for ANY save of a subscribed URI — regardless of whether the save
+    * originated from the data-server's RPC `saveModelDocument`, the LSP head's
+    * text-editor save, or any other client.
     *
-    * Architectural symmetry with {@link subscribeToDocumentBuilder}: every
+    * Architectural symmetry with {@link subscribeToModelUpdates}: every
     * subscribed client sees every state change to documents they care about,
     * regardless of which client triggered it. Firing `onDocumentSaved` only
     * from the data-server's own RPC path is a bug, not an optimisation: an
@@ -1307,12 +1201,12 @@ export class DataServer<
     * clients, which never clear their dirty state.
     */
    protected subscribeToTextDocumentSaves(): void {
-      this.disposables.push(this.services.workspace.TextDocuments.onDidSave(event => this.dispatchSaveEvent(event)));
+      this.disposables.push(this.modelService.onModelSaved(event => this.dispatchSaveEvent(event)));
    }
 
    /** Relay each change of a document's dirty state; see {@link dispatchDirtyEvent}. */
    protected subscribeToDirtyChanges(): void {
-      this.disposables.push(this.services.workspace.TextDocuments.onDidChangeDirty(event => this.dispatchDirtyEvent(event)));
+      this.disposables.push(this.modelService.onDirtyChanged(event => this.dispatchDirtyEvent(event)));
    }
 
    /**
@@ -1320,7 +1214,7 @@ export class DataServer<
     * {@link dispatchSaveEvent} is: the answer at any one moment travels on
     * every document sent, so a client that watches nothing reads it there.
     */
-   protected dispatchDirtyEvent(event: DocumentDirtyChangedEvent): void {
+   protected dispatchDirtyEvent(event: ModelDirtyChangedEvent): void {
       const uri = this.canonicalKey(event.uri);
       if (this.uriWatchRecords.get(uri)?.watchers.size) {
          this.clientProxy.onDocumentDirtyChanged({ uri, text: event.text });
@@ -1346,7 +1240,7 @@ export class DataServer<
     */
    protected subscribeToTextDocumentCloses(): void {
       this.disposables.push(
-         this.services.workspace.TextDocuments.onDidCloseLastOpen(event => {
+         this.modelService.onModelReleased(event => {
             const uri = this.canonicalKey(event.uri);
             const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
             record.revertPending = true;
@@ -1375,15 +1269,9 @@ export class DataServer<
     * in the other direction: a transition that matters enough is delivered
     * without a subscription.
     *
-    * Runs from the `DocumentBuilder.onUpdate` listener rather than from a phase
-    * listener, which is the only place a deletion is observable: `update`
-    * removes the document before deriving the rebuild set, so it is never built.
-    * That ordering also puts this notification ahead of the `'rebuilt'` events
-    * for the dependents whose references the deletion just broke.
-    *
-    * The `deleted` list arrives already expanded to concrete document URIs —
-    * `deleteDocuments` resolves a directory URI to the documents beneath it — so
-    * no caller has to handle a directory here.
+    * A deletion is announced before the build that follows it, so this goes
+    * out ahead of the `'rebuilt'` events for the dependents whose references
+    * the deletion just broke.
     *
     * The URI's fingerprint and revert mark are dropped: they describe a
     * document that no longer exists. A kept fingerprint is adopted as the
@@ -1394,28 +1282,21 @@ export class DataServer<
     * re-subscription, and a client that answers the deletion by closing
     * releases the watch through `closeModelDocument` anyway.
     */
-   protected dispatchDeleteEvents(deleted: readonly URI[]): void {
-      for (const removed of deleted) {
-         const uri = this.canonicalKey(removed.toString());
-         const record = this.uriWatchRecords.get(uri);
-         if (record) {
-            record.fingerprint = undefined;
-            record.fingerprintVersion = undefined;
-            record.revertPending = undefined;
-            record.sentVersion = undefined;
-            this.pruneUriWatchRecord(uri);
-         }
-         this.clientProxy.onDocumentDeleted({ uri });
+   protected dispatchDeleteEvent(event: ModelDeletedEvent): void {
+      const uri = this.canonicalKey(event.uri);
+      const record = this.uriWatchRecords.get(uri);
+      if (record) {
+         record.fingerprint = undefined;
+         record.fingerprintVersion = undefined;
+         record.revertPending = undefined;
+         record.sentVersion = undefined;
+         this.pruneUriWatchRecord(uri);
       }
+      this.clientProxy.onDocumentDeleted({ uri });
    }
 
    /** Fan out a save event for the document's URI, gated on the URI's watchers. */
-   protected dispatchSaveEvent(event: ClientTextDocumentChangeEvent<TextDocument>): void {
-      // The save event arrives under the CLIENT URI the text store keys by (e.g. a
-      // symlink path S); `uriWatchRecords` and `dispatchPhaseEvent` key by the
-      // CANONICAL identity R. Canonicalize before both the gate and the envelope so
-      // a save of a symlinked file isn't silently dropped (and the envelope resolves
-      // the R-keyed document rather than missing into an empty one).
+   protected dispatchSaveEvent(event: AstDocumentSavedEvent<AstNode>): void {
       const uri = this.canonicalKey(event.document.uri);
       if (!this.uriWatchRecords.get(uri)?.watchers.size) {
          return;
@@ -1423,7 +1304,7 @@ export class DataServer<
       const response = this.envelope(UriUtils.toUri(uri));
       const wireEvent: TransferDocumentSavedEvent<TTransfer, TDiagnostic> = {
          document: response,
-         sourceClientId: event.clientId
+         sourceClientId: event.sourceClientId
       };
       this.clientProxy.onDocumentSaved(wireEvent);
    }
@@ -1459,16 +1340,8 @@ export class DataServer<
     * digest keeps its memory constant in document size; see
     * {@link computeDocumentFingerprint} for the inputs.
     */
-   protected dispatchPhaseEvent(document: LangiumDocument, cancelToken: CancellationToken): void {
-      if (cancelToken.isCancellationRequested) {
-         // Build preempted by a concurrent write lock (or other cancel source) —
-         // the subscription event is stale by the time it would fire. Skip
-         // emission so RPC subscribers don't surface intermediate states.
-         // A pending revert mark is deliberately NOT consumed here: the
-         // follow-up build re-fires this phase and broadcasts then.
-         return;
-      }
-      const uri = document.uri.toString();
+   protected dispatchPhaseEvent(event: ModelUpdatedEvent<AstNode>): void {
+      const uri = this.canonicalKey(event.document.uri);
       const record = this.uriWatchRecords.get(uri);
       const revertedOnClose = record?.revertPending === true;
       if (!record || (record.watchers.size === 0 && !revertedOnClose)) {
@@ -1484,6 +1357,12 @@ export class DataServer<
          record.revertPending = undefined;
          this.pruneUriWatchRecord(uri);
       }
+      // The encoder reads the built document, which the event's holds for this
+      // synchronous run.
+      const document = this.modelService.getDocument(uri);
+      if (!document) {
+         return;
+      }
       const fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
       const stamped = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
       if (record.fingerprint === fingerprint && record.fingerprintVersion === stamped) {
@@ -1496,22 +1375,24 @@ export class DataServer<
       }
       record.fingerprint = fingerprint;
       record.fingerprintVersion = stamped;
-      // The manager's attribution, so this head names the same client as the
+      // The event's attribution, so this head names the same client as the
       // in-process heads do for one build, except for a version this head
       // already sent; see `DataServerUriWatchRecord.sentVersion`.
-      const version = this.services.workspace.AstDocumentManager.isOpen(uri) ? document.textDocument.version : undefined;
+      const version = this.modelService.isOpen(uri) ? document.textDocument.version : undefined;
       const { reason, sourceClientId } =
          version !== undefined && record.sentVersion === version
             ? { reason: 'rebuilt' as const, sourceClientId: UNKNOWN_CLIENT_ID }
-            : this.services.workspace.AstDocumentManager.attributeUpdate(document);
+            : event;
       record.sentVersion = version;
-      const event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
+      const wireEvent: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri, fingerprint),
          sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,
          reason
       };
-      this.tracer.withUri(uri).debug(`Emit onDocumentUpdated v${stamped} (reason=${event.reason}, sourceClientId=${event.sourceClientId})`);
-      this.clientProxy.onDocumentUpdated(event);
+      this.tracer
+         .withUri(uri)
+         .debug(`Emit onDocumentUpdated v${stamped} (reason=${wireEvent.reason}, sourceClientId=${wireEvent.sourceClientId})`);
+      this.clientProxy.onDocumentUpdated(wireEvent);
    }
 
    /**

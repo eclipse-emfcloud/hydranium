@@ -89,7 +89,7 @@ async function boot(): Promise<{ harness: OrderFlowHarness; uri: (file: string) 
 /** Every update event for `uri` from now on. */
 function record(harness: OrderFlowHarness, uri: string): Event[] {
    const events: Event[] = [];
-   harness.shared.model.ModelService.onModelUpdated(uri, event => events.push(event));
+   harness.shared.model.ModelService.onModelUpdated(event => events.push(event), { uri });
    return events;
 }
 

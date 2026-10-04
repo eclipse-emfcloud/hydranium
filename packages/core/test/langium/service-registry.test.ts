@@ -233,6 +233,34 @@ describe('ExtendedServiceRegistry', () => {
          expect(registry.soleServicesByType('SharedType')).toBeUndefined();
          expect(registry.getServicesByType('SharedType')).toHaveLength(2);
       });
+
+      describe('getLanguageFor', () => {
+         function twoLanguages(): ExtendedServiceRegistry {
+            const registry = new ExtendedServiceRegistry();
+            registry.register(producing('alpha', 'TypeOne', 'SharedType'));
+            registry.register(producing('beta', 'TypeTwo', 'SharedType'));
+            return registry;
+         }
+         const idOf = (services: LangiumCoreServices | undefined) => services?.LanguageMetaData.languageId;
+
+         it('takes a declared id over the target and the type', () => {
+            expect(idOf(twoLanguages().getLanguageFor({ languageId: 'beta', target: 'file:///x.alpha', type: 'TypeOne' }))).toBe('beta');
+         });
+
+         it('falls through an unregistered id to the target, and an unroutable target to the type', () => {
+            expect(idOf(twoLanguages().getLanguageFor({ languageId: 'gamma', target: 'file:///x.alpha', type: 'TypeTwo' }))).toBe('alpha');
+            expect(idOf(twoLanguages().getLanguageFor({ target: 'file:///dir', type: 'TypeTwo' }))).toBe('beta');
+         });
+
+         it('answers the only registered language for any hint, and abstains on an ambiguous type', () => {
+            const single = new ExtendedServiceRegistry();
+            single.register(producing('alpha', 'TypeOne'));
+
+            expect(idOf(single.getLanguageFor({ target: 'file:///dir', type: 'UnknownType' }))).toBe('alpha');
+            expect(twoLanguages().getLanguageFor({ target: 'file:///dir', type: 'SharedType' })).toBeUndefined();
+            expect(twoLanguages().getLanguageFor({})).toBeUndefined();
+         });
+      });
    });
 
    describe('registrations', () => {

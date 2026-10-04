@@ -44,13 +44,12 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { BrowserActionDispatchScope } from '@eclipse-glsp/server/browser.js';
-import type { AstDocument } from '@hydranium/core';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import { HydraniumGlspAppModule, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import { type AstNode, URI } from '@hydranium/langium';
+import { URI } from '@hydranium/langium';
 import type { TransferElement } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { ContainerModule, type interfaces } from 'inversify';
@@ -211,15 +210,12 @@ export function readBeforeRefetch<T>(diagram: Diagram, read: () => Promise<T>): 
 
 /** The storage's protected resubmit path, entered the way its debounce timer enters it. */
 export interface ResubmitPath {
-   pendingResubmitDocument?: AstDocument<AstNode>;
-   currentPrimaryDocument(): AstDocument<AstNode> | undefined;
    flushResubmit(): void;
 }
 
 /** Run the storage's resubmit now, as its debounce timer would. */
 export function flushResubmit(diagram: Diagram): void {
    const storage = diagram.sessionContainer.get<SourceModelStorage>(SourceModelStorage) as unknown as ResubmitPath;
-   storage.pendingResubmitDocument = storage.currentPrimaryDocument();
    storage.flushResubmit();
 }
 

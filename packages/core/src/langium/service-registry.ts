@@ -317,6 +317,28 @@ export class ExtendedServiceRegistry<
    }
 
    /**
+    * The language the strongest signal given names: a declared `languageId`,
+    * then `target`'s document, then the only registered language, then the sole
+    * producer of `type`. `undefined` when none answers, which leaves the
+    * fallback to the caller, since it differs per caller.
+    *
+    * A declared id comes first because every later signal is inferred, and an
+    * inference must not override a caller that said which grammar it means.
+    */
+   getLanguageFor(hint: { readonly languageId?: string; readonly target?: LanguageTarget; readonly type?: string }): TServices | undefined {
+      const declared = hint.languageId === undefined ? undefined : this.getServicesById(hint.languageId);
+      const located = declared ?? this.getServicesFor(hint.target);
+      if (located) {
+         return located;
+      }
+      const all = this.all;
+      if (all.length === 1) {
+         return all[0];
+      }
+      return hint.type === undefined ? undefined : this.soleServicesByType(hint.type);
+   }
+
+   /**
     * Drop the memoised type index, so a language registered after the first
     * type lookup is accounted for. The reason this index belongs on the
     * registry rather than in a consumer's private memo: the registry is the

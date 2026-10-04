@@ -20,7 +20,7 @@ import {
    type TransferElement
 } from '@hydranium/protocol';
 import { type AstNode, UriUtils } from '@hydranium/langium';
-import { type CancellationToken, type Disposable } from 'vscode-languageserver';
+import { type CancellationToken, type Disposable, Emitter, type Event } from 'vscode-languageserver';
 import { type AstDocument, type SavedAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
@@ -141,6 +141,12 @@ export interface ClientSession<
     * reason reverts such a document at once.
     */
    dispose(cause?: SessionEndCause): void;
+   /**
+    * Fires once the session has ended, its documents closed, with the cause it
+    * ended with. A takeover through `createSession` ends it as `'lost'` from
+    * another caller, so a holder that keeps per-session state releases it here.
+    */
+   readonly onDidDispose: Event<SessionEndCause>;
 }
 
 /**
@@ -181,6 +187,7 @@ export class DefaultClientSession<
    protected readonly openOptionsByUri = new Map<string, TOpenOptions | undefined>();
    /** Drops an open's options from {@link openOptionsByUri} when the store closes the open. */
    protected readonly closeListener: Disposable;
+   protected readonly disposeEmitter = new Emitter<SessionEndCause>();
    /** Logs under `logName`, `ClientSession` when none is given, with this session's id in a bracket of its own, so a line names the session that wrote. */
    protected readonly tracer: Tracer;
    /** The service bound on `model.ModelService`, which serialises and rebuilds for this session. */
@@ -267,6 +274,12 @@ export class DefaultClientSession<
       this.disposed = true;
       this.services.workspace.TextDocuments.closeSession(this.clientId, cause);
       this.closeListener.dispose();
+      this.disposeEmitter.fire(cause ?? 'closed');
+      this.disposeEmitter.dispose();
+   }
+
+   get onDidDispose(): Event<SessionEndCause> {
+      return this.disposeEmitter.event;
    }
 
    protected assertLive(): void {

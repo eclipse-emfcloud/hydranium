@@ -217,7 +217,9 @@ ends that session, as its connection closing would, and registers the id
 afresh. It lets a client whose connection dropped register again before the
 server has noticed the drop. The token guards against colliding with that
 session; it is not a secret, since the wire carries no authentication, and a
-takeover ends the old session even when its connection is still alive.
+takeover ends the old session even when its connection is still alive. In
+process, `ModelService.createSession(label, clientId, { resumeToken })` does
+the same, and the old session's `onDidDispose` tells its holder.
 
 The session belongs to the connection: a request carrying its id acts as that
 session, so its `updateModelDocument` and `saveModelDocument` write only what
@@ -702,7 +704,8 @@ const sharedModule = {
 
 `revertGraceMs` in `HydraniumTextDocumentsOptions` defers the revert of a
 document whose last close came from a lost connection: a data connection that
-closed, or a session a reconnecting client took over with its resume token.
+closed, a GLSP connection that closed under a diagram, or a session a
+reconnecting client took over with its resume token.
 The store keeps the document, and its unsaved text, for that long. A client
 lost from the document may reclaim that text only within the grace of its own
 loss: an open under its id in that time, such as a session a reconnecting

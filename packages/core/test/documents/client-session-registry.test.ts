@@ -73,7 +73,7 @@ describe('ClientSessionRegistry — the session table', () => {
       registry.unregister('s');
       registry.unregister('s');
 
-      expect(closed).toEqual([{ clientId: 's' }]);
+      expect(closed).toEqual([{ clientId: 's', cause: 'closed' }]);
    });
 });
 

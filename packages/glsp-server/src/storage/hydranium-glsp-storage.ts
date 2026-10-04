@@ -46,8 +46,9 @@ import {
    type AstDocumentSavedEvent,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
-   type DocumentDirtyChangedEvent,
-   type ServerSharedServices
+   type ModelDirtyChangedEvent,
+   type ServerSharedServices,
+   type SessionEndCause
 } from '@hydranium/core';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
@@ -176,10 +177,10 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * integrity rules applied). The end of an operation captures the root its
  * write produced, settled or not, and the operation's own submit waits for the
  * settled one through `ready()`. The GModel factory therefore always walks a
- * fully linked + reprojected AST. The storage never captures off a transient
- * mid-rebuild snapshot — notably it re-`settled()`s in the resubmit path rather
- * than trusting the `onModelUpdated` event's document, which can arrive while a
- * re-entered document is still being rebuilt.
+ * fully linked + reprojected AST. The resubmit path re-`settled()`s rather
+ * than keeping the `onModelUpdated` event's document: the event's document
+ * holds only while its listener runs, and the resubmit runs after a debounce,
+ * by which time another build can have reset it.
  *
  * Adopters with richer needs override the seams ({@link isStructurallyBroken},
  * {@link parseErrorStatus}, {@link onSourceModelSettled}) rather than the
@@ -211,7 +212,10 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * **Lifecycle ordering.** `init` runs after DI resolution and parks the
  * secondary-write-set watch, which outlives any single load.
  * {@link sessionDisposed} calls {@link dispose}, which drains
- * {@link toDispose} idempotently and then ends the client session. Every
+ * {@link toDispose} idempotently and then ends the client session. The
+ * framework's GLSP server disposes the storage as lost first when it shuts
+ * down, which is how the client's connection ending reaches it, so the
+ * diagram's unsaved text waits out the revert grace. Every
  * transient subscription created in {@link doLoadSourceModel} is parked on
  * {@link toDispose} so the drain catches them on client-detach.
  */
@@ -287,9 +291,6 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * hence its `Clock` — is available by then); disposed on session teardown.
     */
    protected resubmitDebouncer!: Debouncer;
-
-   /** Latest event document awaiting the debounced resubmit; read by {@link flushResubmit} (last write wins). */
-   protected pendingResubmitDocument?: AstDocument<AstNode>;
 
    @postConstruct()
    protected init(): void {
@@ -426,20 +427,23 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // GLSP's sessionDisposed is unreliable on Theia tab-close; dispose on client
       // detach so reopens don't accumulate stale onModelUpdated listeners.
       this.toDispose.push(
-         modelService.onClientClosed(rootUri, this.state.clientId, () => {
-            this.logger.info(`Client detached (${this.state.clientId}) — disposing storage subscriptions for ${rootUri}`);
-            this.dispose();
-         })
+         modelService.onClientClosed(
+            () => {
+               this.logger.info(`Client detached (${this.state.clientId}) — disposing storage subscriptions for ${rootUri}`);
+               this.dispose();
+            },
+            { uri: rootUri, clientId: this.state.clientId }
+         )
       );
 
       // React to external rebuilds: settle-gated capture + debounced/deduped resubmit.
-      this.toDispose.push(modelService.onModelUpdated(rootUri, event => this.handleModelUpdated(rootUri, event)));
+      this.toDispose.push(modelService.onModelUpdated(event => this.handleModelUpdated(rootUri, event), { uri: rootUri }));
 
       // GLSP's own command stack counts commands; tell it of another client's save.
-      this.toDispose.push(modelService.onModelSaved(rootUri, event => this.handleModelSaved(event)));
+      this.toDispose.push(modelService.onModelSaved(event => this.handleModelSaved(event), { uri: rootUri }));
 
       // Tell the client of each dirty flip, one the diagram did not cause included.
-      this.toDispose.push(this.sharedServices.workspace.TextDocuments.onDidChangeDirty(event => this.handleDirtyChanged(event)));
+      this.toDispose.push(modelService.onDirtyChanged(event => this.handleDirtyChanged(event)));
 
       // Capture the initial settled root.
       const document = await modelService.settled(rootUri);
@@ -498,7 +502,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
             this.departedSecondaries.delete(uri);
             this.secondarySubscriptions.set(
                uri,
-               this.sharedServices.model.ModelService.onModelUpdated(uri, event => this.handleSecondaryUpdated(uri, event))
+               this.sharedServices.model.ModelService.onModelUpdated(event => this.handleSecondaryUpdated(uri, event), { uri })
             );
             this.openSecondary(uri);
          }
@@ -538,15 +542,6 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * this listener caused by the client's own write, and resubmitting on it
     * fights the optimistic client-side move the user is still holding.
     *
-    * Schedules the PRIMARY's current document, never the secondary's.
-    * {@link doUpdateAndSubmit} reads its event document only for the edit-mode
-    * and structurally-broken decisions, both of which are statements about the
-    * document the canvas edits: passing the secondary's would let a typo in a
-    * layout file flip the canvas READONLY and take the keep-the-last-valid-GModel
-    * branch off an unrelated document's parse state. The pending-document field
-    * is shared with the primary path, so it would poison a concurrently
-    * scheduled primary resubmit too.
-    *
     * No marker refresh, unlike the primary path: a secondary's diagnostics reach
     * the client only if an adopter's index registers elements as rendering that
     * document, and refreshing here unconditionally would add a dispatch to every
@@ -557,29 +552,21 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.disposeIfStale(uri)) {
          return;
       }
-      if (event.causedBy === this.state.clientId) {
-         return;
-      }
-      const primary = this.currentPrimaryDocument();
-      if (primary === undefined) {
+      if (event.causedBy === this.state.clientId || this.currentPrimaryDocument() === undefined) {
          return;
       }
       this.logger.debug(
          `Secondary ${uri} rebuilt, caused by ${event.causedBy ?? 'an unknown client'} (${event.reason}) — scheduling resubmit`
       );
-      this.scheduleUpdateAndSubmit(primary);
+      this.scheduleUpdateAndSubmit();
    }
 
    /**
     * The primary document's current state, or `undefined` when it is not
     * registered.
     *
-    * Synchronous by construction — the phase-agnostic lookup door plus the shared
-    * projection — so reacting to a secondary neither waits nor can force a build.
-    * `settled()` is not an alternative: besides being asynchronous, it cannot be
-    * relied on to carry diagnostics — a document it has to drive to the landmark
-    * arrives pre-validation, without them — and diagnostics are the reason
-    * {@link doUpdateAndSubmit} takes a separate event document at all.
+    * Synchronous by construction, so the parse-error status reads the text as
+    * it stands rather than waiting for a build.
     */
    protected currentPrimaryDocument(): AstDocument<AstNode> | undefined {
       const document = this.sharedServices.model.ModelService.getDocument(this.state.sourceUri);
@@ -606,7 +593,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          return;
       }
       if (event.causedBy !== this.state.clientId) {
-         this.scheduleUpdateAndSubmit(event.document);
+         this.scheduleUpdateAndSubmit();
       }
       await this.refreshDiagnosticMarkers();
    }
@@ -629,27 +616,21 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Record the latest document and (re)arm the trailing-edge
-    * {@link resubmitDebouncer}, so a burst of rebuilds runs
-    * {@link doUpdateAndSubmit} once with the most recent document.
+    * (Re)arm the trailing-edge {@link resubmitDebouncer}, so a burst of
+    * rebuilds runs {@link doUpdateAndSubmit} once.
     */
-   protected scheduleUpdateAndSubmit(document: AstDocument<AstNode>): void {
-      this.pendingResubmitDocument = document;
+   protected scheduleUpdateAndSubmit(): void {
       this.resubmitDebouncer.schedule();
    }
 
    /**
-    * Debouncer callback: run the resubmit for the latest pending document
-    * against this storage's (invariant) source URI and dispatch the result.
-    * Fire-and-forget — failures are logged, not surfaced to the timer caller.
+    * Debouncer callback: run the resubmit against this storage's (invariant)
+    * source URI and dispatch the result. Fire-and-forget — failures are
+    * logged, not surfaced to the timer caller.
     */
    protected flushResubmit(): void {
-      const document = this.pendingResubmitDocument;
-      if (document === undefined) {
-         return;
-      }
       const rootUri = this.state.sourceUri;
-      this.doUpdateAndSubmit(rootUri, document).then(
+      this.doUpdateAndSubmit(rootUri).then(
          actions => this.actionDispatcher.dispatchAll(actions),
          error => this.logger.error(`Update-and-submit failed for ${rootUri}: ${error instanceof Error ? error.message : String(error)}`)
       );
@@ -682,7 +663,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * here first would leave that answer changing nothing. GLSP's saveable
     * waits for exactly that answer, and times out without it.
     */
-   protected handleDirtyChanged(event: DocumentDirtyChangedEvent): void {
+   protected handleDirtyChanged(event: ModelDirtyChangedEvent): void {
       if (this.ownSavesPending > 0 || !this.sharedServices.workspace.TextDocuments.isOpenInClient(event.uri, this.state.clientId)) {
          return;
       }
@@ -698,22 +679,16 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
 
    /**
     * Re-settle to a guaranteed fully-linked + reprojected root, capture it, and
-    * (unless suppressed) resubmit a deduped external GModel. Diagnostics for the
-    * parse-error status come from the event document, because the re-settled one
-    * cannot be relied on to have any: a document driven to the landmark arrives
-    * pre-validation, and this path re-settles precisely to escape a transient
-    * mid-rebuild snapshot.
+    * (unless suppressed) resubmit a deduped external GModel.
     *
     * The settle is awaited outside {@link AbstractHydraniumGlspState.runExclusive},
     * so an operation does not wait on a build; the capture and the render run
     * inside it, the render's own wait for the document included, since an
     * operation opened between that wait and the GModel build would be rendered.
     */
-   protected async doUpdateAndSubmit(rootUri: string, eventDocument: AstDocument<AstNode>): Promise<Action[]> {
-      // Settle-gate the capture: never setSourceRoot off the event's possibly-transient
-      // snapshot — the event can arrive while a re-entered document is mid-rebuild.
+   protected async doUpdateAndSubmit(rootUri: string): Promise<Action[]> {
       const document = await this.sharedServices.model.ModelService.settled(rootUri);
-      return this.state.runExclusive(() => this.captureAndSubmit(rootUri, document.root as TRoot, eventDocument));
+      return this.state.runExclusive(() => this.captureAndSubmit(rootUri, document.root as TRoot));
    }
 
    /**
@@ -721,12 +696,21 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * `root` is not captured when the state already holds a later one: an
     * operation that ended while the settle was awaited captured its own
     * write, which `root` predates.
+    *
+    * The parse-error status is the primary's as it stands now, which can be
+    * past `root`: a status taken from an older document would let an operation
+    * write into text that no longer parses.
     */
-   protected async captureAndSubmit(rootUri: string, root: TRoot, eventDocument: AstDocument<AstNode>): Promise<Action[]> {
+   protected async captureAndSubmit(rootUri: string, root: TRoot): Promise<Action[]> {
       if (this.sharedServices.workspace.ModelLedger.versionOf(root) >= this.state.version) {
          this.state.setSourceRoot(rootUri, root);
       }
-      const broken = this.refreshParseErrorStatus(eventDocument);
+      const primary = this.currentPrimaryDocument();
+      if (!primary) {
+         // A primary deleted since the settle leaves nothing to be broken.
+         this.state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
+      }
+      const broken = primary ? this.refreshParseErrorStatus(primary) : [];
 
       // Skip the external submit until the initial requestModel completes; submitting too
       // early bumps root.revision and the client's stale first computedBounds is dropped,
@@ -1074,13 +1058,13 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * Cancel any pending resubmit, drain every subscription — those registered
     * during {@link doLoadSourceModel} and the per-secondary ones, which live
     * outside {@link toDispose} because they come and go with the write set —
-    * and end the diagram's client session, closing everything it has open.
-    * Idempotent.
+    * and end the diagram's client session with `cause`, closing everything it
+    * has open. Idempotent.
     *
     * The session ends last, once the detach listener is gone: its closes would
     * otherwise report this storage's own teardown as a client detaching.
     */
-   dispose(): void {
+   dispose(cause: SessionEndCause = 'closed'): void {
       this.resubmitDebouncer?.dispose();
       for (const subscription of this.secondarySubscriptions.values()) {
          subscription.dispose();
@@ -1088,7 +1072,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       this.secondarySubscriptions.clear();
       this.toDispose.dispose();
       this.disposed = true;
-      this.state.modelSession?.dispose();
+      this.state.modelSession?.dispose(cause);
       this.state.modelSession = undefined;
    }
 }
