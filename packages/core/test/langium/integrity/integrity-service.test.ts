@@ -1026,6 +1026,20 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
       expect(fileSystemProvider.writes).toEqual([]);
    });
 
+   it('writes nothing when an editor attaches while disk is being read', async () => {
+      const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+      textDocuments.held.set('file:///held.fake', td);
+      fileSystemProvider.duringRead = () => (textDocuments.openInLanguageClient = true);
+
+      await probe.syncCorrectionsNow(td, 'saved');
+
+      expect(fileSystemProvider.writes).toEqual([]);
+      expect(textDocuments.diskBaselines).toEqual([]);
+   });
+
    it('neither writes nor stages a held file in editor mode, even when its source is what disk holds', async () => {
       const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe('editor');
       textDocuments.openInOtherClient = true;
