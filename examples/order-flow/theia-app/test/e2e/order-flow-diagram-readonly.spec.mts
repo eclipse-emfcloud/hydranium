@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { loadOrderFlowApp, test } from './order-flow-app.mjs';
 
-const READONLY_REASON = 'Read-only: this document has a syntax error. Fix it to edit the diagram again.';
+const READONLY_REASON = 'Read-only: fulfillment.process has a syntax error. Fix it to edit the diagram again.';
 
 /** A workspace overlay whose `fulfillment.process` has a transition with no target, a parser error. */
 function brokenProcessOverlay(): string {
@@ -61,5 +61,8 @@ test.describe('Order-flow diagram opened over a broken document', () => {
       // reaches the client; a second is ten times that.
       await app.page.waitForTimeout(1000);
       await expect(band).toHaveText(READONLY_REASON);
+      // Visible, not only present: GLSP hides a status message behind a hover
+      // unless the example's stylesheet keeps it shown.
+      await expect(band.locator('.sprotty-status-message')).toBeVisible();
    });
 });

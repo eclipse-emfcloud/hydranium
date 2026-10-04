@@ -205,26 +205,28 @@ const processFixture: LanguageFixture = {
  * alongside their references and would not catch an encoder that mishandled the
  * reference-only case.
  *
- * Targets `returns.process`, which has no committed `.layout` beside it, so
- * the fixture adds a layout rather than competing with `fulfillment.layout`.
+ * Lays out `returns.process`, which has no committed `.layout` beside it, so
+ * the fixture adds one under the name that binds it rather than competing with
+ * `fulfillment.layout`.
  */
 const layoutFixture: LanguageFixture = {
    valid: {
-      uri: uri('orders/conformance.layout'),
+      uri: uri('orders/returns.layout'),
       languageId: LAYOUT_LANGUAGE_ID,
-      text: 'layout ReturnsLayout for Returns {\n   node Receive at 40, 40 size 160, 60\n}\n'
+      text: 'layout {\n   node Receive at 40, 40 size 160, 60\n}\n'
    },
    invalid: {
       uri: uri('orders/conformance-invalid.layout'),
       // Parses clean, fails linking against the NARROWED scope: `Pay` is a real
-      // flow node in `fulfillment.process`, just not one of `Returns`'. An
-      // unscoped `[FlowNode:ID]` resolves it via the global index, so this goes
-      // green if `OrderFlowLayoutScopeProvider` is ever removed.
-      text: 'layout BrokenLayout for Returns {\n   node Pay at 0, 0\n}\n',
+      // flow node in `fulfillment.process`, but no `.process` shares this file's
+      // name, so the layout lays out nothing. An unscoped `[FlowNode:ID]`
+      // resolves it via the global index, so this goes green if
+      // `OrderFlowLayoutScopeProvider` is ever removed.
+      text: 'layout {\n   node Pay at 0, 0\n}\n',
       languageId: LAYOUT_LANGUAGE_ID
    },
    edit: {
-      to: 'layout ReturnsLayout for Returns {\n   node Receive at 40, 40 size 160, 60\n   node Restock at 40, 160\n}\n',
+      to: 'layout {\n   node Receive at 40, 40 size 160, 60\n   node Restock at 40, 160\n}\n',
       // `flowNode` is a `Reference<FlowNode>`, which is a bare NAME on the wire
       // and a Langium reference object in the AST — asserting on the string is
       // what pins that the transfer roots, not the AST ones, reached the client.

@@ -210,10 +210,10 @@ the two ends of the pipeline this page exists to show apart.
 **It follows editor FOCUS rather than the workspace list, which is a
 consequence of the grammars rather than a preference.** A `DomainModel` root has
 no top-level string property at all, so a panel bound to the selection editor
-would open on `orders.domain` and show nothing to edit; the two roots that do
-have editable fields — `ProcessModel` and `LayoutModel` — are exactly the two
-documents pinned under the diagram, which the selection editor will not load
-because one document in two editors splits the cursor between them. Click into a
+would open on `orders.domain` and show nothing to edit; the only root that does
+have editable fields — `ProcessModel` — is one of the two documents pinned under
+the diagram, which the selection editor will not load because one document in
+two editors splits the cursor between them. Click into a
 `.domain` and the panel says so rather than going blank.
 
 **Drag a node and watch the `.layout` editor, not just the report line.** That is

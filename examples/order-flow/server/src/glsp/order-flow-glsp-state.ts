@@ -14,6 +14,7 @@ import { type BaseVersion, type ModelVersion, type TransferElement } from '@hydr
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
+import { layoutUriFor } from '../language-server/layout-file.js';
 import type { ProcessModel as TransferProcessModel } from '../language-server/generated-hydranium/transfer-model.js';
 import type { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 
@@ -28,11 +29,6 @@ import type { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
  */
 export type OrderFlowSourceModel = MultiDocumentSourceModel<TransferProcessModel>;
 
-/** The layout file for a process document: same basename, `.layout` extension. */
-export function layoutUriFor(processUri: string): string {
-   return processUri.replace(/\.process$/, '.layout');
-}
-
 /**
  * `order-flow`'s GLSP state, over the framework's
  * {@link ReconcilingMultiDocumentGlspState}.
@@ -46,12 +42,12 @@ export function layoutUriFor(processUri: string): string {
  * the process file does not have.
  *
  * The layout file is located by **sibling convention** (`fulfillment.process` →
- * `fulfillment.layout`) rather than by searching the index for a `LayoutModel`
- * pointing back at this process. The convention is deterministic, which matters
- * because the file may not exist yet — the first drag on a never-laid-out process
- * has to CREATE it, and that needs a name rather than a search result. The
- * diagram's session creates it ({@link openForWrite}), since a session's writes
- * open nothing.
+ * `fulfillment.layout`, see {@link layoutUriFor}), which is also how the
+ * layout's entries find their process. The convention is deterministic, which
+ * matters because the file may not exist yet — the first drag on a
+ * never-laid-out process has to CREATE it, and that needs a name rather than a
+ * search result. The diagram's session creates it ({@link openForWrite}), since
+ * a session's writes open nothing.
  */
 @injectable()
 export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<ProcessModel, TransferProcessModel> {
@@ -94,19 +90,9 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
       return this.pendingLayoutRoot;
    }
 
-   /**
-    * An empty layout root for this process. `name` is derived from the process
-    * name so the generated file reads like a hand-authored one, and `process` is
-    * a bare reference to the process root — the grammar's `layout X for Y` header
-    * needs both before any entry can be serialized.
-    */
+   /** An empty layout root for this process. */
    protected createLayoutRoot(): LayoutModel {
-      const process = this.languageServicesFor(this.sourceRoot)?.references.ReferenceBuilder.toOwnReference(this.sourceRoot);
-      return layoutNode(LayoutModel, {
-         name: `${this.sourceRoot.name}Layout`,
-         process: process as LayoutModel['process'],
-         nodes: []
-      });
+      return layoutNode(LayoutModel, { nodes: [] });
    }
 
    protected override trackWriteSet(uri: string): void {

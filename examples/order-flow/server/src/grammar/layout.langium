@@ -4,8 +4,15 @@ import './common'
 import './process'
 
 /**
- * `*.layout` — where a process's graphical layout lives, in its OWN file
- * referencing the `*.process` it lays out.
+ * `*.layout` — where a process's graphical layout lives, in its OWN file beside
+ * the `*.process` it lays out: `fulfillment.layout` lays out
+ * `fulfillment.process`.
+ *
+ * **The file name is the only link.** The diagram finds a process's layout by
+ * that name, so the file states nothing more about which process it belongs to.
+ * A header naming the process too would be a second link that can disagree with
+ * the first: a layout the diagram reads whose entries resolve against a different
+ * process, or none.
  *
  * The alternative — an optional `diagram { … }` block inside `.process` — is
  * forced only on an adopter whose GLSP state can write no more than one
@@ -30,19 +37,18 @@ import './process'
  * children of `ProcessModel` — so `[FlowNode:ID]` would resolve against every
  * flow node in the workspace and a layout entry would happily bind to a
  * same-named task in an unrelated process. `OrderFlowLayoutScopeProvider`
- * narrows it to the nodes of the process this file declares, which is the same
- * dependent-reference shape `writes Order.status = PAID` needs in `.process`.
- * Two grammars, same lesson: a cross-document reference that type-checks is not
- * the same as one that is scoped correctly.
+ * narrows it to the nodes of the process in the same-named file. Two grammars,
+ * same lesson as `writes Order.status = PAID` in `.process`: a cross-document
+ * reference that type-checks is not the same as one that is scoped correctly.
  *
- * `import './process'` is what makes `[ProcessModel:ID]` and `[FlowNode:ID]`
- * legal here AND keeps all three grammars in one `langium-cli` run — the shared
- * `AstReflection` slot holds exactly one reflection, so independently generated
- * language packages would leave one grammar's types unknown.
+ * `import './process'` is what makes `[FlowNode:ID]` legal here AND keeps all
+ * three grammars in one `langium-cli` run — the shared `AstReflection` slot
+ * holds exactly one reflection, so independently generated language packages
+ * would leave one grammar's types unknown.
  */
 
 entry LayoutModel:
-    'layout' name=ID 'for' process=[ProcessModel:ID] '{'
+    'layout' '{'
         (nodes+=DiagramNode)*
     '}';
 

@@ -111,7 +111,7 @@ const LAYOUT_EDITOR = '#layout-editor';
  * `orders/fulfillment.layout`'s declaration — the first line of it that is not a
  * comment, and therefore the line the page scrolls each editor to on open.
  */
-const LAYOUT_DECLARATION = 'layout FulfillmentLayout for Fulfillment {';
+const LAYOUT_DECLARATION = 'layout {';
 
 /**
  * The last entry of `orders/fulfillment.layout`, spelled as the fixture has it.
@@ -176,8 +176,15 @@ const PALETTE_TOGGLE = `${MOUNT} .minimize-palette-button`;
 /** GLSP's status band, the surface the server's read-only reason lands on. */
 const STATUS_BAND = `${MOUNT} .sprotty-status`;
 
+/**
+ * The band's text. Asserted VISIBLE as well as by text: GLSP hides it behind a
+ * hover unless the example's stylesheet keeps it shown, and a text assertion
+ * reads hidden text too.
+ */
+const STATUS_MESSAGE = `${STATUS_BAND} .sprotty-status-message`;
+
 /** What the band says while the document does not parse. */
-const READONLY_REASON = 'Read-only: this document has a syntax error. Fix it to edit the diagram again.';
+const READONLY_REASON = 'Read-only: fulfillment.process has a syntax error. Fix it to edit the diagram again.';
 
 /**
  * A character no `.process` token can start with, typed to make the document
@@ -603,6 +610,7 @@ test.describe('order-flow in a web worker', () => {
       // GLSP channel, which the two visibility assertions cannot distinguish from
       // a purely client-side reaction to a stale edit mode.
       await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
+      await expect(page.locator(STATUS_MESSAGE)).toBeVisible();
       await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
       await expect(page.locator(PALETTE_TOGGLE)).toBeHidden();
 
@@ -636,7 +644,37 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
       await page.waitForTimeout(1000);
       await expect(page.locator(STATUS_BAND)).toHaveText(READONLY_REASON);
+      await expect(page.locator(STATUS_MESSAGE)).toBeVisible();
       await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
+   });
+
+   /**
+    * A layout that stops parsing takes the diagram read-only too, and the band
+    * names the layout rather than the process the diagram was opened on.
+    *
+    * A drag would otherwise write the layout from the AST error recovery made of
+    * it, which drops every entry the parser skipped.
+    */
+   test('a layout that stops parsing takes the diagram read-only, naming the layout', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator(`${MOUNT} .tool-button`).first()).toBeVisible();
+
+      await page.locator(`${LAYOUT_EDITOR} .view-line`, { hasText: LAYOUT_DECLARATION }).click();
+      await page.keyboard.press('Home');
+      await page.keyboard.type('x');
+
+      await expect(page.locator(STATUS_BAND)).toHaveText(
+         'Read-only: fulfillment.layout has a syntax error. Fix it to edit the diagram again.'
+      );
+      await expect(page.locator(STATUS_MESSAGE)).toBeVisible();
+      await expect(page.locator(`${MOUNT} .tool-palette`)).toBeHidden();
+
+      // Still typing in the layout editor: the palette hiding for read-only
+      // must not move the caret.
+      await page.keyboard.press('Backspace');
+
+      await expect(page.locator(STATUS_BAND)).toHaveText('');
+      await expect(page.locator(`${MOUNT} .tool-palette`)).toBeVisible();
    });
 
    test('highlighting comes from the server, not from a client grammar', async ({ page }) => {

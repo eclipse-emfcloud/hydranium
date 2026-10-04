@@ -403,3 +403,15 @@
    margin: 0;
    padding-inline-start: 1.1em;
 }
+
+/*
+ * GLSP's status overlay shows a message only while the pointer is over its icon,
+ * unless the status is FATAL. A warning or an error states a condition the
+ * canvas is in — the server's reason for refusing edits is an error — and an
+ * icon with the reason behind a hover reads as a decoration. They stay on
+ * screen; INFO, which the server uses for transient progress, keeps the hover.
+ */
+.sprotty-status .sprotty-status-message.warning,
+.sprotty-status .sprotty-status-message.error {
+   visibility: visible;
+}

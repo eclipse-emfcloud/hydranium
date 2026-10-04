@@ -19,11 +19,7 @@
  * the panel's assertions down with it.
  *
  * The assertions worth having are the write ones, which observe the SERVER's
- * verdict rather than the panel's echo of what was typed into it. The strongest
- * is cross-document and cross-grammar: renaming `fulfillment.process`'s root
- * breaks `fulfillment.layout`'s `for Fulfillment` reference, so a diagnostic
- * appearing on the LAYOUT proves the write reached the shared Langium workspace
- * and triggered a real dependent rebuild.
+ * verdict rather than the panel's echo of what was typed into it.
  */
 
 import { expect } from '@playwright/test';
@@ -45,10 +41,10 @@ async function setField(app: TheiaApp, fieldName: string, value: string): Promis
 
 /**
  * Serial, because these tests share one Theia app AND build on each other: the
- * rename test leaves the workspace edited and the revert test puts it back. A
- * retry re-runs `beforeAll` but not preceding tests, so without serial mode a
- * retried revert would run against a workspace nobody had renamed and pass for
- * the wrong reason.
+ * unresolvable-reference test leaves the workspace edited and the repair test
+ * puts it back. A retry re-runs `beforeAll` but not preceding tests, so without
+ * serial mode a retried repair would run against a workspace nobody had broken
+ * and pass for the wrong reason.
  */
 test.describe.serial('Order-flow properties panel in Theia', () => {
    let app: TheiaApp;
@@ -127,45 +123,13 @@ test.describe.serial('Order-flow properties panel in Theia', () => {
       await expect(app.page.locator(`${PANEL} input#field-subject`)).toHaveValue('Order');
    });
 
-   test('renaming the process root breaks the dependent .layout file', async () => {
-      // Cross-document AND cross-grammar. Nothing about the `.layout` file is
-      // touched here — renaming the process root is what invalidates its
-      // `for Fulfillment` reference — so a diagnostic on the layout can only come
-      // from a real dependent rebuild in the shared Langium workspace.
-      //
-      // This assertion depends on the panel's open settling at `Validated`: the
-      // layout is merely SELECTED, never edited, so a read that returned at an
-      // earlier build landmark would answer before validation had run and show
-      // the document as clean.
-      await selectFile(app, 'orders/fulfillment.process');
-      await expect(app.page.locator(`${PANEL} input#field-name`)).toHaveValue('Fulfillment');
-      await setField(app, 'name', 'Fulfilment');
-
-      await selectFile(app, 'orders/fulfillment.layout');
-      await expect(app.page.locator(`${PANEL} input#field-process`)).toHaveValue('Fulfillment');
-      const diagnostics = app.page.locator(`${PANEL} .diagnostics li`);
-      await expect(diagnostics.first()).toContainText('Fulfillment');
-      await expect(diagnostics.first()).toContainText('error');
-   });
-
-   test('reverting the rename clears the dependent diagnostic', async () => {
-      await selectFile(app, 'orders/fulfillment.process');
-      await expect(app.page.locator(`${PANEL} input#field-name`)).toHaveValue('Fulfilment');
-      await setField(app, 'name', 'Fulfillment');
-
-      // Selecting the layout re-reads it at validation, so this is a genuine
-      // re-check rather than a wait for a push that may never come.
-      await selectFile(app, 'orders/fulfillment.layout');
-      await expect(app.page.locator(`${PANEL} .diagnostics li`)).toHaveCount(0);
-   });
-
    test("marks the document unsaved while an editor holds an edit, and clears it on the editor's save", async () => {
       // The panel has no save of its own, so the note follows the server's
       // view of the document: an edit from any client, cleared by any save.
       // The layout is used because it opens in a text editor, and no earlier
       // test in this serial suite edits it.
       await selectFile(app, 'orders/fulfillment.layout');
-      await expect(app.page.locator(`${PANEL} input#field-process`)).toHaveValue('Fulfillment');
+      await expect(app.page.locator(PANEL)).toContainText('This document root has no editable text properties.');
       const unsaved = app.page.locator(`${PANEL} .unsaved`);
       await expect(unsaved).toBeHidden();
 

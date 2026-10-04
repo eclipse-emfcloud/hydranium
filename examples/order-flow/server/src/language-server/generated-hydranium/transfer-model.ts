@@ -32,8 +32,8 @@ export const ValueTypeType = 'ValueType';
 export const WriteType = 'Write';
 
 // --- Type Aliases ---
-export type OrderFlowKeywordNames = ',' | '-' | ':' | '[' | ']' | 'entity' | 'enum' | 'project' | 'public' | 'requires' | 'valuetype' | '{' | '}' | 'at' | 'for' | 'layout' | 'node' | 'size' | '->' | '.' | '=' | 'gateway' | 'process' | 'reads' | 'task' | 'transition' | 'writes';
-export const OrderFlowKeywordNamesValues = [',', '-', ':', '[', ']', 'entity', 'enum', 'project', 'public', 'requires', 'valuetype', '{', '}', 'at', 'for', 'layout', 'node', 'size', '->', '.', '=', 'gateway', 'process', 'reads', 'task', 'transition', 'writes'] as const;
+export type OrderFlowKeywordNames = ',' | '-' | ':' | '[' | ']' | 'entity' | 'enum' | 'project' | 'public' | 'requires' | 'valuetype' | '{' | '}' | 'at' | 'layout' | 'node' | 'size' | '->' | '.' | '=' | 'for' | 'gateway' | 'process' | 'reads' | 'task' | 'transition' | 'writes';
+export const OrderFlowKeywordNamesValues = [',', '-', ':', '[', ']', 'entity', 'enum', 'project', 'public', 'requires', 'valuetype', '{', '}', 'at', 'layout', 'node', 'size', '->', '.', '=', 'for', 'gateway', 'process', 'reads', 'task', 'transition', 'writes'] as const;
 export type Declaration = Entity | Enumeration | ValueType;
 export type Effect = Read | Write;
 export type FlowNode = Gateway | Task;
@@ -106,9 +106,7 @@ export interface Gateway extends OrderFlowElement {
 
 export interface LayoutModel extends OrderFlowElement {
    readonly $type: typeof LayoutModelType;
-   name: string;
    nodes: Array<DiagramNode>;
-   process: Reference<ProcessModel>;
 }
 
 export interface ProcessModel extends OrderFlowElement {
@@ -240,7 +238,7 @@ export function isWrite(item: unknown): item is Write {
 }
 
 export function isOrderFlowKeywordNames(item: unknown): item is OrderFlowKeywordNames {
-   return item === ',' || item === '-' || item === ':' || item === '[' || item === ']' || item === 'entity' || item === 'enum' || item === 'project' || item === 'public' || item === 'requires' || item === 'valuetype' || item === '{' || item === '}' || item === 'at' || item === 'for' || item === 'layout' || item === 'node' || item === 'size' || item === '->' || item === '.' || item === '=' || item === 'gateway' || item === 'process' || item === 'reads' || item === 'task' || item === 'transition' || item === 'writes';
+   return item === ',' || item === '-' || item === ':' || item === '[' || item === ']' || item === 'entity' || item === 'enum' || item === 'project' || item === 'public' || item === 'requires' || item === 'valuetype' || item === '{' || item === '}' || item === 'at' || item === 'layout' || item === 'node' || item === 'size' || item === '->' || item === '.' || item === '=' || item === 'for' || item === 'gateway' || item === 'process' || item === 'reads' || item === 'task' || item === 'transition' || item === 'writes';
 }
 
 export function isDeclaration(item: unknown): item is Declaration {

@@ -134,13 +134,12 @@ describe('order-flow structured write path — ClientSession.update with a trans
 
       await writeAsForm(harness, uri, transfer);
 
-      // The layout survives the TRANSFER round-trip, where `LayoutModel.process`
-      // and `DiagramNode.flowNode` are plain strings rather than Langium
-      // references. Worth asserting and not only in AST mode: the emitter reads
-      // them through `serializeReferenceText`, the one seam that has to answer for
-      // both a Langium `Reference` and a bare string. Both references here point
-      // ACROSS a document boundary, so a regression would produce `layout X for ` and
-      // `node  at …` rather than a merely unresolved name.
+      // The layout survives the TRANSFER round-trip, where `DiagramNode.flowNode`
+      // is a plain string rather than a Langium reference. Worth asserting and not
+      // only in AST mode: the emitter reads it through `serializeReferenceText`,
+      // the one seam that has to answer for both a Langium `Reference` and a bare
+      // string. The reference points ACROSS a document boundary, so a regression
+      // would produce `node  at …` rather than a merely unresolved name.
       expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(
          [
             '// Layout for `fulfillment.process`, in its',
@@ -165,7 +164,7 @@ describe('order-flow structured write path — ClientSession.update with a trans
             '// A `size` is a MINIMUM; a node grows past',
             '// it to fit its labels.',
             '',
-            'layout FulfillmentLayout for Fulfillment {',
+            'layout {',
             '   node Pay at 40, 100 size 160, 60',
             '   node PaymentOk at 260, 90',
             '   node Pick at 440, 200 size 160, 60',

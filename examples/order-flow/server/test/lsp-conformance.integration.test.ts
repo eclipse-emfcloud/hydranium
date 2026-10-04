@@ -148,27 +148,27 @@ const processFixture: LanguageFixture = {
  * process this file names — which is why running the battery over this grammar
  * is not a duplicate of running it over `.process`.
  *
- * Targets `returns.process`, deliberately: it is the process with NO committed
- * `.layout` beside it, so the fixture adds a layout rather than competing with
- * `orders/fulfillment.layout`.
+ * Lays out `returns.process`, deliberately: it is the process with NO committed
+ * `.layout` beside it, so the fixture adds one under the name that binds it
+ * rather than competing with `orders/fulfillment.layout`.
  */
 const layoutFixture: LanguageFixture = {
    valid: {
-      uri: uri('orders/lsp-conformance.layout'),
+      uri: uri('orders/returns.layout'),
       languageId: LayoutLanguageMetaData.languageId,
-      text: 'layout ReturnsLayout for Returns {\n   node Receive at 40, 40 size 160, 60\n   node Restock at 40, 160\n}\n'
+      text: 'layout {\n   node Receive at 40, 40 size 160, 60\n   node Restock at 40, 160\n}\n'
    },
    invalid: {
       uri: uri('orders/lsp-conformance-invalid.layout'),
       languageId: LayoutLanguageMetaData.languageId,
       // Parses clean, fails linking — and fails against the NARROWED scope:
-      // `Pay` is a real flow node in the workspace (`fulfillment.process`), just
-      // not one of `Returns`'. An unscoped `[FlowNode:ID]` would resolve it
-      // happily via the global index, so this is the fixture that goes green if
-      // the scope provider is ever removed.
-      text: 'layout BrokenLayout for Returns {\n   node Pay at 0, 0\n}\n'
+      // `Pay` is a real flow node in the workspace (`fulfillment.process`), but
+      // no `.process` shares this file's name. An unscoped `[FlowNode:ID]` would
+      // resolve it happily via the global index, so this is the fixture that
+      // goes green if the scope provider is ever removed.
+      text: 'layout {\n   node Pay at 0, 0\n}\n'
    },
-   // The flow-node reference position, where the candidates are the declared
+   // The flow-node reference position, where the candidates are the same-named
    // process's nodes rather than keywords.
    completionPosition: { line: 1, character: 8 }
 };

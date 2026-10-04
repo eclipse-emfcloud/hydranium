@@ -56,10 +56,10 @@ type OrderFlowTransferRoot = TransferElement;
  * **Focus rather than the workspace selection, and the field data is what
  * decides it.** A `DomainModel` root has no top-level string property at all, so
  * a panel bound to the selection editor — which opens on a `.domain` — renders
- * empty and stays empty; the two roots that do have editable fields,
- * `ProcessModel` and `LayoutModel`, are exactly the two documents pinned beside
- * the diagram, which the selection editor refuses to load because showing one
- * document in two editors would split the cursor between them.
+ * empty and stays empty; the only root that does have editable fields,
+ * `ProcessModel`, is one of the two documents pinned beside the diagram, which
+ * the selection editor refuses to load because showing one document in two
+ * editors would split the cursor between them.
  */
 export class PropertiesPanel {
    protected readonly form: PropertiesForm;

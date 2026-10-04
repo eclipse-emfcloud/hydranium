@@ -140,7 +140,7 @@ describe('order-flow serializer golden corpus', () => {
          [
             'layout entries on one line, mixing measured and unmeasured nodes',
             '.layout',
-            `layout Cramped for Dispatch{node Pack at 40,40 size 160,60
+            `layout{node Pack at 40,40 size 160,60
              node Weighed at 40 , 160}`
          ]
       ])('preserves the semantic model through parse → serialize → parse (%s)', async (_label, extension, source) => {

@@ -20,7 +20,7 @@ import { DiagramNode, type FlowNode, type LayoutModel, isFlowNode } from '../../
 import { layoutNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
-import { appendChild } from '@hydranium/core';
+import { appendChild, removeChildren } from '@hydranium/core';
 
 /** One resolved move/resize: the flow node the client addressed, and its new bounds. */
 interface ResolvedBounds {
@@ -135,6 +135,11 @@ export class OrderFlowChangeBoundsOperationHandler extends JsonOperationHandler 
    /**
     * The layout entry for `flowNode`, appended if this is its first move.
     *
+    * The LAST entry for the node when the file has several, since that is the
+    * one the diagram draws; the earlier ones are removed, because they position
+    * nothing and a drag that left them would leave the file saying two things
+    * about one node.
+    *
     * Returns `undefined` only when the flow node has no resolvable name, which
     * the grammar makes impossible — but a blank reference would serialize to
     * `node  at 0, 0` and corrupt the file, so it stays a hard stop rather than
@@ -147,9 +152,11 @@ export class OrderFlowChangeBoundsOperationHandler extends JsonOperationHandler 
     * keeps the diagram's naming rules from being applied to a foreign node.
     */
    protected entryFor(layout: LayoutModel, flowNode: FlowNode): DiagramNode | undefined {
-      const existing = layout.nodes.find(node => node.flowNode?.ref === flowNode);
-      if (existing) {
-         return existing;
+      const existing = layout.nodes.filter(node => node.flowNode?.ref === flowNode);
+      const inForce = existing.at(-1);
+      if (inForce) {
+         removeChildren(layout.nodes, new Set(existing.slice(0, -1)));
+         return inForce;
       }
       const reference = this.modelState.languageServicesFor(flowNode)?.references.ReferenceBuilder.toOwnReference(flowNode);
       if (!reference) {

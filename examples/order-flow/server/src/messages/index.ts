@@ -22,4 +22,5 @@
  */
 
 export { DUPLICATE_TRANSITION, SELF_TRANSITION } from '../language-server/process-validation.js';
+export { OVERRIDDEN_LAYOUT_ENTRY } from '../language-server/layout-validation.js';
 export { PALETTE_EFFECT, PALETTE_GATEWAY, PALETTE_TASK, PALETTE_TRANSITION } from '../glsp/order-flow-tool-palette-item-provider.js';

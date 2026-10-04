@@ -112,7 +112,7 @@ describe('order-flow serializers — one per grammar, routed per URI', () => {
       // so one user gesture resolves two different serializers by URI.
       expect(await serialize(harness, 'orders/fulfillment.layout')).toBe(
          [
-            'layout FulfillmentLayout for Fulfillment {',
+            'layout {',
             // `Cancel` has no entry, which is the state the emitter has to leave
             // alone rather than default to 0, 0.
             '   node Pay at 40, 100 size 160, 60',

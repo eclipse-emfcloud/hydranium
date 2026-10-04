@@ -308,7 +308,7 @@ describe('order-flow .process diagram as a client session', () => {
          message: 'the drag never landed'
       });
 
-      expect(diagram.text(diagram.layoutUri)).toContain('layout ReturnsLayout for Returns');
+      expect(diagram.text(diagram.layoutUri)).toContain('layout {');
       expect(diagram.isOpenForDiagram(diagram.layoutUri)).toBe(true);
    });
 
@@ -353,7 +353,7 @@ describe('order-flow .process diagram as a client session', () => {
    it('opens a layout file the workspace has not read instead of failing to create it', async () => {
       const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
       const layoutPath = URI.parse(diagram.layoutUri).fsPath;
-      writeFileSync(layoutPath, 'layout ReturnsLayout for Returns {\n}\n');
+      writeFileSync(layoutPath, 'layout {\n}\n');
       expect(diagram.text(diagram.layoutUri)).toBeUndefined();
 
       diagram.harness.dispatch(
@@ -365,7 +365,7 @@ describe('order-flow .process diagram as a client session', () => {
       await waitFor(() => diagram.text(diagram.layoutUri)?.includes('node Receive at 20, 20') ?? false, {
          message: 'the drag never landed'
       });
-      expect(readFileSync(layoutPath, 'utf8')).toContain('layout ReturnsLayout for Returns');
+      expect(readFileSync(layoutPath, 'utf8')).toContain('layout {');
    });
 
    it('merges a drag into a layout file the workspace has not read rather than overwriting it', async () => {
@@ -373,7 +373,7 @@ describe('order-flow .process diagram as a client session', () => {
       // and be replayed onto the file's text.
       const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
       const layoutPath = URI.parse(diagram.layoutUri).fsPath;
-      writeFileSync(layoutPath, 'layout ReturnsLayout for Returns {\n   node Restock at 5, 5 size 100, 40\n}\n');
+      writeFileSync(layoutPath, 'layout {\n   node Restock at 5, 5 size 100, 40\n}\n');
       expect(diagram.text(diagram.layoutUri)).toBeUndefined();
 
       diagram.harness.dispatch(
@@ -391,7 +391,7 @@ describe('order-flow .process diagram as a client session', () => {
    it('merges a drag into a layout another client created first rather than overwriting it', async () => {
       const diagram = await startDiagram(WORKSPACE_FILES.returnsProcess);
       const editor = diagram.shared.model.ModelService.createSession('text-editor', 'text-editor');
-      await editor.create(diagram.layoutUri, 'layout ReturnsLayout for Returns {\n   node Restock at 5, 5 size 100, 40\n}\n');
+      await editor.create(diagram.layoutUri, 'layout {\n   node Restock at 5, 5 size 100, 40\n}\n');
 
       diagram.harness.dispatch(
          ChangeBoundsOperation.create([

@@ -266,19 +266,19 @@ describe('large-workspace generator — the edges it exists to exercise', () => 
       expect(effect.literal.ref?.name).toBe('NEW');
    });
 
-   it('resolves the layout references into the process they are scoped to', () => {
+   it('resolves the layout references into the process of the same name', () => {
       const layout = rootOf<LayoutModel>('gen-app1/flow-00.layout');
-      const process = layout.process.ref;
+      const process = rootOf<ProcessModel>('gen-app1/flow-00.process');
 
-      expect(process?.name).toBe('App1Flow0');
+      expect(process.name).toBe('App1Flow0');
       // Every entry positions a node of THAT process; the layout scope provider
       // narrows the candidates, so a name from another process fails to link.
       for (const node of layout.nodes) {
-         expect(node.flowNode.ref, `unresolved layout node in ${layout.name}`).toBeDefined();
-         expect(process?.nodes).toContain(node.flowNode.ref);
+         expect(node.flowNode.ref, 'unresolved layout node in gen-app1/flow-00.layout').toBeDefined();
+         expect(process.nodes).toContain(node.flowNode.ref);
       }
       // The last flow node is deliberately unpositioned.
-      expect(layout.nodes.length).toBe((process?.nodes.length ?? 0) - 1);
+      expect(layout.nodes.length).toBe(process.nodes.length - 1);
    });
 });
 

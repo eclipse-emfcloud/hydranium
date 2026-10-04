@@ -29,6 +29,9 @@ import { type TheiaApp, TheiaTextEditor } from '@theia/playwright';
 import { existsSync, readFileSync } from 'node:fs';
 import { loadOrderFlowApp, openPropertiesPanel, PROPERTIES_PANEL as PANEL, selectFile, test } from './order-flow-app.mjs';
 
+/** `orders/fulfillment.layout`'s entry for `Pay`, as the fixture spells it. */
+const PAY_ENTRY = 'node Pay at 40, 100 size 160, 60';
+
 async function setField(app: TheiaApp, fieldName: string, value: string): Promise<void> {
    const input = app.page.locator(`${PANEL} input#field-${fieldName}`);
    await input.fill(value);
@@ -101,26 +104,22 @@ test.describe.serial('Order-flow in Theia across a page reload', () => {
       // layout file, because its default opener is the text editor, where the
       // process file's is the diagram.
       const editor = await app.openEditor('orders/fulfillment.layout', TheiaTextEditor);
-      // By keyboard: the declaration sits below the fold, where the page
-      // object's line lookups cannot see it, as Monaco renders visible lines
-      // only. Only the name is replaced, so no bracket gets auto-closed.
+      // By keyboard: the entries sit below the fold, where the page object's
+      // line lookups cannot see them, as Monaco renders visible lines only. One
+      // digit appended at the end of a line, so no bracket gets auto-closed.
       await editor.placeCursorInLineWithLineNumber(1);
       await app.page.keyboard.press('Control+End');
-      await expect(app.page.locator('.monaco-editor .view-line', { hasText: 'layout FulfillmentLayout for' })).toBeVisible();
-      await app.page.locator('.monaco-editor .view-line', { hasText: 'layout FulfillmentLayout for' }).click();
-      await app.page.keyboard.press('Home');
-      // Past `layout ` to the name, which is then selected as one word.
-      await app.page.keyboard.press('Control+ArrowRight');
-      await app.page.keyboard.press('ArrowRight');
-      await app.page.keyboard.press('Control+Shift+ArrowRight');
-      await app.page.keyboard.type('FulfilledLayout');
-      await expect(app.page.locator('.monaco-editor .view-line', { hasText: 'layout FulfilledLayout for Fulfillment {' })).toBeVisible();
+      await expect(app.page.locator('.monaco-editor .view-line', { hasText: PAY_ENTRY })).toBeVisible();
+      await app.page.locator('.monaco-editor .view-line', { hasText: PAY_ENTRY }).click();
+      await app.page.keyboard.press('End');
+      await app.page.keyboard.type('0');
+      await expect(app.page.locator('.monaco-editor .view-line', { hasText: `${PAY_ENTRY}0` })).toBeVisible();
       await editor.save();
 
       await reload(app);
-      await openPropertiesPanel(app);
-      await selectFile(app, 'orders/fulfillment.layout');
+      await app.openEditor('orders/fulfillment.layout', TheiaTextEditor);
+      await app.page.keyboard.press('Control+End');
 
-      await expect(app.page.locator(`${PANEL} input#field-name`)).toHaveValue('FulfilledLayout', { timeout: 60_000 });
+      await expect(app.page.locator('.monaco-editor .view-line', { hasText: `${PAY_ENTRY}0` })).toBeVisible({ timeout: 60_000 });
    });
 });

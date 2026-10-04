@@ -29,6 +29,7 @@ import { DomainSerializer } from './domain-serializer.js';
 import { OrderFlowComputedPropertiesContribution } from './order-flow-ast-extension.js';
 import { OrderFlowIntegrityContribution } from './order-flow-integrity.js';
 import { OrderFlowProcessValidationContribution } from './process-validation.js';
+import { OrderFlowLayoutValidationContribution } from './layout-validation.js';
 import {
    DomainGeneratedModule,
    LayoutGeneratedModule,
@@ -73,11 +74,11 @@ import { ProcessSerializer } from './process-serializer.js';
  *   grammar's `public` modifier onto the framework's `public` visibility
  *   tier. Bound everywhere so one rule governs the whole workspace,
  *   even though only `.domain` declarations carry the modifier.
- * - **`ScopeProvider`** (`.process` and `.layout`) — dependent references,
- *   where a reference's candidates depend on a previous one having resolved:
- *   the nested `writes Order.status = PAID` chain in `.process`, and
- *   `DiagramNode.flowNode` narrowed to the declared process in `.layout`.
- *   `.domain` keeps the framework default; it has no dependent references.
+ * - **`ScopeProvider`** (`.process` and `.layout`) — narrowed references:
+ *   the nested `writes Order.status = PAID` chain in `.process`, where each
+ *   reference's candidates depend on the previous one having resolved, and
+ *   `DiagramNode.flowNode` narrowed to the same-named process in `.layout`.
+ *   `.domain` keeps the framework default; it has no narrowed references.
  * - **`Serializer`** (per language) — a serializer is always grammar-shaped,
  *   so there is one per grammar and the framework cannot default any of them.
  * - **`integrity.rules`** (`.domain` and `.process`) — name-uniqueness repair
@@ -256,6 +257,11 @@ const LayoutLanguageModule = (
    trivia: {
       preservers: {
          comments: services => new OrderFlowTriviaContribution(services)
+      }
+   },
+   validation: {
+      checks: {
+         overriddenEntries: () => new OrderFlowLayoutValidationContribution()
       }
    },
    references: {
