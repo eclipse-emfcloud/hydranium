@@ -19,6 +19,8 @@
 
 import { expect } from '@playwright/test';
 import { type TheiaApp, TheiaExplorerView } from '@theia/playwright';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
 import { loadOrderFlowApp, test } from './order-flow-app.mjs';
 
 /** Class contract published by `@hydranium/glsp-client-theia`'s diagram widget. */
@@ -102,5 +104,30 @@ test.describe.serial('Order-flow diagram in Theia', () => {
       // It is inserted into the diagram's base div before sprotty's first render
       // replaces that div; left there, it is never on the page at all.
       await expect(app.page.locator('.sprotty-status')).toHaveCount(1);
+   });
+
+   test('a diagram closed and reopened in the window edits and saves', async () => {
+      const file = path.join(app.workspace.path, 'orders/fulfillment.process');
+      const tab = app.page.locator('#theia-main-content-panel .lm-TabBar-tab', { hasText: 'fulfillment.process' });
+      await tab.locator('.lm-TabBar-tabCloseIcon').click();
+      await expect(app.page.locator('.sprotty')).toHaveCount(0);
+
+      const explorer = await app.openView(TheiaExplorerView);
+      await explorer.clickContextMenuItem('orders/fulfillment.process', ['Open']);
+      // Not the hidden copy GLSP renders to measure bounds, which is a `.sprotty` too.
+      const canvas = app.page.locator('.sprotty:not(.sprotty-hidden)');
+      await expect(canvas.getByText('Ship', { exact: true })).toBeVisible({ timeout: 30_000 });
+      // The tab, so Theia routes the keys to the diagram rather than the explorer.
+      await tab.click();
+      await canvas.locator('svg.sprotty-graph').focus();
+      await app.page.keyboard.press('Control+a');
+      // Delete acts on the selection as it stands, and the select-all is a
+      // command that queues behind any still running.
+      await expect(canvas.locator('.sprotty-node:not(.selected)')).toHaveCount(0);
+      await app.page.keyboard.press('Delete');
+      await expect(canvas.getByText('Ship', { exact: true })).toHaveCount(0);
+      await app.page.keyboard.press('Control+s');
+
+      await expect.poll(() => readFileSync(file, 'utf-8'), { timeout: 10_000 }).not.toContain('task Ship');
    });
 });
