@@ -589,14 +589,18 @@ describe('DataServer', () => {
          }
       }
 
-      it('reaches the dirty and saved events of a watched URI, not only its updates', async () => {
+      it('reaches the dirty and saved events of a watched URI', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
          const dirty: string[] = [];
          const saved: string[] = [];
+         const savedModels: boolean[] = [];
          const { client: localClient } = makeCapturingDataClient<FakeRoot, FakeDiagnostic>({
             onDocumentDirtyChanged: event => void dirty.push(event.uri),
-            onDocumentSaved: event => void saved.push(event.sourceClientId)
+            onDocumentSaved: event => {
+               saved.push(event.sourceClientId);
+               savedModels.push(event.document.model !== undefined);
+            }
          });
          const pair = makeDuplexConnectionPair();
          new UpperKeyServer(pair.left, bundle.services);
@@ -617,7 +621,30 @@ describe('DataServer', () => {
 
             await waitFor(() => saved.length === 1 && dirty.length > 0);
             expect(saved).toEqual(['editor-1']);
+            expect(savedModels).toEqual([true]);
             expect(dirty.every(uri => uri === URI_A.toUpperCase())).toBe(true);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('reaches the updates of a watched URI, looking the document up by its own URI', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { server, proxy, events, pair } = makeDataServerHarness<UpperKeyServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new UpperKeyServer(channel, bundle.services)
+         });
+         try {
+            await openAs(proxy, bundle, 'sub-1');
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            // Baselined from the document, so an unchanged rebuild stays quiet.
+            const internal = server as unknown as { uriWatchRecords: Map<string, { fingerprint?: string }> };
+            expect(internal.uriWatchRecords.get(URI_A.toUpperCase())?.fingerprint).toBeDefined();
+
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'changed' }));
+
+            await waitFor(() => events.length === 1);
+            expect(events[0].document.model?.root).toMatchObject({ name: 'changed' });
          } finally {
             pair.dispose();
          }

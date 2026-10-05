@@ -761,7 +761,7 @@ export class DataServer<
       this.uriWatchRecords.set(uri, record);
       record.watchers.add(args.clientId);
       if (record.fingerprint === undefined) {
-         const document = this.services.workspace.LangiumDocuments.getDocument(UriUtils.toUri(uri));
+         const document = this.modelService.getDocument(args.uri);
          if (document && !this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
             record.fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
             record.fingerprintVersion = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
@@ -816,6 +816,7 @@ export class DataServer<
     * LSP head resolves.
     *
     * Adopters can still override for head-specific URI policy by subclassing.
+    * The result keys watches only; a document is looked up by its own URI.
     */
    protected canonicalKey(uri: string): string {
       return this.services.workspace.DocumentUriPolicy.canonicalUri(uri);
@@ -1301,7 +1302,7 @@ export class DataServer<
       if (!this.uriWatchRecords.get(uri)?.watchers.size) {
          return;
       }
-      const response = this.envelope(UriUtils.toUri(uri));
+      const response = this.envelope(UriUtils.toUri(event.document.uri));
       const wireEvent: TransferDocumentSavedEvent<TTransfer, TDiagnostic> = {
          document: response,
          sourceClientId: event.sourceClientId
@@ -1359,7 +1360,7 @@ export class DataServer<
       }
       // The encoder reads the built document, which the event's holds for this
       // synchronous run.
-      const document = this.modelService.getDocument(uri);
+      const document = this.modelService.getDocument(event.document.uri);
       if (!document) {
          return;
       }
@@ -1378,7 +1379,7 @@ export class DataServer<
       // The event's attribution, so this head names the same client as the
       // in-process heads do for one build, except for a version this head
       // already sent; see `DataServerUriWatchRecord.sentVersion`.
-      const version = this.modelService.isOpen(uri) ? document.textDocument.version : undefined;
+      const version = this.modelService.isOpen(event.document.uri) ? document.textDocument.version : undefined;
       const { reason, sourceClientId } =
          version !== undefined && record.sentVersion === version
             ? { reason: 'rebuilt' as const, sourceClientId: UNKNOWN_CLIENT_ID }
