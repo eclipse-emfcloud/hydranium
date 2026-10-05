@@ -16,6 +16,7 @@ import {
    type ResponseAction,
    SourceModelStorage
 } from '@eclipse-glsp/server';
+import { type InitializeClientSessionParameters } from '@eclipse-glsp/protocol';
 import { RequestSaveModelAction } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
@@ -66,6 +67,25 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
          }
       }
       super.shutdown();
+   }
+
+   /**
+    * End a session the id still has before initializing it again. A model
+    * source initializes once, so a second initialize under one id is a new
+    * widget, a reopened tab whose closed predecessor's dispose never arrived;
+    * upstream would hand it that stale session.
+    */
+   override async initializeClientSession(params: InitializeClientSessionParameters): Promise<void> {
+      if (!this.clientSessions.has(params.clientSessionId)) {
+         return super.initializeClientSession(params);
+      }
+      this.logger.warn(`Client session ${params.clientSessionId} initialized again before its dispose arrived; ending the old one`);
+      // Not awaited before the initialize: both drop and set the session before
+      // their first await, and the model request that follows is read without
+      // waiting for this one to settle.
+      const disposed = this.disposeClientSession({ clientSessionId: params.clientSessionId });
+      const initialized = super.initializeClientSession(params);
+      await Promise.all([disposed, initialized]);
    }
 
    /**

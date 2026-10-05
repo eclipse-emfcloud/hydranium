@@ -50,6 +50,9 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
             SetViewportAction.create(viewportData.elementId, viewportData.viewportData as never, { animate: true })
          );
       }
+      protected getRequestModelOptions(): object {
+         return { sourceUri: 'file:///a.tst' };
+      }
       dispose(): void {
          this.disposeCalls++;
       }
@@ -70,9 +73,11 @@ vi.mock('../../src/browser/glsp-saveable', () => ({
 import { GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Message } from '@theia/core/lib/browser';
+import { RESUME_TOKEN_ARG } from '@hydranium/protocol';
 import { DIAGRAM_LOADING_CLASS, DIAGRAM_LOADING_FAILED_CLASS, HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
 import { HydraniumGlspSaveable } from '../../src/browser/glsp-saveable';
+import { DefaultWindowSessionService, type WindowSessionService } from '../../src/browser/window-session';
 
 /** Records `appendChild` / `remove` without a DOM. */
 interface OverlayHost {
@@ -338,5 +343,23 @@ describe('HydraniumGlspDiagramWidget', () => {
       widget.loader = undefined;
       widget.attach();
       expect(widget.createdOverlays).toBe(0);
+   });
+});
+
+describe('HydraniumGlspDiagramWidget request options', () => {
+   const windowSessions = new DefaultWindowSessionService();
+
+   class TokenWidget extends HydraniumGlspDiagramWidget {
+      protected override readonly windowSessions: WindowSessionService = windowSessions;
+   }
+
+   it('adds the window’s resume token to upstream’s request options, the same for every diagram', () => {
+      const options = (widget: HydraniumGlspDiagramWidget): Record<string, unknown> =>
+         (widget as unknown as { getRequestModelOptions(): Record<string, unknown> }).getRequestModelOptions();
+      const first = options(new TokenWidget());
+
+      expect(first.sourceUri).toBe('file:///a.tst');
+      expect(first[RESUME_TOKEN_ARG]).toBe(windowSessions.current().resumeToken);
+      expect(options(new TokenWidget())[RESUME_TOKEN_ARG]).toBe(first[RESUME_TOKEN_ARG]);
    });
 });

@@ -48,11 +48,18 @@ if you are mounting a hydranium GLSP diagram in a Theia application.
   LSP already publishes the same diagnostics, and the per-diagram container binds
   `NoOpExternalMarkerManager` instead: markers still decorate the diagram, but
   Theia's Problems view stops double-listing them.
-  **`AbstractHydraniumGlspDiagramManager`** derives the language-correlated
+- **`AbstractHydraniumGlspDiagramManager`** derives the language-correlated
   getters from one descriptor plus a label, and `reopen` replaces a diagram
   with a fresh widget in the same tab position, as the Retry of a failed load
   does. It reopens every diagram when their client is lost, and a failed one
-  when a client starts.
+  when a client starts. A diagram's client id is the same for the same widget
+  in the same window, so a diagram reopened after its client is lost, or
+  reloaded with its page, takes its old session over with the window's resume
+  token and keeps its unsaved text.
+- **`WindowSessionService`** — the window's id and resume token, claimed as
+  the frontend starts. The default keeps them in `sessionStorage` and hands
+  them on only as the page leaves, so a reload resumes and a duplicated tab
+  draws its own. Rebind it for a different notion of a window.
 - **`HydraniumGlspClientContribution`** — for a server that starts late: it
   defers `start` until a workspace is open, fails a start that takes longer than
   `startupTimeoutMs` (30 s by default), and starts a fresh client after a failed

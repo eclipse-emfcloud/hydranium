@@ -13,6 +13,7 @@ import {
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
+   randomUuid,
    TIMED_OUT,
    type TransferElement,
    type TextVersion,
@@ -886,7 +887,7 @@ export class DefaultModelService<
       options: { readonly resumeToken?: string } = {}
    ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
       const sessionLabel = label ?? 'session';
-      const id = clientId ?? `${sessionLabel}#${globalThis.crypto.randomUUID()}`;
+      const id = clientId ?? `${sessionLabel}#${randomUuid()}`;
       const textDocuments = this.services.workspace.TextDocuments;
       if (options.resumeToken !== undefined && this.resumeTokens.get(id) === options.resumeToken) {
          this.sessions.get(id)?.dispose('lost');

@@ -254,6 +254,16 @@ describe('ModelService session takeover', () => {
       expect(models.createSession('test', 'client', { resumeToken: 'next' })).not.toBe(replacement);
    });
 
+   it('mints a session id outside a secure context, where crypto has no randomUUID, as a browser worker may run', () => {
+      const { models } = harness();
+      vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) });
+      try {
+         expect(models.createSession('panel').clientId).toMatch(/^panel#/);
+      } finally {
+         vi.unstubAllGlobals();
+      }
+   });
+
    it('reports the cause a session was disposed with, once', () => {
       const { models } = harness();
       const session = models.createSession('test', 'client');

@@ -398,23 +398,49 @@ frames can be lost on the way, and the server then ends the sessions as lost.
 ## Over the GLSP head
 
 Each GLSP client session is one client session. `HydraniumGlspStorage`
-registers the GLSP client id as its id when the GLSP client session starts,
-taking the id as given, and hands the session to the diagram's state as
-`modelSession`. GLSP's placeholder client, `TEMPORARY_CLIENT_ID`, which exists
-only to enumerate action kinds, registers nothing.
+registers the GLSP client id as its id when the diagram loads, taking the id
+as given, and hands the session to the diagram's state as `modelSession`.
+GLSP's placeholder client, `TEMPORARY_CLIENT_ID`, which exists only to
+enumerate action kinds, registers nothing.
 
-A GLSP client id can still be live as another participant's: a reloaded client
-reconnects under its old id before the server has noticed the old connection
-close, which ends that connection's sessions a moment later. The storage then
-registers nothing when its GLSP session starts, and registers again when the
-diagram loads; while the id is held, the load waits up to two seconds
-(`sessionWaitMs`) for its holder to end. When the id is still held after that,
-the diagram does not load: the client gets a rejection naming the id, and the
-user a message saying the diagram's identifier is in use, with
-`DIAGRAM_SESSION_REFUSED` as its code. A save of such a diagram fails the same
-way. Taking the id over would end the other participant's session, and working
-without one would share its opens, so its close would close the diagram's
-documents too.
+Hydranium's Theia diagram manager gives a diagram the same client id across a
+reload and a reconnect of its window, and its load carries the window's resume
+token in the `RequestModelAction` option `RESUME_TOKEN_ARG`. A reloaded or
+reconnected diagram usually loads before the server has noticed the old
+connection close; its token takes the old session over, ending it as lost, so
+the diagram reopens on its unsaved text. When the GLSP server shuts down, which
+is how a closing connection reaches it, its diagrams' sessions end as lost too,
+including when the client stopped on purpose.
+
+The window's id and token come from the `WindowSessionService`, whose default
+keeps them in `sessionStorage`. A page claims them as its frontend starts,
+before any diagram opens, and hands them on only as it leaves: a reload takes
+them up, while a duplicated tab, which copies `sessionStorage` from a page
+still open, draws its own and resumes nothing of the original's. A page
+restored from the back-forward cache takes the mark back, so a tab duplicated
+after it draws its own as well. An adopter with its own notion of a window
+rebinds `WindowSessionService`.
+
+Whether a reload has anything to resume depends on where the server runs. A
+server that outlives the page or serves several pages, such as one process in
+the Theia backend for every window or a standalone socket server, still holds
+the reloaded diagram's session, and the handover lets the new page take it
+over. A server started per frontend does not: Theia gives every page load a new
+frontend id, and so a new plugin host, so a server the plugin host runs (as in
+the order-flow example) is a new process after a reload, and the old one ends
+with its unsaved text once `frontendConnectionTimeout` passes. There only a
+reconnect within that timeout keeps the server, and the stable id and token
+then resume the diagram; the handover is inert.
+
+A load that sends no token and finds its id held waits up to two seconds
+(`sessionWaitMs`) for the holder to end, which covers a client that reconnects
+under its old id without resuming. A load whose token does not match is not
+kept waiting. When the id is still held, the diagram does not load: the client
+gets a rejection naming the id, and the user a message saying the diagram's
+identifier is in use, with `DIAGRAM_SESSION_REFUSED` as its code. A save before
+the diagram has loaded fails the same way. Taking the id over without the token
+would end the other participant's session, and working without one would share
+its opens, so its close would close the diagram's documents too.
 
 The diagram opens its source document through the session when it loads, and
 every document of its write set (`trackSecondaryDocument`) as the document

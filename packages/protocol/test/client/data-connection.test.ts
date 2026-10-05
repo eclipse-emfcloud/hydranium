@@ -445,6 +445,17 @@ describe('DataConnection.createSession', () => {
       }
    });
 
+   it('mints a session outside a secure context, where crypto has no randomUUID', () => {
+      const { connection, dispose } = harness();
+      vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) });
+      try {
+         expect(connection.createSession('panel').clientId).toMatch(/^panel#/);
+      } finally {
+         vi.unstubAllGlobals();
+         dispose();
+      }
+   });
+
    it('registers each session on the wire, and queues its calls behind the registration', async () => {
       const registration = gate();
       const { connection, calls, dispose } = harness({ createGate: registration.promise });

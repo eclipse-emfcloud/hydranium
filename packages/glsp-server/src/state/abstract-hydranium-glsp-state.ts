@@ -107,9 +107,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * The client session this diagram works as, registered under `clientId` by
-    * the source-model storage and ended with the GLSP client session.
-    * `undefined` for GLSP's placeholder client, and when the id was held by
-    * another participant, in which case the diagram does not load.
+    * the source-model storage's load and ended with the GLSP client session,
+    * or by a resume that takes it over. `undefined` before the load, for
+    * GLSP's placeholder client, and when another participant held the id, in
+    * which case the diagram does not load.
     *
     * Every write of the diagram goes through this session, which writes only a
     * document it has open and opens nothing. A one-shot write to a document

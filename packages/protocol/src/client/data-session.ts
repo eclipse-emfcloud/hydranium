@@ -14,6 +14,7 @@ import { isConflictError, SessionClosedError } from '../errors';
 import { type BaseVersion, isModelVersion, type ModelVersion, type TextVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import type { OpenModelArgs } from '../model-server';
+import { randomUuid } from '../random-uuid';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
 import type { TextState, TransferDocument, TransferSavedDocument } from '../transfer-document';
@@ -303,7 +304,7 @@ export class DataSession<
     * a server that has not yet noticed the drop would otherwise refuse the id
     * as a duplicate until it does.
     */
-   protected readonly resumeToken: string = globalThis.crypto.randomUUID();
+   protected readonly resumeToken: string = randomUuid();
    /** The proxy the session is registered on; another one means the connection was replaced. */
    protected registeredOn?: RpcProxy<TServer>;
    protected registration?: Promise<void>;

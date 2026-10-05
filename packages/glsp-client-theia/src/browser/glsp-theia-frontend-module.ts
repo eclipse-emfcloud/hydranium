@@ -20,6 +20,7 @@ import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/co
 import { bindConnectionReporter, bindLogLevelPreference } from '@hydranium/client-theia/lib/browser';
 import type { interfaces } from '@theia/core/shared/inversify';
 import { HydraniumGlspDiagramWidget } from './diagram-widget';
+import { bindWindowSessionService } from './window-session';
 
 /**
  * Sentinel returned from {@link AbstractHydraniumGlspTheiaFrontendModule.bindClientContribution}
@@ -107,6 +108,7 @@ export abstract class AbstractHydraniumGlspTheiaFrontendModule extends GLSPTheia
    override initialize(context: ContainerContext): void {
       super.initialize(context);
       bindConnectionReporter(context.bind, context.isBound);
+      bindWindowSessionService(context.bind, context.isBound);
       if (this.logLevelPreference) {
          bindLogLevelPreference(context.bind, this.logLevelPreference);
       }
