@@ -23,14 +23,18 @@
 
 import 'reflect-metadata';
 import { ChangeBoundsOperation, SaveModelAction, ServerModule } from '@eclipse-glsp/server';
+import { type ClientSessionPersistArgs, DefaultClientSession, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
+import { type AstNode } from '@hydranium/langium';
+import { type TextVersion } from '@hydranium/protocol';
 import { readFileSync, statSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { type ProcessModel } from '../../src/language-server/ast.js';
+import { type OrderFlowOptions } from '../../src/language-server/order-flow-module.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
@@ -48,8 +52,8 @@ afterEach(() => {
 });
 
 /** Boot the real GLSP container over a scratch copy and open the `.process` file. */
-async function openDiagram(): Promise<GlspHarness<OrderFlowGlspState>> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+async function openDiagram(options: OrderFlowOptions = {}): Promise<GlspHarness<OrderFlowGlspState>> {
+   const { harness: services, workspace } = await makeScratchWorkspaceHarness(undefined, options);
    scratch = workspace;
    savedUris = [];
    services.shared.workspace.TextDocuments.onDidSave(event => savedUris.push(event.document.uri));
@@ -182,5 +186,38 @@ describe('order-flow .process save', () => {
       // sorted rather than a set, so a duplicate announcement still fails. A
       // missing one has already failed above as a timeout naming what arrived.
       expect([...savedUris].sort()).toEqual([diagram.state.sourceUri, diagram.state.layoutUri].sort());
+   });
+
+   it("writes each document through the diagram session class's own persist", async () => {
+      const persisted: string[] = [];
+      class RecordingSession extends DefaultClientSession<AstNode> {
+         protected override persistDocument(args: ClientSessionPersistArgs): Promise<TextVersion> {
+            persisted.push(`${this.canonicalKey(args.uri)} ${String(args.baseVersion)}`);
+            return super.persistDocument(args);
+         }
+      }
+      const diagram = await openDiagram({
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new RecordingSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      // A drag puts the layout in the write set, so the save names both documents.
+      diagram.dispatch(
+         ChangeBoundsOperation.create([
+            { elementId: idOf(diagram, 'Pay'), newPosition: { x: 300, y: 220 }, newSize: { width: 200, height: 80 } }
+         ])
+      );
+      await diagram.nextModelSubmission();
+
+      diagram.dispatch(SaveModelAction.create());
+      await waitForSaveAnnouncements(2);
+
+      expect([...persisted].sort()).toEqual([`${diagram.state.sourceUri} any`, `${diagram.state.layoutUri} any`].sort());
    });
 });

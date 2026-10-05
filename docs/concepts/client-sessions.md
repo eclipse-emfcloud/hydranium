@@ -53,13 +53,27 @@ bracket of its own.
 
 `DefaultClientSession` opens and writes itself: each member hands its work to a
 protected method (`registerOpen`, `createDocument`, `updateDocument`,
-`updateDocuments`, `saveDocument`, `closeDocument`), and a session class of
-your own overrides one of them to change how its sessions open or write. `save`
-writes through `updateDocument`, so an override of it applies to saves too. The
+`updateDocuments`, `saveDocument`, `persistDocument`, `closeDocument`), and a
+session class of your own overrides one of them to change how its sessions open
+or write. `save` writes through `updateDocument`, so an override of it applies
+to saves too. Every write to disk a session makes goes through
+`persistDocument`: a `save`, a `persist`, and a diagram's save, whichever head
+asked. Override it to act on each of them. A save and a diagram's save reach it
+with `baseVersion` `'any'`: a save's update already checked the version and
+moved past it, and a diagram's save persists the store, which already holds
+every client's writes. An override that awaits before calling the base lets a
+diagram save take its documents' texts at different moments, and a diagram that
+ends during the await fails the documents not yet taken with
+`DocumentNotOpenError`. An override that writes the text somewhere else instead
+of calling the base announces the save itself, through
+`TextDocuments.notifyDidSaveTextDocument` with the text it wrote: the store's
+disk baseline, and with it the document's dirty state, follows that
+announcement, as does every save listener. Writes no session makes do not reach
+it: an editor's own save, and an integrity repair written straight to disk. The
 open check and the `baseVersion` gate are the session's own `assertOpen` and
-`assertBaseVersion`. Turning a model into text (`modelToText`) and `rebuild` live on
-the `ModelService` bound on `model.ModelService`, which the session writes
-through.
+`assertBaseVersion`. Turning a model into text (`modelToText`) and `rebuild`
+live on the `ModelService` bound on `model.ModelService`, which the session
+writes through.
 
 ## The handle
 
@@ -69,7 +83,7 @@ through.
 | `openOptions(uri)` | The options this session opened `uri` with |
 | `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
-| `persist({ uri, baseVersion })` | Persist the text the store holds, with no update and no serialisation; fails as `save` does |
+| `persist({ uri, baseVersion })` | Persist the text the store holds, with no update and no serialisation, resolving with the version written; fails as `save` does at the write, and never on a build |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
 | `close(uri)` | Close this session's open of `uri` |
 | `withOpen(uri, fn)` | Open, run `fn`, and close again when `fn` settles, unless the session already had `uri` open |
@@ -153,10 +167,14 @@ named version fails with `ConflictError`, and `'any'` persists whatever is
 there. The saved event names the persisting session, also when another
 participant wrote the text.
 
-A save and a persist both answer with the document and, in `persisted.version`,
-the version of the text they wrote. The document's model can be older or
-newer than that text, since writes land between the build and the take, so a
-client that marks a version saved takes `persisted.version`.
+A save answers with the document and, in `persisted.version`, the version of
+the text it wrote. The document's model can be older or newer than that text,
+since writes land between the build and the take, so a client that marks a
+version saved takes `persisted.version`. A session's persist answers with that
+version alone, once the text is on disk, and waits for no build, so a build
+given up after the write cannot fail it. The data head's persist request
+waits for the document's build after the write and answers as a save does, so
+that request can still fail with the text already on disk.
 
 ## `updateAll`
 
@@ -423,9 +441,11 @@ fails.
 
 A save persists the text of every document the session has open: the source
 document, the write set, and the documents that left the write set since the
-last save. A document only another client has open is not saved. Every save
-takes its text in one step, so a GLSP client session that ends during the save
-closes nothing before its text is taken.
+last save. Each goes through the session's `persist` at `'any'`, since the
+store already holds every client's writes. A document only another client has
+open is not saved. Every save takes its text in one step, so a GLSP client
+session that ends during the save closes nothing before its text is taken,
+unless the session class's `persistDocument` awaits before calling the base.
 
 A write to a document outside the write set goes through the session's
 `withOpen`, based on the version `ModelService.snapshot` returned when the

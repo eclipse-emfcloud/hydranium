@@ -776,8 +776,9 @@ export class DataServer<
    }
 
    async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.requireSession(args.clientId).persist({ uri: args.uri, baseVersion: args.baseVersion });
-      return { ...this.encodeDocument(astDocument), persisted: astDocument.persisted };
+      const version = await this.requireSession(args.clientId).persist({ uri: args.uri, baseVersion: args.baseVersion });
+      const astDocument = await this.modelService.ensureDocumentState(args.uri, this.services.workspace.DocumentBuilder.finalBuildState());
+      return { ...this.encodeDocument(astDocument), persisted: { version } };
    }
 
    /**

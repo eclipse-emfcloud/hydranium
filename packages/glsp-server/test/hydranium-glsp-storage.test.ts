@@ -36,6 +36,7 @@ import {
    AstDocument,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
+   type ClientSessionPersistArgs,
    DefaultModelLedger,
    type ServerSharedServices,
    UNKNOWN_CLIENT_ID
@@ -47,7 +48,7 @@ import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { DuplicateClientIdError, ReconcilingConflictResolver, SessionClosedError, asCanonicalUri } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/testing';
+import { tick, waitFor } from '@hydranium/protocol/testing';
 import { DIAGRAM_SESSION_REFUSED, HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
 import { type SaveDeliveryPolicy, SaveDeliveryPolicy as SaveDeliveryPolicyToken } from '../src/storage/save-delivery-policy.js';
 
@@ -141,21 +142,48 @@ class UpdateRecordingStorage extends TestStorage {
    }
 }
 
-/** The diagram's client session as the storage sees it: records what it is asked to do into `calls`, and fails every open with `openError`. */
-function makeRecordingModelSession(clientId: string, calls: string[], openError?: Error): ModelClientSession<AstNode> {
+/**
+ * The diagram's client session as the storage sees it: records what it is asked
+ * to do into `calls`, fails every open with `openError`, and hands each persist
+ * to `persist`. Once disposed every member but `dispose` throws
+ * `SessionClosedError` synchronously, before returning a promise, as the
+ * `ClientSession` contract has an ended session do; an async double would turn
+ * that throw into a rejection the real session never produces.
+ */
+function makeRecordingModelSession(
+   clientId: string,
+   calls: string[],
+   openError?: Error,
+   persist?: (args: ClientSessionPersistArgs, clientId: string) => Promise<unknown>
+): ModelClientSession<AstNode> {
+   let disposed = false;
+   const assertLive = (): void => {
+      if (disposed) {
+         throw new SessionClosedError(clientId);
+      }
+   };
    const session = {
       clientId,
       label: 'diagram',
-      async open(uri: string): Promise<void> {
+      open(uri: string): Promise<void> {
+         assertLive();
          calls.push(`open ${uri}`);
-         if (openError) {
-            throw openError;
-         }
+         return openError ? Promise.reject(openError) : Promise.resolve();
       },
-      async close(uri: string): Promise<void> {
+      persist(args: ClientSessionPersistArgs): Promise<unknown> {
+         assertLive();
+         if (!persist) {
+            throw new Error(`Unexpected persist of ${args.uri}`);
+         }
+         return persist(args, clientId);
+      },
+      close(uri: string): Promise<void> {
+         assertLive();
          calls.push(`close ${uri}`);
+         return Promise.resolve();
       },
       dispose(): void {
+         disposed = true;
          calls.push('dispose');
       }
    };
@@ -169,7 +197,13 @@ function makeRecordingModelSession(clientId: string, calls: string[], openError?
  * knows.
  */
 function makeSessionModelService(
-   options: { calls?: string[]; refuse?: boolean; documents?: readonly string[]; openError?: Error } = {}
+   options: {
+      calls?: string[];
+      refuse?: boolean;
+      documents?: readonly string[];
+      openError?: Error;
+      persist?: (args: ClientSessionPersistArgs, clientId: string) => Promise<unknown>;
+   } = {}
 ): object {
    const calls = options.calls ?? [];
    return {
@@ -180,7 +214,7 @@ function makeSessionModelService(
          if (options.refuse) {
             throw new DuplicateClientIdError(clientId);
          }
-         return makeRecordingModelSession(clientId, calls, options.openError);
+         return makeRecordingModelSession(clientId, calls, options.openError, options.persist);
       }
    };
 }
@@ -301,35 +335,35 @@ class PolicyStorage extends HydraniumGlspStorage<TestRoot> {
 }
 
 /**
- * Build a {@link PolicyStorage} over a mock `AstDocumentManager.save` and a stub
- * state (`clientId`, `sourceRoot`, `secondaryUris`). Binds
+ * Build a {@link PolicyStorage} over a mock of the diagram session's `persist`
+ * and a stub state (`clientId`, `sourceRoot`, `secondaryUris`). Binds
  * {@link SaveDeliveryPolicyToken} only when a policy is given, so the unbound
  * default path is testable.
  *
  * `openUris` are the documents the diagram's session has open, which is what
  * the flush saves; `openElsewhere` are open only in another client.
  *
- * Whether a save reaches disk is `AstDocumentManager.save`'s own decision and is
- * covered where that lives; mocking it here leaves these cases about the write
- * SET — which URIs the flush names, in what order, and how many times.
+ * Whether a persist reaches disk is the session's own decision and is covered
+ * where that lives; mocking it here leaves these cases about the write SET —
+ * which URIs the flush names, in what order, and how many times.
  */
 function createPolicyStorage(options: {
    policy?: SaveDeliveryPolicy;
-   save: (uri: string, clientId: string) => Promise<unknown>;
+   persist: (args: ClientSessionPersistArgs, clientId: string) => Promise<unknown>;
    secondaryUris?: readonly string[];
    openUris?: readonly string[];
    openElsewhere?: readonly string[];
    refuseSession?: boolean;
 }): {
    storage: PolicyStorage;
-   saveMock: ReturnType<typeof vi.fn>;
+   persistMock: ReturnType<typeof vi.fn>;
    root: TestRoot;
    lines: CapturedGlspLine[];
    /** The dirty states the storage dispatched, as `isDirty reason`. */
    dirtyStates: string[];
 } {
    const root: TestRoot = { $type: 'TestRoot' };
-   const saveMock = vi.fn(options.save);
+   const persistMock = vi.fn(options.persist);
    const open = new Set(options.openUris ?? ['file:///x.a', ...(options.secondaryUris ?? [])]);
    const openElsewhere = new Set(options.openElsewhere ?? []);
    const { logger, lines } = makeCapturingGlspLogger();
@@ -340,12 +374,12 @@ function createPolicyStorage(options: {
          workspace: {
             ModelLedger: new DefaultModelLedger(),
             DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-            AstDocumentManager: { save: saveMock, isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
+            AstDocumentManager: { isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
             TextDocuments: {
                isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
             }
          },
-         model: { ModelService: makeSessionModelService({ refuse: options.refuseSession }) }
+         model: { ModelService: makeSessionModelService({ refuse: options.refuseSession, persist: persistMock }) }
       })
    );
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
@@ -384,7 +418,7 @@ function createPolicyStorage(options: {
    // `lines` is a live reference — the storage surfaces failures through the
    // GLSP logger after the returned promise settles, so tests filter it at
    // assertion time (a getter would snapshot empty at destructure time).
-   return { storage: container.get(PolicyStorage), saveMock, root, lines, dirtyStates };
+   return { storage: container.get(PolicyStorage), persistMock, root, lines, dirtyStates };
 }
 
 const saveAction = { kind: 'saveModel', fileUri: 'file:///x.a' } as unknown as SaveModelAction;
@@ -465,19 +499,21 @@ describe('HydraniumGlspStorage', () => {
          const services = makeNoopSharedServices<ServerSharedServices>({
             model: {
                ModelService: {
-                  ...makeSessionModelService({ calls, documents, openError: options.openError }),
+                  ...makeSessionModelService({
+                     calls,
+                     documents,
+                     openError: options.openError,
+                     persist: async args => {
+                        calls.push(`save ${args.uri}`);
+                        await options.onSave?.(args.uri);
+                     }
+                  }),
                   onModelUpdated: () => ({ dispose() {} })
                }
             },
             workspace: {
                ModelLedger: new DefaultModelLedger(),
                DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-               AstDocumentManager: {
-                  save: async (uri: string) => {
-                     calls.push(`save ${uri}`);
-                     await options.onSave?.(uri);
-                  }
-               },
                TextDocuments: { get: () => undefined, isOpenInClient: (uri: string) => open.has(uri) }
             }
          });
@@ -519,6 +555,36 @@ describe('HydraniumGlspStorage', () => {
 
          await expect(storage.callFlushWriteSet('file:///a/main.x')).rejects.toThrow('disk full');
          expect(calls).toEqual(['save file:///a/side.x']);
+      });
+
+      it('completes a save whose diagram ends during the writes, with a departed document left to close', async () => {
+         // Ending the session closed everything it had open; there is nothing
+         // left to close, and every write landed.
+         const open = new Set(['file:///a/side.x']);
+         const opened = createOpeningStorage(['file:///a/side.x'], open, {
+            onSave: async () => opened.storage.dispose()
+         });
+         opened.state.trackSecondaryDocument('file:///a/side.x');
+         opened.state.untrackSecondaryDocuments();
+         opened.calls.length = 0;
+
+         await opened.storage.callFlushWriteSet('file:///a/main.x');
+         expect(opened.calls).toEqual(['save file:///a/side.x', 'dispose']);
+      });
+
+      it('completes a save whose session the store ends during the writes, with a departed document left to close', async () => {
+         // The store ends the session without the storage: the state still
+         // holds the ended handle, which refuses the close.
+         const open = new Set(['file:///a/side.x']);
+         const opened = createOpeningStorage(['file:///a/side.x'], open, {
+            onSave: async () => opened.state.modelSession?.dispose()
+         });
+         opened.state.trackSecondaryDocument('file:///a/side.x');
+         opened.state.untrackSecondaryDocuments();
+         opened.calls.length = 0;
+
+         await opened.storage.callFlushWriteSet('file:///a/main.x');
+         expect(opened.calls).toEqual(['save file:///a/side.x', 'dispose']);
       });
 
       it('keeps a document that leaves the write set during the save open for the next save', async () => {
@@ -883,75 +949,119 @@ describe('HydraniumGlspStorage', () => {
    });
 
    describe('saveSourceModel — write set', () => {
-      it('flushes the stored text of the primary, with no model handed to the write', async () => {
-         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve() });
+      it("persists the primary's stored text through the diagram's session, whatever version the store holds", async () => {
+         const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve() });
          await storage.saveSourceModel(saveAction);
-         expect(saveMock.mock.calls).toEqual([['file:///x.a', 'client-1']]);
+         expect(persistMock.mock.calls).toEqual([[{ uri: 'file:///x.a', baseVersion: 'any' }, 'client-1']]);
       });
 
       it('flushes every tracked secondary, not only the document the action names', async () => {
-         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), secondaryUris: ['file:///x.layout'] });
+         const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve(), secondaryUris: ['file:///x.layout'] });
          await storage.saveSourceModel(saveAction);
-         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a', 'file:///x.layout']);
+         expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a', 'file:///x.layout']);
       });
 
       it('skips a tracked document the diagram does not have open, even when another client does', async () => {
          // The other client's unsaved edits are not the diagram's to persist.
-         const { storage, saveMock } = createPolicyStorage({
-            save: () => Promise.resolve(),
+         const { storage, persistMock } = createPolicyStorage({
+            persist: () => Promise.resolve(),
             secondaryUris: ['file:///x.layout'],
             openUris: ['file:///x.a'],
             openElsewhere: ['file:///x.layout']
          });
          await storage.saveSourceModel(saveAction);
-         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+         expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a']);
       });
 
       it('saves nothing for a diagram that registered no session', async () => {
          // The client id's opens are then another participant's.
-         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), refuseSession: true });
+         const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve(), refuseSession: true });
          await expect(storage.saveSourceModel(saveAction)).rejects.toThrow(DIAGRAM_SESSION_REFUSED.text);
-         expect(saveMock).not.toHaveBeenCalled();
+         expect(persistMock).not.toHaveBeenCalled();
       });
 
       it('calls every save before any of them settles', async () => {
          // Each save takes its text when called. Called one after another, a
          // session ending during the first write would close the rest before
          // their text was taken.
-         const { storage, saveMock } = createPolicyStorage({
-            save: () => new Promise<void>(() => undefined),
+         const { storage, persistMock } = createPolicyStorage({
+            persist: () => new Promise<void>(() => undefined),
             secondaryUris: ['file:///x.layout']
          });
          void storage.saveSourceModel(saveAction);
-         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a', 'file:///x.layout']);
+         expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a', 'file:///x.layout']);
+      });
+
+      it('persists every document when the persist of an earlier one throws instead of rejecting', async () => {
+         const { storage, persistMock } = createPolicyStorage({
+            persist: args => {
+               if (args.uri === 'file:///x.a') {
+                  throw new Error('refused');
+               }
+               return Promise.resolve();
+            },
+            secondaryUris: ['file:///x.layout']
+         });
+         await expect(storage.saveSourceModel(saveAction)).rejects.toThrow('refused');
+         expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a', 'file:///x.layout']);
+      });
+
+      it('fails with the first document that failed, and logs every failure under its own document', async () => {
+         const { storage, lines } = createPolicyStorage({
+            persist: args => Promise.reject(new Error(`refused ${args.uri}`)),
+            secondaryUris: ['file:///x.layout']
+         });
+         await expect(storage.saveSourceModel(saveAction)).rejects.toThrow('refused file:///x.a');
+         expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
+            'Save failed for file:///x.a: refused file:///x.a',
+            'Save failed for file:///x.layout: refused file:///x.layout'
+         ]);
+      });
+
+      it('settles a failed save only once every other document of the set has been written', async () => {
+         let finishLayout!: () => void;
+         const { storage } = createPolicyStorage({
+            persist: args =>
+               args.uri === 'file:///x.a' ? Promise.reject(new Error('refused')) : new Promise<void>(resolve => (finishLayout = resolve)),
+            secondaryUris: ['file:///x.layout']
+         });
+         let settled = false;
+         const saving = Promise.resolve(storage.saveSourceModel(saveAction)).finally(() => (settled = true));
+         saving.catch(() => undefined);
+
+         await tick();
+         expect(settled).toBe(false);
+         finishLayout();
+
+         await expect(saving).rejects.toThrow('refused');
       });
 
       it('saves a primary tracked as its own secondary once', async () => {
-         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve(), secondaryUris: ['file:///x.a'] });
+         const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve(), secondaryUris: ['file:///x.a'] });
          await storage.saveSourceModel(saveAction);
-         expect(saveMock.mock.calls.map(call => call[0])).toEqual(['file:///x.a']);
+         expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a']);
       });
    });
 
    describe('saveSourceModel — delivery policy', () => {
       it('defaults to awaiting the flush when no policy is bound', async () => {
-         const { storage, saveMock } = createPolicyStorage({ save: () => Promise.resolve() });
+         const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve() });
          const result = storage.saveSourceModel(saveAction);
          expect(result).toBeInstanceOf(Promise);
          await result;
-         expect(saveMock).toHaveBeenCalledTimes(1);
+         expect(persistMock).toHaveBeenCalledTimes(1);
       });
 
       it('await propagates the failure', async () => {
          const failure = new Error('disk full');
-         const { storage } = createPolicyStorage({ policy: { kind: 'await' }, save: () => Promise.reject(failure) });
+         const { storage } = createPolicyStorage({ policy: { kind: 'await' }, persist: () => Promise.reject(failure) });
          await expect(storage.saveSourceModel(saveAction)).rejects.toBe(failure);
       });
 
       it('fire-and-forget returns undefined, and swallows + logs failures', async () => {
          const { storage, lines } = createPolicyStorage({
             policy: { kind: 'fire-and-forget' },
-            save: () => Promise.reject(new Error('disk full'))
+            persist: () => Promise.reject(new Error('disk full'))
          });
          const result = storage.saveSourceModel(saveAction);
          expect(result).toBeUndefined();
@@ -960,7 +1070,7 @@ describe('HydraniumGlspStorage', () => {
          // save path awaits, which this assertion must not encode.
          const logged = async (): Promise<boolean> => {
             for (let attempt = 0; attempt < 50; attempt++) {
-               if (lines.some(line => line.level === 'error' && line.message.includes('Save failed for file:///x.a'))) {
+               if (lines.some(line => line.level === 'error' && line.message.includes('Diagram save failed for file:///x.a'))) {
                   return true;
                }
                await new Promise(resolve => setTimeout(resolve, 1));
@@ -969,6 +1079,21 @@ describe('HydraniumGlspStorage', () => {
          };
          // Caught and logged, never rethrown.
          expect(await logged()).toBe(true);
+      });
+
+      it('fire-and-forget names the document that failed, then the diagram, when only a secondary failed', async () => {
+         const { storage, lines } = createPolicyStorage({
+            policy: { kind: 'fire-and-forget' },
+            persist: args => (args.uri === 'file:///x.layout' ? Promise.reject(new Error('disk full')) : Promise.resolve()),
+            secondaryUris: ['file:///x.layout']
+         });
+         storage.saveSourceModel(saveAction);
+
+         await waitFor(() => lines.some(line => line.message.startsWith('Diagram save failed')));
+         expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
+            'Save failed for file:///x.layout: disk full',
+            'Diagram save failed for file:///x.a: disk full'
+         ]);
       });
    });
 
@@ -979,7 +1104,7 @@ describe('HydraniumGlspStorage', () => {
       // answer changing nothing, and a saveable waiting for it times out.
       it('sends no dirty state for a flip during its own awaited save', async () => {
          let finish!: () => void;
-         const { storage, dirtyStates } = createPolicyStorage({ save: () => new Promise<void>(resolve => (finish = resolve)) });
+         const { storage, dirtyStates } = createPolicyStorage({ persist: () => new Promise<void>(resolve => (finish = resolve)) });
 
          const saving = storage.saveSourceModel(saveAction);
          storage.dirtyChanged('file:///x.a', false);
@@ -992,7 +1117,7 @@ describe('HydraniumGlspStorage', () => {
       it('sends the dirty state once a failed save settles, since GLSP then sends none', async () => {
          let fail!: (error: Error) => void;
          const { storage, dirtyStates } = createPolicyStorage({
-            save: () => new Promise<void>((_resolve, reject) => (fail = reject))
+            persist: () => new Promise<void>((_resolve, reject) => (fail = reject))
          });
 
          const saving = storage.saveSourceModel(saveAction);
@@ -1005,7 +1130,7 @@ describe('HydraniumGlspStorage', () => {
       });
 
       it('ends its hold when a flush override throws before it returns a promise', async () => {
-         const { storage, dirtyStates } = createPolicyStorage({ save: () => Promise.resolve() });
+         const { storage, dirtyStates } = createPolicyStorage({ persist: () => Promise.resolve() });
          Object.assign(storage, {
             flushWriteSet: () => {
                throw new Error('flush refused');
@@ -1021,7 +1146,7 @@ describe('HydraniumGlspStorage', () => {
       it('sends a flip outside its own save, and one during a save it does not wait for', async () => {
          const { storage, dirtyStates } = createPolicyStorage({
             policy: { kind: 'fire-and-forget' },
-            save: () => new Promise<void>(() => undefined)
+            persist: () => new Promise<void>(() => undefined)
          });
          storage.dirtyChanged('file:///x.a', true);
 

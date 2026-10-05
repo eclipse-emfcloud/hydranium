@@ -30,6 +30,7 @@ import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver
 import type { HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
+import { IntegrityService } from '../integrity/integrity-service.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
@@ -355,6 +356,19 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       const docState = doc ? DocumentState[doc.state] : 'unknown (document not loaded)';
       const lastPhase = this.lastPhaseMs > 0 ? `${Math.round(performance.now() - this.lastPhaseMs)}ms ago` : 'no phase observed';
       return `current state: '${docState}', last phase: ${lastPhase}, active build: ${this.formatSession(this.activeSession)}`;
+   }
+
+   /**
+    * The last phase a rebuild reaches under {@link updateBuildOptions}:
+    * `Validated`, or {@link IntegrityService.SettledState} when rebuilds do
+    * not validate, since no build then reaches `Validated` and a wait for it
+    * would never end. A document a `shouldValidate` override skips stops
+    * short of it; waiting on it is this builder's to resolve. An override that
+    * returns a phase rebuilds never reach makes every wait for it hang, the
+    * session writes that answer at it included.
+    */
+   finalBuildState(): DocumentState {
+      return this.updateBuildOptions.validation ? DocumentState.Validated : IntegrityService.SettledState;
    }
 
    /** Render a session for a status line. `undefined` — no build in progress — reads as `none`. */

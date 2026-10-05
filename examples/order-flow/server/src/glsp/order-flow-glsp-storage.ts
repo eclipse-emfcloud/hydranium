@@ -16,7 +16,7 @@ import type { OrderFlowSourceModel } from './order-flow-glsp-state.js';
  * `.process` source-model storage, inheriting both framework defaults:
  * `loadSourceModel` (open + settle + `setSourceRoot`) and `saveSourceModel`
  * (flush the store's text for the primary and every tracked secondary through
- * `AstDocumentManager.save` → `WritableFileSystemProvider`).
+ * the diagram's client session).
  *
  * No serializer runs on the save path — a save persists what the diagram's
  * operations already wrote to the store. Serialization happens per operation, on

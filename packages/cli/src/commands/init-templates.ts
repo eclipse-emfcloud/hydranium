@@ -1656,7 +1656,7 @@ export class __GRAMMAR__GlspState extends FullTextHydraniumGlspState<__ENTRY_RUL
    const storage = `// Source-model storage for the __GRAMMAR__ diagram, inheriting both framework
 // defaults: \`loadSourceModel\` (open + settle + \`setSourceRoot\`) and
 // \`saveSourceModel\` (flush the store's text for the primary and every tracked
-// secondary through \`AstDocumentManager.save\` → \`WritableFileSystemProvider\`).
+// secondary through the diagram's client session).
 //
 // No serializer runs on the save path — a save persists what the diagram's
 // operations already wrote to the store.
