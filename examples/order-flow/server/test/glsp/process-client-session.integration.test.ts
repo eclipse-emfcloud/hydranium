@@ -162,9 +162,9 @@ describe('order-flow .process diagram as a client session', () => {
 
       requestModel(diagram);
 
-      // After the bounded wait for the id to free. A model request is a
-      // REQUEST, so its rejection carries only the developer-facing cause; the
-      // user reads the message dispatched beside it.
+      // After the bounded wait a load without a resume token gets for the id to
+      // free. A model request is a REQUEST, so its rejection carries only the
+      // developer-facing cause; the user reads the message dispatched beside it.
       const rejection = await diagram.harness.nextAction<RejectAction>(RejectAction.KIND, 5_000);
       expect(rejection.detail).toContain(CLIENT_ID);
       const message = await diagram.harness.nextAction<MessageAction>(MessageAction.KIND);
@@ -188,8 +188,9 @@ describe('order-flow .process diagram as a client session', () => {
    });
 
    it('loads a diagram whose client id frees while the load waits for it', async () => {
-      // A reloaded client reconnecting before the server has noticed its old
-      // connection close, which ends that connection's sessions a moment later.
+      // A client that sends no resume token, reconnecting before the server has
+      // noticed its old connection close, which ends that connection's sessions
+      // a moment later.
       const diagram = await startDiagram(WORKSPACE_FILES.fulfillmentProcess, { open: false });
       const holder = diagram.shared.model.ModelService.createSession('holder', CLIENT_ID);
       await diagram.harness.start();

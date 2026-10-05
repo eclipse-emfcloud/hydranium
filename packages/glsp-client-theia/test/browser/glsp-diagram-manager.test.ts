@@ -16,6 +16,7 @@ import { HydraniumGlspClientContribution } from '../../src/browser/client-contri
 import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader.js';
 import { HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget.js';
 import { AbstractHydraniumGlspDiagramManager } from '../../src/browser/glsp-diagram-manager.js';
+import { DefaultWindowSessionService, type WindowSessionService } from '../../src/browser/window-session.js';
 
 /**
  * What the base class received, so the assertion is on the options this override
@@ -45,6 +46,9 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
       }
       async createWidget(): Promise<unknown> {
          return this.createdWidget;
+      }
+      protected createDiagramOptions(options: { uri: string }): object {
+         return { clientId: 'counted_0', sourceUri: options.uri };
       }
    },
    BaseGLSPClientContribution: class {},
@@ -296,5 +300,50 @@ describe('AbstractHydraniumGlspDiagramManager on client events', () => {
       fire(contribution, 'clientStartedEmitter');
 
       expect(manager.reopened).toEqual([failed]);
+   });
+});
+
+describe('AbstractHydraniumGlspDiagramManager client ids', () => {
+   const windowSessions = new DefaultWindowSessionService();
+
+   class IdManager extends TestDiagramManager {
+      protected override readonly windowSessions: WindowSessionService = windowSessions;
+
+      clientIdFor(uri: string, editMode = 'editable', extra: Record<string, unknown> = {}): string {
+         const options = { uri, editMode, ...extra } as Parameters<IdManager['createDiagramOptions']>[0];
+         return (this.createDiagramOptions(options) as { clientId: string }).clientId;
+      }
+   }
+
+   it('gives two widgets of one document two ids when an option an adopter adds sets them apart', () => {
+      const manager = new IdManager();
+
+      expect(manager.clientIdFor('file:///a.tst', 'editable', { pane: 'left' })).not.toBe(
+         manager.clientIdFor('file:///a.tst', 'editable', { pane: 'right' })
+      );
+      expect(manager.clientIdFor('file:///a.tst', 'editable', { pane: 'left' })).toBe(
+         manager.clientIdFor('file:///a.tst', 'editable', { pane: 'left' })
+      );
+   });
+
+   it('gives a document open in two edit modes two ids, so neither takes the other’s session over', () => {
+      const editable = new IdManager().clientIdFor('file:///a.tst', 'editable');
+
+      expect(new IdManager().clientIdFor('file:///a.tst', 'readonly')).not.toBe(editable);
+      expect(new IdManager().clientIdFor('file:///a.tst', 'editable')).toBe(editable);
+   });
+
+   it('gives a document the same id in every manager of the window, and other documents other ids', () => {
+      const first = new IdManager().clientIdFor('file:///a.tst');
+
+      expect(new IdManager().clientIdFor('file:///a.tst')).toBe(first);
+      expect(new IdManager().clientIdFor('file:///b.tst')).not.toBe(first);
+      expect(first.startsWith('test-diagram_')).toBe(true);
+   });
+
+   it('builds ids a CSS id selector accepts, since GLSP finds the diagram’s element by one', () => {
+      const id = new IdManager().clientIdFor('file:///home/user/My Folder/a.tst');
+
+      expect(id).toMatch(/^[A-Za-z][\w-]*$/);
    });
 });

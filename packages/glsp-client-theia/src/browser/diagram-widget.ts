@@ -7,15 +7,17 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DiagramLoader, EditorContextService, GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
+import { type Args, DiagramLoader, EditorContextService, GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
+import { RESUME_TOKEN_ARG } from '@hydranium/protocol';
 import { GLSPDiagramWidget, type GLSPDiagramWidgetOptions } from '@eclipse-glsp/theia-integration';
 // Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
 import { type Message } from '@theia/core/lib/browser';
 import { Emitter, type Event, nls } from '@theia/core';
-import { type Container, injectable } from '@theia/core/shared/inversify';
+import { type Container, inject, injectable } from '@theia/core/shared/inversify';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspSaveable } from './glsp-saveable';
+import { WindowSessionService } from './window-session';
 // Shipped by this package rather than left to adopters: an overlay whose
 // stylesheet was forgotten is an unstyled div in normal flow, which is a silent
 // failure. Adopters override individual rules from their own stylesheet.
@@ -54,6 +56,7 @@ export const DIAGRAM_LOADING_FAILED_CLASS = `${DIAGRAM_LOADING_CLASS}-failed`;
  */
 @injectable()
 export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
+   @inject(WindowSessionService) protected readonly windowSessions!: WindowSessionService;
    protected loadingOverlay?: HTMLElement;
    protected readonly reopenRequestEmitter = new Emitter<void>();
 
@@ -79,6 +82,11 @@ export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
    /** The widget's saveable. Override to change how saves and dirty state behave. */
    protected createSaveable(): GLSPDiagramWidget['saveable'] {
       return new HydraniumGlspSaveable(this.actionDispatcher, this.diContainer.get(EditorContextService));
+   }
+
+   /** Adds the window's resume token, so a reload or reconnect takes this diagram's session over. */
+   protected override getRequestModelOptions(): Args {
+      return { ...super.getRequestModelOptions(), [RESUME_TOKEN_ARG]: this.windowSessions.current().resumeToken };
    }
 
    protected override onAfterAttach(msg: Message): void {

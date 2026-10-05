@@ -36,6 +36,7 @@ import {
    DisposableCollection,
    isDuplicateClientIdError,
    isSessionClosedError,
+   RESUME_TOKEN_ARG,
    SessionClosedError
 } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
@@ -187,9 +188,10 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * whole flow, and select a {@link SaveDeliveryPolicy} via the bound option to
  * tune how {@link saveSourceModel} delivers its result.
  *
- * **One client session per GLSP client session.** `init` registers the GLSP
- * client id as a client session ({@link registerModelSession}) and hands it to
- * the state as `modelSession`. The primary is opened through it on load, and
+ * **One client session per GLSP client session.** The load registers the GLSP
+ * client id as a client session ({@link registerModelSession}), with the
+ * request's {@link RESUME_TOKEN_ARG}, and hands it to the state as
+ * `modelSession`. The primary is opened through it, and
  * every document that joins the write set as it joins
  * ({@link openSecondary}); a document that leaves the write set stays open
  * until the next save, so leaving never reverts the diagram's unsaved edits to
@@ -270,12 +272,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     */
    protected readonly departedSecondaries = new Set<string>();
 
-   /**
-    * How long a load waits for a client id another participant holds to free
-    * before refusing. A reloaded client can reconnect under its old id before
-    * the server has noticed the old connection close, which ends that
-    * connection's sessions a moment later.
-    */
+   /** How long a load without a resume token waits for a held client id to free; see {@link loadModelSession}. */
    protected readonly sessionWaitMs: number = 2_000;
 
    /** Set by {@link dispose}; a disposed storage registers no session again. */
@@ -300,7 +297,6 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.state.clientId === TEMPORARY_CLIENT_ID) {
          return;
       }
-      this.state.modelSession = this.registerModelSession();
       this.sessionManager.addListener(this, this.state.clientId);
       // Watched for this storage's whole lifetime rather than per load. The load
       // flow is a documented override point, so a subscription parked there would
@@ -311,20 +307,23 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
 
    /**
     * Register the diagram's client session under the GLSP client id, or
-    * `undefined` when another participant holds that id, which is logged.
+    * `undefined` when another participant holds that id, which is logged, and
+    * the diagram then refuses to load ({@link requireModelSession}). Taking
+    * the id over would end that participant's session under it, and working
+    * without a session would share its opens and echoes, so its close would
+    * take the diagram's documents with it.
     *
-    * The diagram then refuses to load ({@link requireModelSession}). Taking
-    * the id over would end the other participant's session under it, and
-    * working without a session would share that participant's opens and
-    * echoes, so its close would take the diagram's documents with it.
+    * The exception is a `resumeToken` the holder registered with, which takes
+    * its session over: a diagram that reconnected or reloaded, whose old
+    * connection the server has not seen close yet.
     *
     * A client id the framework reserves throws `ReservedClientIdError`:
     * whoever chose the GLSP client id has a bug, and no later registration can
     * succeed.
     */
-   protected registerModelSession(): ModelClientSession<AstNode> | undefined {
+   protected registerModelSession(resumeToken?: string): ModelClientSession<AstNode> | undefined {
       try {
-         return this.sharedServices.model.ModelService.createSession('diagram', this.state.clientId);
+         return this.sharedServices.model.ModelService.createSession('diagram', this.state.clientId, { resumeToken });
       } catch (error: unknown) {
          if (!isDuplicateClientIdError(error)) {
             throw error;
@@ -335,43 +334,48 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * The diagram's client session, registering it again when the id was held
-    * earlier. Throws `SessionClosedError` once the storage is disposed, and the
-    * refusal when the id is still held.
+    * The diagram's client session. Throws `SessionClosedError` once the
+    * storage is disposed, and the refusal before a load has registered one.
+    * Registering here instead would start the session without the load's
+    * resume token, which a later resume then fails to match.
     */
    protected requireModelSession(): ModelClientSession<AstNode> {
       if (this.disposed) {
          throw new SessionClosedError(this.state.clientId, 'The diagram has closed; its client session has ended.');
       }
-      if (!this.state.modelSession) {
-         this.state.modelSession = this.registerModelSession();
-      }
       const session = this.state.modelSession;
       if (!session) {
          throw new GLSPServerError(
             this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_SESSION_REFUSED),
-            `clientId=${this.state.clientId} is still held by another participant, so this diagram has no client session`
+            `clientId=${this.state.clientId} has no client session: no load has registered it, or another participant holds the id`
          );
       }
       return session;
    }
 
    /**
-    * {@link requireModelSession} for the load: while the id is held, wait up to
-    * {@link sessionWaitMs} for its holder to end before refusing, and tell the
-    * user when it does not.
+    * {@link requireModelSession} for the load, registering with the request's
+    * resume token, and telling the user when the id is refused. A load with
+    * no token waits up to {@link sessionWaitMs} for a held id to free: a
+    * client that resumes no session reconnects under its old id before the
+    * server has seen the old connection close.
     */
-   protected async awaitModelSession(): Promise<ModelClientSession<AstNode>> {
+   protected async loadModelSession(action: RequestModelAction): Promise<ModelClientSession<AstNode>> {
+      const option = action.options?.[RESUME_TOKEN_ARG];
+      const token = typeof option === 'string' ? option : undefined;
       if (!this.state.modelSession && !this.disposed) {
-         this.state.modelSession = this.registerModelSession();
+         this.state.modelSession = this.registerModelSession(token);
       }
-      if (!this.state.modelSession && !this.disposed) {
+      if (!this.state.modelSession && !this.disposed && token === undefined) {
          await this.waitForSessionEnd(this.state.clientId, this.sessionWaitMs);
+         if (!this.state.modelSession && !this.disposed) {
+            this.state.modelSession = this.registerModelSession();
+         }
       }
       try {
          return this.requireModelSession();
       } catch (error: unknown) {
-         // A diagram closed while it waited has no client left to tell.
+         // A diagram closed meanwhile has no client left to tell.
          if (isSessionClosedError(error)) {
             throw error;
          }
@@ -420,7 +424,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // Open FIRST: a workspace-scanned-but-never-didOpened document rebuilds here,
       // so the capture below settles on a built root rather than a transient
       // mid-rebuild one. Closed when the session ends.
-      await (await this.awaitModelSession()).open(rootUri);
+      await (await this.loadModelSession(action)).open(rootUri);
 
       // GLSP's sessionDisposed is unreliable on Theia tab-close; dispose on client
       // detach so reopens don't accumulate stale onModelUpdated listeners.

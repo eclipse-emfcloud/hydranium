@@ -20,6 +20,7 @@ import {
    type TransferDocumentUpdatedEvent
 } from '../data';
 import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
+import { randomUuid } from '../random-uuid';
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
@@ -159,7 +160,7 @@ export class DataConnection<
     */
    createSession(label = 'session', clientId?: string): DataSession<TTransfer, TServer> {
       this.assertLive();
-      const id = clientId ?? `${label}#${globalThis.crypto.randomUUID()}`;
+      const id = clientId ?? `${label}#${randomUuid()}`;
       if (FRAMEWORK_CLIENT_IDS.includes(id)) {
          throw new ReservedClientIdError(id);
       }

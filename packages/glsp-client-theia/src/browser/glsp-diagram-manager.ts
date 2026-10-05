@@ -7,16 +7,22 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { codiconCSSString, DiagramLoader } from '@eclipse-glsp/client';
+import { codiconCSSString, DiagramLoader, type IDiagramOptions } from '@eclipse-glsp/client';
 import { GLSPDiagramManager } from '@eclipse-glsp/theia-integration';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
-import { type GLSPDiagramWidget, type GLSPWidgetOpenerOptions } from '@eclipse-glsp/theia-integration/lib/browser';
+import {
+   type GLSPDiagramWidget,
+   type GLSPDiagramWidgetOptions,
+   type GLSPWidgetOpenerOptions
+} from '@eclipse-glsp/theia-integration/lib/browser';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { type Disposable, DisposableCollection } from '@theia/core';
-import { injectable } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
+import { textHash } from '@hydranium/protocol';
 import { HydraniumGlspClientContribution } from './client-contribution';
 import { HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspDiagramWidget } from './diagram-widget';
+import { WindowSessionService } from './window-session';
 
 /**
  * `GLSPDiagramManager` subclass that derives the language-correlated getters
@@ -50,6 +56,8 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
 
    /** Optional icon-class override; takes precedence over the language's `iconClass`. */
    protected readonly customIconClass?: string;
+
+   @inject(WindowSessionService) protected readonly windowSessions!: WindowSessionService;
 
    protected clientListeners?: Disposable;
    /** The reopens asked for so far, which run one at a time. */
@@ -85,6 +93,23 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
    }
 
    /**
+    * The same client id for the same diagram in this window, across a reload
+    * and a reopen after a lost client, so its load takes over the session the
+    * old connection left and keeps its unsaved text. A diagram closed by the
+    * user ends its session, and opening it again starts afresh.
+    *
+    * The widget options enter as a hash: GLSP makes the id an element id and
+    * finds it with an `#id` selector, which a URI's `:` and `/` break. The
+    * options identify the widget, so two widgets of one document, in two edit
+    * modes or set apart by an option an adopter adds, do not take each other's
+    * session over.
+    */
+   protected override createDiagramOptions(options: GLSPDiagramWidgetOptions): IDiagramOptions {
+      const clientId = `${this.diagramType}_${this.windowSessions.current().id}_${textHash(JSON.stringify(options))}`;
+      return { ...super.createDiagramOptions(options), clientId };
+   }
+
+   /**
     * Reopen every diagram once its client is lost, since none of them has a
     * server behind it any more, and a failed one once a client starts.
     */
@@ -115,7 +140,8 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
 
    /**
     * Replace `widget` with a fresh one for the same diagram, in the same tab
-    * position and with its viewport: a new container, client id and load.
+    * position and with its viewport: a new container and load under the same
+    * client id, which takes over the session the old connection left.
     * Reopens run one at a time, since each places its replacement next to a
     * neighbour that a reopen running alongside could take out of the layout.
     */

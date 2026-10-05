@@ -49,8 +49,14 @@ import { DiagramStatus } from '../src/state/diagram-status.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
-import { DuplicateClientIdError, ReconcilingConflictResolver, SessionClosedError, asCanonicalUri } from '@hydranium/protocol';
-import { tick, waitFor } from '@hydranium/protocol/testing';
+import {
+   DuplicateClientIdError,
+   RESUME_TOKEN_ARG,
+   ReconcilingConflictResolver,
+   SessionClosedError,
+   asCanonicalUri
+} from '@hydranium/protocol';
+import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { DIAGRAM_SESSION_REFUSED, HydraniumGlspStorage, SOURCE_URI_MISSING } from '../src/storage/hydranium-glsp-storage.js';
 import { type SaveDeliveryPolicy, SaveDeliveryPolicy as SaveDeliveryPolicyToken } from '../src/storage/save-delivery-policy.js';
 
@@ -65,7 +71,6 @@ class TestState extends AbstractHydraniumGlspState<TestRoot> {
 }
 
 class TestStorage extends HydraniumGlspStorage<TestRoot> {
-   protected override readonly sessionWaitMs = 50;
    public loadCalls: RequestModelAction[] = [];
    public saveCalls: SaveModelAction[] = [];
 
@@ -105,8 +110,14 @@ class TestStorage extends HydraniumGlspStorage<TestRoot> {
       return this.requireModelSession();
    }
 
-   public callAwaitModelSession(): Promise<ModelClientSession<AstNode>> {
-      return this.awaitModelSession();
+   public callRegisterModelSession(): void {
+      this.state.modelSession = this.registerModelSession();
+   }
+
+   public callLoadModelSession(resumeToken?: unknown): Promise<ModelClientSession<AstNode>> {
+      return this.loadModelSession(
+         RequestModelAction.create({ options: resumeToken === undefined ? {} : { [RESUME_TOKEN_ARG]: resumeToken as string } })
+      );
    }
 }
 
@@ -202,6 +213,7 @@ function makeSessionModelService(
    options: {
       calls?: string[];
       refuse?: boolean;
+      holder?: Pick<ModelClientSession<AstNode>, 'onDidDispose'>;
       documents?: readonly string[];
       openError?: Error;
       persist?: (args: ClientSessionPersistArgs, clientId: string) => Promise<unknown>;
@@ -210,10 +222,10 @@ function makeSessionModelService(
    const calls = options.calls ?? [];
    return {
       snapshot: () => undefined,
-      getSession: () => undefined,
+      getSession: () => options.holder,
       getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri, parseResult: { value: { $type: 'Root' } } } : undefined),
-      createSession(label: string, clientId: string): ModelClientSession<AstNode> {
-         calls.push(`createSession ${label} ${clientId}`);
+      createSession(label: string, clientId: string, sessionOptions?: { resumeToken?: string }): ModelClientSession<AstNode> {
+         calls.push(`createSession ${label} ${clientId}${sessionOptions?.resumeToken ? ` ${sessionOptions.resumeToken}` : ''}`);
          if (options.refuse) {
             throw new DuplicateClientIdError(clientId);
          }
@@ -335,6 +347,11 @@ class PolicyStorage extends HydraniumGlspStorage<TestRoot> {
    dirtyChanged(uri: string, dirty: boolean): void {
       this.handleDirtyChanged({ uri: asCanonicalUri(uri), text: { version: 1, hash: '', dirty } });
    }
+
+   /** Register the session as a load does, so a save has one to write through. */
+   register(): void {
+      this.state.modelSession = this.registerModelSession();
+   }
 }
 
 /**
@@ -421,7 +438,9 @@ function createPolicyStorage(options: {
    // `lines` is a live reference — the storage surfaces failures through the
    // GLSP logger after the returned promise settles, so tests filter it at
    // assertion time (a getter would snapshot empty at destructure time).
-   return { storage: container.get(PolicyStorage), persistMock, root, lines, dirtyStates };
+   const storage = container.get(PolicyStorage);
+   storage.register();
+   return { storage, persistMock, root, lines, dirtyStates };
 }
 
 const saveAction = { kind: 'saveModel', fileUri: 'file:///x.a' } as unknown as SaveModelAction;
@@ -448,41 +467,86 @@ describe('HydraniumGlspStorage', () => {
          expect(state.modelSession).toBeUndefined();
       });
 
-      it('registers the GLSP client id as a client session and hands it to the state', () => {
+      it('registers the GLSP client id as a client session at load, with the request’s resume token', async () => {
          const calls: string[] = [];
-         const { state } = createStorage(
+         const { storage, state } = createStorage(
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
          );
-         expect(calls).toEqual(['createSession diagram client-1']);
+         expect(calls).toEqual([]);
+
+         await storage.callLoadModelSession('token');
+
+         expect(calls).toEqual(['createSession diagram client-1 token']);
          expect(state.modelSession?.clientId).toBe('client-1');
       });
 
-      it('registers no session for an id another participant holds, and refuses to load', () => {
+      it('refuses a load whose token does not match at once, and tells the client', async () => {
+         // A clock that never advances: a load that waited for the holder would never settle.
          const { storage, state } = createStorage(
             'client-1',
-            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ refuse: true }) } })
+            makeNoopSharedServices<ServerSharedServices>({
+               Clock: makeFakeClock(),
+               model: { ModelService: makeSessionModelService({ refuse: true }) }
+            })
          );
-         expect(state.modelSession).toBeUndefined();
-         expect(() => storage.callRequireModelSession()).toThrow(
+         const dispatch = vi.fn(() => Promise.resolve());
+         (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
+
+         await expect(storage.callLoadModelSession('token')).rejects.toThrow(
             expect.objectContaining({ message: DIAGRAM_SESSION_REFUSED.text, cause: expect.stringContaining('client-1') })
          );
+         expect(state.modelSession).toBeUndefined();
+         expect(dispatch).toHaveBeenCalledTimes(1);
       });
    });
 
    describe('a refused client id', () => {
-      it('registers the session once the id frees, when it is next needed', () => {
-         const options = { refuse: true };
-         const { storage, state } = createStorage(
-            'client-1',
-            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService(options) } })
-         );
-         expect(state.modelSession).toBeUndefined();
+      it('waits for a held id to free on a load without a token, and registers then', async () => {
+         let holderEnded: ((cause: SessionEndCause) => void) | undefined;
+         const options = {
+            refuse: true,
+            holder: {
+               onDidDispose: (listener: (cause: SessionEndCause) => void) => {
+                  holderEnded = listener;
+                  return { dispose() {} };
+               }
+            }
+         };
+         const services = makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService(options) } });
+         const { storage, state } = createStorage('client-1', services);
 
+         const loading = storage.callLoadModelSession();
+         // Woken by the holder's end, not by the wait running out.
+         await waitFor(() => holderEnded !== undefined);
          options.refuse = false;
+         holderEnded?.('closed');
 
-         expect(storage.callRequireModelSession().clientId).toBe('client-1');
+         expect((await loading).clientId).toBe('client-1');
          expect(state.modelSession?.clientId).toBe('client-1');
+      });
+
+      it('refuses a save before the diagram has loaded, and registers nothing for it', async () => {
+         const calls: string[] = [];
+         const { storage } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
+
+         await expect(storage.callFlushWriteSet('file:///a/main.x')).rejects.toThrow(DIAGRAM_SESSION_REFUSED.text);
+         expect(calls).toEqual([]);
+      });
+
+      it('ignores a resume token that is not a string', async () => {
+         const calls: string[] = [];
+         const { storage } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
+         );
+
+         await storage.callLoadModelSession(42);
+
+         expect(calls).toEqual(['createSession diagram client-1']);
       });
    });
 
@@ -521,6 +585,7 @@ describe('HydraniumGlspStorage', () => {
             }
          });
          const { storage, state } = createStorage('client-1', services, options.logger);
+         storage.callRegisterModelSession();
          calls.length = 0;
          return { storage, state, calls };
       }
@@ -1279,6 +1344,7 @@ describe('HydraniumGlspStorage', () => {
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
          );
+         storage.callRegisterModelSession();
          storage.pushDisposable({ dispose: () => calls.push('subscription') });
          storage.dispose();
          expect(calls.slice(1)).toEqual(['subscription', 'dispose']);
@@ -1288,7 +1354,9 @@ describe('HydraniumGlspStorage', () => {
          const ended = (dispose: (storage: TestStorage) => void): string[] => {
             const calls: string[] = [];
             const services = makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } });
-            dispose(createStorage('client-1', services).storage);
+            const { storage } = createStorage('client-1', services);
+            storage.callRegisterModelSession();
+            dispose(storage);
             return calls.filter(call => call.startsWith('dispose'));
          };
 
@@ -1302,6 +1370,7 @@ describe('HydraniumGlspStorage', () => {
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } })
          );
+         storage.callRegisterModelSession();
          storage.dispose();
 
          expect(state.modelSession).toBeUndefined();
@@ -1318,20 +1387,16 @@ describe('HydraniumGlspStorage', () => {
          await expect(storage.callFlushWriteSet('file:///a/main.x')).rejects.toThrow(SessionClosedError);
       });
 
-      it('ends a load still waiting for a held id as a closed session when disposed, and tells no one', async () => {
+      it('refuses a load after dispose as a closed session, and tells no one', async () => {
          const { storage } = createStorage(
             'client-1',
-            makeNoopSharedServices<ServerSharedServices>({
-               model: { ModelService: makeSessionModelService({ refuse: true }) }
-            })
+            makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ refuse: true }) } })
          );
          const dispatch = vi.fn(() => Promise.resolve());
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
-
-         const loading = storage.callAwaitModelSession();
          storage.dispose();
 
-         await expect(loading).rejects.toThrow(SessionClosedError);
+         await expect(storage.callLoadModelSession()).rejects.toThrow(SessionClosedError);
          expect(dispatch).not.toHaveBeenCalled();
       });
 
