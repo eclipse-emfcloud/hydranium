@@ -11,6 +11,7 @@ export * from './document-uri-policy.js';
 export * from './file-system-provider.js';
 export * from './in-memory-file-system-provider.js';
 export * from './persistent-file-system-provider.js';
+export * from './self-save-registry.js';
 export * from './index-manager.js';
 export * from './initialize-workspace.js';
 export * from './langium-documents.js';

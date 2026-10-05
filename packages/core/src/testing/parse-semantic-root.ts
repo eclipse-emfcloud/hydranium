@@ -55,7 +55,7 @@
 
 import { type AstNode, AstUtils, type LangiumCoreServices, URI } from '@hydranium/langium';
 import { type ParseHelperOptions, parseHelper } from '@hydranium/langium/test';
-import type { WritableFileSystemProvider } from '../documents/ast-document-manager.js';
+import type { WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 
 /** The one field this module reads off a lexer or parser error. */
 interface ParseErrorMessage {

@@ -17,7 +17,7 @@ import {
    ValidationRegistry
 } from '@hydranium/langium';
 import type { ServerLanguageServices } from '../../../src/langium/language-module.js';
-import { ValidationContributionCollector } from '../../../src/langium/validation/validation-contribution-collector.js';
+import { DefaultValidationContributionCollector } from '../../../src/langium/validation/validation-contribution-collector.js';
 import { makeFakeAstNode, makeNoopTracer } from '../../../src/testing/index.js';
 
 interface FakeNode extends AstNode {
@@ -38,7 +38,7 @@ function makeLangiumRegistry(): ValidationRegistry {
    return new ValidationRegistry(langiumServices);
 }
 
-describe('ValidationContributionCollector', () => {
+describe('DefaultValidationContributionCollector', () => {
    it('reads `validation.checks` and calls each contribution at construction', () => {
       const calls: string[] = [];
       const services = {
@@ -56,7 +56,7 @@ describe('ValidationContributionCollector', () => {
          }
       } as unknown as ServerLanguageServices;
 
-      new ValidationContributionCollector(services);
+      new DefaultValidationContributionCollector(services);
 
       expect(calls.sort()).toEqual(['adopter', 'framework']);
    });
@@ -90,7 +90,7 @@ describe('ValidationContributionCollector', () => {
          }
       } as unknown as ServerLanguageServices;
 
-      new ValidationContributionCollector(services);
+      new DefaultValidationContributionCollector(services);
 
       const captured: string[] = [];
       const accept: ValidationAcceptor = (_severity, message) => {

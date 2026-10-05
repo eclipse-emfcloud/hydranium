@@ -16,6 +16,15 @@ import { type ValidationCheckRegistry } from './validation-contribution.js';
 export type ValidationContributionCollectorOptions = LogNameOptions;
 
 /**
+ * The validation-collector slot. Empty because the service registers checks in
+ * its constructor and nothing calls it; typing the slot by the class would stop
+ * an adopter's subclass from a second package copy satisfying it. The cost: any
+ * non-null value satisfies it, so a mis-bound slot compiles and registers no check.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the slot has no public member to name
+export interface ValidationContributionCollector {}
+
+/**
  * Per-language eager collector that wires `ValidationCheckContribution`s
  * declared under `services.validation.checks` into Langium's native
  * `ValidationRegistry`.
@@ -32,7 +41,7 @@ export type ValidationContributionCollectorOptions = LogNameOptions;
  * DI proxy. That is what gets the checks into the registry before Langium
  * reaches the `Validated` phase — nothing else constructs this service.
  */
-export class ValidationContributionCollector {
+export class DefaultValidationContributionCollector implements ValidationContributionCollector {
    protected readonly tracer: Tracer;
 
    constructor(services: ServerLanguageServices, options: ValidationContributionCollectorOptions = {}) {

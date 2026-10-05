@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 import { type Clock } from '@hydranium/protocol';
-import { isCaseInsensitiveFileSystem } from '../util/environment.js';
-import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
+import { isCaseInsensitiveFileSystem } from '../../util/environment.js';
+import { type ServerSharedServicesMinimal } from '../shared-services.js';
 
 /** Default eligibility window for a self-save entry. */
 const DEFAULT_TTL_MS = 30_000;

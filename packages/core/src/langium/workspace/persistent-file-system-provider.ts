@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { URI } from '@hydranium/langium';
-import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import { type WritableFileSystemProvider } from './file-system-provider.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type FileSystemSeed, InMemoryFileSystemProvider, type InMemoryFileSystemOptions } from './in-memory-file-system-provider.js';
 

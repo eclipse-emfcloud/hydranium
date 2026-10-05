@@ -9,7 +9,7 @@
 
 import { type FileSystemNode, URI } from '@hydranium/langium';
 import { type Tracer } from '@hydranium/protocol';
-import { type WritableFileSystemProvider } from '../../documents/ast-document-manager.js';
+import { type WritableFileSystemProvider } from './file-system-provider.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from './in-memory-file-system-provider.js';

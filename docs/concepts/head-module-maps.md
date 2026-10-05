@@ -36,7 +36,7 @@ is the enumeration, and it also shows the `./lib/*` twin each one carries. The
 | folder | subpath | role |
 | --- | --- | --- |
 | `langium/` | `.` | the framework core (see subfolders below) |
-| `documents/` | `.` | Model-coordination: `AstDocumentManager` (multi-client lifecycle), `HydraniumTextDocuments`, `WritableFileSystemProvider`, `LanguageClientTextShadow`, `SelfSaveRegistry` (the server's own writes, so the watched-files echo can be suppressed) |
+| `documents/` | `.` | Model-coordination: `AstDocumentManager` (multi-client lifecycle), `HydraniumTextDocuments`, `LanguageClientTextShadow` |
 | `launcher/` | `.` | server / integrated-server lifecycle handles |
 | `util/` | `.` | shared primitives (`Registry`, `environment.ts` capability accessors) |
 | `lsp/` | `./lsp` | the LSP head — `HydraniumCompletionProvider` and `AbstractHydraniumSemanticTokenProvider` (language module), `HydraniumDocumentUpdateHandler` (shared module: Langium declares that slot on the shared tier), `lspLatencyOptions` (opt-in per-method timing, handed to `createConnection` as its options so it sits on the dispatch path every handler crosses), plus a re-export of `startLanguageServer` |
@@ -65,7 +65,7 @@ is the enumeration, and it also shows the `./lib/*` twin each one carries. The
 | `config/` | settings / config surface | `hydranium-observability` |
 | `diagnostics/` | logger/tracer naming (`LogNameOptions`), log preamble | `hydranium-observability` |
 | `documentation/` | `HydraniumCommentProvider` — read-side CST rehydration, so a hover/completion doc comment resolves from a shed `$cstNode` | `hydranium-grammar-ast` |
-| `workspace/` | workspace manager, synthetic-node + virtual-document helpers, document-URI policy, index manager, workspace lock, the `LangiumDocumentFactory` override | `hydranium-grammar-ast` |
+| `workspace/` | `WritableFileSystemProvider` and its portable implementations, `SelfSaveRegistry` (the server's own writes, so the watched-files echo can be suppressed), workspace manager, synthetic-node + virtual-document helpers, document-URI policy, index manager, workspace lock, the `LangiumDocumentFactory` override | `hydranium-grammar-ast` |
 
 ### How it wires
 
