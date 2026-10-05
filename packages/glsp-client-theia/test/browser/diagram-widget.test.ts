@@ -42,6 +42,14 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
       protected async initializeDiagram(): Promise<void> {
          this.initializeDiagramCalls++;
       }
+      /** Upstream's restore, which animates. */
+      protected async setViewportData(viewportData: { elementId: string; viewportData: unknown }): Promise<void> {
+         const { SetViewportAction } = await import('@eclipse-glsp/client');
+         const dispatcher = this.actionDispatcher as unknown as { dispatchOnceModelInitialized(action: unknown): void };
+         dispatcher.dispatchOnceModelInitialized(
+            SetViewportAction.create(viewportData.elementId, viewportData.viewportData as never, { animate: true })
+         );
+      }
       dispose(): void {
          this.disposeCalls++;
       }
@@ -59,6 +67,7 @@ vi.mock('../../src/browser/glsp-saveable', () => ({
    }
 }));
 
+import { GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Message } from '@theia/core/lib/browser';
 import { DIAGRAM_LOADING_CLASS, DIAGRAM_LOADING_FAILED_CLASS, HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget';
@@ -130,6 +139,10 @@ class TestableWidget extends HydraniumGlspDiagramWidget {
       this.retryLoad();
    }
 
+   restoreViewport(viewportData: Parameters<HydraniumGlspDiagramWidget['setViewportData']>[0]): Promise<void> {
+      return this.setViewportData(viewportData);
+   }
+
    protected override createRetryButton(): HTMLElement {
       return { kind: 'retry button' } as unknown as HTMLElement;
    }
@@ -185,6 +198,19 @@ describe('HydraniumGlspDiagramWidget', () => {
       // GLSP's own one listens to the dirty state until disposed.
       expect(glspSaveable.dispose).toHaveBeenCalled();
       expect(widget.saveable).toMatchObject({ actionDispatcher: { kind: 'dispatcher' }, editorContextService: { kind: 'editor context' } });
+   });
+
+   it('restores a stored viewport without animating it', async () => {
+      const dispatcher = Object.assign(Object.create(GLSPActionDispatcher.prototype) as GLSPActionDispatcher, {
+         dispatchOnceModelInitialized: vi.fn()
+      });
+      (widget as unknown as { actionDispatcher: GLSPActionDispatcher }).actionDispatcher = dispatcher;
+
+      await widget.restoreViewport({ elementId: 'graph', viewportData: { scroll: { x: 10, y: 20 }, zoom: 2 } });
+
+      expect(dispatcher.dispatchOnceModelInitialized).toHaveBeenCalledWith(
+         SetViewportAction.create('graph', { scroll: { x: 10, y: 20 }, zoom: 2 }, { animate: false })
+      );
    });
 
    it('covers the canvas on attach while the load is in flight', () => {

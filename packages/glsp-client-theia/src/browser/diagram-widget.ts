@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DiagramLoader, EditorContextService } from '@eclipse-glsp/client';
+import { DiagramLoader, EditorContextService, GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
 import { GLSPDiagramWidget, type GLSPDiagramWidgetOptions } from '@eclipse-glsp/theia-integration';
 // Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
@@ -91,6 +91,19 @@ export class HydraniumGlspDiagramWidget extends GLSPDiagramWidget {
    override dispose(): void {
       this.hideLoadingOverlay();
       super.dispose();
+   }
+
+   /**
+    * GLSP's restore with `animate: false`; compare the two on a GLSP upgrade.
+    * An animated restore holds back every later command, so a Delete right
+    * after a select-all typed as the diagram opens finds nothing selected.
+    */
+   protected override async setViewportData(viewportData: Parameters<GLSPDiagramWidget['setViewportData']>[0]): Promise<void> {
+      if (this.actionDispatcher instanceof GLSPActionDispatcher) {
+         this.actionDispatcher.dispatchOnceModelInitialized(
+            SetViewportAction.create(viewportData.elementId, viewportData.viewportData, { animate: false })
+         );
+      }
    }
 
    /**
