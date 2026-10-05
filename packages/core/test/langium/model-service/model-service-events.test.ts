@@ -114,9 +114,15 @@ describe('ModelService onModelUpdated', () => {
       models.onModelUpdated(() => build.cancel());
       models.onModelUpdated(event => seen.push(event.document.uri));
 
+      const delivered = vi.fn();
+      documentBuilder.onDocumentPhaseDelivered(DocumentState.Validated, delivered);
+
       documentBuilder.firePhase(DocumentState.Validated, documentAt(URI_A), build.token);
 
       expect(seen).toEqual([]);
+      // Left undelivered, so the next build still reports the skipped
+      // subscriber the author's change rather than a rebuild.
+      expect(delivered).not.toHaveBeenCalled();
    });
 
    it('delivers nothing for a cancelled build, and nothing after the subscription is disposed', () => {

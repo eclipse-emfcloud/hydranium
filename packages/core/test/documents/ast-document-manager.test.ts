@@ -193,6 +193,7 @@ describe('AstDocumentManager attributeUpdate', () => {
       const { manager, textDocuments, builder } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
       const document = documentAt(URI_A, 1);
+      builder.onDocumentPhase(DocumentState.Validated, () => undefined);
 
       builder.firePhase(DocumentState.Validated, document, CancellationToken.Cancelled);
 

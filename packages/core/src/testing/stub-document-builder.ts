@@ -13,6 +13,7 @@ import {
    type DocumentPhaseListener,
    type DocumentState,
    type DocumentUpdateListener,
+   isOperationCancelled,
    type LangiumDocument,
    type URI,
    type WorkspaceLock
@@ -90,7 +91,7 @@ export interface StubDocumentBuilder
    readonly waitUntilCalls: ReadonlyArray<RecordedBuilderCall<[DocumentState, URI | undefined]>>;
    /**
     * Synchronously fire the phase listener(s) registered for `state` with
-    * `document`, then, unless `cancelToken` is cancelled, the
+    * `document`, then, unless a listener was cancelled, the
     * `onDocumentPhaseDelivered` listeners. `cancelToken` defaults to a
     * non-cancelled token; pass a cancelled token to simulate a build preempted
     * by a concurrent write lock.
@@ -217,10 +218,25 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
          // may stand in for a write that moves the version on. Read only when
          // someone is told, since many fakes carry no text document.
          const version = delivered.length > 0 ? document.textDocument.version : 0;
+         // As the real builder: a listener reached on a cancelled token, or
+         // throwing OperationCancelled, counts as cancelled and withholds the
+         // delivered listeners.
+         let cancelledListeners = 0;
          for (const listener of listeners) {
-            reraise(listener(document, token));
+            if (token.isCancellationRequested) {
+               cancelledListeners++;
+               continue;
+            }
+            try {
+               reraise(listener(document, token));
+            } catch (err: unknown) {
+               if (!isOperationCancelled(err)) {
+                  throw err;
+               }
+               cancelledListeners++;
+            }
          }
-         if (!token.isCancellationRequested) {
+         if (cancelledListeners === 0) {
             for (const listener of delivered) {
                listener(document, version);
             }

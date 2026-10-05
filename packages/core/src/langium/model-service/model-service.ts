@@ -1236,9 +1236,10 @@ export class DefaultModelService<
          phase
       });
       for (const { listener } of matching) {
-         // A write queued by an earlier listener cancels this build.
+         // A write queued by an earlier listener cancels this build. Thrown,
+         // so the builder leaves the version undelivered for those skipped.
          if (cancelToken.isCancellationRequested) {
-            return;
+            throw OperationCancelled;
          }
          try {
             listener(event);
