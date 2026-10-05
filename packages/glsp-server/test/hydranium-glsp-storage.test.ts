@@ -210,6 +210,7 @@ function makeSessionModelService(
    const calls = options.calls ?? [];
    return {
       snapshot: () => undefined,
+      getSession: () => undefined,
       getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri, parseResult: { value: { $type: 'Root' } } } : undefined),
       createSession(label: string, clientId: string): ModelClientSession<AstNode> {
          calls.push(`createSession ${label} ${clientId}`);
@@ -1321,8 +1322,7 @@ describe('HydraniumGlspStorage', () => {
          const { storage } = createStorage(
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({
-               model: { ModelService: makeSessionModelService({ refuse: true }) },
-               workspace: { TextDocuments: { onDidCloseSession: () => ({ dispose() {} }) } }
+               model: { ModelService: makeSessionModelService({ refuse: true }) }
             })
          );
          const dispatch = vi.fn(() => Promise.resolve());

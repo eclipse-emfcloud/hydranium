@@ -895,10 +895,12 @@ export class DefaultModelService<
       this.sessionCloseListener ??= textDocuments.onDidCloseSession(event => {
          // Also reached when the store ends a session directly; disposing the
          // handle makes its later calls fail rather than write under an id
-         // this service no longer treats as a session.
-         this.sessions.get(event.clientId)?.dispose(event.cause);
+         // this service no longer treats as a session. Forgotten first: a
+         // dispose listener may start a replacement under the same id.
+         const ended = this.sessions.get(event.clientId);
          this.sessions.delete(event.clientId);
          this.resumeTokens.delete(event.clientId);
+         ended?.dispose(event.cause);
       });
       let session: ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
       try {
@@ -1234,6 +1236,10 @@ export class DefaultModelService<
          phase
       });
       for (const { listener } of matching) {
+         // A write queued by an earlier listener cancels this build.
+         if (cancelToken.isCancellationRequested) {
+            return;
+         }
          try {
             listener(event);
          } catch (err: unknown) {

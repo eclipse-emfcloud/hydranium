@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { CancellationToken } from 'vscode-languageserver';
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { DuplicateClientIdError } from '../../../src/documents/client-session-errors.js';
 import { type SessionEndCause } from '../../../src/documents/client-session-registry.js';
@@ -105,6 +105,18 @@ describe('ModelService onModelUpdated', () => {
       documentBuilder.firePhase(DocumentState.Validated, documentAt(URI_A));
 
       expect(seen).toEqual([URI_A]);
+   });
+
+   it('stops delivering once an earlier subscriber cancels the build', () => {
+      const { models, documentBuilder } = harness();
+      const build = new CancellationTokenSource();
+      const seen: string[] = [];
+      models.onModelUpdated(() => build.cancel());
+      models.onModelUpdated(event => seen.push(event.document.uri));
+
+      documentBuilder.firePhase(DocumentState.Validated, documentAt(URI_A), build.token);
+
+      expect(seen).toEqual([]);
    });
 
    it('delivers nothing for a cancelled build, and nothing after the subscription is disposed', () => {
@@ -220,6 +232,20 @@ describe('ModelService session takeover', () => {
       textDocuments.closeSession('client', 'lost');
 
       expect(causes).toEqual(['lost']);
+   });
+
+   it('keeps a replacement started from the ended session dispose listener', () => {
+      const { models, textDocuments } = harness();
+      const session = models.createSession('test', 'client', { resumeToken: 'token' });
+      let replacement: ReturnType<typeof models.createSession> | undefined;
+      session.onDidDispose(() => {
+         replacement = models.createSession('test', 'client', { resumeToken: 'next' });
+      });
+
+      textDocuments.closeSession('client', 'lost');
+
+      expect(models.getSession('client')).toBe(replacement);
+      expect(models.createSession('test', 'client', { resumeToken: 'next' })).not.toBe(replacement);
    });
 
    it('reports the cause a session was disposed with, once', () => {

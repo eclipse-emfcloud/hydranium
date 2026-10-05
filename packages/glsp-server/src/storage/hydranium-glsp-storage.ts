@@ -396,13 +396,11 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
             resolve();
          };
          subscriptions.push(this.sharedServices.Clock.setTimer(done, timeoutMs));
-         subscriptions.push(
-            this.sharedServices.workspace.TextDocuments.onDidCloseSession(event => {
-               if (event.clientId === clientId) {
-                  done();
-               }
-            })
-         );
+         // A holder this service did not start is waited out by the timer.
+         const holder = this.sharedServices.model.ModelService.getSession(clientId);
+         if (holder) {
+            subscriptions.push(holder.onDidDispose(done));
+         }
       });
    }
 
