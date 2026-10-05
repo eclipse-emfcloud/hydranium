@@ -25,9 +25,9 @@
  * what is pinned.
  */
 
-import { describe, expect, it } from 'vitest';
-import { DocumentState, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
-import { CancellationToken } from 'vscode-languageserver';
+import { describe, expect, it, vi } from 'vitest';
+import { DocumentState, OperationCancelled, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import { makeFakeAstNode, makeFakeDocument, makeStubDocumentBuilder, type StubDocumentBuilder } from '../../src/testing/index.js';
 
 const URI_ONE = URI.parse('file:///a.x');
@@ -162,13 +162,41 @@ describe('makeStubDocumentBuilder — phase and update dispatch', () => {
 
    it('passes a non-cancelled token by default and the caller token when given', () => {
       const builder = makeStubDocumentBuilder();
-      const cancelled: boolean[] = [];
-      builder.onDocumentPhase(DocumentState.Validated, (_doc, token) => void cancelled.push(token.isCancellationRequested));
+      const tokens: CancellationToken[] = [];
+      builder.onDocumentPhase(DocumentState.Validated, (_doc, token) => void tokens.push(token));
+      const caller = new CancellationTokenSource().token;
 
       builder.firePhase(DocumentState.Validated, document(URI_ONE));
+      builder.firePhase(DocumentState.Validated, document(URI_ONE), caller);
+
+      expect(tokens.map(token => token.isCancellationRequested)).toEqual([false, false]);
+      expect(tokens[1]).toBe(caller);
+   });
+
+   it('skips the listeners on a cancelled token, and then withholds delivery, as the real builder does', () => {
+      const builder = makeStubDocumentBuilder();
+      const listener = vi.fn();
+      const delivered = vi.fn();
+      builder.onDocumentPhase(DocumentState.Validated, listener);
+      builder.onDocumentPhaseDelivered(DocumentState.Validated, delivered);
+
       builder.firePhase(DocumentState.Validated, document(URI_ONE), CancellationToken.Cancelled);
 
-      expect(cancelled).toEqual([false, true]);
+      expect(listener).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+   });
+
+   it('withholds delivery when a listener throws OperationCancelled', () => {
+      const builder = makeStubDocumentBuilder();
+      const delivered = vi.fn();
+      builder.onDocumentPhase(DocumentState.Validated, () => {
+         throw OperationCancelled;
+      });
+      builder.onDocumentPhaseDelivered(DocumentState.Validated, delivered);
+
+      builder.firePhase(DocumentState.Validated, document(URI_ONE));
+
+      expect(delivered).not.toHaveBeenCalled();
    });
 
    it('stops firing a disposed phase listener while keeping its neighbours', () => {

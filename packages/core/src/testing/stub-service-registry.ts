@@ -29,7 +29,7 @@ export interface StubLanguageDescriptor {
     * AST `$type`s this language's grammar produces. Synthesised into a minimal
     * `Grammar` — one entry-less parser rule per type — which is exactly what
     * `collectProducibleTypes` reads, so type→language routing
-    * (`buildLanguageTypeIndex`, `DataServer.resolveReferenceLanguage`) resolves
+    * (`buildLanguageTypeIndex`, `ExtendedServiceRegistry.getLanguageFor`) resolves
     * against this stub the same way it does against generated grammars.
     *
     * Entry-less on purpose: `reachableParserRules` falls back to every parser

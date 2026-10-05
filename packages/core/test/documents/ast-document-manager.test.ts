@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type CanonicalUri } from '@hydranium/protocol';
+import { type CanonicalUri, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
@@ -17,6 +17,7 @@ import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/clien
 import { type FileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
+import { DefaultModelService } from '../../src/langium/model-service/model-service.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { CancellationToken } from 'vscode-languageserver';
 import { makeFakeAstNode, makeFakeDocument, makeTestServices } from '../../src/testing/index.js';
@@ -30,7 +31,8 @@ const URI_A = 'file:///A.fake';
 const URI_B = 'file:///B.fake';
 
 /**
- * Wire a REAL {@link AstDocumentManager} over a REAL {@link HydraniumTextDocuments}.
+ * Wire a REAL {@link AstDocumentManager} over a REAL {@link HydraniumTextDocuments},
+ * with a {@link DefaultModelService} over both for the events.
  *
  * The bundled stub `HydraniumTextDocuments` doesn't implement `onDidOpen`, which
  * the real `AstDocumentManager` constructor subscribes to — so we swap a real
@@ -41,6 +43,7 @@ const URI_B = 'file:///B.fake';
  */
 function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; managerOptions?: AstDocumentManagerOptions } = {}): {
    manager: DefaultAstDocumentManager<FakeRoot>;
+   models: DefaultModelService<FakeRoot>;
    textDocuments: HydraniumTextDocuments;
    builder: ReturnType<typeof makeTestServices<FakeRoot>>['documentBuilder'];
    sync: DefaultVersionSyncService;
@@ -62,8 +65,10 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
    const sync = new DefaultVersionSyncService(services);
    services.workspace.VersionSyncService = sync;
    const manager = new DefaultAstDocumentManager<FakeRoot>(services, opts.managerOptions);
+   services.workspace.AstDocumentManager = manager;
    return {
       manager,
+      models: new DefaultModelService<FakeRoot>(services),
       textDocuments,
       builder: bundle.documentBuilder,
       sync,
@@ -89,19 +94,21 @@ function open(textDocuments: HydraniumTextDocuments, uri: string, version: numbe
    textDocuments.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version, text: '' } }, clientId);
 }
 
-describe('AstDocumentManager onUpdate', () => {
+describe('ModelService onModelUpdated over the real manager', () => {
    it('fires once with the rebuilt root and the attribution', () => {
-      const { manager, textDocuments, builder } = makeManagerHarness();
+      const { textDocuments, builder, models } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
 
       const events: Array<{ name: string; sourceClientId: string; reason: string; causedBy?: string }> = [];
-      manager.onUpdate(URI_A, event =>
-         events.push({
-            name: event.document.root.name,
-            sourceClientId: event.sourceClientId,
-            reason: event.reason,
-            causedBy: event.causedBy
-         })
+      models.onModelUpdated(
+         event =>
+            events.push({
+               name: event.document.root.name,
+               sourceClientId: event.sourceClientId,
+               reason: event.reason,
+               causedBy: event.causedBy
+            }),
+         { uri: URI_A }
       );
 
       const doc = makeFakeDocument<FakeRoot>(URI_A, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'rebuilt' }), { version: 1 });
@@ -111,10 +118,10 @@ describe('AstDocumentManager onUpdate', () => {
    });
 
    it('reports reason "changed" for a document no client opened when the URI is in the most recent changed set', () => {
-      const { manager, builder } = makeManagerHarness();
+      const { builder, models } = makeManagerHarness();
 
       const reasons: string[] = [];
-      manager.onUpdate(URI_A, event => reasons.push(event.reason));
+      models.onModelUpdated(event => reasons.push(event.reason), { uri: URI_A });
 
       builder.fireOnUpdate([URI.parse(URI_A)], []);
       builder.firePhase(
@@ -131,10 +138,10 @@ describe('AstDocumentManager onUpdate', () => {
    // unreachability is pinned against a real builder instead.
 
    it('URI-gates: a phase fire for a different URI does not invoke the listener', () => {
-      const { manager, builder } = makeManagerHarness();
+      const { builder, models } = makeManagerHarness();
 
       const reasons: string[] = [];
-      manager.onUpdate(URI_A, event => reasons.push(event.reason));
+      models.onModelUpdated(event => reasons.push(event.reason), { uri: URI_A });
 
       builder.firePhase(
          DocumentState.Validated,
@@ -145,10 +152,10 @@ describe('AstDocumentManager onUpdate', () => {
    });
 
    it('falls back to UNKNOWN_CLIENT_ID for a change when no author history exists for the version', () => {
-      const { manager, builder } = makeManagerHarness();
+      const { builder, models } = makeManagerHarness();
 
       const sources: string[] = [];
-      manager.onUpdate(URI_A, event => sources.push(`${event.reason} ${event.sourceClientId}`));
+      models.onModelUpdated(event => sources.push(`${event.reason} ${event.sourceClientId}`), { uri: URI_A });
       builder.fireOnUpdate([URI.parse(URI_A)], []);
 
       // URI_A was never opened in the real text store → no version-author history.
@@ -186,6 +193,7 @@ describe('AstDocumentManager attributeUpdate', () => {
       const { manager, textDocuments, builder } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
       const document = documentAt(URI_A, 1);
+      builder.onDocumentPhase(DocumentState.Validated, () => undefined);
 
       builder.firePhase(DocumentState.Validated, document, CancellationToken.Cancelled);
 
@@ -263,33 +271,38 @@ describe('AstDocumentManager attributeUpdate', () => {
    });
 });
 
-describe('AstDocumentManager onSave', () => {
+describe('ModelService onModelSaved over the real manager', () => {
    it('fires for the subscribed URI carrying the saving client', async () => {
-      const { manager, textDocuments } = makeManagerHarness();
+      const { textDocuments, models } = makeManagerHarness();
       // Save only fires onDidSave for a synced (opened) document.
       open(textDocuments, URI_A, 1, 'saver-1');
 
       const events: Array<{ uri: string; sourceClientId: string }> = [];
-      manager.onSave(URI_A, event => {
-         events.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
-      });
+      models.onModelSaved(
+         event => {
+            events.push({ uri: event.document.uri, sourceClientId: event.sourceClientId });
+         },
+         { uri: URI_A }
+      );
 
       textDocuments.notifyDidSaveTextDocument({ textDocument: { uri: URI_A } }, 'saver-1');
-      // onSave's listener is async (awaits getOrCreateDocument); settle the microtask queue.
       await Promise.resolve();
 
       expect(events).toEqual([{ uri: URI_A, sourceClientId: 'saver-1' }]);
    });
 
    it('does not fire for a save of a different URI', async () => {
-      const { manager, textDocuments } = makeManagerHarness();
+      const { textDocuments, models } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'saver-1');
       open(textDocuments, URI_B, 1, 'saver-1');
 
       const events: string[] = [];
-      manager.onSave(URI_A, event => {
-         events.push(event.document.uri);
-      });
+      models.onModelSaved(
+         event => {
+            events.push(event.document.uri);
+         },
+         { uri: URI_A }
+      );
 
       textDocuments.notifyDidSaveTextDocument({ textDocument: { uri: URI_B } }, 'saver-1');
       await Promise.resolve();
@@ -298,17 +311,20 @@ describe('AstDocumentManager onSave', () => {
    });
 });
 
-describe('AstDocumentManager onClientClosed', () => {
+describe('ModelService onClientClosed over the real store', () => {
    it('fires when the matching client closes the subscribed URI', () => {
-      const { manager, textDocuments } = makeManagerHarness();
+      const { textDocuments, models } = makeManagerHarness();
       // Open in two clients so closing one still delivers an onDidClose event.
       open(textDocuments, URI_A, 1, 'c1');
       open(textDocuments, URI_A, 1, 'c2');
 
       let fired = 0;
-      manager.onClientClosed(URI_A, 'c1', () => {
-         fired++;
-      });
+      models.onClientClosed(
+         () => {
+            fired++;
+         },
+         { uri: URI_A, clientId: 'c1' }
+      );
 
       textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: URI_A } }, 'c1');
 
@@ -316,14 +332,17 @@ describe('AstDocumentManager onClientClosed', () => {
    });
 
    it('does not fire for a different client closing the same URI', () => {
-      const { manager, textDocuments } = makeManagerHarness();
+      const { textDocuments, models } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'c1');
       open(textDocuments, URI_A, 1, 'c2');
 
       let fired = 0;
-      manager.onClientClosed(URI_A, 'c1', () => {
-         fired++;
-      });
+      models.onClientClosed(
+         () => {
+            fired++;
+         },
+         { uri: URI_A, clientId: 'c1' }
+      );
 
       textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: URI_A } }, 'c2');
 
@@ -333,16 +352,19 @@ describe('AstDocumentManager onClientClosed', () => {
    it('does not fire when the matching client closes a different URI', () => {
       // Kills the URI-match conjunct in onClientClosed: a close of the right
       // client but the wrong URI must not invoke the listener.
-      const { manager, textDocuments } = makeManagerHarness();
+      const { textDocuments, models } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'c1');
       open(textDocuments, URI_A, 1, 'c2');
       open(textDocuments, URI_B, 1, 'c1');
       open(textDocuments, URI_B, 1, 'c2');
 
       let fired = 0;
-      manager.onClientClosed(URI_A, 'c1', () => {
-         fired++;
-      });
+      models.onClientClosed(
+         () => {
+            fired++;
+         },
+         { uri: URI_A, clientId: 'c1' }
+      );
 
       textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: URI_B } }, 'c1');
 
@@ -370,12 +392,12 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
       }
    };
 
-   it('onUpdate fires for a subscriber on the symlink URI when the build reports the real URI', () => {
-      const { manager, textDocuments, builder } = makeManagerHarness({ documentUriPolicy: linkAware });
+   it('onModelUpdated fires for a subscriber on the symlink URI when the build reports the real URI', () => {
+      const { textDocuments, builder, models } = makeManagerHarness({ documentUriPolicy: linkAware });
       open(textDocuments, REAL_URI, 1, 'author-1');
 
       const reasons: string[] = [];
-      manager.onUpdate(LINK_URI, event => reasons.push(event.reason));
+      models.onModelUpdated(event => reasons.push(event.reason), { uri: LINK_URI });
 
       builder.firePhase(
          DocumentState.Validated,
@@ -385,12 +407,12 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
       expect(reasons).toEqual(['changed']);
    });
 
-   it('onUpdate emits the document (canonical) URI, never the URI the subscriber armed with', () => {
-      const { manager, textDocuments, builder } = makeManagerHarness({ documentUriPolicy: linkAware });
+   it('onModelUpdated emits the document (canonical) URI, never the URI the subscriber armed with', () => {
+      const { textDocuments, builder, models } = makeManagerHarness({ documentUriPolicy: linkAware });
       open(textDocuments, REAL_URI, 1, 'author-1');
 
       const uris: string[] = [];
-      manager.onUpdate(LINK_URI, event => uris.push(event.document.uri));
+      models.onModelUpdated(event => uris.push(event.document.uri), { uri: LINK_URI });
 
       builder.firePhase(
          DocumentState.Validated,
@@ -403,15 +425,18 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
       expect(uris).toEqual([REAL_URI]);
    });
 
-   it('onSave fires for a subscriber on the symlink URI when the real URI is saved', async () => {
-      const { manager, textDocuments, documents } = makeManagerHarness({ documentUriPolicy: linkAware });
+   it('onModelSaved fires for a subscriber on the symlink URI when the real URI is saved', async () => {
+      const { textDocuments, documents, models } = makeManagerHarness({ documentUriPolicy: linkAware });
       documents.set(REAL_URI, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }));
       open(textDocuments, REAL_URI, 1, 'saver-1');
 
       const events: string[] = [];
-      manager.onSave(LINK_URI, event => {
-         events.push(event.document.uri);
-      });
+      models.onModelSaved(
+         event => {
+            events.push(event.document.uri);
+         },
+         { uri: LINK_URI }
+      );
 
       textDocuments.notifyDidSaveTextDocument({ textDocument: { uri: REAL_URI } }, 'saver-1');
       await Promise.resolve();
@@ -420,14 +445,17 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
    });
 
    it('onClientClosed fires for a subscriber on the symlink URI when the real URI is closed', () => {
-      const { manager, textDocuments } = makeManagerHarness({ documentUriPolicy: linkAware });
+      const { textDocuments, models } = makeManagerHarness({ documentUriPolicy: linkAware });
       open(textDocuments, REAL_URI, 1, 'c1');
       open(textDocuments, REAL_URI, 1, 'c2');
 
       let fired = 0;
-      manager.onClientClosed(LINK_URI, 'c1', () => {
-         fired++;
-      });
+      models.onClientClosed(
+         () => {
+            fired++;
+         },
+         { uri: LINK_URI, clientId: 'c1' }
+      );
 
       textDocuments.notifyDidCloseTextDocument({ textDocument: { uri: REAL_URI } }, 'c1');
 
@@ -452,42 +480,41 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
    });
 });
 
-describe('AstDocumentManager onSave URI gating', () => {
-   it('does not fire for the subscribed URI when no Langium document exists for it', async () => {
-      // Kills the `this.langiumDocs.hasDocument(documentURI)` conjunct in
-      // onSave: URI_B is opened in the text store but never registered in langiumDocs,
-      // so the save listener must NOT fire even though the URI matches.
-      const { manager, textDocuments } = makeManagerHarness();
+describe('ModelService onModelSaved URI gating', () => {
+   it('fires for a document saved before its first build, as an empty envelope', () => {
+      // URI_B is opened in the text store but never registered in langiumDocs:
+      // a document created and saved before it was built. Its watchers are
+      // told of the save all the same.
+      const { textDocuments, models } = makeManagerHarness();
       open(textDocuments, URI_B, 1, 'saver-1');
 
-      const events: string[] = [];
-      manager.onSave(URI_B, event => {
-         events.push(event.document.uri);
-      });
+      const events: Array<{ uri: string; version: number; sourceClientId: string }> = [];
+      models.onModelSaved(
+         event => {
+            events.push({ uri: event.document.uri, version: event.document.version, sourceClientId: event.sourceClientId });
+         },
+         { uri: URI_B }
+      );
 
       textDocuments.notifyDidSaveTextDocument({ textDocument: { uri: URI_B } }, 'saver-1');
-      await Promise.resolve();
 
-      expect(events).toEqual([]);
+      expect(events).toEqual([{ uri: URI_B, version: UNRECORDED_VERSION, sourceClientId: 'saver-1' }]);
    });
 
    it('does not fire when a DIFFERENT URI is saved, even with a Langium document present', async () => {
-      // Kills onSave's URI-match conjunct in two ways
-      // that the hasDocument-gating test could not (it left URI_B out of
-      // langiumDocs, so hasDocument masked the uri-match conjunct):
-      //   - ConditionalExpression `true && ...`: would fire for the wrong URI.
-      //   - LogicalOperator `uri === uri || rest`: would fire whenever `rest`
-      //     (documentURI !== undefined && hasDocument) holds for the saved URI.
-      // Here URI_B IS registered in langiumDocs, so the only thing stopping the
-      // fire for a subscriber on URI_A is the uri-match conjunct itself.
-      const { manager, textDocuments, documents } = makeManagerHarness();
+      // URI_B is registered in langiumDocs, so the only thing stopping the fire
+      // for a subscriber on URI_A is the URI match itself.
+      const { textDocuments, documents, models } = makeManagerHarness();
       documents.set(URI_B, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'b' }));
       open(textDocuments, URI_B, 1, 'saver-1');
 
       const events: string[] = [];
-      manager.onSave(URI_A, event => {
-         events.push(event.document.uri);
-      });
+      models.onModelSaved(
+         event => {
+            events.push(event.document.uri);
+         },
+         { uri: URI_A }
+      );
 
       textDocuments.notifyDidSaveTextDocument({ textDocument: { uri: URI_B } }, 'saver-1');
       await Promise.resolve();
@@ -641,18 +668,21 @@ describe('AstDocumentManager save', () => {
       await expect(manager.save(URI_B, 'c1')).rejects.toThrow(/hasn't been opened for saving/);
    });
 
-   it('writes the document content to the file system and fires onSave', async () => {
+   it('writes the document content to the file system and announces the save', async () => {
       // Kills save()'s writeFile arrow (as `() => undefined`) and its
       // notifyDidSaveTextDocument object literal: save must persist the
       // text AND notify save subscribers.
-      // The harness already seeds URI_A in langiumDocs, so onSave's hasDocument gate passes.
-      const { manager, fileSystem } = makeManagerHarness();
+      // The harness already seeds URI_A in langiumDocs, so onModelSaved finds a document to report.
+      const { manager, fileSystem, models } = makeManagerHarness();
       await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'persist-me\n' });
 
       const saved: string[] = [];
-      manager.onSave(URI_A, event => {
-         saved.push(event.document.uri);
-      });
+      models.onModelSaved(
+         event => {
+            saved.push(event.document.uri);
+         },
+         { uri: URI_A }
+      );
 
       await manager.save(URI_A, 'c1');
       await Promise.resolve();
@@ -664,14 +694,17 @@ describe('AstDocumentManager save', () => {
    it('skips the write when the file already holds the stored text, and still announces the save', async () => {
       // Kills the `matchesDisk` guard in both directions at once: dropping it
       // writes, and widening it to guard the notification too empties `saved`.
-      const { manager, fileSystem } = makeManagerHarness();
+      const { manager, fileSystem, models } = makeManagerHarness();
       await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'already-there\n' });
       (fileSystem as unknown as { readFile: (uri: URI) => Promise<string> }).readFile = async () => 'already-there\n';
 
       const saved: string[] = [];
-      manager.onSave(URI_A, event => {
-         saved.push(event.document.uri);
-      });
+      models.onModelSaved(
+         event => {
+            saved.push(event.document.uri);
+         },
+         { uri: URI_A }
+      );
 
       await manager.save(URI_A, 'c1');
       await Promise.resolve();
@@ -944,13 +977,16 @@ describe('AstDocumentManager disk baseline', () => {
    });
 
    it('takes the written text as the baseline before the save is announced', async () => {
-      const { manager, textDocuments, fileSystem } = makeManagerHarness();
+      const { manager, textDocuments, fileSystem, models } = makeManagerHarness();
       backWithDisk(fileSystem, new Map());
       await openForSave(manager, URI_A, 'created\n');
       const dirtyWhenAnnounced: boolean[] = [];
-      manager.onSave(URI_A, () => {
-         dirtyWhenAnnounced.push(textDocuments.isDirty(URI_A));
-      });
+      models.onModelSaved(
+         () => {
+            dirtyWhenAnnounced.push(textDocuments.isDirty(URI_A));
+         },
+         { uri: URI_A }
+      );
 
       await manager.save(URI_A, 'c1');
       await tick(0);

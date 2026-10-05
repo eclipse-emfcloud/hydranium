@@ -13,15 +13,18 @@ import {
    GLSPServerError,
    RejectAction,
    type RequestAction,
-   type ResponseAction
+   type ResponseAction,
+   SourceModelStorage
 } from '@eclipse-glsp/server';
 import { RequestSaveModelAction } from '@hydranium/protocol';
 import { injectable } from 'inversify';
+import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 
 /**
  * The GLSP server the framework binds in place of upstream's
  * {@link DefaultGLSPServer}, so a failed REQUEST reaches its reader with the
- * text the thrower wrote.
+ * text the thrower wrote, and a diagram whose connection ends keeps its unsaved
+ * text for the revert grace (see {@link shutdown}).
  *
  * **What breaks without it.** Upstream projects a failing request's detail as
  * `error.cause?.toString()` whenever the error is a {@link GLSPServerError},
@@ -42,10 +45,29 @@ import { injectable } from 'inversify';
  * An adopter who binds their own GLSP server extends this class rather than
  * {@link DefaultGLSPServer}: the framework's server-container override keeps a
  * server that extends this one and replaces any other, so a subclass of
- * upstream's server is discarded.
+ * upstream's server is discarded, and with it both behaviours.
  */
 @injectable()
 export class HydraniumGlspServer extends DefaultGLSPServer {
+   /**
+    * End each diagram's client session as lost rather than closed, before
+    * upstream disposes the sessions, so its unsaved text waits out the revert
+    * grace for the client to reconnect. A shutdown is how the client's
+    * connection ending reaches the server; a client that stops on purpose
+    * shuts the server down the same way, and its diagrams are held as well.
+    */
+   override shutdown(): void {
+      for (const session of this.clientSessions.values()) {
+         const storage = session.container.isBound(SourceModelStorage) ? session.container.get(SourceModelStorage) : undefined;
+         if (storage instanceof HydraniumGlspStorage) {
+            storage.dispose('lost');
+         } else if (storage) {
+            this.logger.debug(`Shutdown leaves ending ${session.id} to its storage, which is not a HydraniumGlspStorage`);
+         }
+      }
+      super.shutdown();
+   }
+
    /**
     * The detail projected into the client's {@link RejectAction} and the server
     * log when a request fails.

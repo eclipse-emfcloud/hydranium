@@ -265,11 +265,11 @@ rather than failing the test, and Vitest does not report it. Read the log.
      per-extension tally); the caller supplies only `emit`.
 
    And one trap worth knowing: on a `makeTestServices` tree,
-   `AstDocumentManager.onUpdate` never fires by itself, because the stub builder
+   `ModelService.onModelUpdated` never fires by itself, because the stub builder
    runs no phases. Drive it with the bundle's
-   `astDocumentManager.emitUpdate(uri, event)` and check
-   `updateSubscriptions(uri)` before believing an empty event list — otherwise a
-   negative assertion passes because nothing was ever wired up.
+   `documentBuilder.firePhase(state, document)`, and prove one delivery before
+   believing an empty event list — otherwise a negative assertion passes
+   because nothing was ever wired up.
 3. **Red first.** Write the assertion, watch it fail for the right reason, then
    make it pass. A characterization test that comes out **red against unmodified
    code is a latent bug** — investigate it, do not adjust the test to match the

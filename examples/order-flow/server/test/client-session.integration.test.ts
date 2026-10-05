@@ -167,7 +167,7 @@ describe('ClientSession writes', () => {
       const models = harness.shared.model.ModelService;
       const session = models.createSession('form');
       const savedBy: string[] = [];
-      models.onModelSaved(uri, event => savedBy.push(event.sourceClientId));
+      models.onModelSaved(event => savedBy.push(event.sourceClientId), { uri });
 
       await session.open(uri);
       await session.save({ uri, model: EDITED, baseVersion: 'any' });

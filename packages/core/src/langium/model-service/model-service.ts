@@ -23,8 +23,8 @@ import { type AstNode, DocumentState, type LangiumDocument, OperationCancelled, 
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
-import { CancellationToken, type Disposable } from 'vscode-languageserver';
-import { AstDocument, type AstDocumentSavedEvent, type AstDocumentUpdatedEvent } from '../../documents/ast-document-manager.js';
+import { CancellationToken, Disposable } from 'vscode-languageserver';
+import { AstDocument, type AstDocumentSavedEvent } from '../../documents/ast-document-manager.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
@@ -33,6 +33,15 @@ import { LANGUAGE_CLIENT_ID } from '../../documents/client-ids.js';
 import { type OpenOptions } from '../../documents/client-session-registry.js';
 import { type ServerSharedServices } from '../module.js';
 import { type ClientSession } from './client-session.js';
+import {
+   type ModelDeletedEvent,
+   type ModelDirtyChangedEvent,
+   type ModelEventFilter,
+   type ModelPhaseFilter,
+   type ModelReleasedEvent,
+   type ModelsBuiltEvent,
+   type ModelUpdatedEvent
+} from './model-events.js';
 
 /**
  * The undo-stack entry for a server-authored write pushed to the editor.
@@ -86,6 +95,12 @@ export interface ModelServiceOptions extends LogNameOptions {
     * flipped without a restart.
     */
    readonly allowReentrantBuilds?: MaybeObservableValue<boolean>;
+}
+
+/** One {@link ModelService.onModelUpdated} subscription; `uri` is canonical, absent for every document. */
+export interface ModelUpdateSubscriber<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> {
+   readonly uri?: CanonicalUri;
+   readonly listener: (event: ModelUpdatedEvent<TAst, TDiagnostic>) => void;
 }
 
 /** Options for a {@link DefaultModelService} wait on one document. */
@@ -157,12 +172,9 @@ export interface SyncedWaitOptions {
  * the injected `TransferEncoder` — symmetric with the
  * `getModelDocument` envelope path.
  *
- * **Subscriptions** ({@link onModelUpdated} / {@link onModelSaved} /
- * {@link onClientClosed}) are thin pass-throughs over
- * `DocumentBuilder.onDocumentPhase` and
- * `HydraniumTextDocuments.onDidSave` / `onDidClose`. Filtering
- * by URI happens here so consumers can subscribe per-document without
- * implementing the URI gate at each callsite.
+ * **Subscriptions** (`on*`) are how a head follows documents; it subscribes
+ * here rather than to the builder or the text store. Each takes a filter, and
+ * one without a `uri` hears every document.
  *
  * **Two families.** `waitFor*` only waits: it rejects for a URI with no
  * document, and for a root behind the store's text it waits for whatever
@@ -256,9 +268,28 @@ export interface ModelService<
    modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string>;
    getDocument(uri: string): LangiumDocument | undefined;
 
-   onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable;
-   onModelSaved(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void): Disposable;
-   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable;
+   /**
+    * Fires as a document reaches the filter's phase, `Validated` by default.
+    * Listeners run inside the build, so one that throws is logged and the
+    * others still run.
+    */
+   onModelUpdated(listener: (event: ModelUpdatedEvent<TAst, TDiagnostic>) => void, filter?: ModelPhaseFilter): Disposable;
+   /**
+    * Fires once per build that reaches the phase, with every document it
+    * carried there. A listener that throws is logged, as for {@link onModelUpdated}.
+    */
+   onModelsBuilt(listener: (event: ModelsBuiltEvent) => void, filter?: Pick<ModelPhaseFilter, 'phase'>): Disposable;
+   /**
+    * Fires for every save, whichever client made it, as the store announces
+    * it. A document saved before its first build arrives as an empty envelope
+    * at `UNRECORDED_VERSION`, whose `root` is `undefined` despite its type.
+    */
+   onModelSaved(listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void, filter?: ModelEventFilter): Disposable;
+   onModelDeleted(listener: (event: ModelDeletedEvent) => void, filter?: ModelEventFilter): Disposable;
+   onDirtyChanged(listener: (event: ModelDirtyChangedEvent) => void, filter?: ModelEventFilter): Disposable;
+   onModelReleased(listener: (event: ModelReleasedEvent) => void, filter?: ModelEventFilter): Disposable;
+   /** Fires when `filter.clientId` closes `filter.uri`, its session ending included. */
+   onClientClosed(listener: () => void, filter: { readonly uri: string; readonly clientId: string }): Disposable;
 
    /**
     * Start a client session, the only way to open and write documents through
@@ -269,6 +300,12 @@ export interface ModelService<
     * held by another live session or has documents open under it as a client
     * that is not a session.
     *
+    * A `resumeToken` matching the one the live session under `clientId` was
+    * started with ends that session as lost first, so the documents it was
+    * last to hold keep their unsaved text for the new one. The token guards
+    * against taking over a session by accident, not against a peer: anyone who
+    * knows it can end the session.
+    *
     * `TOpenOptions` types the options the session's `open` takes and its
     * `openOptions` returns. The narrowing is an unchecked cast, and it holds
     * only for the caller that started the session: a holder reached through
@@ -276,7 +313,8 @@ export interface ModelService<
     */
    createSession<TOpenOptions extends OpenOptions = OpenOptions>(
       label?: string,
-      clientId?: string
+      clientId?: string,
+      options?: { readonly resumeToken?: string }
    ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
    /** The live session started under `clientId`, or `undefined` once it has ended or was never started. */
    getSession(clientId: string): ClientSession<TAst, TDiagnostic, TTransfer> | undefined;
@@ -327,6 +365,13 @@ export class DefaultModelService<
     * this service.
     */
    protected sessionCloseListener?: Disposable;
+   /** The token each live session was started with, by client id, for a takeover by {@link createSession}. */
+   protected readonly resumeTokens = new Map<string, string>();
+   /**
+    * The {@link onModelUpdated} subscribers, by phase. One builder listener per
+    * phase serves them all, kept for the life of the service.
+    */
+   protected readonly updateSubscribers = new Map<DocumentState, Set<ModelUpdateSubscriber<TAst, TDiagnostic>>>();
 
    /**
     * Workspace-level readiness gate. Resolves when the framework has
@@ -837,18 +882,25 @@ export class DefaultModelService<
 
    createSession<TOpenOptions extends OpenOptions = OpenOptions>(
       label?: string,
-      clientId?: string
+      clientId?: string,
+      options: { readonly resumeToken?: string } = {}
    ): ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions> {
       const sessionLabel = label ?? 'session';
       const id = clientId ?? `${sessionLabel}#${globalThis.crypto.randomUUID()}`;
       const textDocuments = this.services.workspace.TextDocuments;
+      if (options.resumeToken !== undefined && this.resumeTokens.get(id) === options.resumeToken) {
+         this.sessions.get(id)?.dispose('lost');
+      }
       textDocuments.registerSession(id);
       this.sessionCloseListener ??= textDocuments.onDidCloseSession(event => {
          // Also reached when the store ends a session directly; disposing the
          // handle makes its later calls fail rather than write under an id
-         // this service no longer treats as a session.
-         this.sessions.get(event.clientId)?.dispose();
+         // this service no longer treats as a session. Forgotten first: a
+         // dispose listener may start a replacement under the same id.
+         const ended = this.sessions.get(event.clientId);
          this.sessions.delete(event.clientId);
+         this.resumeTokens.delete(event.clientId);
+         ended?.dispose(event.cause);
       });
       let session: ClientSession<TAst, TDiagnostic, TTransfer, TOpenOptions>;
       try {
@@ -866,6 +918,9 @@ export class DefaultModelService<
          throw err;
       }
       this.sessions.set(id, session);
+      if (options.resumeToken !== undefined) {
+         this.resumeTokens.set(id, options.resumeToken);
+      }
       return session;
    }
 
@@ -1052,41 +1107,148 @@ export class DefaultModelService<
    }
 
    // ============================================================
-   // Subscription pass-throughs
+   // Subscriptions
    // ============================================================
 
-   /**
-    * Subscribe to AST-snapshot updates for `uri`. Fires after each
-    * rebuild that reaches the target phase. Delegates to the
-    * `HydraniumTextDocuments` — single listener registration shared with
-    * any direct `HydraniumTextDocuments.onUpdate` subscriber, so the same
-    * underlying `DocumentBuilder.onDocumentPhase` listener serves both
-    * call paths. The event's reason, source and cause are
-    * {@link AstDocumentManager.attributeUpdate}'s.
-    */
-   onModelUpdated(uri: string, listener: (event: AstDocumentUpdatedEvent<TAst, TDiagnostic>) => void): Disposable {
-      return this.services.workspace.AstDocumentManager.onUpdate(uri, listener as never);
+   onModelUpdated(listener: (event: ModelUpdatedEvent<TAst, TDiagnostic>) => void, filter: ModelPhaseFilter = {}): Disposable {
+      const phase = filter.phase ?? DocumentState.Validated;
+      let subscribers = this.updateSubscribers.get(phase);
+      if (!subscribers) {
+         const created = new Set<ModelUpdateSubscriber<TAst, TDiagnostic>>();
+         this.updateSubscribers.set(phase, created);
+         this.services.workspace.DocumentBuilder.onDocumentPhase(
+            phase,
+            labelPhaseListener(
+               (document, cancelToken) => this.deliverUpdate(phase, created, document, cancelToken),
+               'ModelService.onModelUpdated'
+            )
+         );
+         subscribers = created;
+      }
+      const subscriber = { uri: this.filterUri(filter), listener };
+      subscribers.add(subscriber);
+      return Disposable.create(() => subscribers.delete(subscriber));
+   }
+
+   onModelsBuilt(listener: (event: ModelsBuiltEvent) => void, filter: Pick<ModelPhaseFilter, 'phase'> = {}): Disposable {
+      const phase = filter.phase ?? DocumentState.Validated;
+      return this.services.workspace.DocumentBuilder.onBuildPhase(phase, (built, cancelToken) => {
+         if (cancelToken.isCancellationRequested) {
+            return;
+         }
+         try {
+            listener(Object.freeze({ uris: built.map(document => this.uriPolicy.canonicalUri(document.uri.toString())), phase }));
+         } catch (err: unknown) {
+            this.tracer.error(`onModelsBuilt listener threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+         }
+      });
+   }
+
+   onModelSaved(listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void, filter: ModelEventFilter = {}): Disposable {
+      const target = this.filterUri(filter);
+      return this.services.workspace.TextDocuments.onDidSave(event => {
+         // LangiumDocuments keys by the canonical form, the saved event by the
+         // client-facing one.
+         const uri = this.uriPolicy.canonicalUri(event.document.uri);
+         if (this.matches(target, uri)) {
+            listener({ document: this.toAstDocument(UriUtils.toUri(uri)), sourceClientId: event.clientId });
+         }
+      });
+   }
+
+   onModelDeleted(listener: (event: ModelDeletedEvent) => void, filter: ModelEventFilter = {}): Disposable {
+      const target = this.filterUri(filter);
+      return this.services.workspace.DocumentBuilder.onUpdate((_changed, deleted) => {
+         for (const deletedUri of deleted) {
+            const uri = this.uriPolicy.canonicalUri(deletedUri.toString());
+            if (this.matches(target, uri)) {
+               listener(Object.freeze({ uri }));
+            }
+         }
+      });
+   }
+
+   onDirtyChanged(listener: (event: ModelDirtyChangedEvent) => void, filter: ModelEventFilter = {}): Disposable {
+      const target = this.filterUri(filter);
+      return this.services.workspace.TextDocuments.onDidChangeDirty(event => {
+         if (this.matches(target, event.uri)) {
+            listener(event);
+         }
+      });
+   }
+
+   onModelReleased(listener: (event: ModelReleasedEvent) => void, filter: ModelEventFilter = {}): Disposable {
+      const target = this.filterUri(filter);
+      return this.services.workspace.TextDocuments.onDidCloseLastOpen(event => {
+         if (this.matches(target, event.uri)) {
+            listener(event);
+         }
+      });
+   }
+
+   onClientClosed(listener: () => void, filter: { readonly uri: string; readonly clientId: string }): Disposable {
+      const target = this.uriPolicy.canonicalUri(filter.uri);
+      return this.services.workspace.TextDocuments.onDidClose(event => {
+         if (event.clientId === filter.clientId && this.uriPolicy.canonicalUri(event.document.uri) === target) {
+            listener();
+         }
+      });
+   }
+
+   protected filterUri(filter: ModelEventFilter): CanonicalUri | undefined {
+      return filter.uri === undefined ? undefined : this.uriPolicy.canonicalUri(filter.uri);
+   }
+
+   protected matches(target: CanonicalUri | undefined, uri: CanonicalUri): boolean {
+      return target === undefined || target === uri;
    }
 
    /**
-    * Subscribe to save events for `uri`. Fires on every persist through
-    * the multi-client text-document store — including saves originated
-    * by other heads (LSP editor `Ctrl+S`, the data-server `save`, etc.)
-    * so subscribers see one consistent stream regardless of who wrote
-    * the file. Delegates to the manager — single listener registration
-    * shared with any direct `HydraniumTextDocuments.onSave` subscriber.
+    * Hand every subscriber of `phase` for `document` one event, built once, so
+    * all of them see the same attribution. Built inside the build's listener
+    * and handed out without an await: after one, another build can have reset
+    * the document.
     */
-   onModelSaved(uri: string, listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void): Disposable {
-      return this.services.workspace.AstDocumentManager.onSave(uri, listener as never);
-   }
-
-   /**
-    * Subscribe to the `(uri, clientId)` close event. Delegates to the
-    * manager so the listener registry is shared with any direct
-    * `HydraniumTextDocuments.onClientClosed` subscriber.
-    */
-   onClientClosed(uri: string, clientId: string, listener: () => void): Disposable {
-      return this.services.workspace.AstDocumentManager.onClientClosed(uri, clientId, listener);
+   protected deliverUpdate(
+      phase: DocumentState,
+      subscribers: ReadonlySet<ModelUpdateSubscriber<TAst, TDiagnostic>>,
+      document: LangiumDocument,
+      cancelToken: CancellationToken
+   ): void {
+      if (cancelToken.isCancellationRequested || subscribers.size === 0) {
+         return;
+      }
+      const uri = this.uriPolicy.canonicalUri(document.uri.toString());
+      const matching = [...subscribers].filter(subscriber => this.matches(subscriber.uri, uri));
+      if (matching.length === 0) {
+         return;
+      }
+      const manager = this.services.workspace.AstDocumentManager;
+      const envelope = manager.toAstDocument(document) as AstDocument<TAst, TDiagnostic>;
+      const event: ModelUpdatedEvent<TAst, TDiagnostic> = Object.freeze({
+         // Copied: a validation run without a reset, of further categories,
+         // appends to the live array.
+         document:
+            phase >= DocumentState.Validated
+               ? { ...envelope, ...(envelope.diagnostics && { diagnostics: [...envelope.diagnostics] }) }
+               : (this.withoutDiagnostics(envelope) as AstDocument<TAst, TDiagnostic>),
+         ...manager.attributeUpdate(document),
+         phase
+      });
+      for (const { listener } of matching) {
+         // A write queued by an earlier listener cancels this build. Thrown,
+         // so the builder leaves the version undelivered for those skipped.
+         if (cancelToken.isCancellationRequested) {
+            throw OperationCancelled;
+         }
+         try {
+            listener(event);
+         } catch (err: unknown) {
+            this.tracer
+               .with(uri)
+               .error(`onModelUpdated listener threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+         }
+      }
    }
 
    // ============================================================

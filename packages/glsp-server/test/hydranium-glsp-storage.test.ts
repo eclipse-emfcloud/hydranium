@@ -39,11 +39,13 @@ import {
    type ClientSessionPersistArgs,
    DefaultModelLedger,
    type ServerSharedServices,
+   type SessionEndCause,
    UNKNOWN_CLIENT_ID
 } from '@hydranium/core';
 import { makeFakeAstNode, makeNoopSharedServices, makeNoopTracer } from '@hydranium/core/testing';
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
 import { type CapturedGlspLine, makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
+import { DiagramStatus } from '../src/state/diagram-status.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
@@ -114,7 +116,7 @@ class TestStorage extends HydraniumGlspStorage<TestRoot> {
  * their decision.
  */
 class UpdateRecordingStorage extends TestStorage {
-   readonly resubmits: string[] = [];
+   resubmits = 0;
    markerRefreshes = 0;
 
    callHandleModelUpdated(event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
@@ -125,8 +127,8 @@ class UpdateRecordingStorage extends TestStorage {
       this.handleSecondaryUpdated('file:///x.layout', event);
    }
 
-   protected override scheduleUpdateAndSubmit(document: AstDocument<AstNode>): void {
-      this.resubmits.push(document.uri);
+   protected override scheduleUpdateAndSubmit(): void {
+      this.resubmits++;
    }
 
    protected override currentPrimaryDocument(): AstDocument<AstNode> {
@@ -182,9 +184,9 @@ function makeRecordingModelSession(
          calls.push(`close ${uri}`);
          return Promise.resolve();
       },
-      dispose(): void {
+      dispose(cause?: SessionEndCause): void {
          disposed = true;
-         calls.push('dispose');
+         calls.push(cause === 'lost' ? 'dispose lost' : 'dispose');
       }
    };
    return session as unknown as ModelClientSession<AstNode>;
@@ -208,6 +210,7 @@ function makeSessionModelService(
    const calls = options.calls ?? [];
    return {
       snapshot: () => undefined,
+      getSession: () => undefined,
       getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri, parseResult: { value: { $type: 'Root' } } } : undefined),
       createSession(label: string, clientId: string): ModelClientSession<AstNode> {
          calls.push(`createSession ${label} ${clientId}`);
@@ -312,11 +315,11 @@ function makeSubscriptionRecordingServices(): { services: ServerSharedServices; 
             // service gives for an unopened URI.
             snapshot: () => undefined,
             getDocument: () => undefined,
-            onModelUpdated(uri: string) {
-               log.subscribed.push(uri);
+            onModelUpdated(_listener: unknown, filter: { uri: string }) {
+               log.subscribed.push(filter.uri);
                return {
                   dispose() {
-                     log.disposed.push(uri);
+                     log.disposed.push(filter.uri);
                   }
                };
             }
@@ -1157,6 +1160,26 @@ describe('HydraniumGlspStorage', () => {
       });
    });
 
+   describe('a resubmit whose primary is gone', () => {
+      it('withdraws a parse-error status set before the primary was deleted', async () => {
+         const services = makeNoopSharedServices<ServerSharedServices>({
+            model: { ModelService: { ...makeSessionModelService(), getDocument: () => undefined } },
+            workspace: { ModelLedger: new DefaultModelLedger() }
+         });
+         const { storage, state } = createStorage('client-1', services);
+         state.setStatus(DiagramStatus.PARSE_ERROR, { severity: 'ERROR', message: 'broken', readonly: true });
+
+         await (storage as unknown as { captureAndSubmit(uri: string, root: AstNode): Promise<unknown> }).captureAndSubmit(
+            'file:///a/main.x',
+            {
+               $type: 'TestRoot'
+            }
+         );
+
+         expect(state.currentStatus).toBeUndefined();
+      });
+   });
+
    describe('answering an update', () => {
       function updateRecordingStorage(): UpdateRecordingStorage {
          const { storage } = createStorage('client-1', undefined, undefined, UpdateRecordingStorage);
@@ -1182,7 +1205,7 @@ describe('HydraniumGlspStorage', () => {
             updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-1' })
          );
 
-         expect(storage.resubmits).toEqual([]);
+         expect(storage.resubmits).toBe(0);
          expect(storage.markerRefreshes).toBe(1);
       });
 
@@ -1197,7 +1220,7 @@ describe('HydraniumGlspStorage', () => {
          );
          await storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID }));
 
-         expect(storage.resubmits).toEqual(['file:///x.a', 'file:///x.a', 'file:///x.a']);
+         expect(storage.resubmits).toBe(3);
          expect(storage.markerRefreshes).toBe(3);
       });
 
@@ -1211,10 +1234,10 @@ describe('HydraniumGlspStorage', () => {
             updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-2', causedBy: 'client-2' })
          );
 
-         expect(storage.resubmits).toEqual(['file:///x.a']);
+         expect(storage.resubmits).toBe(1);
       });
 
-      it('answers a secondary’s update by the same rule, resubmitting the primary', () => {
+      it('answers a secondary’s update by the same rule', () => {
          const storage = updateRecordingStorage();
 
          storage.callHandleSecondaryUpdated(
@@ -1227,7 +1250,7 @@ describe('HydraniumGlspStorage', () => {
             updated('file:///x.layout', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-2' })
          );
 
-         expect(storage.resubmits).toEqual(['file:///x.a']);
+         expect(storage.resubmits).toBe(1);
       });
    });
 
@@ -1261,6 +1284,18 @@ describe('HydraniumGlspStorage', () => {
          expect(calls.slice(1)).toEqual(['subscription', 'dispose']);
       });
 
+      it('ends the client session with the cause it is disposed with, closed when none is given', () => {
+         const ended = (dispose: (storage: TestStorage) => void): string[] => {
+            const calls: string[] = [];
+            const services = makeNoopSharedServices<ServerSharedServices>({ model: { ModelService: makeSessionModelService({ calls }) } });
+            dispose(createStorage('client-1', services).storage);
+            return calls.filter(call => call.startsWith('dispose'));
+         };
+
+         expect(ended(storage => storage.dispose('lost'))).toEqual(['dispose lost']);
+         expect(ended(storage => storage.sessionDisposed({ id: 'client-1' } as ClientSession))).toEqual(['dispose']);
+      });
+
       it('drops the ended session from the state and registers none again', () => {
          const calls: string[] = [];
          const { storage, state } = createStorage(
@@ -1287,8 +1322,7 @@ describe('HydraniumGlspStorage', () => {
          const { storage } = createStorage(
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({
-               model: { ModelService: makeSessionModelService({ refuse: true }) },
-               workspace: { TextDocuments: { onDidCloseSession: () => ({ dispose() {} }) } }
+               model: { ModelService: makeSessionModelService({ refuse: true }) }
             })
          );
          const dispatch = vi.fn(() => Promise.resolve());

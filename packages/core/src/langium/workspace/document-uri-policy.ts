@@ -51,8 +51,7 @@ export function findRealpathDivergence(uri: URI | string, fs: RealpathCapableFil
  * - {@link canonicalUri} — TOTAL: maps any URI to the single canonical *string*
  *   the framework keys a document by, regardless of whether the file exists.
  *   This is the form that MUST match the adopter's `LangiumDocuments` keying so
- *   the text store, AST-document event filters
- *   (`AstDocumentManager.onUpdate` / `onSave` / `onClientClosed`), and
+ *   the text store, `ModelService`'s event filters, and
  *   `LangiumDocuments` lookups all agree on one identity for the same file. Use
  *   for keying, comparison, and the text-store ↔ document-store bridges.
  *

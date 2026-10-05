@@ -7,5 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './model-events.js';
 export * from './model-service.js';
 export * from './client-session.js';

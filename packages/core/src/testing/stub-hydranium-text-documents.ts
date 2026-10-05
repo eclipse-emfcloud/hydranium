@@ -283,7 +283,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       registerSession(clientId) {
          sessions.register(clientId);
       },
-      closeSession(clientId) {
+      closeSession(clientId, cause) {
          if (!sessions.isRegistered(clientId)) {
             return;
          }
@@ -292,7 +292,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
                stub.fireClose(uri, clientId);
             }
          } finally {
-            sessions.unregister(clientId);
+            sessions.unregister(clientId, cause);
          }
       },
       get onDidCloseSession() {

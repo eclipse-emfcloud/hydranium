@@ -65,7 +65,7 @@ describe('HydraniumTextDocuments — client sessions', () => {
       docs.closeSession('s');
 
       expect(closes).toEqual([`s ${A}`, `s ${B}`]);
-      expect(sessionCloses).toEqual([{ event: { clientId: 's' }, stillOpen: false }]);
+      expect(sessionCloses).toEqual([{ event: { clientId: 's', cause: 'closed' }, stillOpen: false }]);
       expect(docs.isOpenInClient(A, 'other')).toBe(true);
       expect(docs.isOpen(B)).toBe(false);
    });

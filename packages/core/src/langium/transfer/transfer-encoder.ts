@@ -408,9 +408,8 @@ export class DefaultTransferEncoder<
 
    /**
     * Build a wire {@link EncodedTransferDocument} envelope from a server-internal
-    * {@link AstDocument} snapshot (the AST-typed envelope emitted by
-    * `AstDocumentManager.onUpdate` / `onSave` and returned from
-    * `ModelService.request` / `update` / `save`). Distinct from
+    * {@link AstDocument} snapshot (the AST-typed envelope `ModelService`'s
+    * events carry and its reads and session writes return). Distinct from
     * {@link toTransferDocument}(`LangiumDocument`) which encodes against
     * the live build artifact — adopter facade returns hold the snapshot
     * directly, and this helper bridges that to the wire shape without a

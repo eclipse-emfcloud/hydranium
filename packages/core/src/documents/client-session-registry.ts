@@ -36,6 +36,7 @@ export type ClientSessionState = 'live' | 'closing';
 /** Delivered by {@link ClientSessionRegistry.onDidCloseSession}. */
 export interface ClientSessionClosedEvent {
    readonly clientId: string;
+   readonly cause: SessionEndCause;
 }
 
 /**
@@ -128,12 +129,12 @@ export class ClientSessionRegistry {
       return this.opensOf(clientId);
    }
 
-   /** Remove `clientId` from the session table and announce it. A no-op for an id that is not registered. */
-   unregister(clientId: string): void {
+   /** Remove `clientId` from the session table and announce it with `cause`. A no-op for an id that is not registered. */
+   unregister(clientId: string, cause: SessionEndCause = 'closed'): void {
       if (!this.sessions.delete(clientId)) {
          return;
       }
-      this.sessionClosedEmitter.fire(Object.freeze({ clientId }));
+      this.sessionClosedEmitter.fire(Object.freeze({ clientId, cause }));
    }
 
    /**

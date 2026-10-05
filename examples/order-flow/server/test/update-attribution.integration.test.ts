@@ -89,7 +89,7 @@ async function boot(): Promise<{ harness: OrderFlowHarness; uri: (file: string) 
 /** Every update event for `uri` from now on. */
 function record(harness: OrderFlowHarness, uri: string): Event[] {
    const events: Event[] = [];
-   harness.shared.model.ModelService.onModelUpdated(uri, event => events.push(event));
+   harness.shared.model.ModelService.onModelUpdated(event => events.push(event), { uri });
    return events;
 }
 
@@ -174,6 +174,32 @@ describe('update attribution against the real builder', () => {
       await written;
 
       expect(cancelled).toBe(true);
+      expect(events.map(attribution)).toEqual([{ reason: 'changed', sourceClientId: 'panel', causedBy: 'panel' }]);
+   });
+
+   it('credits a write to its writer for a subscriber its cancelled build skipped', async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const workspace = harness.shared.workspace;
+      const panel = models.createSession('panel', 'panel');
+      await panel.open(uri(LONE));
+      await models.validated(uri(LONE));
+      // The first subscriber queues a rebuild of the same version, which
+      // cancels the build before the second hears it.
+      let rebuilt: Promise<void> | undefined;
+      disposables.push(
+         models.onModelUpdated(
+            () => {
+               rebuilt ??= workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.update([URI.parse(uri(LONE))], [], token));
+            },
+            { uri: uri(LONE) }
+         )
+      );
+      const events = record(harness, uri(LONE));
+
+      await panel.update({ uri: uri(LONE), model: LONE_EDITED, baseVersion: 'any' });
+      await rebuilt;
+
       expect(events.map(attribution)).toEqual([{ reason: 'changed', sourceClientId: 'panel', causedBy: 'panel' }]);
    });
 

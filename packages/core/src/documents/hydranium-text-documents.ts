@@ -1685,7 +1685,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.notifyDidCloseTextDocument({ textDocument: { uri } }, clientId, cause);
          }
       } finally {
-         this.__sessions.unregister(clientId);
+         this.__sessions.unregister(clientId, cause);
          this.tracer.info(`Session closed: ${this.formatClientId(clientId)}`);
          this.tracer.trace(`Session closed: ${clientId}`);
       }

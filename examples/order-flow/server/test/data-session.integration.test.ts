@@ -219,6 +219,7 @@ describe('data head sessions', () => {
       const stale = connect();
       await stale.proxy.createSession({ clientId: SESSION, resumeToken: 'secret' });
       await stale.proxy.openModelDocument({ uri, clientId: SESSION });
+      await stale.proxy.watchModelDocument({ uri, clientId: SESSION });
       const { proxy } = connect();
 
       expect(isDuplicateClientIdError(await rejectionOf(proxy.createSession({ clientId: SESSION })))).toBe(true);
@@ -226,6 +227,8 @@ describe('data head sessions', () => {
       await proxy.createSession({ clientId: SESSION, resumeToken: 'secret' });
 
       expect(textDocuments.isOpenInClient(uri, SESSION)).toBe(false);
+      const staleWatches = stale.server as unknown as { uriWatchRecords: Map<string, DataServerUriWatchRecord> };
+      expect([...staleWatches.uriWatchRecords.values()].some(record => record.watchers.has(SESSION))).toBe(false);
       const late = await rejectionOf(stale.proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: 'any' }));
       expect(isSessionClosedError(late)).toBe(true);
       await proxy.openModelDocument({ uri, clientId: SESSION });
@@ -287,12 +290,14 @@ describe('data head sessions', () => {
       const { services, connect } = await boot();
       const head = connect();
       await head.proxy.createSession({ clientId: SESSION, resumeToken: 'secret' });
-      const resumable = (head.server as unknown as { resumableSessions(): Map<string, unknown> }).resumableSessions();
-      expect(resumable.has(SESSION)).toBe(true);
-
       services.shared.model.ModelService.getSession(SESSION)?.dispose();
+      await head.proxy.createSession({ clientId: SESSION });
 
-      expect(resumable.has(SESSION)).toBe(false);
+      // The old token names a session that has ended, so it takes over nothing.
+      const takeover = await rejectionOf(connect().proxy.createSession({ clientId: SESSION, resumeToken: 'secret' }));
+
+      expect(isDuplicateClientIdError(takeover)).toBe(true);
+      expect(services.shared.model.ModelService.getSession(SESSION)).toBeDefined();
    });
 
    it('refuses a session request that runs after its connection closed, and leaves nothing open or registered', async () => {

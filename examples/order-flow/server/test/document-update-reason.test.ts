@@ -67,7 +67,7 @@ async function buildFixture(): Promise<{
    const secondaryUri = URI.file(workspace.resolve(SECONDARY));
 
    const reasons: string[] = [];
-   harness.shared.workspace.AstDocumentManager.onUpdate(primaryUri.toString(), event => reasons.push(event.reason));
+   harness.shared.model.ModelService.onModelUpdated(event => reasons.push(event.reason), { uri: primaryUri.toString() });
    return { harness, primaryUri, secondaryUri, reasons };
 }
 
