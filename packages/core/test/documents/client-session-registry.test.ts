@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type CanonicalUri, LANGUAGE_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
+import { type CanonicalUri, LANGUAGE_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
 import { DuplicateClientIdError, ReservedClientIdError, SessionClosedError } from '../../src/documents/client-session-errors.js';
 import { ClientSessionRegistry, type ClientSessionClosedEvent } from '../../src/documents/client-session-registry.js';
@@ -33,7 +33,7 @@ describe('ClientSessionRegistry — the session table', () => {
       expect(registry.isRegistered('wire-1')).toBe(false);
    });
 
-   it.each([LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, INTEGRITY_CLIENT_ID])(
+   it.each([LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, INTEGRITY_CLIENT_ID])(
       'rejects the framework id %s',
       reserved => {
          const registry = new ClientSessionRegistry();
@@ -110,5 +110,20 @@ describe('ClientSessionRegistry — opens', () => {
 
       expect(() => registry.addOpen(A, 's')).toThrow(SessionClosedError);
       expect(registry.isOpen(A)).toBe(false);
+   });
+});
+
+describe('ClientSessionRegistry — client versions', () => {
+   it("keeps a writer's version, open or not, until it closes or the document is released", () => {
+      const registry = new ClientSessionRegistry();
+      registry.setClientVersion(A, 'form', 3);
+      expect(registry.clientVersionOf(A, 'form')).toBe(3);
+      registry.addOpen(A, 'tree');
+      registry.setClientVersion(A, 'tree', 5);
+      registry.removeOpen(A, 'tree');
+      expect(registry.clientVersionOf(A, 'tree')).toBeUndefined();
+      expect(registry.clientVersionOf(A, 'form')).toBe(3);
+      registry.forgetClientVersions(A);
+      expect(registry.clientVersionOf(A, 'form')).toBeUndefined();
    });
 });

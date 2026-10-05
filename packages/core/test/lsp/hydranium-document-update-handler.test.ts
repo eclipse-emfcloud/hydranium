@@ -107,8 +107,8 @@ interface ServicesStubOptions {
    selfSaveRegistered?: (fsPath: string, mtimeMs: number) => boolean;
    /** Optional bookkeeping side-channels. When provided, the stub appends to these arrays. */
    scheduledReasons?: Array<string | undefined>;
-   /** Drives `TextDocuments.onDidCloseLastOpen`. */
-   lastOpenClosed?: Emitter<{ uri: string }>;
+   /** Drives `TextDocuments.onDidReleaseDocument`. */
+   documentReleased?: Emitter<{ uri: string }>;
    loggedErrors?: string[];
    loggedWarnings?: string[];
    loggedDebug?: string[];
@@ -175,7 +175,7 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          },
          TextDocuments: {
             getAuthor,
-            onDidCloseLastOpen: (opts.lastOpenClosed ?? new Emitter<{ uri: string }>()).event,
+            onDidReleaseDocument: (opts.documentReleased ?? new Emitter<{ uri: string }>()).event,
             onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event,
             reloadDiskBaseline: async (uri: string) => {
                opts.reloadedBaselines?.push(uri);
@@ -240,12 +240,12 @@ describe('HydraniumDocumentUpdateHandler — debounce on', () => {
       // no longer holds: from disk, which the revert already does, or, for a
       // file that never existed, by reading a file that is not there.
       const clock = makeFakeClock();
-      const lastOpenClosed = new Emitter<{ uri: string }>();
-      const handler = new CapturingHandler(makeServicesStub({ clock, lastOpenClosed }), { debounceMs: 50 });
+      const documentReleased = new Emitter<{ uri: string }>();
+      const handler = new CapturingHandler(makeServicesStub({ clock, documentReleased }), { debounceMs: 50 });
       handler.triggerChange('file:///a.a');
       handler.triggerChange('file:///b.a');
 
-      lastOpenClosed.fire({ uri: 'file:///a.a' });
+      documentReleased.fire({ uri: 'file:///a.a' });
       clock.advance(50);
 
       expect(handler.dispatchCalls.map(call => call.changed.map(uri => uri.toString()))).toEqual([['file:///b.a']]);
@@ -267,11 +267,11 @@ describe('HydraniumDocumentUpdateHandler — debounce on', () => {
    it('drops the reason of a pending change it drops, when no other change is pending', () => {
       // Kept, the reason would be staged on the next unrelated build.
       const clock = makeFakeClock();
-      const lastOpenClosed = new Emitter<{ uri: string }>();
-      const handler = new HydraniumDocumentUpdateHandler(makeServicesStub({ clock, lastOpenClosed }), { debounceMs: 50 });
+      const documentReleased = new Emitter<{ uri: string }>();
+      const handler = new HydraniumDocumentUpdateHandler(makeServicesStub({ clock, documentReleased }), { debounceMs: 50 });
       handler.didChangeContent({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
 
-      lastOpenClosed.fire({ uri: 'file:///a.a' });
+      documentReleased.fire({ uri: 'file:///a.a' });
 
       expect(handler['pendingReason']).toBeUndefined();
    });
@@ -475,7 +475,7 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
       expect(scheduledReasons).toEqual(['didChangeWatchedFiles']);
    });
 
-   it('dispatches nothing on a close, which leaves the last-close revert to the text store', () => {
+   it('dispatches nothing on a close, which leaves the release to the text store', () => {
       // Langium subscribes the handler to `onDidClose` only when it has a
       // `didCloseDocument`, and the store already reverts every head's last
       // close; one here would build the document a second time.

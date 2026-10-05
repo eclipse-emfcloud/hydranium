@@ -13,4 +13,4 @@
  * can name them without depending on the server tier; this path stays so
  * server-side code keeps importing them from where it already does.
  */
-export { FRAMEWORK_CLIENT_IDS, LANGUAGE_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
+export { FRAMEWORK_CLIENT_IDS, LANGUAGE_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';

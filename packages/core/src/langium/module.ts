@@ -38,6 +38,7 @@ import { DefaultAstDocumentManager, type AstDocumentManager } from '../documents
 import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from './workspace/self-save-registry.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
+import { DefaultDocumentReleaseHandler, type DocumentReleaseHandler } from '../documents/document-release-handler.js';
 import { DefaultVersionSyncService, type VersionSyncService } from '../documents/version-sync-service.js';
 import {
    DefaultEmptyFileSystemProvider,
@@ -286,6 +287,12 @@ export interface ServerAddedSharedServices<
       ModelLedger: ModelLedger;
       /** Reconciles each produced root with the store, and owns every build that syncs a root to its text or recovers one. */
       VersionSyncService: VersionSyncService;
+      /**
+       * What the build keeps for a document {@link HydraniumTextDocuments} has
+       * released, for every head. Bound to {@link DefaultDocumentReleaseHandler},
+       * which reverts it to disk.
+       */
+      DocumentReleaseHandler: DocumentReleaseHandler;
    };
    /**
     * In-process workspace facade ({@link ModelService}) + AST→transfer
@@ -562,7 +569,8 @@ export function createServerSharedModule(
          // first build.
          CstResidencyService: services => new DefaultCstResidencyService(services),
          ModelLedger: () => new DefaultModelLedger(),
-         VersionSyncService: services => new DefaultVersionSyncService(services)
+         VersionSyncService: services => new DefaultVersionSyncService(services),
+         DocumentReleaseHandler: services => new DefaultDocumentReleaseHandler(services)
       },
       model: {
          // Generic walker — adopters with a typed `$type → wire shape` overlay

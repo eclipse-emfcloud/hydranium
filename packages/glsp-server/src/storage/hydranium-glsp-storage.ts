@@ -217,7 +217,7 @@ function hasStructuralErrors(parseResult: ParseResult): boolean {
  * {@link toDispose} idempotently and then ends the client session. The
  * framework's GLSP server disposes the storage as lost first when it shuts
  * down, which is how the client's connection ending reaches it, so the
- * diagram's unsaved text waits out the revert grace. Every
+ * diagram's unsaved text waits out the release grace. Every
  * transient subscription created in {@link doLoadSourceModel} is parked on
  * {@link toDispose} so the drain catches them on client-detach.
  */

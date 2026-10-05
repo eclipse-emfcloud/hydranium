@@ -36,6 +36,7 @@ import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/wor
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
+import { DefaultDocumentReleaseHandler, type DocumentReleaseHandler } from '../documents/document-release-handler.js';
 import { DefaultVersionSyncService, type VersionSyncService } from '../documents/version-sync-service.js';
 import type { FakeDocumentOptions } from './fake-document.js';
 import { makeStubDocumentBuilder, type StubDocumentBuilder } from './stub-document-builder.js';
@@ -115,6 +116,8 @@ export interface TestSharedServices<
       ModelLedger: ModelLedger;
       /** The REAL service, over this tree's stubs; it reconciles nothing against the stub store. */
       VersionSyncService: VersionSyncService;
+      /** The REAL handler, over this tree's stubs; the stub store releases nothing to it. */
+      DocumentReleaseHandler: DocumentReleaseHandler;
    };
    readonly model: {
       TransferEncoder: TransferEncoder<TTransferDiagnostic>;
@@ -378,8 +381,9 @@ export function makeTestServices<
          WorkspaceLock: workspaceLock,
          FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: documentUriPolicy } }),
          ModelLedger: modelLedger,
-         // Patched in below: it reads the tree it belongs to.
-         VersionSyncService: {} as VersionSyncService
+         // Patched in below, as both read the tree they belong to.
+         VersionSyncService: {} as VersionSyncService,
+         DocumentReleaseHandler: {} as DocumentReleaseHandler
       },
       model: {} as TestSharedServices<TAst, TDiagnostic, TTransfer, TProject, TTransferDiagnostic>['model'],
       ServerLocale: {} as ServerLocale,
@@ -390,6 +394,7 @@ export function makeTestServices<
    // Patched in after the literal, like `model` below: both read the tree they
    // belong to, and the renderer reads the locale service.
    services.workspace.VersionSyncService = new DefaultVersionSyncService(sharedServices);
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(sharedServices);
    const mutableMessages = services as { ServerLocale: ServerLocale; MessageRenderer: MessageRenderer };
    const serverLocale = new DefaultServerLocale(sharedServices);
    if (options.locale) {

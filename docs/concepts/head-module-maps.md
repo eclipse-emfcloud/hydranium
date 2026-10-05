@@ -36,7 +36,7 @@ is the enumeration, and it also shows the `./lib/*` twin each one carries. The
 | folder | subpath | role |
 | --- | --- | --- |
 | `langium/` | `.` | the framework core (see subfolders below) |
-| `documents/` | `.` | Model-coordination: `AstDocumentManager` (multi-client lifecycle), `HydraniumTextDocuments`, `LanguageClientTextShadow` |
+| `documents/` | `.` | Model-coordination: `AstDocumentManager` (AST-facing facade), `HydraniumTextDocuments` (with its `TextLedger`, `LanguageClientShadow`, `DirtyStateTracker` and `DocumentReleaseScheduler`), `DocumentReleaseHandler` |
 | `launcher/` | `.` | server / integrated-server lifecycle handles |
 | `util/` | `.` | shared primitives (`Registry`, `environment.ts` capability accessors) |
 | `lsp/` | `./lsp` | the LSP head — `HydraniumCompletionProvider` and `AbstractHydraniumSemanticTokenProvider` (language module), `HydraniumDocumentUpdateHandler` (shared module: Langium declares that slot on the shared tier), `lspLatencyOptions` (opt-in per-method timing, handed to `createConnection` as its options so it sits on the dispatch path every handler crosses), plus a re-export of `startLanguageServer` |

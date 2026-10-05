@@ -70,7 +70,7 @@ import {
    type TransferUpdateDocumentArgs,
    type TransferUpdateDocumentsArgs
 } from '@hydranium/protocol/data';
-import { REVERT_ON_CLOSE_CLIENT_ID } from '@hydranium/core';
+import { DOCUMENT_RELEASE_CLIENT_ID } from '@hydranium/core';
 import { defaultDataServerDiagnostics } from './default-diagnostics.js';
 
 /**
@@ -358,13 +358,13 @@ export interface ResolvedDataServerOptions {
 /**
  * What a {@link DataServer} keeps per canonical URI, in the `protected`
  * {@link DataServer.uriWatchRecords}. A record lives while it has a watcher
- * or a revert mark; {@link DataServer.pruneUriWatchRecord} enforces that on
- * every path that removes either, so a record with no watcher has a revert
- * pending. Test the size of {@link DataServerUriWatchRecord.watchers}, not the
+ * or a release mark; {@link DataServer.pruneUriWatchRecord} enforces that on
+ * every path that removes either, so a record with no watcher has a release
+ * broadcast pending. Test the size of {@link DataServerUriWatchRecord.watchers}, not the
  * record's presence, for "watched".
  */
 export interface DataServerUriWatchRecord {
-   /** The client ids watching the URI; save, dirty and phase events go out only while it is non-empty, a pending revert aside. */
+   /** The client ids watching the URI; save, dirty and phase events go out only while it is non-empty, a pending release mark aside. */
    readonly watchers: Set<string>;
    /** Digest of the last emitted state, or of the state a first watch found; see {@link DataServer.dispatchPhaseEvent} for why it de-duplicates, {@link DataServer.computeDocumentFingerprint} for its inputs. */
    fingerprint?: string;
@@ -375,8 +375,8 @@ export interface DataServerUriWatchRecord {
     * version still carries the manager's attribution.
     */
    fingerprintVersion?: ModelVersion;
-   /** Set by {@link DataServer.subscribeToTextDocumentCloses}; the next phase event broadcasts even without a watcher. */
-   revertPending?: boolean;
+   /** Set by {@link DataServer.subscribeToModelReleases} once a release happened: its broadcast, the next phase event, goes out even without a watcher. */
+   releaseBroadcastPending?: boolean;
    /**
     * The version of an open document the last event sent was built at. The
     * version sent again goes out as `'rebuilt'` from no client: the manager
@@ -530,13 +530,13 @@ export class DataServer<
       this.subscribeToModelUpdates();
       this.subscribeToTextDocumentSaves();
       this.subscribeToDirtyChanges();
-      this.subscribeToTextDocumentCloses();
+      this.subscribeToModelReleases();
       this.subscribeToProjectManager();
       // Self-register teardown so an adopter that keeps no reference to the
       // server still releases per-connection state, with no lifecycle hook of
       // its own. The client did not close anything itself, so its sessions end
       // as lost and each document it was the last to have open waits out the
-      // store's revert grace. See `dispose`.
+      // store's release grace. See `dispose`.
       this.disposables.push(connection.onClose(() => this.dispose('lost')));
    }
 
@@ -552,8 +552,8 @@ export class DataServer<
     * connection closes, so adopters who don't hold a reference still get
     * per-connection cleanup; adopters that DO hold a reference may call
     * `dispose()` directly for early teardown. The sessions end with `cause`:
-    * `'closed'` reverts every document whose last open they close at once,
-    * and `'lost'`, the connection's own close, lets each wait out the revert
+    * `'closed'` releases every document whose last open they close at once,
+    * and `'lost'`, the connection's own close, lets each wait out the release
     * grace.
     */
    dispose(cause: SessionEndCause = 'closed'): void {
@@ -567,7 +567,7 @@ export class DataServer<
       }
       // AFTER `disposables.dispose()`, deliberately: ending a session releases
       // each document it was the last to hold, and this server's own
-      // `onModelReleased` subscription would otherwise mark a revert broadcast
+      // `onModelReleased` subscription would otherwise mark a release broadcast
       // for a connection that is already gone.
       this.disposables.dispose();
       for (const [clientId, session] of this.clientSessions) {
@@ -786,15 +786,15 @@ export class DataServer<
     * Drop what `uri` no longer needs: the
     * {@link DataServerUriWatchRecord.fingerprint} once no client watches it,
     * and the whole record once it holds no
-    * {@link DataServerUriWatchRecord.revertPending} mark either. Every path
-    * that removes a watcher or consumes a mark ends here.
+    * {@link DataServerUriWatchRecord.releaseBroadcastPending} mark either.
+    * Every path that removes a watcher or consumes a mark ends here.
     */
    protected pruneUriWatchRecord(uri: string): void {
       const record = this.uriWatchRecords.get(uri);
       if (!record || record.watchers.size > 0) {
          return;
       }
-      if (record.revertPending) {
+      if (record.releaseBroadcastPending) {
          record.fingerprint = undefined;
          record.fingerprintVersion = undefined;
       } else {
@@ -1223,28 +1223,30 @@ export class DataServer<
    }
 
    /**
-    * Mark each document the store releases after its last close, so
-    * {@link dispatchPhaseEvent} broadcasts the following rebuild even without
-    * a watcher. The store rebuilds such a document from its disk content,
-    * discarding unsaved in-session edits, and the last close typically also
+    * Mark each document the store releases, so {@link dispatchPhaseEvent}
+    * broadcasts the build that follows even without a watcher. By default
+    * that build reverts the document to its disk content, discarding unsaved
+    * in-session edits, and the last close typically also
     * removed the last watcher: without the broadcast, a consumer that only
     * ever fetches via `getModelDocument` keeps showing the discarded state.
     * The broadcast is de-duplicated against the fingerprint while a watcher
     * holds one, so a close whose disk state equals the last emitted state
-    * stays silent; with no watcher there is no fingerprint, and every revert
-    * is sent.
+    * stays silent; with no watcher there is no fingerprint, and every release
+    * build is sent. The mark goes with the first build after the release,
+    * whoever caused it: a handler that builds nothing leaves it to the next
+    * one, a client's edit included.
     *
     * A release, not the close itself: a document whose last client lost its
-    * connection is released only once the revert grace runs out, or when
+    * connection is released only once the release grace runs out, or when
     * another client opens it meanwhile, and not at all when a client lost
     * from it opens it again within its own grace.
     */
-   protected subscribeToTextDocumentCloses(): void {
+   protected subscribeToModelReleases(): void {
       this.disposables.push(
          this.modelService.onModelReleased(event => {
             const uri = this.canonicalKey(event.uri);
             const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
-            record.revertPending = true;
+            record.releaseBroadcastPending = true;
             this.uriWatchRecords.set(uri, record);
          })
       );
@@ -1265,8 +1267,8 @@ export class DataServer<
     * no way to run: its workspace lives behind the head. A client that does not
     * care filters on the URI, which costs it a comparison.
     *
-    * The precedent is the last-close revert broadcast (see
-    * {@link subscribeToTextDocumentCloses}), where the same judgement was already made
+    * The precedent is the release broadcast (see
+    * {@link subscribeToModelReleases}), where the same judgement was already made
     * in the other direction: a transition that matters enough is delivered
     * without a subscription.
     *
@@ -1274,7 +1276,7 @@ export class DataServer<
     * out ahead of the `'rebuilt'` events for the dependents whose references
     * the deletion just broke.
     *
-    * The URI's fingerprint and revert mark are dropped: they describe a
+    * The URI's fingerprint and release mark are dropped: they describe a
     * document that no longer exists. A kept fingerprint is adopted as the
     * baseline and suppresses the first emit after the file returns with its
     * previous content.
@@ -1289,7 +1291,7 @@ export class DataServer<
       if (record) {
          record.fingerprint = undefined;
          record.fingerprintVersion = undefined;
-         record.revertPending = undefined;
+         record.releaseBroadcastPending = undefined;
          record.sentVersion = undefined;
          this.pruneUriWatchRecord(uri);
       }
@@ -1321,8 +1323,8 @@ export class DataServer<
     *
     * An event for a URI no client watches is NOT sent over the wire, so
     * bandwidth scales with watched URIs rather than with phase events; a
-    * pending revert mark is the exception (see
-    * {@link subscribeToTextDocumentCloses}).
+    * pending release mark is the exception (see
+    * {@link subscribeToModelReleases}).
     *
     * An event for a rebuild with no observable change since the last emit is
     * suppressed against the URI's fingerprint and the version it was taken at;
@@ -1344,18 +1346,18 @@ export class DataServer<
    protected dispatchPhaseEvent(event: ModelUpdatedEvent<AstNode>): void {
       const uri = this.canonicalKey(event.document.uri);
       const record = this.uriWatchRecords.get(uri);
-      const revertedOnClose = record?.revertPending === true;
-      if (!record || (record.watchers.size === 0 && !revertedOnClose)) {
+      const afterRelease = record?.releaseBroadcastPending === true;
+      if (!record || (record.watchers.size === 0 && !afterRelease)) {
          return;
       }
-      if (revertedOnClose) {
+      if (afterRelease) {
          // Consumed even when watchers exist — the regular dispatch below
          // serves them, and the mark's attribution is more precise than the
          // post-close unknown client the manager's attribution would yield.
          // With no watcher the record goes now, so the fingerprint written
          // below lands on a detached record and the next first watch
          // re-baselines instead of adopting it.
-         record.revertPending = undefined;
+         record.releaseBroadcastPending = undefined;
          this.pruneUriWatchRecord(uri);
       }
       // The encoder reads the built document, which the event's holds for this
@@ -1387,7 +1389,7 @@ export class DataServer<
       record.sentVersion = version;
       const wireEvent: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri, fingerprint),
-         sourceClientId: revertedOnClose ? REVERT_ON_CLOSE_CLIENT_ID : sourceClientId,
+         sourceClientId: afterRelease ? DOCUMENT_RELEASE_CLIENT_ID : sourceClientId,
          reason
       };
       this.tracer

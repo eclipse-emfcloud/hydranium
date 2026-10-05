@@ -149,18 +149,18 @@ interface Booted {
    readonly connect: () => ProbeHarness;
 }
 
-/** Boot a scratch workspace, with the text store's `revertGraceMs` when given. */
-async function boot(revertGraceMs?: number): Promise<Booted> {
+/** Boot a scratch workspace, with the text store's `releaseGraceMs` when given. */
+async function boot(releaseGraceMs?: number): Promise<Booted> {
    scratch = await makeScratchWorkspaceHarness(
       workspace => {
          workspace.write(FILE, CLEAN);
          workspace.write(OTHER_FILE, CLEAN);
       },
-      revertGraceMs === undefined
+      releaseGraceMs === undefined
          ? {}
          : {
               extraSharedModules: [
-                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs }) } }
+                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs }) } }
               ]
            }
    );
@@ -524,13 +524,13 @@ describe('DataSession restore against the real stack', () => {
    });
 });
 
-/** Outlast the revert grace of a store booted with {@link GRACE_MS}. */
+/** Outlast the release grace of a store booted with {@link GRACE_MS}. */
 function outlastGrace(): Promise<void> {
    return new Promise(resolve => setTimeout(resolve, GRACE_MS + 200));
 }
 
 describe('DataSession re-apply against the real stack', () => {
-   it('writes nothing to a document the revert grace kept, which still holds the edit', async () => {
+   it('writes nothing to a document the release grace kept, which still holds the edit', async () => {
       const { services, uri, connect } = await boot();
       const textDocuments = services.shared.workspace.TextDocuments;
       let head = connect();

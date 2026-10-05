@@ -25,7 +25,7 @@ import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
  * The GLSP server the framework binds in place of upstream's
  * {@link DefaultGLSPServer}, so a failed REQUEST reaches its reader with the
  * text the thrower wrote, and a diagram whose connection ends keeps its unsaved
- * text for the revert grace (see {@link shutdown}).
+ * text for the release grace (see {@link shutdown}).
  *
  * **What breaks without it.** Upstream projects a failing request's detail as
  * `error.cause?.toString()` whenever the error is a {@link GLSPServerError},
@@ -52,7 +52,7 @@ import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 export class HydraniumGlspServer extends DefaultGLSPServer {
    /**
     * End each diagram's client session as lost rather than closed, before
-    * upstream disposes the sessions, so its unsaved text waits out the revert
+    * upstream disposes the sessions, so its unsaved text waits out the release
     * grace for the client to reconnect. A shutdown is how the client's
     * connection ending reaches the server; a client that stops on purpose
     * shuts the server down the same way, and its diagrams are held as well.

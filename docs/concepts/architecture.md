@@ -41,9 +41,9 @@ The set is open-ended: a head is just code that holds the shared services tree
 and speaks some protocol on a `MessageConnection`, so an adopter can add its own
 (a REST bridge, a code-generation endpoint, a bespoke tool protocol) the same
 way — the dashed *custom head* in the diagram. They all coordinate through the
-shared workspace's **Model coordination** layer (the `AstDocumentManager`), so
-an edit made on one surface is observable by the others with no head-to-head
-synchronisation protocol.
+shared workspace's **Model coordination** layer (its core is the shared text
+store, `HydraniumTextDocuments`), so an edit made on one surface is observable
+by the others with no head-to-head synchronisation protocol.
 
 What the set is open-ended in is *heads*, not *processes*. Heads coexist by
 sharing one services tree, and the write serialisation they rely on is
@@ -68,9 +68,9 @@ plus an index of node descriptions used for cross-reference linking and for the
 project/scope tiers described below.
 
 A text/Monaco client edits documents over LSP exactly as it would against any
-Langium server. What makes Hydranium's LSP head different is that its edits are
-routed through the shared workspace's **Model coordination** layer (the
-`AstDocumentManager`, below) rather than a private document store, so a co-open
+Langium server. What makes Hydranium's LSP head different is that its edits land
+in the shared text store of the **Model coordination** layer (below),
+`HydraniumTextDocuments`, rather than a private document store, so a co-open
 form or diagram editor sees them.
 
 ## Typed data access — the data-server head
@@ -112,10 +112,17 @@ Output-channel logger lives in
 
 ## Model coordination — the multi-client document lifecycle
 
-The **Model coordination** layer — implemented by the
-[`AstDocumentManager`](../../packages/core/src/documents/ast-document-manager.ts) —
-is what lets the heads coexist on one document. It generalises the LSP document
-lifecycle to a multi-client scenario:
+The **Model coordination** layer is what lets the heads coexist on one
+document. Its core is
+[`HydraniumTextDocuments`](../../packages/core/src/documents/hydranium-text-documents.ts),
+the one text store every head writes to and the LSP text-sync endpoint: the
+editor's `textDocument/*` notifications arrive there directly. The non-textual
+heads open, update and save documents in AST terms through
+[`AstDocumentManager`](../../packages/core/src/documents/ast-document-manager.ts),
+which delegates each text change to the store. Sessions call the store only
+for their lifecycle and open-state queries; editor pushes and integrity repairs
+write through it directly. The layer generalises the LSP document lifecycle to
+a multi-client scenario:
 
 - The first `open` for a URI seeds the shared source of truth from content an
   integrity repair staged for it, if any; otherwise from the supplied client
@@ -129,9 +136,10 @@ lifecycle to a multi-client scenario:
   [client session](client-sessions.md), which fails for a document the session
   does not have open. The `baseVersion` check runs before serialization or
   mutation and again where the text applies; a successful
-  content change is installed by
+  content change reaches the store through
   [`AstDocumentManager.update`](../../packages/core/src/documents/ast-document-manager.ts),
-  which advances the server-owned version and records the *author*. The
+  and the store advances the server-owned version and records the *author* in
+  its [`TextLedger`](../../packages/core/src/documents/text-ledger.ts). The
   resulting state is forwarded to all co-editing clients tagged with that
   author, so each client can apply or discard it and update-cycles are easy to
   avoid.
@@ -139,15 +147,19 @@ lifecycle to a multi-client scenario:
   mechanism, so it is updated directly via the LSP
   [`applyEdit`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_applyEdit)
   request — the "shadow path"
-  ([`LanguageClientTextShadow`](../../packages/core/src/documents/language-client-text-shadow.ts)).
+  ([`LanguageClientShadow`](../../packages/core/src/documents/language-client-shadow.ts),
+  the store's model of what the editor holds, which also tells the editor's
+  echoes of those pushes from its own edits).
 - After the last client closes the document, the shared text and editor shadow
   are released, while the server's content-version sequence is retained. The
-  text store then rebuilds the document from the file system provider for
-  every head, the LSP head and a headless server alike, or removes it from the
+  text store hands the document to the
+  [`DocumentReleaseHandler`](../../packages/core/src/documents/document-release-handler.ts)
+  slot, whose default rebuilds it from the file system provider for every
+  head, the LSP head and a headless server alike, or removes it from the
   workspace when the provider cannot serve it, whatever the URI's scheme. After
   a lost connection the release waits out a grace, ten seconds by default,
   within which a reconnecting client finds its unsaved text (see
-  [Last close](client-sessions.md#last-close)).
+  [Last close and release](client-sessions.md#last-close-and-release)).
 
 A data-server client's `DataSession` is a client session registered over its
 connection (see [Client sessions](client-sessions.md)). It pairs an

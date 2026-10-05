@@ -7,23 +7,22 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { asLanguageClientUri, type CanonicalUri } from '@hydranium/protocol';
 import { describe, expect, test } from 'vitest';
-import { Range, type TextEdit, uinteger } from 'vscode-languageserver';
+import { Range, type TextDocumentsConfiguration, type TextEdit, uinteger } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { LanguageClientTextShadow, diffToEdits } from '../../src/documents/language-client-text-shadow.js';
+import { DefaultLanguageClientShadow, diffToEdits } from '../../src/documents/language-client-shadow.js';
+import { type CapturedLine, makeCapturingTracer } from '../../src/testing/index.js';
 
 /**
- * Minimal `ShadowDocumentSource` stub for these tests — `computeEdits`'s
- * apply-verify probe is the only state-bearing path that reads from it,
- * and the default `TextDocument.create` factory is sufficient (these
- * tests don't exercise the custom-text-document-type story; that's
- * exercised end-to-end through the `HydraniumTextDocuments` integration
- * tests).
+ * The default factories: these tests do not exercise a custom text-document
+ * type, which the `HydraniumTextDocuments` integration tests cover end to end.
  */
-const stubDocumentSource = { create: TextDocument.create };
+const factories: TextDocumentsConfiguration<TextDocument> = { create: TextDocument.create, update: TextDocument.update };
 
-function makeShadow(onFallback: (uri: string, reason: string) => void = () => undefined): LanguageClientTextShadow {
-   return new LanguageClientTextShadow(onFallback, stubDocumentSource);
+function makeShadow(configuration = factories): { shadow: DefaultLanguageClientShadow; lines: CapturedLine[] } {
+   const { tracer, lines } = makeCapturingTracer();
+   return { shadow: new DefaultLanguageClientShadow(configuration, tracer), lines };
 }
 
 /**
@@ -132,76 +131,77 @@ function isFullReplace(edits: TextEdit[], expectedText: string): boolean {
    return edits.length === 1 && edits[0].range.end.line === FULL_RANGE.end.line && edits[0].newText === expectedText;
 }
 
-describe('LanguageClientTextShadow.computeEdits', () => {
-   const URI = 'file:///test.a';
+describe('DefaultLanguageClientShadow.preparePush', () => {
+   const KEY = 'file:///test.a' as CanonicalUri;
+   const URI = asLanguageClientUri('file:///test.a');
+   const editsOf = (shadow: DefaultLanguageClientShadow, text: string): TextEdit[] => shadow.preparePush(KEY, URI, text)?.edits ?? [];
+   const fallbacks = (lines: CapturedLine[]): CapturedLine[] => lines.filter(line => /apply-verify fallback/.test(line.message));
 
    test('first call emits a full-range replace', () => {
-      const shadow = makeShadow();
-      const edits = shadow.computeEdits(URI, 'a\nb\n');
-      expect(isFullReplace(edits, 'a\nb\n')).toBe(true);
+      const { shadow } = makeShadow();
+      expect(isFullReplace(editsOf(shadow, 'a\nb\n'), 'a\nb\n')).toBe(true);
    });
 
-   test('identical follow-up returns no edits', () => {
-      const shadow = makeShadow();
-      shadow.computeEdits(URI, 'a\nb\n');
-      expect(shadow.computeEdits(URI, 'a\nb\n')).toEqual([]);
+   test('identical follow-up plans nothing', () => {
+      const { shadow } = makeShadow();
+      shadow.preparePush(KEY, URI, 'a\nb\n');
+      expect(shadow.preparePush(KEY, URI, 'a\nb\n')).toBeUndefined();
    });
 
    test('subsequent change emits a diff (not full replace)', () => {
-      const shadow = makeShadow();
-      shadow.computeEdits(URI, 'a\nb\nc\n');
-      const edits = shadow.computeEdits(URI, 'a\nB\nc\n');
+      const { shadow } = makeShadow();
+      shadow.preparePush(KEY, URI, 'a\nb\nc\n');
+      const edits = editsOf(shadow, 'a\nB\nc\n');
       expect(edits.length).toBeGreaterThanOrEqual(1);
       expect(isFullReplace(edits, 'a\nB\nc\n')).toBe(false);
    });
 
-   test('invalidate forces next call back to full-range replace', () => {
-      const shadow = makeShadow();
-      shadow.computeEdits(URI, 'a\nb\n');
-      shadow.invalidate(URI);
-      const edits = shadow.computeEdits(URI, 'a\nB\n');
-      expect(isFullReplace(edits, 'a\nB\n')).toBe(true);
+   test('invalidateClientText forces next call back to full-range replace', () => {
+      const { shadow } = makeShadow();
+      shadow.preparePush(KEY, URI, 'a\nb\n');
+      shadow.invalidateClientText(URI);
+      expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(true);
    });
 
-   test('set primes the shadow so next call is a diff', () => {
-      const shadow = makeShadow();
-      shadow.set(URI, 'a\nb\n');
-      const edits = shadow.computeEdits(URI, 'a\nB\n');
-      expect(isFullReplace(edits, 'a\nB\n')).toBe(false);
+   test('a settled push ignores a second answer', () => {
+      const { shadow } = makeShadow();
+      shadow.setClientText(URI, 'a\nb\n');
+      const push = shadow.preparePush(KEY, URI, 'a\nB\n');
+      push?.notifyOutcome('applied');
+      // A refusal invalidates the baseline; counted, the next push would be a full replace.
+      push?.notifyOutcome('refused');
+      expect(isFullReplace(editsOf(shadow, 'a\nB\nc\n'), 'a\nB\nc\n')).toBe(false);
    });
 
-   test('onFallback wiring is plumbed (no fallback in happy paths)', () => {
+   test('setClientText primes the baseline so next call is a diff', () => {
+      const { shadow } = makeShadow();
+      shadow.setClientText(URI, 'a\nb\n');
+      expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(false);
+   });
+
+   test('logs no fallback on the happy paths', () => {
       // Apply-verify failure cannot be triggered naturally, since diffToEdits
-      // reconstructs `newText` exactly. This only pins that the callback stays
+      // reconstructs `newText` exactly. This only pins that the log stays
       // silent on the happy paths; the injected-mismatch test drives the fallback.
-      const calls: Array<[string, string]> = [];
-      const shadow = makeShadow((uri, reason) => calls.push([uri, reason]));
-      shadow.computeEdits(URI, 'a\nb\n');
-      shadow.computeEdits(URI, 'a\nB\n');
-      expect(calls).toEqual([]);
+      const { shadow, lines } = makeShadow();
+      shadow.preparePush(KEY, URI, 'a\nb\n');
+      shadow.preparePush(KEY, URI, 'a\nB\n');
+      expect(fallbacks(lines)).toEqual([]);
    });
 
-   test('falls back to a full replace and notifies when apply-verify mismatches', () => {
-      // Inject a ShadowDocumentSource whose `create` returns a probe document
-      // that does NOT reconstruct `newText` under the diff. This drives the
-      // apply-verify safety net via the documented injection seam without
-      // breaking diffToEdits. Kills the mismatch guard (`if (false)`), its
-      // block, the onFallback reason string, and the `return [fullReplace]`
-      // (`[]`).
-      const calls: Array<[string, string]> = [];
-      // The probe always materialises 'WRONG\n' whatever content it is asked
-      // for, so applying the diff to it can never reproduce `newText` → the
-      // verifier must report a mismatch.
-      const corruptingSource = {
-         create: (uri: string, languageId: string, version: number) => TextDocument.create(uri, languageId, version, 'WRONG\n')
+   test('falls back to a full replace and warns when apply-verify mismatches', () => {
+      // A `create` whose probe never holds the text it is asked for, so applying
+      // the diff to it can never reproduce the pushed text. Kills the mismatch
+      // guard, its warning and the `return [fullReplace]`.
+      const corrupting: TextDocumentsConfiguration<TextDocument> = {
+         ...factories,
+         create: (uri, languageId, version) => TextDocument.create(uri, languageId, version, 'WRONG\n')
       };
-      const shadow = new LanguageClientTextShadow((uri, reason) => calls.push([uri, reason]), corruptingSource);
-      // Prime a baseline so computeEdits takes the diff path (not the first-sync full replace).
-      shadow.set(URI, 'a\nb\nc\n');
-      const edits = shadow.computeEdits(URI, 'a\nB\nc\n');
-      // Fallback fired with the apply-verify reason ...
-      expect(calls).toEqual([[URI, 'apply-verify-mismatch']]);
-      // ... and returned a single full-range replace carrying the whole new text.
+      const { shadow, lines } = makeShadow(corrupting);
+      // Prime a baseline so the push takes the diff path (not the first-sync full replace).
+      shadow.setClientText(URI, 'a\nb\nc\n');
+      const edits = editsOf(shadow, 'a\nB\nc\n');
+      expect(fallbacks(lines).map(line => line.level)).toEqual(['warn']);
       expect(isFullReplace(edits, 'a\nB\nc\n')).toBe(true);
    });
 });

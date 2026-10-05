@@ -586,7 +586,7 @@ describe('AstDocumentManager open / close lifecycle', () => {
    it('open() on an already-open URI registers the attaching client as a holder', async () => {
       // `manager.isOpen` is any-client, so it cannot witness this: it reads
       // `true` whether or not `c2` was recorded. The per-client hold is what
-      // the last-close revert counts down to, so an unrecorded client has its
+      // the release counts down to, so an unrecorded client has its
       // document torn down when the first holder closes.
       const { manager, textDocuments } = makeManagerHarness();
       await manager.open({ uri: URI_B, clientId: 'c1', languageId: 'plaintext', text: 'seed\n' });

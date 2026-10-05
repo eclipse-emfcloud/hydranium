@@ -13,11 +13,11 @@
  * The observable is the built document's text, which is what every read and
  * every integrity pass sees.
  *
- * Most grace cases rebind the text store with a short `revertGraceMs`, the
+ * Most grace cases rebind the text store with a short `releaseGraceMs`, the
  * one way a server sets it, so that a test can outlast it.
  */
 
-import { HydraniumTextDocuments, INTEGRITY_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, type ServerSharedServices } from '@hydranium/core';
+import { HydraniumTextDocuments, INTEGRITY_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, type ServerSharedServices } from '@hydranium/core';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import { DocumentState, URI } from '@hydranium/langium';
@@ -67,14 +67,14 @@ interface Booted {
    readonly built: () => string | undefined;
 }
 
-async function boot(revertGraceMs?: number): Promise<Booted> {
+async function boot(releaseGraceMs?: number): Promise<Booted> {
    scratch = await makeScratchWorkspaceHarness(
       workspace => workspace.write(FILE, CLEAN),
-      revertGraceMs === undefined
+      releaseGraceMs === undefined
          ? {}
          : {
               extraSharedModules: [
-                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs }) } }
+                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs }) } }
               ]
            }
    );
@@ -93,7 +93,7 @@ function outlastRevert(ms = GRACE_MS + 200): Promise<void> {
    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-describe('revert grace', () => {
+describe('release grace', () => {
    it('refuses a create of a document waiting out the grace, and says so', async () => {
       const { services, path } = await boot(GRACE_MS);
       const models = services.shared.model.ModelService;
@@ -110,7 +110,7 @@ describe('revert grace', () => {
             (error: unknown) => error
          );
 
-      expect(String(refusal)).toContain('revert grace');
+      expect(String(refusal)).toContain('release grace');
       expect(services.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(CLEAN);
    });
 
@@ -146,7 +146,7 @@ describe('revert grace', () => {
 
       expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
       expect(textDocuments.version(uri)).toBeGreaterThan(written.version);
-      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      expect(textDocuments.isReleaseDeferred(uri)).toBe(false);
       await waitFor(() => built() === CLEAN, { timeoutMs: 2000 });
    });
 
@@ -178,7 +178,7 @@ describe('revert grace', () => {
          listener.dispose();
       }
 
-      expect(textDocuments.isRevertPending(uri)).toBe(true);
+      expect(textDocuments.isReleaseDeferred(uri)).toBe(true);
       expect(textDocuments.getAuthor(uri)).toBe(INTEGRITY_CLIENT_ID);
       expect(textDocuments.get(uri)?.getText()).toContain('Pay__1');
       expect(readFileSync(sourcePath, 'utf8')).toBe(onDisk);
@@ -244,7 +244,7 @@ describe('revert racing a re-open', () => {
    });
 });
 
-describe('revert grace over the data head', () => {
+describe('release grace over the data head', () => {
    function connect(services: OrderFlowHarness): Head {
       const head = makeDataServerHarness<LosableDataServer, DomainModel>({
          server: channel => new LosableDataServer(channel, services.shared)
@@ -275,7 +275,7 @@ describe('revert grace over the data head', () => {
       head.server.lose();
       head = connect(services);
       await session.connected();
-      expect(services.shared.workspace.TextDocuments.isRevertPending(uri)).toBe(false);
+      expect(services.shared.workspace.TextDocuments.isReleaseDeferred(uri)).toBe(false);
       await outlastRevert();
 
       expect(reported).toEqual([]);
@@ -293,12 +293,12 @@ describe('revert grace over the data head', () => {
       await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
 
       head.server.lose();
-      expect(textDocuments.isRevertPending(uri)).toBe(true);
+      expect(textDocuments.isReleaseDeferred(uri)).toBe(true);
       head = connect(services);
       await session.connected();
 
       expect(reported).toEqual([]);
-      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      expect(textDocuments.isReleaseDeferred(uri)).toBe(false);
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
       expect(built()).toBe(EDITED);
    });
@@ -307,7 +307,7 @@ describe('revert grace over the data head', () => {
       const { services, uri, built } = await boot(GRACE_MS);
       const head = connect(services);
       const observer = connect(services);
-      const reverts = (): number => observer.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID).length;
+      const reverts = (): number => observer.events.filter(event => event.sourceClientId === DOCUMENT_RELEASE_CLIENT_ID).length;
       await head.proxy.createSession({ clientId: 'form#lost' });
       await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
       await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
@@ -319,7 +319,7 @@ describe('revert grace over the data head', () => {
       await waitFor(() => built() === CLEAN && reverts() > 0, { timeoutMs: GRACE_MS + 2000 });
       await outlastRevert(100);
       expect(reverts()).toBe(1);
-      expect(observer.events.find(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID)?.document.uri).toBe(uri);
+      expect(observer.events.find(event => event.sourceClientId === DOCUMENT_RELEASE_CLIENT_ID)?.document.uri).toBe(uri);
    });
 
    it('opens a lost session’s document from disk for a session of another connection within the grace, and broadcasts the revert', async () => {
@@ -328,7 +328,7 @@ describe('revert grace over the data head', () => {
       const head = connect(services);
       const other = connect(services);
       const watcher = connect(services);
-      const reverts = (): number => watcher.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID).length;
+      const reverts = (): number => watcher.events.filter(event => event.sourceClientId === DOCUMENT_RELEASE_CLIENT_ID).length;
       await head.proxy.createSession({ clientId: 'form#lost' });
       const onDisk = await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
       await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
@@ -339,7 +339,7 @@ describe('revert grace over the data head', () => {
 
       expect(opened.model?.root).toEqual(onDisk.model?.root);
       expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
-      expect(textDocuments.isRevertPending(uri)).toBe(false);
+      expect(textDocuments.isReleaseDeferred(uri)).toBe(false);
       await waitFor(() => built() === CLEAN && reverts() > 0, { timeoutMs: 2000 });
    });
 
@@ -354,12 +354,12 @@ describe('revert grace over the data head', () => {
       head.server.lose();
       await observer.proxy.createSession({ clientId: 'form#lost' });
       await observer.proxy.openModelDocument({ uri, clientId: 'form#lost' });
-      // A build the reopen's write drives, which a revert mark left behind
+      // A build the reopen's write drives, which a release mark left behind
       // by the close would take for the revert.
       await observer.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: CLEAN, baseVersion: 'any' });
       await outlastRevert();
 
-      expect(observer.events.filter(event => event.sourceClientId === REVERT_ON_CLOSE_CLIENT_ID)).toEqual([]);
+      expect(observer.events.filter(event => event.sourceClientId === DOCUMENT_RELEASE_CLIENT_ID)).toEqual([]);
    });
 
    it('reverts a data session’s document at once when its connection closes it on purpose', async () => {

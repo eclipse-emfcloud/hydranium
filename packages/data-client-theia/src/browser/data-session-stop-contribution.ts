@@ -21,10 +21,10 @@ import { injectable } from '@theia/core/shared/inversify';
  *
  * **Stop.** {@link onStop} disposes every tracked session, which sends its
  * `closeSession`, so the server ends it as closed: each document it was the
- * last to hold reverts at once. Otherwise the server learns of the page only
+ * last to hold is released at once. Otherwise the server learns of the page only
  * when its connection goes, which Theia may hold open for its reconnect
  * timeout, and then ends the sessions as lost, so their documents wait out the
- * revert grace. The close is best effort: under load the page's last frames
+ * release grace. The close is best effort: under load the page's last frames
  * can be lost on the way, and the server then ends the sessions as lost. A
  * session with calls still in flight at the stop closes after them, which is
  * too late for a page going away, and is left to the server's connection-close

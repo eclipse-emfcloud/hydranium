@@ -81,7 +81,7 @@ writes through.
 | --- | --- |
 | `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
 | `openOptions(uri)` | The options this session opened `uri` with |
-| `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the revert grace |
+| `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the release grace |
 | `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
 | `persist({ uri, baseVersion })` | Persist the text the store holds, with no update and no serialisation, resolving with the version written; fails as `save` does at the write, and never on a build |
 | `updateAll({ updates })` | Write several documents the session has open, all or none |
@@ -149,8 +149,8 @@ the same version is `rebuilt` and names
 `UNKNOWN_CLIENT_ID`: a document rebuilt because something it references changed
 is news to every client, the one that opened or last wrote it included.
 `AstDocumentManager.attributeUpdate` decides this for every head; the data head
-names the revert-on-close id instead for the rebuild that reverts a document
-after its last close. The rule needs rebuilds that validate: see
+names `DOCUMENT_RELEASE_CLIENT_ID` instead for the build that follows a
+document's release. The rule needs rebuilds that validate: see
 `TransferDocumentUpdateReason` for the cases that fall back.
 
 A save persists the document's current text, which includes unsaved edits other
@@ -238,10 +238,10 @@ code, and a message saying so, for an id the connection never registered.
 has open, drops its watches on the connection, and frees the id. When the
 connection closes, every session it registered ends the same way, as lost
 rather than closed, which lets the documents it was the last to have open wait
-out the revert grace (see [Last close](#last-close)); so does a session another
-connection takes over with its resume token. Either way a later request under
-the id from that connection fails rather than opening anything, until the
-connection registers the id again.
+out the release grace (see [Last close and release](#last-close-and-release));
+so does a session another connection takes over with its resume token. Either
+way a later request under the id from that connection fails rather than
+opening anything, until the connection registers the id again.
 
 Every document request acts as a session, and one carrying an id the connection
 never registered fails with the `SessionClosedError` code. A head that serves
@@ -324,7 +324,7 @@ text its first such write was based on, its last write, and that write's
 answer. After the re-open and the re-watch:
 
 - A document that holds the last write, because the server kept it through
-  the revert grace or no one changed it, needs nothing.
+  the release grace or no one changed it, needs nothing.
 - A document back at the text the first unsaved write was based on, because
   the server reverted it to disk after the grace or restarted, is written
   again: the last written model, based on the re-opened model's version. It is an
@@ -384,11 +384,11 @@ A Theia frontend binds `DataSessionStopContribution` from
 and calls its `track(connection)` once for each data connection, which takes in
 the sessions the connection has and every one it starts. When the page stops, it
 disposes every tracked session, so the server ends them as closed, and each
-document one of them was the last to hold reverts at once; otherwise the server
-sees the page go only when its connection does, which Theia may hold open for
-its reconnect timeout, and then ends them as lost. A session with a call still
-in flight at the stop sends its close only after that call, too late for a page
-going away, so it too ends as lost. While a tracked session has a save in
+document one of them was the last to hold is released at once; otherwise the
+server sees the page go only when its connection does, which Theia may hold open
+for its reconnect timeout, and then ends them as lost. A session with a call
+still in flight at the stop sends its close only after that call, too late for a
+page going away, so it too ends as lost. While a tracked session has a save in
 flight, it vetoes the stop: Electron waits for the saves, and a browser shows
 its leave-page prompt. The Theia backend's forwarders send what the frontend
 wrote before its channel closed, so a close sent as the page goes normally
@@ -571,15 +571,17 @@ reads or writes the file:
   its disk queue, and no file when it cannot be read;
 - an integrity repair written to a file some client holds takes the repair.
 
-A document released after its last close is not dirty, and a dirty one
-announces the change once its revert to disk has parsed the file, at that
-text's version, even when a later write then cancels the revert; a revert
-cancelled before its parse or that fails requests a build of the document in
-its place and announces it once that build has parsed the file, and one that
-removed the document, or whose build did or failed, announces it without `text`. A first open before that announces it instead, when it opens clean. `TextDocuments.onDidChangeDirty` fires on each change of
-the answer, and `updateDiskBaseline(uri, text)` records a write your own code
-made; a save your code announces through `notifyDidSaveTextDocument` with its
-text moves the baseline too.
+A released document is not dirty. A dirty one announces the change once the
+`DocumentReleaseHandler`'s promise settles: with the text the build then holds,
+or without `text` when the build removed the document, failed, or was skipped,
+before it parsed the file, because the connection or the workspace went away.
+The default handler settles once its revert, or the build it requests when the
+revert stopped short, has parsed the file or removed the document. A first open
+before that announces it instead, when it opens clean.
+`TextDocuments.onDidChangeDirty` fires on each change of the answer, and
+`setDiskBaseline(uri, text)` records a write your own code made; a save your
+code announces through `notifyDidSaveTextDocument` with its text moves the
+baseline too.
 
 Over the data head, every transfer document the head sends that it holds
 carries the current answer as `text.dirty`, and a watcher is sent
@@ -626,15 +628,36 @@ whole text, through Theia's own check. That covers the save `EditorDiskSync`
 leaves alone because the file holds neither the editor's text nor the text it
 read.
 
-## Last close
+## Last close and release
 
-When the last client with a document open closes it, the text store releases the
-document and rebuilds it from the file system provider, or removes it, for every
-head and for a server with no language server at all. The unsaved edits of its
-last client are discarded with it. The revert is decided under the workspace
-write lock, after the file's disk queue has drained, so a save issued before the
-close is not reverted past; a client that opens or re-creates the file meanwhile
-keeps its text, and no revert follows.
+A close belongs to one client: it ends that client's open of the document, and
+another client's open is untouched. A release belongs to the text store: it
+drops the shared text it has owned since the first open, once no client holds
+the document. Usually the two happen together, at the last close. They come
+apart when a client loses its connection:
+
+1. A client closes the document. While another client has it open, nothing
+   else happens.
+2. At the last close, the store releases the document at once, unless that
+   close came from a lost connection. Then the release waits out the release
+   grace (below): the lost client opening it again within its grace keeps the
+   unsaved text and nothing is released; any other client opening it releases
+   it first and then opens it as a first open; the grace running out, or the
+   document being deleted, releases it.
+3. At the release, the store drops the document's text, keeping only its
+   version sequence, fires `onDidReleaseDocument`, and then hands it to the
+   `DocumentReleaseHandler` slot. A document released dirty is announced clean
+   once the promise the handler returned settles, that is once the build holds
+   what it keeps (see [Dirty state](#dirty-state)).
+
+The default `DocumentReleaseHandler` rebuilds a released document from the file
+system provider, or removes it, for every head and for a server with no
+language server at all. The unsaved edits of its last client are discarded with
+it. Whether to rebuild or remove is read from the file after its disk queue has
+drained, so a save issued before the close is not reverted past. The revert runs
+under the workspace write lock, which checks again that no client holds the
+document: a client that opens or re-creates the file meanwhile keeps its text,
+and no revert follows.
 
 The bound `FileSystemProvider` decides by `exists`, for a URI of any scheme: a
 document it can serve survives its last close, rebuilt from the provider's text,
@@ -713,8 +736,31 @@ const sharedModule: Module<MyServices, DeepPartial<MyServices>> = {
 shared.workspace.FileSystemProvider.host.setFile(URI.parse('memory:///ws/a.domain'), 'entity A {}');
 ```
 
-`TextDocuments.onDidCloseLastOpen` fires when a document is released, just
-before its revert.
+`TextDocuments.onDidReleaseDocument` fires when a document is released,
+before the `DocumentReleaseHandler` is handed it, so its listeners act before
+any build the handler runs.
+
+`releaseGraceMs` in `HydraniumTextDocumentsOptions` defers the release of a
+document whose last close came from a lost connection: a data connection that
+closed, a GLSP connection that closed under a diagram, or a session a
+reconnecting client took over with its resume token.
+The store keeps the document, and its unsaved text, for that long. A client
+lost from the document may reclaim that text only within the grace of its own
+loss: an open under its id in that time, such as a session a reconnecting
+client registers again or takes over with its resume token, cancels the release.
+An open under any other id, a reloaded page's new session or an editor
+attaching over the LSP head included, releases the document first and then
+opens it as a first open does: a session reads the file, and an editor keeps
+the text it opened with. So does an open under a lost id whose own grace has
+run out, though a later loss keeps the document waiting: that client would
+otherwise inherit unsaved text written after it was lost. A `create` of the URI
+is refused while the document waits. It is open for no client meanwhile, and
+`TextDocuments.isReleaseDeferred(uri)` answers `true`; the integrity service
+treats it as open, so none of its unsaved text reaches disk. A close the
+client makes itself, `closeSession`, and a session's `dispose()` release the
+document at once, whatever the grace. The default is ten seconds; with `0` the
+document is released at once as well, in the close itself rather than on a
+timer.
 
 <!-- snippet-preamble
 import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/core';
@@ -723,32 +769,10 @@ import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/co
 ```ts
 const sharedModule = {
    workspace: {
-      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { revertGraceMs: 0 })
+      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs: 0 })
    }
 };
 ```
-
-`revertGraceMs` in `HydraniumTextDocumentsOptions` defers the revert of a
-document whose last close came from a lost connection: a data connection that
-closed, a GLSP connection that closed under a diagram, or a session a
-reconnecting client took over with its resume token.
-The store keeps the document, and its unsaved text, for that long. A client
-lost from the document may reclaim that text only within the grace of its own
-loss: an open under its id in that time, such as a session a reconnecting
-client registers again or takes over with its resume token, cancels the revert.
-An open under any other id, a reloaded page's new session or an editor
-attaching over the LSP head included, releases the document first and then
-opens it as a first open does: a session reads the file, and an editor keeps
-the text it opened with. So does an open under a lost id whose own grace has
-run out, though a later loss keeps the document waiting: that client would
-otherwise inherit unsaved text written after it was lost. A `create` of the URI
-is refused while the document waits. It is open for no client meanwhile, and
-`TextDocuments.isRevertPending(uri)` answers `true`; the integrity service
-treats it as open, so none of its unsaved text reaches disk. A close the
-client makes itself, `closeSession`, and a session's `dispose()` revert at
-once, whatever the grace. The default is ten seconds; with `0` the revert
-follows at once, and the document is released in the close itself rather than
-on a timer.
 
 ## `withOpen`
 
@@ -775,7 +799,7 @@ await session.withOpen(uri, () => session.save({ uri, model, baseVersion }));
 ## `create`
 
 `create(uri, text)` fails when a file exists at `uri`, when the URI waits out
-the revert grace, or when any client, the session itself included, has the URI
+the release grace, or when any client, the session itself included, has the URI
 open, including a client whose open lands while the create is under way: of
 two creates of one URI, at most one succeeds. Otherwise it opens a document
 holding `text` for the session. The document exists in memory only; it reaches
@@ -786,7 +810,7 @@ disk with the first `save`.
 `dispose()` closes every document the session has open, each through the
 ordinary close, and frees the id, all before it returns. A second `dispose()`
 does nothing. `dispose('lost')` ends the session as its connection going away
-does, so each document it was the last to have open waits out the revert
+does, so each document it was the last to have open waits out the release
 grace. Every other member throws `SessionClosedError` from then on,
 synchronously, before returning a promise.
 
@@ -831,7 +855,7 @@ connection.
 The language client's close is not a lost one, so when a page disposes both
 its data connection and its worker's language client, their order decides what
 a document open in both keeps. If the data connection closes last, its sessions
-end as lost, and the document keeps its unsaved text for the revert grace; if
+end as lost, and the document keeps its unsaved text for the release grace; if
 the language client closes last, the document reverts at once. An editor's
 `didClose` that closes a document last reverts it at once too.
 
@@ -859,7 +883,7 @@ the language client closes last, the document reverts at once. An editor's
   Code reports as a newer file on disk and Theia as out of sync. The gate only
   makes that order certain: the conflict follows whenever the server's write
   lands first.
-- A client that reconnects after the revert grace has run out finds its
+- A client that reconnects after the release grace has run out finds its
   sole-client documents reverted, and other sessions see the revert before
   the reconnecting session writes its edits again. It reports them lost
   wherever it cannot tell that its write lands on the text it was based on.

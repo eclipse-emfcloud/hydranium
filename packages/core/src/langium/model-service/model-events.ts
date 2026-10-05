@@ -9,8 +9,9 @@
 
 import { type CanonicalUri } from '@hydranium/protocol';
 import { type AstNode, type DocumentState } from '@hydranium/langium';
-import { type AstDocumentUpdatedEvent } from '../../documents/ast-document-manager.js';
-import { type DocumentDirtyChangedEvent } from '../../documents/hydranium-text-documents.js';
+import { type AstDocumentSavedEvent, type AstDocumentUpdatedEvent } from '../../documents/ast-document-manager.js';
+import { type DocumentDirtyChangedEvent } from '../../documents/dirty-state-tracker.js';
+import { type DocumentReleasedEvent } from '../../documents/hydranium-text-documents.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 
 /** Which documents a `ModelService` subscription hears about. */
@@ -61,14 +62,14 @@ export interface ModelDeletedEvent {
    readonly uri: CanonicalUri;
 }
 
-/** A document's text started or stopped differing from its file. */
+/** A document was saved: the AST manager's event, as `ModelService` hands it out. */
+export type ModelSavedEvent<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = AstDocumentSavedEvent<
+   TAst,
+   TDiagnostic
+>;
+
+/** A document's text started or stopped differing from its file: the store's event, as `ModelService` hands it out. */
 export type ModelDirtyChangedEvent = DocumentDirtyChangedEvent;
 
-/**
- * A document no client has open any more was released and reverts to disk.
- * The rebuild that reverts it follows as a {@link ModelUpdatedEvent}, unless a
- * client opens the document first or its file is deleted.
- */
-export interface ModelReleasedEvent {
-   readonly uri: CanonicalUri;
-}
+/** A document no client has open any more was released: the store's event, as `ModelService` hands it out. */
+export type ModelReleasedEvent = DocumentReleasedEvent;
