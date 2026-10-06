@@ -17,6 +17,7 @@ import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-docum
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { type CapturedLine, makeCapturingTracer, makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
+import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
 
 const A = 'file:///a.x';
 const B = 'file:///b.x';
@@ -33,6 +34,7 @@ function makeDocs(): { docs: HydraniumTextDocuments<TextDocument>; lines: Captur
          VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
       }
    } as unknown as ServerSharedServices;
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
    return { docs: new HydraniumTextDocuments(services), lines };
 }
 

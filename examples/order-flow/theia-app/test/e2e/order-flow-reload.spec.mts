@@ -88,7 +88,7 @@ test.describe.serial('Order-flow in Theia across a page reload', () => {
       // The old page ended its session as it stopped, so the old server let
       // go of the document and its unsaved text at once. Without that, the
       // session lives on until Theia drops the old page's connection, a
-      // minute in this app, and the document waits out the revert grace after.
+      // minute in this app, and the document waits out the release grace after.
       await expect
          .poll(() => serverLog(app).since(beforeReload), { message: 'the old server releasing the unsaved document', timeout: 20_000 })
          .toMatch(/fulfillment\.process\] Remove synced document: \d+ \(no client left\)/);

@@ -17,7 +17,7 @@ export interface SessionEnding {
 /**
  * Record each session end where it reaches the store, with its cause, and pass
  * it on. The cause decides whether a document the session was the last to have
- * open waits out the store's revert grace, so it is read at the store rather
+ * open waits out the store's release grace, so it is read at the store rather
  * than at the server.
  */
 export function recordSessionEndings(textDocuments: Pick<StubHydraniumTextDocuments, 'closeSession'>): SessionEnding[] {

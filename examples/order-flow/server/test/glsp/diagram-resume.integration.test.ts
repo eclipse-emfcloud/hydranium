@@ -75,7 +75,7 @@ describe('a diagram loading under an id its old connection still holds', () => {
       expect(resumed.state.modelSession).not.toBe(oldSession);
       expect(services.shared.model.ModelService.getSession(CLIENT_ID)).toBe(resumed.state.modelSession);
       // Reclaimed by the same id, not waiting out a grace that reverts it.
-      expect(store.isRevertPending(layoutUri)).toBe(false);
+      expect(store.isReleaseDeferred(layoutUri)).toBe(false);
       expect(store.get(layoutUri)?.getText()).toBe(edited);
       // The old connection's diagram stops, rather than writing under a session that ended.
       const oldStorage = old.sessionContainer.get<SourceModelStorage>(SourceModelStorage) as unknown as { disposed: boolean };

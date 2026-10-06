@@ -93,12 +93,12 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *     Both waits are capped by
  *     {@link HydraniumDocumentUpdateHandlerOptions.willSaveGateMs}.
  *
- * The revert to disk after a document's last close is not dispatched here:
- * the text store runs it for every head, the LSP head included, so a
- * `didCloseDocument` added in a subclass would build the document twice. A
- * change still debounced for the document is dropped when the store releases
- * it: the store's revert rebuilds the document from the file system provider
- * or removes it.
+ * What the build keeps after a document's last close is not dispatched here:
+ * the store hands the released document to the `DocumentReleaseHandler` for
+ * every head, the LSP head included, so a `didCloseDocument` added in a
+ * subclass would build the document twice. A change still debounced for the
+ * document is dropped when the store releases it: the release handler rebuilds
+ * the document from the file system provider or removes it.
  *
  * Adopters with their own handler subclass should extend this class
  * (not Langium's `DefaultDocumentUpdateHandler`) so all of them are
@@ -175,10 +175,10 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
          uri => this.pendingChanged.has(uri.toString()) || this.pendingDeleted.has(uri.toString())
       );
       // A change still debounced for a document the store has released would
-      // build it once more after the store's own revert: from the provider
-      // again, or, for a document the revert removed, by reading a file that
-      // is not there.
-      this.textDocuments.onDidCloseLastOpen(event => {
+      // build it once more after the release handler's build: from the
+      // provider again, or, for a document the release removed, by reading a
+      // file that is not there.
+      this.textDocuments.onDidReleaseDocument(event => {
          this.pendingChanged.delete(URI.parse(event.uri).toString());
          if (this.pendingChanged.size === 0 && this.pendingDeleted.size === 0) {
             this.pendingReason = undefined;

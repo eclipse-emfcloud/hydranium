@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type CanonicalUri, FRAMEWORK_CLIENT_IDS } from '@hydranium/protocol';
-import { type Disposable, Emitter, type Event } from 'vscode-languageserver';
+import { Emitter, type Event } from 'vscode-languageserver';
 import { INTEGRITY_CLIENT_ID } from '../langium/integrity/integrity-rule.js';
 import { DuplicateClientIdError, ReservedClientIdError, SessionClosedError } from './client-session-errors.js';
 
@@ -42,7 +42,7 @@ export interface ClientSessionClosedEvent {
 /**
  * Why a close happened. `'lost'` is a close caused by the client's connection
  * going away rather than by the client, and only such a last close waits out
- * the store's revert grace: a client that closed or ended on purpose has
+ * the store's release grace: a client that closed or ended on purpose has
  * discarded its unsaved edits, while one that lost its connection may be about
  * to register again and open the document once more.
  */
@@ -78,15 +78,15 @@ export class ClientSessionRegistry {
    protected readonly sessions = new Map<string, ClientSessionState>();
    protected readonly clientsByUri = new Map<CanonicalUri, Set<string>>();
    protected readonly opensByClient = new Map<string, Set<CanonicalUri>>();
+   /**
+    * Per document, the newest version id each client declared for its own
+    * buffer: the baseline of the store's per-client staleness guard. A
+    * client's goes when it closes the document, every one when the store
+    * releases it.
+    */
+   protected readonly clientVersions = new Map<CanonicalUri, Map<string, number>>();
    protected readonly reservedIds: ReadonlySet<string> = new Set(RESERVED_CLIENT_IDS);
    protected readonly sessionClosedEmitter = new Emitter<ClientSessionClosedEvent>();
-   /**
-    * The documents whose last open closed with a lost connection and whose
-    * revert is deferred, each with the timer that runs it. Any open of such a
-    * document cancels its timer; the store decides whether the opener keeps the
-    * unsaved text.
-    */
-   protected readonly pendingReverts = new Map<CanonicalUri, Disposable>();
 
    /** Fires once a session has been removed from the table, after all its opens closed. */
    get onDidCloseSession(): Event<ClientSessionClosedEvent> {
@@ -129,10 +129,20 @@ export class ClientSessionRegistry {
       return this.opensOf(clientId);
    }
 
-   /** Remove `clientId` from the session table and announce it with `cause`. A no-op for an id that is not registered. */
+   /**
+    * Remove `clientId` from the session table, with every client version it
+    * declared, and announce it with `cause`. A no-op for an id that is not
+    * registered. The versions go too: a client registered again under the same
+    * id counts its versions afresh.
+    */
    unregister(clientId: string, cause: SessionEndCause = 'closed'): void {
       if (!this.sessions.delete(clientId)) {
          return;
+      }
+      for (const [uri, versions] of this.clientVersions) {
+         if (versions.delete(clientId) && versions.size === 0) {
+            this.clientVersions.delete(uri);
+         }
       }
       this.sessionClosedEmitter.fire(Object.freeze({ clientId, cause }));
    }
@@ -144,9 +154,7 @@ export class ClientSessionRegistry {
     * Throws {@link SessionClosedError} for a session that is closing.
     */
    addOpen(uri: CanonicalUri, clientId: string): boolean {
-      if (this.sessions.get(clientId) === 'closing') {
-         throw new SessionClosedError(clientId);
-      }
+      this.assertCanOpen(clientId);
       let opens = this.opensByClient.get(clientId);
       if (opens?.has(uri)) {
          return false;
@@ -165,6 +173,13 @@ export class ClientSessionRegistry {
       return true;
    }
 
+   /** Throws {@link SessionClosedError} when `clientId` is a session that is closing, and so can open nothing more. */
+   assertCanOpen(clientId: string): void {
+      if (this.sessions.get(clientId) === 'closing') {
+         throw new SessionClosedError(clientId);
+      }
+   }
+
    /** Record that `clientId` closed `uri`. Returns `false` when it did not have it open. */
    removeOpen(uri: CanonicalUri, clientId: string): boolean {
       const opens = this.opensByClient.get(clientId);
@@ -179,7 +194,32 @@ export class ClientSessionRegistry {
       if (!clients?.size) {
          this.clientsByUri.delete(uri);
       }
+      const versions = this.clientVersions.get(uri);
+      versions?.delete(clientId);
+      if (!versions?.size) {
+         this.clientVersions.delete(uri);
+      }
       return true;
+   }
+
+   /** Take `version` as the newest `clientId` declared for `uri`, whether or not it has `uri` open. */
+   setClientVersion(uri: CanonicalUri, clientId: string, version: number): void {
+      let versions = this.clientVersions.get(uri);
+      if (!versions) {
+         versions = new Map();
+         this.clientVersions.set(uri, versions);
+      }
+      versions.set(clientId, version);
+   }
+
+   /** The newest version id `clientId` declared for `uri`. */
+   clientVersionOf(uri: CanonicalUri, clientId: string): number | undefined {
+      return this.clientVersions.get(uri)?.get(clientId);
+   }
+
+   /** Drop every client version of `uri`, for a document the store released. */
+   forgetClientVersions(uri: CanonicalUri): void {
+      this.clientVersions.delete(uri);
    }
 
    /** Whether `clientId` has `uri` open. */
@@ -207,24 +247,8 @@ export class ClientSessionRegistry {
       return [...this.clientsByUri].map(([uri, clients]) => ({ uri, clients: [...clients] }));
    }
 
-   /** Record `timer` as the deferred revert of `uri`. */
-   deferRevert(uri: CanonicalUri, timer: Disposable): void {
-      this.pendingReverts.set(uri, timer);
-   }
-
-   /** Whether the revert of `uri` is deferred. */
-   isRevertPending(uri: CanonicalUri): boolean {
-      return this.pendingReverts.has(uri);
-   }
-
-   /** Cancel the deferred revert of `uri`, if one is pending. */
-   cancelRevert(uri: CanonicalUri): void {
-      this.pendingReverts.get(uri)?.dispose();
-      this.pendingReverts.delete(uri);
-   }
-
    /**
-    * Forget every session, open and deferred revert without announcing
+    * Forget every session and open without announcing
     * anything, for a test double that resets between tests. Subscriptions
     * stay, so a listener registered before the clear hears the sessions that
     * end after it.
@@ -233,9 +257,6 @@ export class ClientSessionRegistry {
       this.sessions.clear();
       this.clientsByUri.clear();
       this.opensByClient.clear();
-      for (const timer of this.pendingReverts.values()) {
-         timer.dispose();
-      }
-      this.pendingReverts.clear();
+      this.clientVersions.clear();
    }
 }

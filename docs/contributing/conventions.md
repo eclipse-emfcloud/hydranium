@@ -435,9 +435,10 @@ means the grammar-generated shared module wasn't composed before
 
 Every class bound in a framework module takes `(services, options = {})`.
 Classes that are NOT bound in any module — pure data structures, utility
-types, value objects returned from service methods — take their data
-directly. They are not part of the dependency-injection graph and don't
-pretend to need services they don't use.
+types, value objects returned from service methods, and collaborators a class
+builds through a protected `create…` method — take their data directly. They
+are not part of the dependency-injection graph and don't pretend to need
+services they don't use.
 
 **Quick test:** open the module factory file (`langium/module.ts` /
 `langium/language-module.ts` / head-specific module files), search for
@@ -835,7 +836,14 @@ import/binding site. Three prefixes, plus bare descriptive names.
   interface, paired with a bare-named interface and bound by default in a
   module (adopters rebind to swap). Examples: `NameProvider` +
   `DefaultNameProvider`, `IntegrityService` + `DefaultIntegrityService`,
-  `WritableFileSystemProvider` + `DefaultFileSystemProvider`. A multi-impl
+  `WritableFileSystemProvider` + `DefaultFileSystemProvider`. A long-lived
+  collaborator behind an interface that a class builds through a protected
+  `create…` method instead of a module binding takes the prefix too; adopters
+  swap it by overriding that method (`TextLedger` + `DefaultTextLedger`, built
+  by `HydraniumTextDocuments`). Being unbound, it takes its data directly (see
+  Constructor shape). The class calls such a method on first use, through a
+  getter, not in its constructor, where a subclass's own fields do not exist
+  yet. A multi-impl
   family with no single default uses descriptive bare names instead
   (`JsonSerializer`/`YamlSerializer`, `NameBasedKeyProvider`/`PositionalKeyProvider`,
   `SystemClock` paired with the test `makeFakeClock`), optionally with a

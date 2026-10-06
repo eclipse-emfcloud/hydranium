@@ -80,7 +80,7 @@ export interface ClientSession<
 
    /**
     * Open `uri` for this session, reading it from disk unless some client has
-    * it open already or it holds this client's unsaved text within its revert
+    * it open already or it holds this client's unsaved text within its release
     * grace. `options` are kept for this open until it closes; a repeat open,
     * concurrent or not, keeps the options of the first.
     */
@@ -90,7 +90,7 @@ export interface ClientSession<
    /**
     * Create a document with `text` and open it for this session. It reaches
     * disk on the first `save`. Fails when the file exists, any client has the
-    * URI open, or the URI waits out the revert grace, and of two creates of one
+    * URI open, or the URI waits out the release grace, and of two creates of one
     * URI at most one succeeds.
     *
     * Resolves with the version the created document took, which a write based
@@ -137,8 +137,8 @@ export interface ClientSession<
     * End the session: close everything it has open and free its id.
     * Idempotent. `cause` is `'lost'` when the session ends because its
     * client's connection went away, which lets each document it was the last
-    * to have open wait out the store's revert grace; ending it for any other
-    * reason reverts such a document at once.
+    * to have open wait out the store's release grace; ending it for any other
+    * reason releases such a document at once.
     */
    dispose(cause?: SessionEndCause): void;
    /**
@@ -497,8 +497,8 @@ export class DefaultClientSession<
          throw new Error(`Cannot create ${uri}: the file exists`);
       }
       this.assertLive();
-      if (this.services.workspace.TextDocuments.isRevertPending(uri)) {
-         throw new Error(`Cannot create ${uri}: it holds the unsaved text of a lost client, waiting out the revert grace`);
+      if (this.services.workspace.TextDocuments.isReleaseDeferred(uri)) {
+         throw new Error(`Cannot create ${uri}: it holds the unsaved text of a lost client, waiting out the release grace`);
       }
       if (this.modelService.isOpen(uri)) {
          throw new Error(`Cannot create ${uri}: it is open in a client`);

@@ -35,15 +35,15 @@ export const UNKNOWN_CLIENT_ID = 'unknown';
 
 /**
  * Synthetic author id on the `onDocumentUpdated` broadcast a data-server
- * emits after the LAST client closed a document and the framework rebuilt it
- * from its disk content (discarding unsaved in-session edits). Not a real
- * client: it lets consumers distinguish the revert broadcast from
- * client-authored updates.
+ * emits for the build that follows a document's release, once no client holds
+ * it; by default that build reverts the document to its disk content,
+ * discarding unsaved edits. Not a real client: it lets consumers tell the
+ * release broadcast from client-authored updates.
  */
-export const REVERT_ON_CLOSE_CLIENT_ID = 'revert-on-close';
+export const DOCUMENT_RELEASE_CLIENT_ID = 'document-release';
 
 /**
  * Every id the framework reserves, for a client checking that the identity it
  * is about to mint collides with none of them.
  */
-export const FRAMEWORK_CLIENT_IDS: readonly string[] = [LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID];
+export const FRAMEWORK_CLIENT_IDS: readonly string[] = [LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID];

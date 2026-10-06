@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import * as clientIds from '../src/client-ids';
-import { FRAMEWORK_CLIENT_IDS, LANGUAGE_CLIENT_ID, REVERT_ON_CLOSE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../src/client-ids';
+import { FRAMEWORK_CLIENT_IDS, LANGUAGE_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../src/client-ids';
 
 describe('client-ids', () => {
    // The literal IS the contract: it travels as `sourceClientId`, so both ends
@@ -24,8 +24,8 @@ describe('client-ids', () => {
       expect(UNKNOWN_CLIENT_ID).toBe('unknown');
    });
 
-   it('exposes the revert-on-close broadcast id as a stable, non-empty literal', () => {
-      expect(REVERT_ON_CLOSE_CLIENT_ID).toBe('revert-on-close');
+   it('exposes the release broadcast id as a stable, non-empty literal', () => {
+      expect(DOCUMENT_RELEASE_CLIENT_ID).toBe('document-release');
    });
 
    it('keeps every reserved id distinct so routing cannot collide', () => {

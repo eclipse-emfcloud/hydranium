@@ -461,7 +461,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     *   mutation rode the current build, so `ModelService.syncToLanguageClient`
     *   (the persistent integrity-settled listener) mirrors it to the client by
     *   *content* (shadow diff), and the editor shows it as an unsaved change.
-    * - **Held only through the data or GLSP head**, or waiting out the revert
+    * - **Held only through the data or GLSP head**, or waiting out the release
     *   grace after its last client's connection was lost → the store is the
     *   authority, and those heads read the correction from the settled build.
     *   In silent mode it is also written to disk when the text it was computed
@@ -499,9 +499,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
 
-      // A document waiting out the revert grace still holds its lost client's
+      // A document waiting out the release grace still holds its lost client's
       // unsaved text, so writing it as a closed file would persist that text.
-      if (this.textDocuments.isOpenInAnyClient(document.uri) || this.textDocuments.isRevertPending(document.uri)) {
+      if (this.textDocuments.isOpenInAnyClient(document.uri) || this.textDocuments.isReleaseDeferred(document.uri)) {
          if (this.syncMode === 'silent' && parsedFrom !== undefined) {
             await this.persistIfDiskMatches(document, parsedFrom);
          }
@@ -567,7 +567,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             return;
          }
          await this.fileSystemProvider.writeFile(uri, repaired);
-         this.textDocuments.updateDiskBaseline(document.uri, repaired);
+         this.textDocuments.setDiskBaseline(document.uri, repaired);
       });
    }
 

@@ -422,9 +422,9 @@ export class DefaultAstDocumentManager<
       // every first open.
       //
       // So an already-open `open()` records the attaching client's open and nothing
-      // else. The open is per `(uri, clientId)` and the last-close revert counts down
-      // to it, so skipping it lets the first client's close tear down a document
-      // another client is still reading. A document waiting out the revert grace
+      // else. The open is per `(uri, clientId)` and the store releases the document
+      // only once none is left, so skipping it lets the first client's close tear down a document
+      // another client is still reading. A document waiting out the release grace
       // is still loaded: a client lost from it within its own grace attaches and
       // keeps its text, and for any other client the attach releases it, so the
       // open reads the file.
@@ -439,7 +439,7 @@ export class DefaultAstDocumentManager<
             // Text the caller supplies was not read from the file, so no file
             // is assumed: the document is dirty until its first save, whatever
             // the file holds.
-            this.textDocuments.updateDiskBaseline(args.uri, undefined);
+            this.textDocuments.setDiskBaseline(args.uri, undefined);
          }
          const built = this.getDocument(args.uri);
          if (creates && built) {

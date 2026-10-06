@@ -43,6 +43,7 @@ import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/documen
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
+import { DefaultDocumentReleaseHandler } from '../../../src/documents/document-release-handler.js';
 
 const DOC_URI = 'file:///a.x';
 const IDLE_MS = 1000;
@@ -102,6 +103,7 @@ function makeComposition(): Composition {
    });
 
    services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
    const docs = new HydraniumTextDocuments<TextDocument>(services);
    // The store is itself a workspace service — close the self-reference so the
    // residency service reads the SAME real instance.

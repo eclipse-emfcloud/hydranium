@@ -113,7 +113,8 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    /**
     * Close the session's open of `uri`. Counterpart to
     * {@link openModelDocument}; the document stays open until every client
-    * has closed it, and the last close reverts it to disk. The default
+    * has closed it, and then the server releases it, by default reverting it
+    * to disk. The default
     * `DataServer` impl ALSO releases any watch for the same
     * `(uri, clientId)` (a forgotten {@link unwatchModelDocument} would
     * otherwise leak dispatch; the implicit unwatch is idempotent).

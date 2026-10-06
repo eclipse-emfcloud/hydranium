@@ -57,8 +57,8 @@ export interface TransferDocumentUpdatedEvent<
     * The client whose write this event echoes: the author of the version on a
     * `'changed'`, and the unknown-client id on a `'rebuilt'`, which echoes no
     * write. A recipient compares it against its own id to recognise its echo.
-    * The rebuild that reverts a document to disk after its last close names
-    * the revert-on-close id instead.
+    * The build that follows a document's release names the release id
+    * instead.
     */
    sourceClientId: string;
    reason: TransferDocumentUpdateReason;

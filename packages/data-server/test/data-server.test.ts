@@ -39,7 +39,7 @@ import { type FakeClock, makeCapturingDataClient, makeFakeClock, tick, waitFor }
 import { makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import {
    IntegrityService,
-   REVERT_ON_CLOSE_CLIENT_ID,
+   DOCUMENT_RELEASE_CLIENT_ID,
    type DocumentUriPolicy,
    type EncodedTransferDocument,
    type HydraniumLanguageServices,
@@ -832,13 +832,13 @@ describe('DataServer', () => {
          }
       });
 
-      it('drops the last-close revert mark on deletion, so a recreated file does not broadcast to nobody', async () => {
+      it('drops the release mark on deletion, so a recreated file does not broadcast to nobody', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          bundle.textDocuments.seedOpen(URI_A, 'name:A', 'editor-1');
          const { proxy, events, pair } = makeHarness(bundle.services);
          try {
-            // Nobody ever watches here, so the last-close revert broadcast is
+            // Nobody ever watches here, so the release broadcast is
             // the only thing that could put an event on this wire — which is
             // what makes the empty array below mean something.
             bundle.textDocuments.fireClose(URI_A, 'editor-1');
@@ -1090,7 +1090,7 @@ describe('DataServer', () => {
 
             const edited = bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-1');
             bundle.textDocuments.applyContentChange(URI_B, 'name:edited', 'other');
-            bundle.textDocuments.updateDiskBaseline(URI_A, 'name:edited');
+            bundle.textDocuments.setDiskBaseline(URI_A, 'name:edited');
 
             await waitFor(() => dirtyChanges.length === 2);
             expect(dirtyChanges).toEqual([
@@ -1127,7 +1127,7 @@ describe('DataServer', () => {
       });
    });
 
-   describe('revert-on-close broadcast', () => {
+   describe('release broadcast', () => {
       it('broadcasts the rebuild after the LAST client closed an unsubscribed document, attributed to the revert author', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'session-edited' });
@@ -1142,7 +1142,7 @@ describe('DataServer', () => {
             await waitFor(() => events.length === 1);
 
             expect(events[0]?.document.uri).toBe(URI_A);
-            expect(events[0]?.sourceClientId).toBe(REVERT_ON_CLOSE_CLIENT_ID);
+            expect(events[0]?.sourceClientId).toBe(DOCUMENT_RELEASE_CLIENT_ID);
          } finally {
             pair.dispose();
          }
@@ -1182,7 +1182,7 @@ describe('DataServer', () => {
 
             fireRebuild(bundle, reverted);
             await waitFor(() => events.length === 1);
-            expect(events[0]?.sourceClientId).toBe(REVERT_ON_CLOSE_CLIENT_ID);
+            expect(events[0]?.sourceClientId).toBe(DOCUMENT_RELEASE_CLIENT_ID);
          } finally {
             pair.dispose();
          }
@@ -1206,7 +1206,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('baselines the next watch on the document it finds, not on the state a revert broadcast sent', async () => {
+      it('baselines the next watch on the document it finds, not on the state a release broadcast sent', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'session-edited' });
          bundle.textDocuments.seedOpen(URI_A, 'name:session-edited', 'editor-1');

@@ -53,15 +53,16 @@ export const DEFAULT_LOGGED_PHASES: DocumentState[] = [
 /**
  * The build reasons the framework stages through
  * {@link HydraniumDocumentBuilder.markNextReason}: the LSP events the update
- * handler dispatches on, and `didClose` for the revert the text store runs
- * after a last close. Exposed so a subclass layering reasons of its own keeps
- * the names the framework emits.
+ * handler dispatches on, and `didRelease` for the builds the
+ * `DocumentReleaseHandler` runs once the text store has released a document.
+ * Exposed so a subclass layering reasons of its own keeps the names the
+ * framework emits.
  */
 export const HYDRANIUM_BUILD_REASONS = Object.freeze({
    didOpen: 'didOpen',
    didChangeContent: 'didChangeContent',
    didChangeWatchedFiles: 'didChangeWatchedFiles',
-   didClose: 'didClose'
+   didRelease: 'didRelease'
 } as const);
 
 /**
@@ -294,7 +295,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    /**
     * Stage an LSP event name for the next `update()` call. Adopters call before
     * the update fires; `HydraniumDocumentUpdateHandler` does it for the LSP
-    * events, and the text store for the revert that follows a last close.
+    * events, and the release handler for the builds that follow a release.
     *
     * The framework stages the value and never reads it back. The consumer is a
     * subclass overriding the build logging, which takes
@@ -793,7 +794,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * `drained` set, from a {@link WorkspaceLock} read: it runs once no write
     * runs or is queued, so no locked build is left that could still carry a
     * waited-on document. A cancelled build is usually followed by its
-    * canceller's, but a write that builds nothing, such as a last-close revert
+    * canceller's, but a write that builds nothing, such as a release build
     * that finds its document reopened, leaves a wait armed during the build
     * with nothing to resolve it, and so does a build that fails. One read
     * serves every build that throws before it runs.
@@ -1068,7 +1069,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * both hold it by. A document created and not yet saved has text but no
     * file, and a policy that checks the disk reports it absent. A registered
     * document whose file has gone is kept too: its rebuild then fails on the
-    * read, which is how the revert on last close learns to remove it rather
+    * read, which is how the release handler learns to remove it rather
     * than leave it holding its last client's text.
     */
    protected flattenAndAdaptURI(uri: URI): URI[] {

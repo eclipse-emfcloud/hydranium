@@ -13,7 +13,7 @@ import { waitFor } from '@hydranium/protocol/testing';
 import { apply, move, openDiagram, textOf } from './uncommitted-edit-harness.js';
 
 describe('a diagram whose connection ends', () => {
-   it('keeps its unsaved text for the revert grace when the server shuts down', async () => {
+   it('keeps its unsaved text for the release grace when the server shuts down', async () => {
       const setup = await openDiagram();
       const { services, diagram, layoutUri } = setup;
       const store = services.shared.workspace.TextDocuments;
@@ -23,7 +23,7 @@ describe('a diagram whose connection ends', () => {
 
       await diagram.shutdown();
 
-      expect(store.isRevertPending(layoutUri)).toBe(true);
+      expect(store.isReleaseDeferred(layoutUri)).toBe(true);
       expect(textOf(setup, layoutUri)).toBe(edited);
    });
 
@@ -35,7 +35,7 @@ describe('a diagram whose connection ends', () => {
 
       await diagram.server.disposeClientSession({ clientSessionId: diagram.state.clientId });
 
-      expect(store.isRevertPending(layoutUri)).toBe(false);
+      expect(store.isReleaseDeferred(layoutUri)).toBe(false);
       await waitFor(() => !store.isDirty(layoutUri), { message: 'the closed diagram’s text never reverted' });
    });
 

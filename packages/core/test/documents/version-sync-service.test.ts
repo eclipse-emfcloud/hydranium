@@ -342,9 +342,9 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       const rig = makeRig();
       rig.sync.registerDeferredBuilds(() => true);
 
-      await rig.sync.requestRecoveryBuild(uri, needed({ ignoreDeferred: true, reason: 'didClose' }));
+      await rig.sync.requestRecoveryBuild(uri, needed({ ignoreDeferred: true, reason: 'didRelease' }));
 
-      expect(rig.builds).toEqual([{ changed: [URI_A], deleted: [], reason: 'didClose' }]);
+      expect(rig.builds).toEqual([{ changed: [URI_A], deleted: [], reason: 'didRelease' }]);
    });
 
    it('removes the document when a still-needed request of the batch asks to', async () => {

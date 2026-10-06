@@ -20,11 +20,13 @@ import { DefaultVersionSyncService } from '../../src/documents/version-sync-serv
 import { describe, expect, it, vi } from 'vitest';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { type DocumentDirtyChangedEvent, HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { type DocumentDirtyChangedEvent } from '../../src/documents/dirty-state-tracker.js';
+import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeFakeAstNode, makeNoopTracer, makeStubLangiumDocuments, type StubLangiumDocuments } from '../../src/testing/index.js';
+import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
 
 const FILE = URI.file('/hydranium-test/dirty.a').toString();
 const OTHER_FILE = URI.file('/hydranium-test/other.a').toString();
@@ -79,7 +81,7 @@ interface DirtyRig {
    holdNextBuild(): () => void;
 }
 
-function makeRig(revertGraceMs = 0): DirtyRig {
+function makeRig(releaseGraceMs = 0): DirtyRig {
    const clock = makeFakeClock();
    const uriPolicy = new DefaultDocumentUriPolicy();
    const files = new Map<string, string>([[FILE, DISK]]);
@@ -161,7 +163,8 @@ function makeRig(revertGraceMs = 0): DirtyRig {
    } as unknown as ServerSharedServices;
    const sync = new CountingVersionSyncService(services);
    services.workspace.VersionSyncService = sync;
-   const docs = new EditorSavingTextDocuments(services, { revertGraceMs });
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
+   const docs = new EditorSavingTextDocuments(services, { releaseGraceMs });
    Object.assign(services.workspace, { TextDocuments: docs });
    const flips: string[] = [];
    const flipVersions: number[] = [];
@@ -244,9 +247,9 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
 
-      docs.updateDiskBaseline(FILE, EDITED);
+      docs.setDiskBaseline(FILE, EDITED);
       expect(docs.isDirty(FILE)).toBe(false);
-      docs.updateDiskBaseline(FILE, undefined);
+      docs.setDiskBaseline(FILE, undefined);
 
       expect(docs.isDirty(FILE)).toBe(true);
       expect(flips).toEqual([`${FILE} true`, `${FILE} false`, `${FILE} true`]);
@@ -277,7 +280,7 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
 
    it('ignores a baseline for a URI no client has open', () => {
       const { docs, flips } = makeRig();
-      docs.updateDiskBaseline(FILE, undefined);
+      docs.setDiskBaseline(FILE, undefined);
       open(docs, 'form');
 
       expect(docs.isDirty(FILE)).toBe(false);
@@ -403,6 +406,22 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
          versions: [2, 3],
          hash: textHash(DISK)
       });
+   });
+
+   it('names the file text when the connection goes after the revert parsed it', async () => {
+      const rig = makeRig();
+      open(rig.docs, 'form');
+      rig.docs.applyContentChange(FILE, EDITED, 'form');
+      // The revert parses, then its diagnostics publish finds the peer gone.
+      rig.failNextBuild(new Error('Connection is disposed.'), () => {
+         const textDocument = TextDocument.create(FILE, 'plaintext', 0, DISK);
+         rig.sync.modelProduced(rig.documents.set(URI.parse(FILE), makeFakeAstNode({ $type: 'Root' }), { textDocument }));
+      });
+
+      rig.docs.notifyDidCloseTextDocument({ textDocument: { uri: FILE } }, 'form');
+      await waitFor(() => rig.flips.length === 2);
+
+      expect({ flips: rig.flips, hash: rig.flipHashes[1] }).toEqual({ flips: [`${FILE} true`, `${FILE} false`], hash: textHash(DISK) });
    });
 
    it('waits for the parse of its own document after a cancelled revert, not for any parse', async () => {

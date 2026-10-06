@@ -25,7 +25,7 @@ import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
-import { AstDocument, type AstDocumentSavedEvent } from '../../documents/ast-document-manager.js';
+import { AstDocument } from '../../documents/ast-document-manager.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
@@ -40,6 +40,7 @@ import {
    type ModelEventFilter,
    type ModelPhaseFilter,
    type ModelReleasedEvent,
+   type ModelSavedEvent,
    type ModelsBuiltEvent,
    type ModelUpdatedEvent
 } from './model-events.js';
@@ -285,9 +286,17 @@ export interface ModelService<
     * it. A document saved before its first build arrives as an empty envelope
     * at `UNRECORDED_VERSION`, whose `root` is `undefined` despite its type.
     */
-   onModelSaved(listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void, filter?: ModelEventFilter): Disposable;
+   onModelSaved(listener: (event: ModelSavedEvent<TAst, TDiagnostic>) => void, filter?: ModelEventFilter): Disposable;
    onModelDeleted(listener: (event: ModelDeletedEvent) => void, filter?: ModelEventFilter): Disposable;
+   /** Fires when a document's text starts or stops differing from its file. */
    onDirtyChanged(listener: (event: ModelDirtyChangedEvent) => void, filter?: ModelEventFilter): Disposable;
+   /**
+    * Fires when the store releases a document no client has open any more.
+    * What the build keeps for it is up to the
+    * `DocumentReleaseHandler` slot; the default reverts it to disk, and that
+    * rebuild follows as an {@link onModelUpdated} event, unless a client opens
+    * the document first or its file is deleted.
+    */
    onModelReleased(listener: (event: ModelReleasedEvent) => void, filter?: ModelEventFilter): Disposable;
    /** Fires when `filter.clientId` closes `filter.uri`, its session ending included. */
    onClientClosed(listener: () => void, filter: { readonly uri: string; readonly clientId: string }): Disposable;
@@ -1145,7 +1154,7 @@ export class DefaultModelService<
       });
    }
 
-   onModelSaved(listener: (event: AstDocumentSavedEvent<TAst, TDiagnostic>) => void, filter: ModelEventFilter = {}): Disposable {
+   onModelSaved(listener: (event: ModelSavedEvent<TAst, TDiagnostic>) => void, filter: ModelEventFilter = {}): Disposable {
       const target = this.filterUri(filter);
       return this.services.workspace.TextDocuments.onDidSave(event => {
          // LangiumDocuments keys by the canonical form, the saved event by the
@@ -1180,7 +1189,7 @@ export class DefaultModelService<
 
    onModelReleased(listener: (event: ModelReleasedEvent) => void, filter: ModelEventFilter = {}): Disposable {
       const target = this.filterUri(filter);
-      return this.services.workspace.TextDocuments.onDidCloseLastOpen(event => {
+      return this.services.workspace.TextDocuments.onDidReleaseDocument(event => {
          if (this.matches(target, event.uri)) {
             listener(event);
          }

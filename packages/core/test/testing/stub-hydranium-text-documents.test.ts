@@ -44,6 +44,7 @@ import {
    makeStubLangiumDocuments
 } from '../../src/testing/index.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
+import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
 
 const URI_ONE = 'file:///a.x';
 const URI_TWO = 'file:///b.x';
@@ -64,6 +65,7 @@ function realStore(): HydraniumTextDocuments<TextDocument> {
          VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
       }
    });
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
    return new HydraniumTextDocuments<TextDocument>(services);
 }
 
@@ -313,6 +315,19 @@ describe('makeStubHydraniumTextDocuments — save and reset', () => {
       expect(stub.isOpenInLanguageClient(URI_TWO)).toBe(false);
       expect(closes).toBe(1);
       expect(await stub.applyEditToLanguageClient(URI_ONE, 'pushed')).toEqual({ applied: true });
+   });
+});
+
+describe('makeStubHydraniumTextDocuments — release order', () => {
+   it("announces a last close released, then clean, in the real store's order", () => {
+      const stub = makeStubHydraniumTextDocuments();
+      const events: string[] = [];
+      stub.onDidReleaseDocument(() => events.push('released'));
+      stub.onDidChangeDirty(event => events.push(event.text === undefined ? 'clean, no text' : `dirty: ${event.text.dirty}`));
+      stub.seedOpen(URI_ONE, 'one', AUTHORING_CLIENT);
+      stub.applyContentChange(URI_ONE, 'two', AUTHORING_CLIENT);
+      stub.fireClose(URI_ONE, AUTHORING_CLIENT);
+      expect(events).toEqual(['dirty: true', 'released', 'clean, no text']);
    });
 });
 

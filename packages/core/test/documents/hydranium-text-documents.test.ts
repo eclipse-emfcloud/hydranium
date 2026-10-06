@@ -21,8 +21,19 @@ import type { ServerSharedServices } from '../../src/langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultLanguageClientShadow, type LanguageClientShadow } from '../../src/documents/language-client-shadow.js';
+import { type AstNode } from '@hydranium/langium';
+import { asLanguageClientUri, type CanonicalUri, isSessionClosedError, textHash } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
+import {
+   DefaultDocumentReleaseHandler,
+   type DocumentReleaseHandler,
+   DocumentReleaseSkippedError
+} from '../../src/documents/document-release-handler.js';
+import { DefaultDirtyStateTracker, type DirtyStateTracker } from '../../src/documents/dirty-state-tracker.js';
+import { DefaultTextLedger, type TextLedger } from '../../src/documents/text-ledger.js';
 
 const URI = 'file:///a.x';
 
@@ -50,27 +61,32 @@ interface LogCall {
 
 interface LoggerStub {
    warnCalls: LogCall[];
+   errorCalls: LogCall[];
    infoCalls: LogCall[];
    debugCalls: LogCall[];
    trace: () => LoggerStub;
+   info: () => void;
    with: (uri: string) => Record<string, (msg: string) => void>;
 }
 
 function makeLogger(): LoggerStub {
    const warnCalls: LogCall[] = [];
+   const errorCalls: LogCall[] = [];
    const infoCalls: LogCall[] = [];
    const debugCalls: LogCall[] = [];
    const noop = (): void => undefined;
    const stub: LoggerStub = {
       warnCalls,
+      errorCalls,
       infoCalls,
       debugCalls,
       trace: () => stub,
+      info: noop,
       with: (uri: string) => ({
          warn: (message: string) => warnCalls.push({ uri, message }),
          info: (message: string) => infoCalls.push({ uri, message }),
          debug: (message: string) => debugCalls.push({ uri, message }),
-         error: noop,
+         error: (message: string) => errorCalls.push({ uri, message }),
          trace: noop,
          // refreshContent (triggered when a second client attaches to an
          // already-open URI) routes through startTimerForUri.
@@ -85,7 +101,7 @@ function makeSharedServices(
    logger?: LoggerStub,
    uriPolicy: unknown = new DefaultDocumentUriPolicy()
 ): ServerSharedServices {
-   return {
+   const services = {
       lsp: connection ? { Connection: connection } : undefined,
       Logger: { for: () => logger },
       // The stub's `with(uri)` surface carries startTimer/warn, so it doubles as the Tracer.
@@ -102,6 +118,8 @@ function makeSharedServices(
          DocumentUriPolicy: uriPolicy
       }
    } as unknown as ServerSharedServices;
+   services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
+   return services;
 }
 
 function makeDocs(
@@ -1532,7 +1550,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
    it('reconcileExternalContent steps the sequence for changed content while closed', () => {
       // The close-revert rebuild (and a watched-file change) swaps a CLOSED
       // document's content outside the store's write paths — the persisted
-      // sequence must step so the revert broadcast and later gate reads see
+      // sequence must step so the release broadcast and later gate reads see
       // a version consistent with the content transition.
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'x\n');
@@ -1962,7 +1980,7 @@ describe('HydraniumTextDocuments change with no known client buffer', () => {
 describe('HydraniumTextDocuments URI normalization', () => {
    // LSP clients normally send already-percent-encoded URIs, so raw === normalized
    // and the gap below never bites in practice. But the manager keeps its own state
-   // (the per-URI `__documents` tracking record and the shadow) alongside the
+   // (its collaborators' per-URI entries) alongside the
    // inherited NormalizedTextDocuments store, whose get/set/delete normalize the
    // key. If the manager keyed that state by the raw event URI, a non-canonical URI
    // would be stored under one key but read back under another by the inherited
@@ -2018,6 +2036,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
             DocumentUriPolicy: linkAware
          }
       } as unknown as ServerSharedServices;
+      services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
       return new HydraniumTextDocuments<TextDocument>(services);
    }
 
@@ -2035,14 +2054,27 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       expect(docs.get(REAL)).toBeUndefined();
    });
 
-   /** Shows what the store keeps per client-facing URI, which no public read reaches. */
-   class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
-      languageClientState(uri: string): { uris: string[]; shadowed: string[]; pending: string[] } {
+   /** Shows what the shadow keeps per client-facing URI, which no public read reaches. */
+   class InspectableShadow extends DefaultLanguageClientShadow {
+      stateOf(key: CanonicalUri): { uris: string[]; shadowed: string[]; pending: string[] } {
          return {
-            uris: [...(this.__documents.get(this.documentKey(uri))?.languageClientDocuments?.keys() ?? [])].sort(),
-            shadowed: [LINK, REAL].filter(clientUri => this.__shadow.isTracked(clientUri)).sort(),
-            pending: [...this.__pendingPushes.keys()].sort()
+            uris: [...(this.opens.get(key)?.keys() ?? [])].sort(),
+            shadowed: [LINK, REAL].filter(clientUri => this.baselines.has(asLanguageClientUri(clientUri))).sort(),
+            pending: [...this.pending.keys()].sort()
          };
+      }
+   }
+
+   class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      protected override createLanguageClientShadow(): LanguageClientShadow {
+         return new InspectableShadow(this.configuration, this.tracer);
+      }
+
+      languageClientState(uri: string): { uris: string[]; shadowed: string[]; pending: string[] } {
+         if (!(this.languageClientShadow instanceof InspectableShadow)) {
+            throw new Error('expected the inspectable shadow');
+         }
+         return this.languageClientShadow.stateOf(this.documentKey(uri));
       }
    }
 
@@ -2066,6 +2098,7 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
             DocumentUriPolicy: linkAware
          }
       } as unknown as ServerSharedServices;
+      services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
       return { docs: new InspectableTextDocuments(services), recorded };
    }
 
@@ -2103,6 +2136,42 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       // A settled-text push reaches BOTH tabs, each addressed at its own spelling.
       await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
       expect(recorded.map(targetUriOf).sort()).toEqual([LINK, REAL].sort());
+   });
+
+   it('diffs a push to a tab closed and reopened with other text against that text, not the closed one', async () => {
+      const { docs, recorded } = makeConnectedStore();
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
+      // One tab closes while the other keeps the document, then reopens holding other text.
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: REAL } }, LANGUAGE_CLIENT_ID);
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'x\ny\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      recorded.length = 0;
+      await docs.applyEditToLanguageClient(REAL, 'a\nC\n');
+      const toReal = recorded.find(rec => targetUriOf(rec) === REAL);
+      expect(toReal).toBeDefined();
+      const edits = (toReal!.params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
+      expect(TextDocumentImpl.applyEdits(TextDocumentImpl.create(REAL, 'plaintext', 1, 'x\ny\n'), edits)).toBe('a\nC\n');
+   });
+
+   it('keeps what it tracks for a URI on a close the language client never opened it under', async () => {
+      const { docs } = makeConnectedStore();
+      // Only another client holds the document; a push still goes to the editor's spelling.
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } }, 'form-client');
+      await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
+      const tracked = docs.languageClientState(REAL);
+      expect(tracked.pending).toEqual([REAL]);
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: REAL } }, LANGUAGE_CLIENT_ID);
+      expect(docs.languageClientState(REAL)).toEqual(tracked);
    });
 
    it('forgets every spelling the language client opened the file under once it closes', async () => {
@@ -2152,6 +2221,30 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       expect(TextDocumentImpl.applyEdits(heldByTabTwo, edits)).toBe('a\nb\nc\nd\n');
    });
 
+   it('numbers a reopened buffer afresh after a close under a URI the editor never opened', () => {
+      const docs = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'a\n' } }, LANGUAGE_CLIENT_ID);
+      // Another client keeps the document, so the editor's close does not release it.
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\n' } }, 'glsp-client');
+      docs.notifyDidChangeTextDocument(
+         { textDocument: { uri: LINK, version: 9 }, contentChanges: [{ text: 'nine\n' }] },
+         LANGUAGE_CLIENT_ID
+      );
+      // The editor closes under the real path, which ends its hold.
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: REAL } }, LANGUAGE_CLIENT_ID);
+      expect(docs.isOpenInLanguageClient(REAL)).toBe(false);
+      // Its reopened buffer numbers from 1 again; a guard left at 9 drops this edit.
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'nine\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      docs.notifyDidChangeTextDocument(
+         { textDocument: { uri: LINK, version: 2 }, contentChanges: [{ text: 'typed\n' }] },
+         LANGUAGE_CLIENT_ID
+      );
+      expect(docs.get(REAL)?.getText()).toBe('typed\n');
+   });
+
    it('treats a file opened under both its symlink and real path as one document', () => {
       const docs = makeStore();
       // Open the SAME physical file under the symlink path (S) and the real path (R).
@@ -2197,7 +2290,7 @@ describe('HydraniumTextDocuments content hash', () => {
    /** Reads the hash a release recorded for the next open to compare against. */
    class HashProbe extends HydraniumTextDocuments<TextDocument> {
       recordedHash(uri: string): string | undefined {
-         return this.__versionSequences.get(this.documentKey(uri))?.contentHash;
+         return this.textLedger.recordOf(this.documentKey(uri))?.hash;
       }
    }
 
@@ -2210,5 +2303,454 @@ describe('HydraniumTextDocuments content hash', () => {
       openInLanguageClient(docs, text);
       docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
       expect(docs.recordedHash(URI)).toBe(digest);
+   });
+});
+
+describe('HydraniumTextDocuments per-client staleness guard', () => {
+   it("accepts a client's change whose own counter trails the shared version", () => {
+      const { docs } = makeDocs();
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'a\n' } }, 'form-editor');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 3 }, contentChanges: [{ text: 'c\n' }] }, LANGUAGE_CLIENT_ID);
+      // The form editor's own counter moves from 1 to 2 while the shared version is at 3.
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'form\n' }] }, 'form-editor');
+      expect(docs.get(URI)?.getText()).toBe('form\n');
+   });
+
+   it("drops a client's change below the last id that client declared", () => {
+      const { docs } = makeDocs();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'a\n' } }, 'form-editor');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 10 }, contentChanges: [{ text: 'ten\n' }] }, 'form-editor');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 5 }, contentChanges: [{ text: 'five\n' }] }, 'form-editor');
+      expect(docs.get(URI)?.getText()).toBe('ten\n');
+   });
+
+   it("forgets every writer's version at the release, so a reopened document starts the guard afresh", () => {
+      const { docs } = makeDocs();
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 10 }, contentChanges: [{ text: 'ten\n' }] }, 'form-editor');
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      openInLanguageClient(docs, 'a\n');
+      // Above the reopened shared version, below the 10 a kept version would remember.
+      expect(docs.version(URI)).toBeLessThan(5);
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 5 }, contentChanges: [{ text: 'five\n' }] }, 'form-editor');
+      expect(docs.get(URI)?.getText()).toBe('five\n');
+   });
+
+   it("counts a re-registered client's versions afresh once its session ended", () => {
+      const { docs } = makeDocs();
+      openInLanguageClient(docs, 'a\n');
+      docs.registerSession('form-editor');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 10 }, contentChanges: [{ text: 'ten\n' }] }, 'form-editor');
+      docs.closeSession('form-editor');
+      docs.registerSession('form-editor');
+      expect(docs.version(URI)).toBeLessThan(5);
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 5 }, contentChanges: [{ text: 'five\n' }] }, 'form-editor');
+      expect(docs.get(URI)?.getText()).toBe('five\n');
+   });
+
+   it('drops a late change from a writer that never opened the document, as for one that did', () => {
+      const { docs } = makeDocs();
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 10 }, contentChanges: [{ text: 'ten\n' }] }, 'form-editor');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 5 }, contentChanges: [{ text: 'five\n' }] }, 'form-editor');
+      expect(docs.get(URI)?.getText()).toBe('ten\n');
+   });
+});
+
+describe('HydraniumTextDocuments release handler failure', () => {
+   it('still closes every document of an ending session and announces each release', async () => {
+      const logger = makeLogger();
+      const services = makeSharedServices(undefined, logger);
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: () => {
+            throw new Error('handler broke');
+         }
+      };
+      const docs = new HydraniumTextDocuments(services);
+      const released: string[] = [];
+      docs.onDidReleaseDocument(event => released.push(event.uri));
+      docs.registerSession('session');
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: 'file:///one.x', languageId: 'plaintext', version: 1, text: '1' } }, 'session');
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: 'file:///two.x', languageId: 'plaintext', version: 1, text: '2' } }, 'session');
+
+      docs.closeSession('session');
+
+      expect(docs.openDocuments()).toEqual([]);
+      expect(released).toEqual(['file:///one.x', 'file:///two.x']);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(logger.errorCalls.filter(call => call.message.startsWith('Release handler failed'))).toHaveLength(2);
+   });
+
+   it('still closes every document of an ending session when the slot cannot be built', () => {
+      const logger = makeLogger();
+      const services = makeSharedServices(undefined, logger);
+      Object.defineProperty(services.workspace, 'DocumentReleaseHandler', {
+         get: () => {
+            throw new Error('factory broke');
+         }
+      });
+      const docs = new HydraniumTextDocuments(services);
+      const released: string[] = [];
+      docs.onDidReleaseDocument(event => released.push(event.uri));
+      docs.registerSession('session');
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: 'file:///one.x', languageId: 'plaintext', version: 1, text: '1' } }, 'session');
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: 'file:///two.x', languageId: 'plaintext', version: 1, text: '2' } }, 'session');
+
+      docs.closeSession('session');
+
+      expect(docs.openDocuments()).toEqual([]);
+      expect(released).toEqual(['file:///one.x', 'file:///two.x']);
+   });
+
+   it.each([
+      [
+         'throws',
+         (): Promise<void> => {
+            throw new Error('handler broke');
+         }
+      ],
+      ['rejects', (): Promise<void> => Promise.reject(new Error('handler broke'))]
+   ])('announces a document released dirty clean when the handler %s', async (_name, didReleaseDocument) => {
+      const services = makeSharedServices(undefined, makeLogger());
+      services.workspace.DocumentReleaseHandler = { didReleaseDocument };
+      const docs = new HydraniumTextDocuments(services);
+      const dirty: boolean[] = [];
+      docs.onDidChangeDirty(event => dirty.push(event.text?.dirty ?? false));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      await Promise.resolve();
+
+      // Left owed, the watcher keeps the document dirty though the store answers clean.
+      expect(docs.isDirty(URI)).toBe(false);
+      expect(dirty).toEqual([true, false]);
+   });
+});
+
+describe('HydraniumTextDocuments release settle', () => {
+   type BeforeSettle = (docs: HydraniumTextDocuments, documents: ReturnType<typeof makeStubLangiumDocuments>) => void;
+   const nothing: BeforeSettle = () => undefined;
+   it.each<[string, boolean, BeforeSettle, string | undefined]>([
+      ['names the text the build holds', true, nothing, 'b\n'],
+      ['names no text once the build no longer has the document', false, nothing, undefined],
+      // Read when the release settles: the announcement names what is there then.
+      ['names text reconciled before the release settles', true, docs => docs.reconcileExternalContent(URI, 'c\n'), 'c\n'],
+      ['names no text once the document was removed before the release settles', true, (_docs, documents) => documents.clear(), undefined]
+   ])('%s', async (_name, built, beforeSettle, expected) => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const documents = makeStubLangiumDocuments();
+      services.workspace.LangiumDocuments = documents as unknown as ServerSharedServices['workspace']['LangiumDocuments'];
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: async released => {
+            if (built) {
+               documents.set(released.uri, { $type: 'Root' } as AstNode);
+            }
+            await Promise.resolve();
+            beforeSettle(docs, documents);
+         }
+      };
+      const docs = new HydraniumTextDocuments(services);
+      const announced: Array<string | undefined> = [];
+      docs.onDidChangeDirty(event => announced.push(event.text?.hash));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(announced).toEqual([textHash('b\n'), expected === undefined ? undefined : textHash(expected)]);
+   });
+});
+
+describe('HydraniumTextDocuments release skipped at teardown', () => {
+   // The handler says it skipped: an error that merely looks like teardown is a failure.
+   it.each([
+      ['a skip', 'debug', (): Error => new DocumentReleaseSkippedError(new Error('Connection is disposed.'))],
+      // Thrown by another installed copy of the package: the same name, another class.
+      [
+         'a skip from another copy',
+         'debug',
+         (): Error =>
+            Object.assign(new Error('Release skipped: the connection or the workspace went away.'), { name: 'DocumentReleaseSkippedError' })
+      ],
+      ['any other rejection', 'error', (): Error => new Error('Connection is disposed.')]
+   ] as const)('announces a document released dirty clean without text, and logs %s at %s', async (_name, level, makeError) => {
+      const logger = makeLogger();
+      const services = makeSharedServices(undefined, logger);
+      const skipped = makeError();
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: async () => {
+            throw skipped;
+         }
+      };
+      const docs = new HydraniumTextDocuments(services);
+      const announced: Array<string | undefined> = [];
+      docs.onDidChangeDirty(event => announced.push(event.text?.hash));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(announced).toEqual([textHash('b\n'), undefined]);
+      // A skip as its own message; anything else as a failure, with its stack.
+      expect(logger.debugCalls.some(call => call.message === skipped.message)).toBe(level === 'debug');
+      expect(logger.errorCalls.some(call => call.message.startsWith(`Release handler failed. ${skipped.name}: ${skipped.message}`))).toBe(
+         level === 'error'
+      );
+   });
+});
+
+describe('HydraniumTextDocuments open by a closing session', () => {
+   it.each([
+      [
+         'an open',
+         (docs: HydraniumTextDocuments<TextDocument>, uri: string): unknown =>
+            docs.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version: 1, text: 'a\n' } }, 'tree')
+      ],
+      ['an attach', (docs: HydraniumTextDocuments<TextDocument>, uri: string): unknown => docs.attachClient(uri, 'tree')]
+   ])('refuses %s before it ends the release grace of a document the session was lost from', async (_name, reopen) => {
+      const clock = makeFakeClock();
+      const services = makeSharedServices(undefined, makeLogger());
+      (services as { Clock: unknown }).Clock = clock;
+      services.workspace.DocumentReleaseHandler = { didReleaseDocument: async () => undefined };
+      const docs = new HydraniumTextDocuments(services, { releaseGraceMs: 1_000 });
+      const released: string[] = [];
+      docs.onDidReleaseDocument(event => released.push(event.uri));
+      const open = (uri: string): void =>
+         docs.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version: 1, text: 'a\n' } }, 'tree');
+      docs.registerSession('tree');
+      open(URI);
+      docs.closeSession('tree', 'lost');
+      // The same id again, within the grace, closing while a listener opens the document it was lost from.
+      docs.registerSession('tree');
+      open('file:///other.x');
+      let refused: unknown;
+      docs.onDidClose(() => {
+         try {
+            reopen(docs, URI);
+         } catch (err: unknown) {
+            refused = err;
+         }
+      });
+
+      docs.closeSession('tree');
+      await clock.advance(1_000);
+
+      expect(isSessionClosedError(refused)).toBe(true);
+      expect(released).toContain(URI);
+   });
+});
+
+describe('HydraniumTextDocuments without a release handler', () => {
+   it('says which slot is missing and still announces a document released dirty clean', async () => {
+      const logger = makeLogger();
+      const services = makeSharedServices(undefined, logger);
+      delete (services.workspace as Partial<ServerSharedServices['workspace']>).DocumentReleaseHandler;
+      const docs = new HydraniumTextDocuments(services);
+      const dirty: boolean[] = [];
+      docs.onDidChangeDirty(event => dirty.push(event.text?.dirty ?? false));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(logger.errorCalls.map(call => call.message.split('\n')[0])).toEqual([
+         'Release handler failed. Error: no workspace.DocumentReleaseHandler bound'
+      ]);
+      expect(dirty).toEqual([true, false]);
+   });
+});
+
+describe('HydraniumTextDocuments overridable factories', () => {
+   it('uses the ledger and dirty tracker its create methods return', () => {
+      class RecordingLedger extends DefaultTextLedger {
+         readonly authored: string[] = [];
+         override setAuthor(key: CanonicalUri, version: number, author: string): void {
+            this.authored.push(author);
+            super.setAuthor(key, version, author);
+         }
+      }
+      class RecordingTracker extends DefaultDirtyStateTracker {
+         refreshes = 0;
+         override refreshDirty(key: CanonicalUri, document: TextDocument): void {
+            this.refreshes++;
+            super.refreshDirty(key, document);
+         }
+      }
+      class RecordingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+         get ledger(): RecordingLedger {
+            return this.textLedger as RecordingLedger;
+         }
+         get tracker(): RecordingTracker {
+            return this.dirtyStateTracker as RecordingTracker;
+         }
+         protected override createTextLedger(): TextLedger {
+            return new RecordingLedger();
+         }
+         protected override createDirtyStateTracker(): DirtyStateTracker {
+            return new RecordingTracker(this.textLedger);
+         }
+      }
+      const docs = new RecordingTextDocuments(makeSharedServices(undefined, makeLogger()));
+      openInLanguageClient(docs, 'a\n');
+      docs.applyContentChange(URI, 'b\n', 'form-editor');
+      expect(docs.ledger.authored).toContain('form-editor');
+      expect(docs.tracker.refreshes).toBeGreaterThan(0);
+   });
+
+   it('builds a collaborator once the subclass has its own fields', () => {
+      class FieldTextDocuments extends HydraniumTextDocuments<TextDocument> {
+         readonly ownLedger = new DefaultTextLedger();
+         get ledger(): TextLedger {
+            return this.textLedger;
+         }
+         protected override createTextLedger(): TextLedger {
+            return this.ownLedger;
+         }
+      }
+      const docs = new FieldTextDocuments(makeSharedServices(undefined, makeLogger()));
+      openInLanguageClient(docs, 'a\n');
+      expect(docs.ledger).toBe(docs.ownLedger);
+   });
+
+   /** Counts the calls that reach the store's own `create` and `update`. */
+   class CountingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      creates = 0;
+      updates = 0;
+      override create(uri: string, languageId: string, version: number, content: string): TextDocument {
+         this.creates++;
+         return super.create(uri, languageId, version, content);
+      }
+      override update(document: TextDocument, changes: TextDocumentContentChangeEvent[], version: number): TextDocument {
+         this.updates++;
+         return super.update(document, changes, version);
+      }
+   }
+
+   it('routes every document the store creates or changes through its own create and update', () => {
+      const docs = new CountingTextDocuments(makeSharedServices(undefined, makeLogger()));
+      openInLanguageClient(docs, 'a\n');
+      expect(docs.creates).toBe(1);
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+      docs.applyContentChange(URI, 'c\n', 'form-editor');
+      docs.commitRepair(URI, 'c\n', 'd\n');
+      expect(docs.updates).toBeGreaterThanOrEqual(3);
+   });
+
+   it('calls no update for a write of unchanged text', () => {
+      const docs = new CountingTextDocuments(makeSharedServices(undefined, makeLogger()));
+      openInLanguageClient(docs, 'a\n');
+      const before = docs.updates;
+      expect(docs.applyContentChange(URI, 'a\n', 'form-editor')).toBe(1);
+      expect(docs.updates).toBe(before);
+   });
+
+   /** Answers open for any document once `holding` is set. */
+   class HoldingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      holding = false;
+      override isOpenInAnyClient(uri: string): boolean {
+         return this.holding || super.isOpenInAnyClient(uri);
+      }
+   }
+
+   it('asks its own isOpenInAnyClient whether a released document is reclaimed', async () => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const docs = new HoldingTextDocuments(services);
+      const reclaimed: boolean[] = [];
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: async released => {
+            docs.holding = true;
+            reclaimed.push(released.isReclaimed());
+         }
+      };
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      expect(reclaimed).toEqual([true]);
+   });
+
+   it('asks its own isOpenInAnyClient whether a last close releases the document', () => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const released: string[] = [];
+      services.workspace.DocumentReleaseHandler = { didReleaseDocument: async document => void released.push(document.uri) };
+      const docs = new HoldingTextDocuments(services);
+      openInLanguageClient(docs, 'a\n');
+      docs.holding = true;
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      expect(released).toEqual([]);
+      expect(docs.isOpen(URI)).toBe(true);
+   });
+
+   it('asks its own isOpenInAnyClient whether a deferred release still runs', async () => {
+      const clock = makeFakeClock();
+      const services = makeSharedServices(undefined, makeLogger());
+      (services as { Clock: unknown }).Clock = clock;
+      const released: string[] = [];
+      services.workspace.DocumentReleaseHandler = { didReleaseDocument: async document => void released.push(document.uri) };
+      const docs = new HoldingTextDocuments(services, { releaseGraceMs: 1_000 });
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID, 'lost');
+      docs.holding = true;
+      await clock.advance(1_000);
+      expect(released).toEqual([]);
+      expect(docs.isOpen(URI)).toBe(true);
+   });
+});
+
+describe('HydraniumTextDocuments release order', () => {
+   it('hands the document over only after its release listeners ran', () => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const order: string[] = [];
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: async () => {
+            order.push('handed over');
+         }
+      };
+      const docs = new HydraniumTextDocuments(services);
+      docs.onDidReleaseDocument(() => order.push('released'));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      expect(order).toEqual(['released', 'handed over']);
+   });
+
+   it.each([
+      [
+         'the handler throws',
+         (): DocumentReleaseHandler => ({
+            didReleaseDocument: () => {
+               throw new Error('handler broke');
+            }
+         })
+      ],
+      ['no handler is bound', (): DocumentReleaseHandler | undefined => undefined],
+      [
+         'the handler settles at once',
+         (): DocumentReleaseHandler => ({
+            didReleaseDocument: async () => undefined
+         })
+      ]
+   ])('announces the release before the clean announcement when %s', async (_name, makeHandler) => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const handler = makeHandler();
+      if (handler === undefined) {
+         delete (services.workspace as Partial<ServerSharedServices['workspace']>).DocumentReleaseHandler;
+      } else {
+         services.workspace.DocumentReleaseHandler = handler;
+      }
+      const docs = new HydraniumTextDocuments(services);
+      const events: string[] = [];
+      docs.onDidReleaseDocument(() => events.push('released'));
+      docs.onDidChangeDirty(event => events.push(event.text?.dirty ? 'dirty' : 'clean'));
+      openInLanguageClient(docs, 'a\n');
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'b\n' }] }, LANGUAGE_CLIENT_ID);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(events).toEqual(['dirty', 'released', 'clean']);
    });
 });

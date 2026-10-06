@@ -13,11 +13,11 @@ import { Disposable, Emitter } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
 import { ClientSessionRegistry } from '../documents/client-session-registry.js';
+import type { DocumentDirtyChangedEvent } from '../documents/dirty-state-tracker.js';
 import type {
    ClientTextDocumentChangeEvent,
-   DocumentDirtyChangedEvent,
    HydraniumTextDocuments,
-   LastOpenClosedEvent
+   DocumentReleasedEvent
 } from '../documents/hydranium-text-documents.js';
 
 /** Snapshot of an open document tracked by the stub. */
@@ -33,11 +33,11 @@ export interface StubTextDocumentEntry {
  * reads from on test paths — the content channel
  * (`notifyDidChangeTextDocument` / `applyContentChange` / `version` /
  * `getAuthor`), the open-state probes (`isOpenInLanguageClient` /
- * `isOpenInAnyClient` / `isOpenInClient` / `isRevertPending` /
+ * `isOpenInAnyClient` / `isOpenInClient` / `isReleaseDeferred` /
  * `openDocuments`), the push channel
  * to the language client (`applyEditToLanguageClient` / `stagePendingContent`),
  * the save / close notifications, the dirty state (`isDirty` / `textState` /
- * `onDidChangeDirty` / `updateDiskBaseline`, against a baseline {@link seedOpen}
+ * `onDidChangeDirty` / `setDiskBaseline`, against a baseline {@link seedOpen}
  * sets and a save that carries its text moves), and the client-session table
  * (`registerSession` / `closeSession` / `onDidCloseSession`), which is a real
  * `ClientSessionRegistry` — plus test-only helpers:
@@ -77,7 +77,7 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'getAuthor'
    | 'isOpenInLanguageClient'
    | 'isOpenInAnyClient'
-   | 'isRevertPending'
+   | 'isReleaseDeferred'
    | 'applyEditToLanguageClient'
    | 'stagePendingContent'
    | 'openDocuments'
@@ -86,11 +86,11 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'registerSession'
    | 'closeSession'
    | 'onDidCloseSession'
-   | 'onDidCloseLastOpen'
+   | 'onDidReleaseDocument'
    | 'isDirty'
    | 'textState'
    | 'onDidChangeDirty'
-   | 'updateDiskBaseline'
+   | 'setDiskBaseline'
 > {
    /**
     * Stub-tailored read accessor. Returns just the surface the framework's
@@ -114,9 +114,12 @@ export interface StubHydraniumTextDocuments extends Pick<
    /** Mark `uri` as open in the LSP textual language client (drives {@link isOpenInLanguageClient}). */
    seedOpenInLanguageClient(uri: string): void;
    /**
-    * Synchronously deliver `onDidClose` to subscribers, then `onDidCloseLastOpen`
-    * when no client has `uri` open any more. The stub keeps no revert grace, so
-    * a last close is announced at once.
+    * Synchronously deliver `onDidClose` to subscribers, then `onDidReleaseDocument`
+    * when no client has `uri` open any more, then the dirty flip of a dropped
+    * holder: the real store's order. The stub keeps no release grace and runs
+    * no release handler, so the flip comes at once and without text, where the
+    * real store announces it once the handler settles, with text while the
+    * build still has the document.
     */
    fireClose(uri: string, clientId: string): void;
    /**
@@ -162,7 +165,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    // stand in for canonical URIs (one stub-boundary cast, like `fireClose`).
    const sessions = new ClientSessionRegistry();
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
-   const lastOpenClosed = new Emitter<LastOpenClosedEvent>();
+   const documentReleased = new Emitter<DocumentReleasedEvent>();
    const baselines = new Map<string, string | undefined>();
    const dirty = new Set<string>();
    const dirtyChanged = new Emitter<DocumentDirtyChangedEvent>();
@@ -177,7 +180,12 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          } else {
             dirty.delete(uri);
          }
-         dirtyChanged.fire({ uri: key(uri), text: { version: held?.version ?? 0, hash: textHash(held?.text ?? ''), dirty: now } });
+         // No build behind the stub, so a document no longer held is announced without text.
+         dirtyChanged.fire(
+            held === undefined
+               ? { uri: key(uri) }
+               : { uri: key(uri), text: { version: held.version, hash: textHash(held.text), dirty: now } }
+         );
       }
    };
 
@@ -237,7 +245,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       },
       notifyDidSaveTextDocument(event, clientId) {
          if (event.text !== undefined) {
-            stub.updateDiskBaseline(event.textDocument.uri, event.text);
+            stub.setDiskBaseline(event.textDocument.uri, event.text);
          }
          saves.push({ uri: event.textDocument.uri, clientId });
          for (const listener of saveListeners.slice()) {
@@ -274,8 +282,9 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       isOpenInClient(uri, clientId) {
          return sessions.isOpenIn(key(uri), clientId);
       },
-      isRevertPending(uri) {
-         return sessions.isRevertPending(key(uri));
+      isReleaseDeferred() {
+         // The stub keeps no release grace.
+         return false;
       },
       attachClient(uri, clientId) {
          return docs.has(uri) && sessions.addOpen(key(uri), clientId);
@@ -298,8 +307,8 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       get onDidCloseSession() {
          return sessions.onDidCloseSession;
       },
-      get onDidCloseLastOpen() {
-         return lastOpenClosed.event;
+      get onDidReleaseDocument() {
+         return documentReleased.event;
       },
       isDirty(uri) {
          return dirty.has(uri);
@@ -307,7 +316,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       get onDidChangeDirty() {
          return dirtyChanged.event;
       },
-      updateDiskBaseline(uri, text) {
+      setDiskBaseline(uri, text) {
          if (docs.has(uri)) {
             baselines.set(uri, text);
             refreshDirty(uri);
@@ -342,9 +351,9 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          // class: listeners detect the last-close transition by consulting
          // `isOpenInAnyClient`, which reads the already-decremented state.
          const holder = docs.get(uri);
-         if (holder && holder.clientId === clientId) {
+         const dropped = holder !== undefined && holder.clientId === clientId;
+         if (dropped) {
             docs.delete(uri);
-            refreshDirty(uri);
          }
          const removed = sessions.removeOpen(key(uri), clientId);
          if (clientId === LANGUAGE_CLIENT_ID) {
@@ -355,7 +364,11 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
             listener(event);
          }
          if (removed && !sessions.isOpen(key(uri))) {
-            lastOpenClosed.fire({ uri: key(uri) });
+            documentReleased.fire({ uri: key(uri) });
+         }
+         // After the release event, in the order the real store announces them.
+         if (dropped) {
+            refreshDirty(uri);
          }
       },
       reset() {
