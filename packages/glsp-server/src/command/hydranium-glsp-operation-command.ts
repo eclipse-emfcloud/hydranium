@@ -32,10 +32,19 @@ export type OperationOutcome = 'executed' | 'dropped' | 'none';
  * One executed side effect the operation undoes and redoes: a recording
  * command's bridge, or a command that does not record.
  */
-export interface SideEffectStep {
+export interface OperationSideEffect {
    undo(): MaybePromise<void>;
    redo(): MaybePromise<void>;
 }
+
+/** The source model an operation changed, before and after it; a redo applies `from → to`, an undo the reverse. */
+export interface OperationTransition<TSourceModel> {
+   readonly from: TSourceModel;
+   readonly to: TSourceModel;
+}
+
+/** Whether an undo or a redo of an operation runs. */
+export type UndoRedoDirection = 'undo' | 'redo';
 
 /**
  * The members of an operation the framework's state, recording command and
@@ -50,8 +59,8 @@ export interface OperationInternals {
    builtNodeOf<T extends AstNode>(node: T): T;
    recordWrittenRoot(root: AstNode): void;
    recordDropped(current: AstNode | undefined): void;
-   recordExecuted(step: SideEffectStep): void;
-   assertRecording(label: string): void;
+   recordExecuted(step: OperationSideEffect): void;
+   assertNotDuringUndoRedo(label: string): void;
    amendBefore(update: (before: AnyObject) => AnyObject): void;
 }
 
@@ -69,7 +78,7 @@ export function workingUriOfCopy(node: AstNode): string | undefined {
 }
 const openOperations = new WeakMap<object, OperationInternals>();
 
-/** The operation open on `state`, executing or replaying its side effects; `undefined` between operations. */
+/** The operation open on `state`, executing, undoing or redoing its side effects; `undefined` between operations. */
 export function openOperationOf(state: object): OperationInternals | undefined {
    return openOperations.get(state);
 }
@@ -102,7 +111,8 @@ function membersOf(operation: object): OperationInternals {
  * capture runs meanwhile.
  *
  * The entry holds one model transition, from the copies' projection before the
- * command to their projection after it, and the side effects that executed, in
+ * command to their projection after it, both as the documents hold them after
+ * a write (see `normalizeTransition`), and the side effects that executed, in
  * order: each command that does not record, a `CompoundCommand`'s children
  * counted one by one, and the bridge of each recording command at any depth.
  * Rollback and undo run them in reverse, redo in order. A recording command
@@ -128,15 +138,15 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /** The command the operation executed. */
    protected command?: Command;
    /** The side effects that executed, in execution order. */
-   protected readonly steps: Array<{ undo(): MaybePromise<void>; redo(): MaybePromise<void> }> = [];
+   protected readonly steps: OperationSideEffect[] = [];
    /**
     * The copies' projection when the operation opened, amended as documents
     * join or leave the write set during it.
     */
    protected before?: TSourceModel;
-   protected transition?: { readonly from: TSourceModel; readonly to: TSourceModel };
+   protected transition?: OperationTransition<TSourceModel>;
    /** Whether an undo or redo is running the side effects, on copies it discards. */
-   protected replaying = false;
+   protected undoingOrRedoing = false;
 
    constructor(protected readonly modelState: HydraniumGlspRecordingState<TSourceModel>) {
       const members: OperationInternals = {
@@ -160,10 +170,10 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
                this.before = update(this.before) as TSourceModel;
             }
          },
-         assertRecording: label => {
-            if (this.replaying) {
+         assertNotDuringUndoRedo: label => {
+            if (this.undoingOrRedoing) {
                throw new Error(
-                  `Recording command '${label}' executed during an undo or redo: a replay writes only the recorded transition, ` +
+                  `Recording command '${label}' executed during an undo or redo, which writes only the recorded transition, ` +
                      'so its edit would be discarded. Execute it in an operation of its own.'
                );
             }
@@ -187,6 +197,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     */
    protected async run(create: () => MaybePromise<Command | undefined>): Promise<'executed' | 'dropped' | 'none'> {
       this.open();
+      let recorded: OperationTransition<TSourceModel> | undefined;
       try {
          this.before = await this.project();
          await this.checkpoint('create');
@@ -203,26 +214,36 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             return 'dropped';
          }
          if (this.before !== undefined && written !== undefined) {
-            this.transition = { from: this.before, to: written };
+            recorded = { from: this.before, to: written };
          }
-         return 'executed';
       } catch (error: unknown) {
          await this.rollback();
          throw error;
       } finally {
          this.close();
       }
+      // After the write landed, so a failure here leaves it in place: the
+      // transition is then kept as recorded, and an undo may conflict.
+      try {
+         this.transition = recorded && (await this.modelState.normalizeTransition(recorded));
+      } catch (error: unknown) {
+         this.modelState.logger.warn(
+            `Normalizing an operation's transition failed: ${error instanceof Error ? error.message : String(error)}`
+         );
+         this.transition = recorded;
+      }
+      return 'executed';
    }
 
    /**
     * Awaited where the operation, or an undo or redo of it, yields to code it
     * does not control: before creating the command, before each side effect
-    * executes, replays, rolls back or is compensated, before projecting the
-    * copies, before resolving a replay. Does nothing; a test overrides it to
-    * land a foreign edit or a failure there.
+    * executes, is undone or redone, rolls back or is compensated, before
+    * projecting the copies, before resolving an undo or redo. Does nothing; a
+    * test overrides it to land a foreign edit or a failure there.
     */
    protected async checkpoint(
-      _point: 'create' | 'execute' | 'project' | 'resolve' | 'undo' | 'redo' | 'rollback' | 'compensate'
+      _point: 'create' | 'execute' | 'project' | 'resolve' | UndoRedoDirection | 'rollback' | 'compensate'
    ): Promise<void> {
       // A seam for tests.
    }
@@ -236,11 +257,11 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    }
 
    async undo(): Promise<void> {
-      await this.replay('undo');
+      await this.undoOrRedo('undo');
    }
 
    async redo(): Promise<void> {
-      await this.replay('redo');
+      await this.undoOrRedo('redo');
    }
 
    canUndo(): boolean {
@@ -390,12 +411,12 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /**
     * Resolve the transition onto the current model, run the commands' side
     * effects, then write once, gated on the versions the model was read at. A
-    * collision does nothing but warn; a transition with nothing left to replay
+    * collision does nothing but warn; a transition with nothing left to apply
     * still runs the side effects.
     *
     * The caller holds `runExclusive`, which nothing here takes again.
     */
-   protected async replay(direction: 'undo' | 'redo'): Promise<void> {
+   protected async undoOrRedo(direction: UndoRedoDirection): Promise<void> {
       // Captured again so the model the transition is resolved onto, the base
       // a conflict reconciles from and the versions the write is gated on are
       // read together.
@@ -404,9 +425,13 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       }
       await this.checkpoint('resolve');
       let merged: TSourceModel | undefined;
-      if (this.transition) {
-         const { from, to } = direction === 'undo' ? { from: this.transition.to, to: this.transition.from } : this.transition;
-         const outcome = await this.modelState.conflictResolver.resolve<TSourceModel>(from, to, async () => this.modelState.sourceModel);
+      const { transition } = this.inDirection(direction);
+      if (transition) {
+         const outcome = await this.modelState.conflictResolver.resolve<TSourceModel>(
+            transition.from,
+            transition.to,
+            async () => this.modelState.sourceModel
+         );
          if (outcome.status === 'merged') {
             merged = outcome.merged;
          } else if (outcome.status !== 'no-op') {
@@ -416,7 +441,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             return;
          }
       }
-      await this.replaySideEffects(direction, merged);
+      await this.undoOrRedoSideEffects(direction, merged);
    }
 
    /**
@@ -443,18 +468,18 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * rethrown with nothing written; GLSP's command stack then flushes, as it
     * does for any undo or redo that fails.
     */
-   protected async replaySideEffects(direction: 'undo' | 'redo', merged?: TSourceModel): Promise<void> {
+   protected async undoOrRedoSideEffects(direction: UndoRedoDirection, merged?: TSourceModel): Promise<void> {
       this.workingRoots.clear();
       this.trace.clear();
       this.writtenRoot = undefined;
-      this.replaying = true;
+      this.undoingOrRedoing = true;
       this.open();
-      const steps = direction === 'undo' ? [...this.steps].reverse() : [...this.steps];
-      const done: typeof steps = [];
+      const { steps, run } = this.inDirection(direction);
+      const done: OperationSideEffect[] = [];
       try {
          for (const step of steps) {
             await this.checkpoint(direction);
-            await (direction === 'undo' ? step.undo() : step.redo());
+            await run(step);
             done.unshift(step);
          }
          if (merged !== undefined && !(await this.write(merged))) {
@@ -465,24 +490,44 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          throw error;
       } finally {
          this.close();
-         this.replaying = false;
+         this.undoingOrRedoing = false;
       }
    }
 
    /**
-    * Run `steps`, which a failed replay in `direction` already ran, the other
-    * way, each on its own as {@link rollback} does; the replay's own error is
-    * the one thrown.
+    * Run `steps`, which a failed undo or redo already ran, the other way, each
+    * on its own as {@link rollback} does; the undo or redo's own error is the
+    * one thrown.
     */
-   protected async compensate(
-      steps: ReadonlyArray<{ undo(): MaybePromise<void>; redo(): MaybePromise<void> }>,
-      direction: 'undo' | 'redo'
-   ): Promise<void> {
+   protected async compensate(steps: readonly OperationSideEffect[], direction: UndoRedoDirection): Promise<void> {
+      const { revert } = this.inDirection(direction);
       await this.runEach(
-         steps.map(step => () => (direction === 'undo' ? step.redo() : step.undo())),
+         steps.map(step => () => revert(step)),
          `Reverting a failed ${direction}`,
          'compensate'
       );
+   }
+
+   /**
+    * The transition and the recorded steps as `direction` runs them: an undo
+    * runs the transition backwards and each step's undo, newest first, and is
+    * reverted by each step's redo; a redo the other way round.
+    */
+   protected inDirection(direction: UndoRedoDirection): {
+      readonly transition?: OperationTransition<TSourceModel>;
+      readonly steps: readonly OperationSideEffect[];
+      run(step: OperationSideEffect): MaybePromise<void>;
+      revert(step: OperationSideEffect): MaybePromise<void>;
+   } {
+      if (direction === 'redo') {
+         return { transition: this.transition, steps: [...this.steps], run: step => step.redo(), revert: step => step.undo() };
+      }
+      return {
+         transition: this.transition && { from: this.transition.to, to: this.transition.from },
+         steps: [...this.steps].reverse(),
+         run: step => step.undo(),
+         revert: step => step.redo()
+      };
    }
 
    /**

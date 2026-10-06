@@ -12,7 +12,7 @@
  *
  * A gesture runs once to enumerate the points it awaits at: the operation's
  * own checkpoints (creating the command, each side effect, projecting the
- * copies, resolving a replay, each replayed side effect), the state's write
+ * copies, resolving an undo or redo, each side effect it reruns), the state's write
  * (`persist`) and the model submit. It then runs again once per point and
  * variant, landing an unrelated foreign edit, a same-field foreign edit or a
  * failure at that point, and checks the invariants every outcome must keep.

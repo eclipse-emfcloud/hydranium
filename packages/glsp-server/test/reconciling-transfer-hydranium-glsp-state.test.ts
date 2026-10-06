@@ -29,6 +29,8 @@ interface TestRoot extends AstNode {
 interface TestSourceModel {
    $type: string;
    label: string;
+   /** Set by {@link ProjectingState}. */
+   projectedBy?: string;
 }
 
 /** The ledger every test's services share; a root is recorded once, so they never collide. */
@@ -103,6 +105,22 @@ function makeHarness(): Harness {
    };
 }
 
+/** Marks every projection it makes, so a test sees which ones bypassed it. */
+@injectable()
+class ProjectingState extends TestReconcilingState {
+   protected override projectRoot(root: AstNode): TestSourceModel {
+      return { ...super.projectRoot(root), projectedBy: 'override' };
+   }
+}
+
+/** Fails to normalize every transition. */
+@injectable()
+class FailingNormalizationState extends TestReconcilingState {
+   override async normalizeTransition(): Promise<never> {
+      throw new Error('serializer unavailable');
+   }
+}
+
 /** A diagram that gives up on the first conflicting write. */
 class SingleWriteState extends TestReconcilingState {
    protected override readonly maxSourceModelWrites = 1;
@@ -162,6 +180,10 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
             },
             async validated(): Promise<{ root: TestRoot }> {
                return { root: harness.validatedRoot };
+            },
+            // A serializer that normalizes: it trims the label it writes.
+            async modelToText(_uri: string, model: TestSourceModel): Promise<string> {
+               return model.label.trim();
             }
          }
       }
@@ -499,6 +521,64 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
          sourceRoot: true,
          label: 'built'
       });
+   });
+
+   it('records the transition as the serializer writes it, projected through a projectRoot override', async () => {
+      const harness = makeHarness();
+      // The write leaves the label as the trimming serializer writes it.
+      harness.nextUpdatedRoot = makeRoot('edited');
+      const resolved: Array<{ base: TestSourceModel; ours: TestSourceModel }> = [];
+      harness.resolve = async (base, ours) => {
+         resolved.push({ base, ours });
+         return { status: 'merged', merged: ours };
+      };
+      const state = createState(harness, ProjectingState);
+      state.setSourceRoot('file:///a.a', makeRoot(' built '));
+      const operation = new HydraniumGlspOperationCommand<TestSourceModel>(state);
+      await runOperation(
+         operation,
+         () =>
+            new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Edit', () => {
+               (state.sourceRoot as { label: string }).label = ' edited ';
+            })
+      );
+
+      await state.runExclusive(() => operation.undo());
+
+      expect(resolved).toEqual([
+         {
+            base: { $type: 'TestRoot', label: 'edited', projectedBy: 'override' },
+            ours: { $type: 'TestRoot', label: 'built', projectedBy: 'override' }
+         }
+      ]);
+   });
+
+   it('keeps the operation and its transition as recorded, with a warning, when normalizing fails after the write', async () => {
+      const harness = makeHarness();
+      const resolved: Array<{ base: string; ours: string }> = [];
+      harness.resolve = async (base, ours) => {
+         resolved.push({ base: base.label, ours: ours.label });
+         return { status: 'merged', merged: ours };
+      };
+      const state = createState(harness, FailingNormalizationState);
+      state.setSourceRoot('file:///a.a', makeRoot(' built '));
+      const operation = new HydraniumGlspOperationCommand<TestSourceModel>(state);
+
+      const outcome = await runOperation(
+         operation,
+         () =>
+            new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Edit', () => {
+               (state.sourceRoot as { label: string }).label = ' edited ';
+            })
+      );
+      await state.runExclusive(() => operation.undo());
+
+      expect({
+         outcome,
+         writes: harness.updateCalls.length,
+         warned: harness.warns.filter(message => message.includes("Normalizing an operation's transition failed")).length,
+         resolved
+      }).toEqual({ outcome: 'executed', writes: 2, warned: 1, resolved: [{ base: ' edited ', ours: ' built ' }] });
    });
 
    it('refuses setSourceRoot while an operation is open', async () => {

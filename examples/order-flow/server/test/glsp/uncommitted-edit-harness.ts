@@ -170,7 +170,7 @@ export async function apply(diagram: Diagram, action: Action): Promise<void> {
 }
 
 /** Dispatch an undo or redo and wait until it has submitted. */
-export async function replay(diagram: Diagram, action: UndoAction | RedoAction): Promise<void> {
+export async function undoOrRedo(diagram: Diagram, action: UndoAction | RedoAction): Promise<void> {
    const reason = UndoAction.is(action) ? 'undo' : 'redo';
    const before = diagram.actions.length;
    diagram.dispatch(action);
@@ -334,7 +334,7 @@ export const browserDispatchScope = new ContainerModule((_bind, _unbind, _isBoun
 /**
  * Ordering cells: what arrives (a client operation, an undo, a redo, the
  * storage's capture and render, a save) while the diagram is in a state
- * (executing, committing, rolling back, replaying an undo, rendering).
+ * (executing, committing, rolling back, running an undo, rendering).
  */
 export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arrivals' | 'undo-arrivals' | 'redo-arrivals' | 'rest'): void {
    const modules: interfaces.ContainerModule[] = scope === 'browser' ? [browserDispatchScope] : [];
@@ -481,7 +481,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
          ['executing', holdExecuting],
          ['committing', holdCommitting],
          ['rolling back', holdRollingBack],
-         ['replaying an undo', holdUndoing],
+         ['running an undo', holdUndoing],
          ['rendering', holdRendering]
       ] as const;
 
@@ -527,7 +527,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
       }
 
       if (part === 'undo-arrivals') {
-         it.each(holdsByOrigin.filter(([held]) => held !== 'replaying an undo'))(
+         it.each(holdsByOrigin.filter(([held]) => held !== 'running an undo'))(
             'runs an undo that arrives while %s, sent from the %s, after it, and it undoes the last step',
             async (held, origin, hold) => {
                const opened = await open();
@@ -553,7 +553,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
 
       if (part === 'undo-arrivals') {
          it.each(origins)(
-            'runs an undo that arrives while an undo replays, sent from the %s, after it, undoing the step before',
+            'runs an undo that arrives while an undo runs, sent from the %s, after it, undoing the step before',
             async origin => {
                const opened = await open();
                const { diagram, layoutUri } = opened;
@@ -581,7 +581,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
                const opened = await open();
                const { diagram, layoutUri } = opened;
                await apply(diagram, move(diagram, 'Pay', 50, 110));
-               await replay(diagram, UndoAction.create());
+               await undoOrRedo(diagram, UndoAction.create());
                events.length = 0;
                const held = await holdExecuting(opened);
 
@@ -626,7 +626,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
                const opened = await open();
                const { diagram, layoutUri } = opened;
                await apply(diagram, move(diagram, 'Pay', 50, 110));
-               await replay(diagram, UndoAction.create());
+               await undoOrRedo(diagram, UndoAction.create());
                events.length = 0;
                const holding = await hold(opened);
 
@@ -681,7 +681,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
       if (part === 'rest') {
          it.each([
             ['rolls back', 'rollback:end'],
-            ['replays an undo', 'undo:end']
+            ['runs an undo', 'undo:end']
          ])('queues an operation a side effect dispatches and awaits while the diagram %s, after it', async (phase, end) => {
             const opened = await open();
             const { diagram, layoutUri } = opened;
@@ -801,7 +801,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
                   writes: persist.mock.calls.length,
                   order: events.filter(event => ['dispatched', 'operation:end', 'move'].includes(event)).slice(0, 3)
                };
-               await replay(diagram, UndoAction.create());
+               await undoOrRedo(diagram, UndoAction.create());
 
                expect({
                   done,

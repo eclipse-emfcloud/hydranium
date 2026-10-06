@@ -11,6 +11,7 @@ import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { type BaseVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
+import { type OperationTransition } from '../command/hydranium-glsp-operation-command.js';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
@@ -65,7 +66,26 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * Synchronous — the encoder walks the in-memory AST without serialising.
     */
    get sourceModel(): TSourceModel {
-      return this.sharedServices.model.TransferEncoder.toTransfer(this.sourceRoot, 'grammar') as unknown as TSourceModel;
+      return this.projectRoot(this.sourceRoot);
+   }
+
+   /**
+    * The source model of `root`. The single projection seam: the source
+    * model, the refetch and {@link normalizeTransition} all project through it.
+    */
+   protected projectRoot(root: AstNode): TSourceModel {
+      return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as unknown as TSourceModel;
+   }
+
+   /** Both ends serialized for the source document and parsed back, unless they are equal. */
+   override async normalizeTransition(transition: OperationTransition<TSourceModel>): Promise<OperationTransition<TSourceModel>> {
+      if (JSON.stringify(transition.from) === JSON.stringify(transition.to)) {
+         return transition;
+      }
+      return {
+         from: this.projectRoot(await this.roundTrip(this._sourceUri, transition.from)),
+         to: this.projectRoot(await this.roundTrip(this._sourceUri, transition.to))
+      };
    }
 
    protected override captureSourceRoot(uri: string, root: TRoot): void {
@@ -104,7 +124,8 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * model through the diagram session's `update` (serialize → reparse),
     * opting into the `ConflictError` gate unless `baseVersion` is `'any'`,
     * and throws without a session. Adopters whose document
-    * round-trip differs override this; the orchestration in
+    * round-trip differs override this, and {@link normalizeTransition}
+    * alongside so undo compares what this writes; the orchestration in
     * {@link updateSourceModel} is unchanged.
     */
    protected async persist(model: TSourceModel, baseVersion: BaseVersion): Promise<{ root: TRoot }> {
@@ -124,7 +145,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
       const theirs = await this.readCurrentRoot(this._sourceUri);
       return (
          theirs && {
-            model: this.sharedServices.model.TransferEncoder.toTransfer(theirs.root, 'grammar') as unknown as TSourceModel,
+            model: this.projectRoot(theirs.root),
             baseVersion: theirs.version
          }
       );

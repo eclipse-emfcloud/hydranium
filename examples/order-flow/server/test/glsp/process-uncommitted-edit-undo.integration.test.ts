@@ -10,8 +10,10 @@
 /** Undo and redo of an operation, and the order of its side effects. */
 
 import { type Command, CompoundCommand, CompoundOperation, RedoAction, UndoAction } from '@eclipse-glsp/server';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
+import { WORKSPACE_FILES } from '../order-flow-harness.js';
 import {
    type Diagram,
    type Setup,
@@ -28,9 +30,9 @@ import {
    nestedCommand,
    openDiagram,
    place,
-   replay,
    spyOnPersist,
-   textOf
+   textOf,
+   undoOrRedo
 } from './uncommitted-edit-harness.js';
 
 describe('the side effects of an operation, in order', () => {
@@ -62,8 +64,8 @@ describe('the side effects of an operation, in order', () => {
       vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(() => mixedCompound(diagram, log));
       await apply(diagram, create);
 
-      await replay(diagram, UndoAction.create());
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       expect(log).toEqual(['plain:execute', 'recording:execute', 'bridge:undo', 'plain:undo', 'plain:redo', 'bridge:redo']);
    });
@@ -132,7 +134,7 @@ describe('the side effects of an operation, in order', () => {
       expect({ count, reported: message.details?.includes('write failed') }).toEqual({ count: 0, reported: true });
    });
 
-   it('keeps redoing the replayed side effects when one step fails to redo after a failed undo write', async () => {
+   it('keeps redoing the undone side effects when one step fails to redo after a failed undo write', async () => {
       const opened = await openDiagram();
       const { diagram } = opened;
       const create = createTask();
@@ -184,7 +186,7 @@ describe('the side effects of an operation, in order', () => {
       await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 700, 220', 'node Ship at 705, 225'));
       const persist = spyOnPersist(diagram);
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({ sideEffects, writes: persist.mock.calls.length, ship: textOf(opened, layoutUri).includes('node Ship at 705, 225') }).toEqual(
          {
@@ -201,7 +203,7 @@ describe('the side effects of an operation, in order', () => {
       await changeTextUnbuilt(opened, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'), layoutUri);
       await apply(diagram, CompoundOperation.create([move(diagram, 'Pay', 50, 110), move(diagram, 'Ship', 700, 220)]));
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       const layout = textOf(opened, layoutUri);
       expect({
@@ -220,13 +222,13 @@ describe('undo and redo of an operation', () => {
       const layout = (): string => textOf(opened, layoutUri);
       const persist = spyOnPersist(diagram);
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const undone = {
          writes: persist.mock.calls.length,
          pay: layout().includes('node Pay at 40, 100'),
          ship: layout().includes('node Ship at 660, 200')
       };
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
       const redone = {
          writes: persist.mock.calls.length,
          pay: layout().includes('node Pay at 50, 110'),
@@ -234,7 +236,7 @@ describe('undo and redo of an operation', () => {
       };
       // A foreign edit to one child's field: its revert collides, so the whole undo is skipped.
       await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 700, 220', 'node Ship at 705, 225'));
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          undone,
@@ -244,6 +246,63 @@ describe('undo and redo of an operation', () => {
          undone: { writes: 1, pay: true, ship: true },
          redone: { writes: 2, pay: true, ship: true },
          afterCollision: { pay: true, writes: 2 }
+      });
+   });
+
+   describe('when the serializer rounds what it writes', () => {
+      const pay = (opened: Setup): string | undefined => /node Pay at \S+, \S+/.exec(textOf(opened, opened.layoutUri))?.[0];
+
+      /** Move Pay to `x, y`, undo and redo, reading Pay's position after each. */
+      async function moveUndoRedo(opened: Setup, x: number, y: number): Promise<{ moved?: string; undone?: string; redone?: string }> {
+         await apply(opened.diagram, move(opened.diagram, 'Pay', x, y));
+         const moved = pay(opened);
+         await undoOrRedo(opened.diagram, UndoAction.create());
+         const undone = pay(opened);
+         await undoOrRedo(opened.diagram, RedoAction.create());
+         return { moved, undone, redone: pay(opened) };
+      }
+
+      it('undoes and redoes a move to a position it rounds', async () => {
+         expect(await moveUndoRedo(await openDiagram(), 50.4567, 110.1234)).toEqual({
+            moved: 'node Pay at 50.46, 110.12',
+            undone: 'node Pay at 40, 100',
+            redone: 'node Pay at 50.46, 110.12'
+         });
+      });
+
+      it('redoes a move of a node whose original position it rounds', async () => {
+         const opened = await openDiagram(workspace => {
+            const file = workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+            writeFileSync(file, readFileSync(file, 'utf8').replace('node Pay at 40, 100', 'node Pay at 40.123, 100'));
+         });
+
+         expect(await moveUndoRedo(opened, 50, 110)).toEqual({
+            moved: 'node Pay at 50, 110',
+            undone: 'node Pay at 40.12, 100',
+            redone: 'node Pay at 50, 110'
+         });
+      });
+
+      it('redoes a move while another node holds a position it rounds', async () => {
+         const opened = await openDiagram();
+         await changeTextBuilt(opened, opened.layoutUri, text =>
+            text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 260.123, 90')
+         );
+
+         expect(await moveUndoRedo(opened, 50, 110)).toEqual({
+            moved: 'node Pay at 50, 110',
+            undone: 'node Pay at 40, 100',
+            redone: 'node Pay at 50, 110'
+         });
+      });
+
+      it('serializes only the document a move changed, once to write it and once for each end', async () => {
+         const opened = await openDiagram();
+         const toText = vi.spyOn(opened.services.shared.model.ModelService, 'modelToText');
+
+         await apply(opened.diagram, move(opened.diagram, 'Pay', 50, 110));
+
+         expect(toText.mock.calls.map(([uri]) => uri)).toEqual([opened.layoutUri, opened.layoutUri, opened.layoutUri]);
       });
    });
 
@@ -265,7 +324,7 @@ describe('undo and redo of an operation', () => {
       );
       await apply(diagram, create);
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          builtNamesDuringUndo,
@@ -309,7 +368,7 @@ describe('undo and redo of an operation', () => {
          changeTextBuilt(opened, layoutUri, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'))
       );
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       const layout = textOf(opened, layoutUri);
       expect({ payReverted: layout.includes('node Pay at 40, 100'), foreign: layout.includes('node PaymentOk at 270, 95') }).toEqual({
@@ -326,9 +385,9 @@ describe('undo and redo of an operation', () => {
          async () => undefined,
          () => changeTextBuilt(opened, layoutUri, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'))
       );
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       const layout = textOf(opened, layoutUri);
       expect({ payRedone: layout.includes('node Pay at 50, 110'), foreign: layout.includes('node PaymentOk at 270, 95') }).toEqual({
@@ -420,9 +479,9 @@ describe('undo and redo of an operation', () => {
       const before = placed();
       const persist = spyOnPersist(diagram);
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const undone = { ...placed(), writes: persist.mock.calls.length };
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       expect({ before, undone, redone: { ...placed(), writes: persist.mock.calls.length } }).toEqual({
          before: { pay: true, ship: true },
@@ -440,9 +499,9 @@ describe('undo and redo of an operation', () => {
       await apply(diagram, create);
       const done = { ...sideEffects };
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const undone = { ...sideEffects, ship: textOf(opened, layoutUri).includes('node Ship at 660, 200') };
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       expect({ done, undone, redone: { ...sideEffects, ship: textOf(opened, layoutUri).includes('node Ship at 700, 220') } }).toEqual({
          done: { outer: 1, inner: 1 },
@@ -482,9 +541,9 @@ describe('undo and redo of an operation', () => {
       });
       const done = state();
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const undone = state();
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       expect({ done, undone, redone: state() }).toEqual({
          done: { sideEffects: 1, payMoved: moves },

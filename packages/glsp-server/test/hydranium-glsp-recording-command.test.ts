@@ -134,7 +134,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.updateCalls).toHaveLength(2);
    });
 
-   it('replays a json-patch redo after undo', async () => {
+   it('redoes a json-patch after undo', async () => {
       const log = makeLog();
       const state = makeFakeState(log);
       const command = makeCommand(state, 'Add node', () => {

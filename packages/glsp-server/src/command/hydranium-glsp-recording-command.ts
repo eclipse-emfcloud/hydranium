@@ -38,9 +38,9 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  *
  * A command executed outside an operation opens one of its own through
  * `runExclusive`, so executing it from inside the boundary with no operation
- * open deadlocks. Its undo and redo then replay that operation without taking
- * the boundary, which the caller holds, as the framework's undo handler does;
- * taking it there would deadlock under that handler.
+ * open deadlocks. Its undo and redo then undo and redo that operation without
+ * taking the boundary, which the caller holds, as the framework's undo handler
+ * does; taking it there would deadlock under that handler.
  */
 export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> extends JsonRecordingCommand<TSourceModel> {
    declare protected modelState: HydraniumGlspRecordingState<TSourceModel>;
@@ -71,7 +71,7 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
          }
          return;
       }
-      open.assertRecording(this.label);
+      open.assertNotDuringUndoRedo(this.label);
       const tracer = this.modelState.tracer.for('HydraniumGlspRecordingCommand');
       tracer.debug(`Executing '${this.label}' (base version v${this.modelState.version})`);
       await tracer.time(`Execute command '${this.label}'`, () => super.execute());

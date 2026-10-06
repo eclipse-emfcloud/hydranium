@@ -257,7 +257,7 @@ describe('FullTextHydraniumGlspState', () => {
          expect(harness.updateCalls.map(call => call.model)).toEqual(['element After {}', 'element Before {}']);
       });
 
-      it('replays the whole document on redo', async () => {
+      it('writes the whole document again on redo', async () => {
          const { harness, setText } = makeTextHarness('element Before {}');
          const state = createState(harness);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
