@@ -89,6 +89,7 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'onDidReleaseDocument'
    | 'isDirty'
    | 'textState'
+   | 'openedVersion'
    | 'onDidChangeDirty'
    | 'setDiskBaseline'
 > {
@@ -167,6 +168,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
    const documentReleased = new Emitter<DocumentReleasedEvent>();
    const baselines = new Map<string, string | undefined>();
+   const openedVersions = new Map<string, number>();
    const dirty = new Set<string>();
    const dirtyChanged = new Emitter<DocumentDirtyChangedEvent>();
    // As the real store: dirty while held with text other than the baseline,
@@ -208,6 +210,9 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       },
       version(uri) {
          return docs.get(uri)?.version ?? 0;
+      },
+      openedVersion(uri) {
+         return docs.has(uri) ? openedVersions.get(uri) : undefined;
       },
       textState(uri) {
          const held = docs.get(uri);
@@ -340,6 +345,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       seedOpen(uri, text, clientId) {
          sessions.addOpen(key(uri), clientId);
          docs.set(uri, { uri, version: 1, text, clientId });
+         openedVersions.set(uri, 1);
          baselines.set(uri, text);
       },
       seedOpenInLanguageClient(uri) {
@@ -379,6 +385,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          appliedEdits.length = 0;
          staged.length = 0;
          baselines.clear();
+         openedVersions.clear();
          dirty.clear();
          saveListeners.length = 0;
          closeListeners.length = 0;

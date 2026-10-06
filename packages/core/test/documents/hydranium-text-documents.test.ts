@@ -891,6 +891,23 @@ describe('HydraniumTextDocuments version gate and close reset', () => {
       expect(docs.get(URI)?.getText()).toBe('reopened\n');
       expect(docs.getAuthor(URI, 3)).toBe(LANGUAGE_CLIENT_ID);
    });
+
+   it('answers the version a document was opened at, past later writes, until it is released', () => {
+      const { docs } = makeDocs();
+      openInLanguageClient(docs, 'first\n');
+      docs.notifyDidChangeTextDocument(
+         { textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'edited\n' }] },
+         LANGUAGE_CLIENT_ID
+      );
+      expect(docs.openedVersion(URI)).toBe(1);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      expect(docs.openedVersion(URI)).toBeUndefined();
+
+      // Opened again with the text it was released with, it keeps that version.
+      openInLanguageClient(docs, 'edited\n');
+      expect(docs.openedVersion(URI)).toBe(2);
+   });
 });
 
 describe('HydraniumTextDocuments author history and pending content', () => {

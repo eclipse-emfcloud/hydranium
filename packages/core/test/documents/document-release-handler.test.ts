@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { URI } from '@hydranium/langium';
-import { type CanonicalUri } from '@hydranium/protocol';
+import { type CanonicalUri, Logger } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
 import { CancellationToken } from 'vscode-languageserver';
 import {
@@ -170,6 +170,22 @@ describe('DefaultDocumentReleaseHandler', () => {
       const { services, builds } = makeRig();
       await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased(() => true));
       expect(builds).toEqual([]);
+   });
+
+   it('logs how each release went, a reclaimed one as building nothing', async () => {
+      const outcomes = async (reclaimed: boolean): Promise<string[]> => {
+         const rig = makeRig();
+         await new DefaultDocumentReleaseHandler(rig.services).didReleaseDocument(makeReleased(() => reclaimed));
+         return rig.logged.filter(line => line.level === 'debug' && line.message.includes('Release outcome')).map(line => line.message);
+      };
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         expect(await outcomes(true)).toEqual([expect.stringContaining('Release outcome: reclaimed by a client, built nothing')]);
+         expect(await outcomes(false)).toEqual([expect.stringContaining('Release outcome: completed rebuild, parsed')]);
+      } finally {
+         Logger.setLevel(previous);
+      }
    });
 
    it('settles an overridden applyReleaseDecision once the build it runs removes the document', async () => {

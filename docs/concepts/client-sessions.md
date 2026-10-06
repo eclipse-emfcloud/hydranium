@@ -150,7 +150,8 @@ the same version is `rebuilt` and names
 is news to every client, the one that opened or last wrote it included.
 `AstDocumentManager.attributeUpdate` decides this for every head; the data head
 names `DOCUMENT_RELEASE_CLIENT_ID` instead for the build that follows a
-document's release. The rule needs rebuilds that validate: see
+document's release, unless that build carries a write made since a client
+opened the document again. The rule needs rebuilds that validate: see
 `TransferDocumentUpdateReason` for the cases that fall back.
 
 A save persists the document's current text, which includes unsaved edits other
