@@ -736,8 +736,9 @@ export class MonacoLspAdapter {
     * business.
     *
     * **The framework does not gate this on a client capability, measured.**
-    * `HydraniumTextDocuments.applyEditToLanguageClient` checks only that an LSP
-    * connection is bound, and `vscode-languageserver`'s own
+    * `HydraniumTextDocuments.applyEditToLanguageClient` checks that an LSP
+    * connection is bound and that the page has the document open, never a
+    * capability, and `vscode-languageserver`'s own
     * `RemoteWorkspaceImpl.applyEdit` forwards unconditionally — so declaring
     * `workspace.applyEdit` in `initialize` does not turn the request on and
     * omitting it does not turn it off. The page declares it anyway, because it

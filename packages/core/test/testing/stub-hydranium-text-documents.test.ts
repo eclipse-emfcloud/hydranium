@@ -231,6 +231,7 @@ describe('makeStubHydraniumTextDocuments — the wire-path supersession rule', (
 describe('makeStubHydraniumTextDocuments — the push channel to the language client', () => {
    it('records every push and answers accepted by default', async () => {
       const stub = makeStubHydraniumTextDocuments();
+      stub.seedOpenInLanguageClient(URI_ONE);
 
       const result = await stub.applyEditToLanguageClient(URI_ONE, 'pushed', { label: 'a label' });
 
@@ -240,6 +241,7 @@ describe('makeStubHydraniumTextDocuments — the push channel to the language cl
 
    it('routes the rejection path through the handler, recording the call either way', async () => {
       const stub = makeStubHydraniumTextDocuments();
+      stub.seedOpenInLanguageClient(URI_ONE);
       const seenInside: number[] = [];
       stub.setApplyEditHandler(() => {
          // The handler runs INSIDE the call, which is the only place a suite can
@@ -254,6 +256,19 @@ describe('makeStubHydraniumTextDocuments — the push channel to the language cl
       expect(result).toEqual({ applied: false });
       expect(seenInside).toEqual([1]);
       expect(stub.appliedEdits).toHaveLength(1);
+   });
+
+   it('sends nothing to a URI the language client has not opened, as the real store sends none', async () => {
+      const stub = makeStubHydraniumTextDocuments();
+      let handled = 0;
+      stub.setApplyEditHandler(() => ((handled += 1), { applied: true }));
+      stub.seedOpen(URI_ONE, 'one', AUTHORING_CLIENT);
+
+      const result = await stub.applyEditToLanguageClient(URI_ONE, 'pushed');
+
+      expect(result).toBeUndefined();
+      expect(stub.appliedEdits).toEqual([]);
+      expect(handled).toBe(0);
    });
 
    it('records staged content separately from pushed content', () => {
@@ -294,12 +309,13 @@ describe('makeStubHydraniumTextDocuments — save and reset', () => {
       stub.setApplyEditHandler(() => ({ applied: false }));
       stub.applyContentChange(URI_ONE, 'two', AUTHORING_CLIENT);
       stub.stagePendingContent(URI_ONE, 'staged');
-      await stub.applyEditToLanguageClient(URI_ONE, 'pushed');
+      await stub.applyEditToLanguageClient(URI_TWO, 'pushed');
       stub.notifyDidSaveTextDocument({ textDocument: { uri: URI_ONE } }, AUTHORING_CLIENT);
 
       // Non-empty before, so the emptiness after is a statement about `reset`
       // rather than about a stub that never recorded anything.
       expect(stub.changes.length).toBeGreaterThan(0);
+      expect(stub.appliedEdits.length).toBeGreaterThan(0);
       expect(closes).toBe(1);
 
       stub.reset();
@@ -314,7 +330,8 @@ describe('makeStubHydraniumTextDocuments — save and reset', () => {
       expect(stub.isOpenInAnyClient(URI_ONE)).toBe(false);
       expect(stub.isOpenInLanguageClient(URI_TWO)).toBe(false);
       expect(closes).toBe(1);
-      expect(await stub.applyEditToLanguageClient(URI_ONE, 'pushed')).toEqual({ applied: true });
+      stub.seedOpenInLanguageClient(URI_TWO);
+      expect(await stub.applyEditToLanguageClient(URI_TWO, 'pushed')).toEqual({ applied: true });
    });
 });
 

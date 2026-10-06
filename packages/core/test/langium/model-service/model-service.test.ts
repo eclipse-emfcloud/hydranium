@@ -1160,9 +1160,11 @@ describe('ModelService LSP-client sync', () => {
       // no client has open, and nothing is carried to a language client's next
       // open either.
       const bundle = buildSyncBundle({ open: false });
+      // The store would drop the push too; the spy pins that no sync starts.
+      const push = vi.spyOn(bundle.textDocuments, 'applyEditToLanguageClient');
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
-      expect(bundle.textDocuments.appliedEdits).toEqual([]);
+      expect(push).not.toHaveBeenCalled();
       expect(bundle.textDocuments.staged).toEqual([]);
    });
 

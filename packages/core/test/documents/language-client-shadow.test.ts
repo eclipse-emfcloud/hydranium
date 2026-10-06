@@ -136,20 +136,33 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
    const URI = asLanguageClientUri('file:///test.a');
    const editsOf = (shadow: DefaultLanguageClientShadow, text: string): TextEdit[] => shadow.preparePush(KEY, URI, text)?.edits ?? [];
    const fallbacks = (lines: CapturedLine[]): CapturedLine[] => lines.filter(line => /apply-verify fallback/.test(line.message));
+   /** Opened with an equality-only snapshot, so the first push is a full replace. */
+   const openShadow = (configuration = factories): ReturnType<typeof makeShadow> => {
+      const made = makeShadow(configuration);
+      made.shadow.addOpen(KEY, URI, 1, '', false);
+      return made;
+   };
+
+   test('pushes to no URI until the client opens the key, then to that URI', () => {
+      const { shadow } = makeShadow();
+      expect(shadow.pushTargets(KEY)).toEqual([]);
+      shadow.addOpen(KEY, URI, 1, '', true);
+      expect(shadow.pushTargets(KEY)).toEqual([URI]);
+   });
 
    test('first call emits a full-range replace', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       expect(isFullReplace(editsOf(shadow, 'a\nb\n'), 'a\nb\n')).toBe(true);
    });
 
    test('identical follow-up plans nothing', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       shadow.preparePush(KEY, URI, 'a\nb\n');
       expect(shadow.preparePush(KEY, URI, 'a\nb\n')).toBeUndefined();
    });
 
    test('subsequent change emits a diff (not full replace)', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       shadow.preparePush(KEY, URI, 'a\nb\nc\n');
       const edits = editsOf(shadow, 'a\nB\nc\n');
       expect(edits.length).toBeGreaterThanOrEqual(1);
@@ -157,14 +170,14 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
    });
 
    test('invalidateClientText forces next call back to full-range replace', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       shadow.preparePush(KEY, URI, 'a\nb\n');
       shadow.invalidateClientText(URI);
       expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(true);
    });
 
    test('a settled push ignores a second answer', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       shadow.setClientText(URI, 'a\nb\n');
       const push = shadow.preparePush(KEY, URI, 'a\nB\n');
       push?.notifyOutcome('applied');
@@ -174,7 +187,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
    });
 
    test('setClientText primes the baseline so next call is a diff', () => {
-      const { shadow } = makeShadow();
+      const { shadow } = openShadow();
       shadow.setClientText(URI, 'a\nb\n');
       expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(false);
    });
@@ -183,7 +196,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       // Apply-verify failure cannot be triggered naturally, since diffToEdits
       // reconstructs `newText` exactly. This only pins that the log stays
       // silent on the happy paths; the injected-mismatch test drives the fallback.
-      const { shadow, lines } = makeShadow();
+      const { shadow, lines } = openShadow();
       shadow.preparePush(KEY, URI, 'a\nb\n');
       shadow.preparePush(KEY, URI, 'a\nB\n');
       expect(fallbacks(lines)).toEqual([]);
@@ -197,7 +210,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
          ...factories,
          create: (uri, languageId, version) => TextDocument.create(uri, languageId, version, 'WRONG\n')
       };
-      const { shadow, lines } = makeShadow(corrupting);
+      const { shadow, lines } = openShadow(corrupting);
       // Prime a baseline so the push takes the diff path (not the first-sync full replace).
       shadow.setClientText(URI, 'a\nb\nc\n');
       const edits = editsOf(shadow, 'a\nB\nc\n');

@@ -170,6 +170,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       // asserted at BOTH levels here, because the nesting is what went wrong and
       // a check on the top level alone would pass for a label sent nowhere.
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
+      openInLanguageClient(docs, 'old\n');
 
       await docs.applyEditToLanguageClient(URI, 'hello\n', { label: 'Update Model' });
 
@@ -181,6 +182,8 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
       });
+      openInLanguageClient(docs, 'hello\n');
+      docs.invalidateLanguageClientText(URI);
       const result = await docs.applyEditToLanguageClient(URI, 'hello\nworld\n');
       expect(result).toEqual({ applied: true });
       expect(recorded).toHaveLength(1);
@@ -297,18 +300,16 @@ describe('HydraniumTextDocuments shadow auto-tracking', () => {
       expect(edits.length).toBeGreaterThan(0);
    });
 
-   it('language-client didClose invalidates the shadow', async () => {
+   it('sends nothing once the language client closes the document', async () => {
+      // A coalesced sync can run after the close it raced.
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
       });
       openInLanguageClient(docs, 'alive\n');
       docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
-      // Post-close, next applyEditToLanguageClient sends a full replace.
-      await docs.applyEditToLanguageClient(URI, 'alive\n');
-      expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
-      expect(edits).toHaveLength(1);
-      expect(edits[0].newText).toBe('alive\n');
+      const result = await docs.applyEditToLanguageClient(URI, 'changed\n');
+      expect(result).toBeUndefined();
+      expect(recorded).toHaveLength(0);
    });
 });
 
@@ -357,13 +358,13 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
       expect(identifier.version).toBeNull();
    });
 
-   it('sends no version for a document the language client never opened', async () => {
+   it('sends nothing to a document the language client never opened', async () => {
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
       });
-      await docs.applyEditToLanguageClient(URI, 'fresh\n');
-      const identifier = (recorded[0].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
-      expect(identifier.version).toBeNull();
+      const result = await docs.applyEditToLanguageClient(URI, 'fresh\n');
+      expect(result).toBeUndefined();
+      expect(recorded).toHaveLength(0);
    });
 
    it('a version-checking client rejects a diff its buffer has outrun, instead of splicing it', async () => {
@@ -1138,20 +1139,17 @@ describe('HydraniumTextDocuments open / close client gating', () => {
       expect(changeFires).toHaveLength(0);
    });
 
-   it('does NOT baseline the shadow when a non-language client opens first', async () => {
+   it('does NOT count a non-language client open as the editor holding the document', async () => {
       // Kills the `clientId === LANGUAGE_CLIENT_ID` guard in notifyDidOpen:
-      // only the language client should baseline the Monaco shadow.
+      // only the language client's open makes the editor a push target.
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
       docs.notifyDidOpenTextDocument(
          { textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'glsp-content\n' } },
          'glsp-client'
       );
-      // Shadow was never set → outbound sync must be a full replace, not a no-op.
-      const result = await docs.applyEditToLanguageClient(URI, 'glsp-content\n');
-      expect(result).toEqual({ applied: true });
-      expect(recorded).toHaveLength(1);
-      const edits = (recorded[0].params.edit.documentChanges![0] as { edits: Array<{ newText: string }> }).edits;
-      expect(edits[0].newText).toBe('glsp-content\n');
+      const result = await docs.applyEditToLanguageClient(URI, 'changed\n');
+      expect(result).toBeUndefined();
+      expect(recorded).toHaveLength(0);
    });
 
    it('does NOT invalidate the shadow when a non-language client closes', async () => {
@@ -1186,23 +1184,6 @@ describe('HydraniumTextDocuments staged-content baseline', () => {
    });
 });
 
-describe('HydraniumTextDocuments first-open baseline vs an outstanding push', () => {
-   it('keeps the pushed baseline when the client opens the file from disk afterwards', async () => {
-      // An `applyEdit` to a file the client has closed: the client opens it from disk
-      // and applies the edit after, so the push's baseline is what it ends up holding.
-      // Re-baselining to the disk text at that open keys the next diff to a buffer
-      // nobody has.
-      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
-      await docs.applyEditToLanguageClient(URI, 'a\nb\nc\n');
-      openInLanguageClient(docs, 'a\n');
-      await docs.applyEditToLanguageClient(URI, 'a\nb\nc\nd\n');
-      expect(recorded).toHaveLength(2);
-      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
-      const heldByClient = TextDocumentImpl.create(URI, 'plaintext', 0, 'a\nb\nc\n');
-      expect(TextDocumentImpl.applyEdits(heldByClient, edits)).toBe('a\nb\nc\nd\n');
-   });
-});
-
 describe('HydraniumTextDocuments language-client attach baseline', () => {
    it('sends no edit when the language client attaches holding the text the sync would push', async () => {
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
@@ -1213,23 +1194,6 @@ describe('HydraniumTextDocuments language-client attach baseline', () => {
       const result = await docs.applyEditToLanguageClient(URI, 'shared\n');
       expect(recorded).toHaveLength(0);
       expect(result).toBeUndefined();
-   });
-
-   it('keeps a shadow established by an earlier push when the language client attaches', async () => {
-      // The staged-integrity flow: `workspace/applyEdit` targets a file Monaco does not
-      // have open, so the client opens it from DISK and applies the edit afterwards. The
-      // push's own baseline is what Monaco ends up holding — an attach must not drag the
-      // shadow back to the pre-edit disk text, or the next diff splices the buffer.
-      const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
-      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'disk\n' } }, 'glsp-client');
-      await docs.applyEditToLanguageClient(URI, 'a\nintegrity\n');
-      openInLanguageClient(docs, 'disk\n');
-      await docs.applyEditToLanguageClient(URI, 'a\nintegrity2\n');
-      // The second push must be reconstructable from the text the client actually holds
-      // after the first one, which is the only baseline its ranges can address.
-      const edits = (recorded[1].params.edit.documentChanges![0] as { edits: TextEdit[] }).edits;
-      const held = TextDocumentImpl.create(URI, 'plaintext', 0, 'a\nintegrity\n');
-      expect(TextDocumentImpl.applyEdits(held, edits)).toBe('a\nintegrity2\n');
    });
 
    it('does not match the opened text against a client buffer that has since moved', async () => {
@@ -1943,9 +1907,7 @@ describe('HydraniumTextDocuments change with no known client buffer', () => {
     *
     * The rejection is what makes the client's buffer unknowable: it drops both
     * the tracked text and the opened snapshot, and the recovery push is
-    * therefore sent with no record of what it lands on. Nothing narrower
-    * reproduces that — a push to a client that never opened the document is the
-    * other route, and it cannot then send a `didChange` at all.
+    * therefore sent with no record of what it lands on.
     */
    async function pushAfterRejection(): Promise<{ docs: HydraniumTextDocuments<TextDocument>; fires: string[] }> {
       let attempts = 0;
@@ -2095,13 +2057,19 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       }
    }
 
-   function makeConnectedStore(): { docs: InspectableTextDocuments; recorded: RecordedApplyEdit[] } {
+   /** `inFlight` runs inside each push, where a client event can race it. */
+   function makeConnectedStore(inFlight: (params: ApplyWorkspaceEditParams) => void = () => undefined): {
+      docs: InspectableTextDocuments;
+      recorded: RecordedApplyEdit[];
+   } {
       const recorded: RecordedApplyEdit[] = [];
       const logger = makeLogger();
       const services = {
          lsp: {
             Connection: {
-               workspace: { applyEdit: async (params: ApplyWorkspaceEditParams) => (recorded.push({ params }), { applied: true }) }
+               workspace: {
+                  applyEdit: async (params: ApplyWorkspaceEditParams) => (recorded.push({ params }), inFlight(params), { applied: true })
+               }
             }
          },
          Logger: { for: () => logger },
@@ -2180,17 +2148,6 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       expect(TextDocumentImpl.applyEdits(TextDocumentImpl.create(REAL, 'plaintext', 1, 'x\ny\n'), edits)).toBe('a\nC\n');
    });
 
-   it('keeps what it tracks for a URI on a close the language client never opened it under', async () => {
-      const { docs } = makeConnectedStore();
-      // Only another client holds the document; a push still goes to the editor's spelling.
-      docs.notifyDidOpenTextDocument({ textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } }, 'form-client');
-      await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
-      const tracked = docs.languageClientState(REAL);
-      expect(tracked.pending).toEqual([REAL]);
-      docs.notifyDidCloseTextDocument({ textDocument: { uri: REAL } }, LANGUAGE_CLIENT_ID);
-      expect(docs.languageClientState(REAL)).toEqual(tracked);
-   });
-
    it('forgets every spelling the language client opened the file under once it closes', async () => {
       const { docs } = makeConnectedStore();
       docs.notifyDidOpenTextDocument(
@@ -2236,6 +2193,26 @@ describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)
       // synced 'a\nb\nc\n' instead, the ranges address a line tab two does not have.
       const heldByTabTwo = TextDocumentImpl.create(REAL, 'plaintext', 0, 'a\nb\n');
       expect(TextDocumentImpl.applyEdits(heldByTabTwo, edits)).toBe('a\nb\nc\nd\n');
+   });
+
+   it('sends nothing to a spelling the editor closes while a push to its other spelling is in flight', async () => {
+      const { docs, recorded } = makeConnectedStore(params => {
+         if (targetUriOf({ params }) === REAL) {
+            docs.notifyDidCloseTextDocument({ textDocument: { uri: LINK } }, LANGUAGE_CLIENT_ID);
+         }
+      });
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: REAL, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+      docs.notifyDidOpenTextDocument(
+         { textDocument: { uri: LINK, languageId: 'plaintext', version: 1, text: 'a\nb\n' } },
+         LANGUAGE_CLIENT_ID
+      );
+
+      await docs.applyEditToLanguageClient(REAL, 'a\nB\n');
+
+      expect(recorded.map(targetUriOf)).toEqual([REAL]);
    });
 
    it('numbers a reopened buffer afresh after a close under a URI the editor never opened', () => {

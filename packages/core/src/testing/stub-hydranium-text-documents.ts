@@ -136,15 +136,20 @@ export interface StubHydraniumTextDocuments extends Pick<
    /**
     * Decide what {@link applyEditToLanguageClient} answers, so a suite can drive
     * the rejection path (`{ applied: false }`) the real client takes when its
-    * buffer has outrun the version the push was addressed at. The call is still
-    * recorded in {@link appliedEdits} either way. Defaults to accepting.
+    * buffer has outrun the version the push was addressed at. The push is still
+    * recorded in {@link appliedEdits} either way. Defaults to accepting; not
+    * called for a URI not open in the language client.
     *
     * The handler runs INSIDE the call, which is also the only place a suite can
     * simulate something happening while the push is in flight — a newer settle,
     * a concurrent client edit.
     */
    setApplyEditHandler(handler: (uri: string, text: string) => ApplyWorkspaceEditResult | undefined): void;
-   /** Replay of every {@link applyEditToLanguageClient} call (the text channel to Monaco). */
+   /**
+    * Replay of every push {@link applyEditToLanguageClient} sent (the text
+    * channel to Monaco): none for a URI not seeded open in the language client,
+    * as the real store sends none.
+    */
    readonly appliedEdits: readonly { uri: string; text: string; label?: string }[];
    /** Replay of every {@link stagePendingContent} call (the not-yet-open staging path). */
    readonly staged: readonly { uri: string; text: string }[];
@@ -336,6 +341,9 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          applyEditHandler = handler;
       },
       async applyEditToLanguageClient(uri, newText, options): Promise<ApplyWorkspaceEditResult | undefined> {
+         if (!languageClientOpen.has(uri)) {
+            return undefined;
+         }
          appliedEdits.push({ uri, text: newText, label: options?.label });
          return applyEditHandler(uri, newText);
       },
