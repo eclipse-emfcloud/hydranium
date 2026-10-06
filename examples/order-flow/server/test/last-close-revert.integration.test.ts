@@ -343,6 +343,30 @@ describe('release grace over the data head', () => {
       await waitFor(() => built() === CLEAN && reverts() > 0, { timeoutMs: 2000 });
    });
 
+   it('credits an edit that rides the first build of another session’s open within the grace to its author, and broadcasts it', async () => {
+      const { services, uri, built } = await boot(GRACE_MS);
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const head = connect(services);
+      const observer = connect(services);
+      await head.proxy.createSession({ clientId: 'form#lost' });
+      await head.proxy.openModelDocument({ uri, clientId: 'form#lost' });
+      await head.proxy.updateModelDocument({ uri, clientId: 'form#lost', model: EDITED, baseVersion: 'any' });
+
+      head.server.lose();
+      const other = services.shared.model.ModelService.createSession('tree');
+      // Open and edit in one turn, so one build carries both.
+      textDocuments.notifyDidOpenTextDocument(
+         { textDocument: { uri, languageId: 'order-flow-domain', version: 0, text: CLEAN } },
+         other.clientId
+      );
+      textDocuments.applyContentChange(uri, EDITED, other.clientId);
+      void services.shared.workspace.VersionSyncService.syncTo(URI.parse(uri), textDocuments.version(uri));
+
+      await waitFor(() => built() === EDITED && observer.events.length > 0, { timeoutMs: 2000 });
+      await outlastRevert();
+      expect(observer.events.map(event => event.sourceClientId)).toEqual([other.clientId]);
+   });
+
    it('broadcasts no revert for a lost session’s document it opens again within the grace', async () => {
       const { services, uri } = await boot(GRACE_MS);
       const head = connect(services);

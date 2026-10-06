@@ -262,6 +262,11 @@ export interface ModelService<
    validated(uri: string, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
 
    isOpen(uri: string): boolean;
+   /**
+    * The version the document at `uri` was opened at, which a client's write
+    * or an integrity repair steps past; `undefined` while it is not open.
+    */
+   openedVersion(uri: string): TextVersion | undefined;
    snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined;
    /**
     * The text a session's write of `model` to `uri` applies: a textual model
@@ -837,6 +842,10 @@ export class DefaultModelService<
     */
    isOpen(uri: string): boolean {
       return this.services.workspace.AstDocumentManager.isOpen(uri);
+   }
+
+   openedVersion(uri: string): TextVersion | undefined {
+      return this.services.workspace.TextDocuments.openedVersion(uri);
    }
 
    /**

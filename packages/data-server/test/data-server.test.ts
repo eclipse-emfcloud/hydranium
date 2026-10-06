@@ -1148,6 +1148,68 @@ describe('DataServer', () => {
          }
       });
 
+      /** Release `URI_A`, building nothing for it, and open it again for `editor-2` at version 1. */
+      async function releaseAndReopen(bundle: Bundle, proxy: TestHarness['proxy']): Promise<void> {
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'session-edited' });
+         bundle.textDocuments.seedOpen(URI_A, 'name:session-edited', 'editor-1');
+         bundle.textDocuments.fireClose(URI_A, 'editor-1');
+         await proxy.createSession({ clientId: 'editor-2' });
+         // Through the manager, so the model service counts the document open and the live version is read.
+         await proxy.openModelDocument({ uri: URI_A, clientId: 'editor-2' });
+      }
+
+      /** Rebuild `URI_A` holding `name`, its text document at `liveVersion` and its root stamped `stamped`. */
+      function rebuildAt(bundle: Bundle, name: string, liveVersion: number, stamped: number): void {
+         const built = bundle.documents.set(URI_A, { $type: 'FakeRoot', name }, { version: liveVersion });
+         bundle.modelLedger.record(built.parseResult.value, stamped);
+         fireRebuild(bundle, built);
+      }
+
+      it('credits the first build of a reopen after a release that built nothing to the release', async () => {
+         const bundle = buildBundle();
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await releaseAndReopen(bundle, proxy);
+            rebuildAt(bundle, 'initial', 1, 1);
+            await waitFor(() => events.length === 1);
+
+            expect(events[0]?.sourceClientId).toBe(DOCUMENT_RELEASE_CLIENT_ID);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('credits a client’s write that the first build after a release carries to that client', async () => {
+         const bundle = buildBundle();
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await releaseAndReopen(bundle, proxy);
+            const version = bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-2');
+            rebuildAt(bundle, 'edited', version, version);
+            await waitFor(() => events.length === 1);
+
+            expect(events[0]?.sourceClientId).toBe('editor-2');
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('credits the first build after a release to the release when a client writes before it goes out', async () => {
+         const bundle = buildBundle();
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await releaseAndReopen(bundle, proxy);
+            // The write lands after the build parsed the text opened at version 1.
+            const version = bundle.textDocuments.applyContentChange(URI_A, 'name:edited', 'editor-2');
+            rebuildAt(bundle, 'initial', version, 1);
+            await waitFor(() => events.length === 1);
+
+            expect(events[0]?.sourceClientId).toBe(DOCUMENT_RELEASE_CLIENT_ID);
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('stays silent when another client still holds the document open', async () => {
          const bundle = buildBundle();
          const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'shared' });

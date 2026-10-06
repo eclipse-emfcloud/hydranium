@@ -67,7 +67,7 @@ export function isDocumentReleaseSkippedError(error: unknown): error is Document
  *
  * The data server announces the first build of a released document as the
  * release, so a handler that builds nothing leaves that to whichever build
- * comes next, a client's edit included.
+ * comes next; one that carries a client's write keeps that client's name.
  *
  * Extend {@link DefaultDocumentReleaseHandler} to change only the policy: it
  * keeps the locking and the wait for the build. An implementation written
@@ -142,6 +142,7 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
    async didReleaseDocument(released: ReleasedDocument): Promise<void> {
       const target = UriUtils.toUri(released.uri);
       const outcome = await this.runRelease(released, target);
+      this.tracer.with(released.uri).debug(`Release outcome: ${this.formatReleaseOutcome(outcome)}`);
       if (outcome.kind === 'skipped') {
          if (!outcome.parsed) {
             throw new DocumentReleaseSkippedError(outcome.error);
@@ -241,6 +242,19 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
       } finally {
          parses?.dispose();
       }
+   }
+
+   /**
+    * `outcome` for the line each release logs at debug: its kind, the
+    * decision and whether the document was parsed.
+    */
+   protected formatReleaseOutcome(outcome: DocumentReleaseOutcome): string {
+      if (outcome.kind === 'reclaimed') {
+         return 'reclaimed by a client, built nothing';
+      }
+      const decision = 'decision' in outcome && outcome.decision !== undefined ? ` ${outcome.decision}` : '';
+      const parsed = 'parsed' in outcome ? (outcome.parsed ? ', parsed' : ', not parsed') : '';
+      return `${outcome.kind}${decision}${parsed}`;
    }
 
    /**

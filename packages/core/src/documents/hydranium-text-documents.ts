@@ -203,6 +203,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    protected readonly __sessions = new ClientSessionRegistry();
 
+   /** The version each open document was opened at; see {@link openedVersion}. */
+   protected readonly __openedVersions = new Map<CanonicalUri, TextVersion>();
+
    protected readonly tracer: Tracer;
    protected readonly configuration: TextDocumentsConfiguration<T>;
    protected __textLedger: TextLedger | undefined;
@@ -598,6 +601,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       this.textLedger.clearAuthors(uri);
       const cleanAnnouncement = this.dirtyStateTracker.release(uri);
       this.__syncedDocuments.delete(uri);
+      this.__openedVersions.delete(uri);
       this.__sessions.forgetClientVersions(uri);
       // A stage is for a first open; one released unconsumed is stale.
       this.__pendingContent.delete(uri);
@@ -787,6 +791,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          this.log(uri, `Open document: Version ${version} by ${this.formatClientId(clientId)} [first client${source}]`);
          document = this.create(uri, td.languageId, version, text);
          this.commitText(uri, document, clientId);
+         this.__openedVersions.set(uri, version);
          // The opener's text, not the staged content: a session's open read
          // it from the file, and an editor opened its buffer from there. An
          // editor that opens a buffer it never saved is taken as clean.
@@ -920,6 +925,14 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    version(uri: DocumentUri): TextVersion {
       return this.get(uri)?.version ?? this.textLedger.recordOf(this.documentKey(uri))?.version ?? 0;
+   }
+
+   /**
+    * The version the document at `uri` was opened at, which a client's write
+    * or an integrity repair steps past; `undefined` while it is not open.
+    */
+   openedVersion(uri: DocumentUri): TextVersion | undefined {
+      return this.__openedVersions.get(this.documentKey(uri));
    }
 
    /**

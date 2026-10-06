@@ -1232,9 +1232,10 @@ export class DataServer<
     * The broadcast is de-duplicated against the fingerprint while a watcher
     * holds one, so a close whose disk state equals the last emitted state
     * stays silent; with no watcher there is no fingerprint, and every release
-    * build is sent. The mark goes with the first build after the release,
-    * whoever caused it: a handler that builds nothing leaves it to the next
-    * one, a client's edit included.
+    * build is sent. The first build after the release consumes the mark, and
+    * goes out as the release unless it is stamped past the version a client
+    * opened the document at again: a client's write or an integrity repair
+    * that rides it keeps its author.
     *
     * A release, not the close itself: a document whose last client lost its
     * connection is released only once the release grace runs out, or when
@@ -1248,6 +1249,7 @@ export class DataServer<
             const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
             record.releaseBroadcastPending = true;
             this.uriWatchRecords.set(uri, record);
+            this.tracer.withUri(uri).debug('Release marked: the first build after it is broadcast, watched or not');
          })
       );
    }
@@ -1387,14 +1389,20 @@ export class DataServer<
             ? { reason: 'rebuilt' as const, sourceClientId: UNKNOWN_CLIENT_ID }
             : event;
       record.sentVersion = version;
+      // The stamp, not the live version: a write after the build's parse moves
+      // only the latter. At the opened version too, which a reopen with the
+      // released text keeps.
+      const openedVersion = afterRelease ? this.modelService.openedVersion(event.document.uri) : undefined;
+      const releaseBuild = afterRelease && (openedVersion === undefined || stamped <= openedVersion);
       const wireEvent: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri, fingerprint),
-         sourceClientId: afterRelease ? DOCUMENT_RELEASE_CLIENT_ID : sourceClientId,
+         sourceClientId: releaseBuild ? DOCUMENT_RELEASE_CLIENT_ID : sourceClientId,
          reason
       };
+      const mark = afterRelease ? `, release mark: opened v${openedVersion ?? '-'}, attributed ${sourceClientId}` : '';
       this.tracer
          .withUri(uri)
-         .debug(`Emit onDocumentUpdated v${stamped} (reason=${wireEvent.reason}, sourceClientId=${wireEvent.sourceClientId})`);
+         .debug(`Emit onDocumentUpdated v${stamped} (reason=${wireEvent.reason}, sourceClientId=${wireEvent.sourceClientId}${mark})`);
       this.clientProxy.onDocumentUpdated(wireEvent);
    }
 
