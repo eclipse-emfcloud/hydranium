@@ -1904,8 +1904,12 @@ test.describe('order-flow in a web worker', () => {
 
       const pendingField = panel.locator('.field[data-pending]');
       const dirtyTitle = page.locator('.pane-title.is-dirty');
+      const dirtyHeading = panel.locator('h3[data-dirty]');
+      const unsaved = panel.locator('.unsaved');
       await expect(pendingField).toHaveCount(0);
       await expect(dirtyTitle).toHaveCount(0);
+      await expect(dirtyHeading).toHaveCount(0);
+      await expect(unsaved).toHaveText('');
 
       // Typed and NOT committed: the server has not been told, so the field is
       // marked and its note appears. Nothing is unsaved yet, because nothing has
@@ -1915,6 +1919,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(pendingField).toHaveCount(1);
       await expect(panel.locator('#field-name-hint')).toBeVisible();
       await expect(dirtyTitle).toHaveCount(0);
+      await expect(dirtyHeading).toHaveCount(0);
 
       // Committed: the field mark clears because the server now has it, and the
       // `.process` buffer becomes unsaved because storage does not. The two
@@ -1924,12 +1929,19 @@ test.describe('order-flow in a web worker', () => {
       await expect(pendingField).toHaveCount(0);
       await expect(panel.locator('#field-name-hint')).toBeHidden();
       await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+      await expect(dirtyHeading).toHaveAttribute('title', 'Unsaved changes');
+      await expect(unsaved).toHaveText('Unsaved changes');
+      // The dot is drawn for the eye only: the status note says it to a screen
+      // reader, which would otherwise read the glyph's name as part of the heading.
+      await expect(dirtyHeading).toHaveAccessibleName('fulfillment.process');
 
       // Saving clears it, and nothing on an editor fires when that happens — so
       // this also pins that the page asks for the marks to be recomputed.
       await page.locator('#save-workspace').click();
       await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
       await expect(dirtyTitle).toHaveCount(0);
+      await expect(dirtyHeading).toHaveCount(0);
+      await expect(unsaved).toHaveText('');
    });
 
    test('an undone edit stops being unsaved, and stops being saved', async ({ page }) => {

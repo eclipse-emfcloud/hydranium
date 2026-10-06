@@ -157,11 +157,10 @@ export class PropertiesForm {
       this.heading = this.createElement(options.headingLevel ?? 'h1');
       this.unsavedNote = this.createElement('div');
       this.unsavedNote.className = 'unsaved';
-      // A status region: a screen reader announces the note when it appears,
-      // which a hidden toggle alone does not make it do.
+      // A status region that stays in the document, empty while clean: a
+      // screen reader announces its text changing, and often stays silent for
+      // a region that appears with its text already in place.
       this.unsavedNote.setAttribute('role', 'status');
-      this.unsavedNote.textContent = this.text(PROPERTIES_UNSAVED);
-      this.unsavedNote.hidden = true;
       this.fieldsHost = this.createElement('div');
       this.status = this.createElement('div');
       this.status.className = 'status';
@@ -205,9 +204,20 @@ export class PropertiesForm {
     * panel's or anyone else's. The panel has no save of its own: any client
     * saves the same document, an editor or a diagram included, and the note
     * goes when one does.
+    *
+    * The heading carries `data-dirty` for a host to draw the editors' dirty
+    * mark on; the note stays the accessible statement of it.
     */
    setDirty(dirty: boolean): void {
-      this.unsavedNote.hidden = !dirty;
+      this.unsavedNote.textContent = dirty ? this.text(PROPERTIES_UNSAVED) : '';
+      if (dirty) {
+         this.heading.setAttribute('data-dirty', '');
+         this.heading.setAttribute('title', this.text(PROPERTIES_UNSAVED));
+      } else {
+         this.heading.removeAttribute('data-dirty');
+         // Removed rather than emptied: an empty title also hides an ancestor's tooltip.
+         this.heading.removeAttribute('title');
+      }
    }
 
    /**

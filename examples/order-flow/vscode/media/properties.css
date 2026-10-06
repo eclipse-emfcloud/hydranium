@@ -37,6 +37,28 @@ h1 {
    margin: 0 0 0.75rem;
 }
 
+/*
+ * The editors' dirty dot, with empty alt text: the note already says it to a
+ * screen reader, and is clipped rather than `display: none`, which would
+ * silence it.
+ */
+[data-dirty]::after {
+   content: ' ●';
+   content: ' ●' / '';
+}
+
+.unsaved {
+   position: absolute;
+   width: 1px;
+   height: 1px;
+   margin: -1px;
+   padding: 0;
+   border: 0;
+   overflow: hidden;
+   clip-path: inset(50%);
+   white-space: nowrap;
+}
+
 .field {
    display: flex;
    flex-direction: column;

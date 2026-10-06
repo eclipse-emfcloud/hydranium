@@ -949,6 +949,25 @@
             font-size: var(--font-md);
             font-weight: 600;
          }
+         /* The editor titles' dirty dot, with empty alt text: the note already
+            says it to a screen reader, and is clipped rather than
+            `display: none`, which would silence it. */
+         #properties-body [data-dirty]::after {
+            content: ' ●';
+            content: ' ●' / '';
+            color: var(--order-flow-foreground);
+         }
+         #properties-body .unsaved {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: -1px;
+            padding: 0;
+            border: 0;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+         }
          #properties-body .field {
             display: flex;
             flex-direction: column;

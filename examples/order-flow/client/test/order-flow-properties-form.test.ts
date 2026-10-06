@@ -58,7 +58,7 @@ function stubElement(): StubElement {
       htmlFor: '',
       hidden: false,
       className: '',
-      textContent: null,
+      textContent: '',
       parentElement: null,
       dataset: {},
       attributes: {},
@@ -127,6 +127,10 @@ class TestableForm extends PropertiesForm {
       return this.unsavedNote as unknown as StubElement;
    }
 
+   headingOf(): StubElement {
+      return this.heading as unknown as StubElement;
+   }
+
    /** The wrapper drawn for `name`, so a test can read what was marked on it. */
    fieldOf(name: string): StubElement {
       const input = this.inputs.get(name) as unknown as StubElement | undefined;
@@ -158,21 +162,38 @@ function makeForm(setField: (name: string, value: string) => Promise<SetFieldOut
 }
 
 describe('PropertiesForm unsaved note', () => {
-   it('shows the note while the document is dirty, and hides it again', () => {
+   it('says the document is unsaved while it is dirty, and nothing once it is clean', () => {
       const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
-      expect(form.unsaved().hidden).toBe(true);
+      expect(form.unsaved().textContent).toBe('');
 
       form.setDirty(true);
-      expect(form.unsaved().hidden).toBe(false);
       expect(form.unsaved().textContent).toBe(PROPERTIES_UNSAVED.text);
-      form.setDirty(false);
 
-      expect(form.unsaved().hidden).toBe(true);
+      form.setDirty(false);
+      expect(form.unsaved().textContent).toBe('');
    });
 
-   it('is a status region, so a screen reader announces it when it appears', () => {
+   it('marks the heading for the dirty dot, with the note as its tooltip, and clears both', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      expect(form.headingOf().attributes['data-dirty']).toBeUndefined();
+
+      form.setDirty(true);
+      expect(form.headingOf().attributes['data-dirty']).toBe('');
+      expect(form.headingOf().attributes.title).toBe(PROPERTIES_UNSAVED.text);
+
+      form.setDirty(false);
+      expect(form.headingOf().attributes['data-dirty']).toBeUndefined();
+      expect(form.headingOf().attributes.title).toBeUndefined();
+   });
+
+   it('is a status region that stays in the document, so a screen reader announces its text changing', () => {
       const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
       expect(form.unsaved().attributes.role).toBe('status');
+      expect(form.unsaved().hidden).toBe(false);
+
+      form.setDirty(true);
+      form.setDirty(false);
+      expect(form.unsaved().hidden).toBe(false);
    });
 });
 
