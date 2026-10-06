@@ -19,8 +19,8 @@ silently start returning `false`. Without the pin, single-copy is only a semver-
 one minor bump away from breaking.
 
 For an **adopter**, the reason to route imports here is not runtime identity (that already holds) —
-it is **version coupling**. Langium sits in an atomic chain with `vscode-languageserver`,
-`vscode-languageserver-protocol` and `vscode-jsonrpc`, with no independently movable link. An
+it is **version coupling**. Langium sits in a chain with `vscode-languageserver`,
+`vscode-languageserver-protocol` and `vscode-jsonrpc`, whose links move together. An
 adopter importing `langium` directly owns that pin itself and can drift out of lockstep with the
 framework it composes; importing it from here means the framework owns it.
 

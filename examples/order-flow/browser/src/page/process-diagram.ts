@@ -23,7 +23,7 @@
  * `STANDALONE_MODULE_CONFIG` supplies GLSP's own plain-webapp modules and the
  * client is built by hand over the transferred port — three lines, because
  * `BaseJsonrpcGLSPClient` takes any `ConnectionProvider` and a `MessageConnection`
- * over a `MessagePort` is one.
+ * over a `MessagePort`, wrapped with `sendByMethodName`, is one.
  *
  * Upstream's `GLSPWebWorkerProvider` looks like the piece for this and is not:
  * it constructs the worker itself, which would be a second worker with a second
@@ -49,7 +49,7 @@ import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { createMessagePortTransport } from '@hydranium/protocol';
+import { createMessagePortTransport, sendByMethodName } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -110,8 +110,12 @@ export async function mountProcessDiagram(glspPort: MessagePort, sourceUri: stri
    // a second call throws. Both ends use `createMessagePortTransport`; see it
    // for why.
    const transport = createMessagePortTransport(glspPort);
-   const connection = createMessageConnection(transport.reader, transport.writer);
-   const glspClient = new BaseJsonrpcGLSPClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: connection });
+   // GLSP's client sends message types built by its own copy of `vscode-jsonrpc`,
+   // which this connection's copy rejects unless they go by method name.
+   const glspClient = new BaseJsonrpcGLSPClient({
+      id: PROCESS_DIAGRAM_ELEMENT_ID,
+      connectionProvider: sendByMethodName(createMessageConnection(transport.reader, transport.writer))
+   });
 
    const diagramOptions: IDiagramOptions = {
       clientId: PROCESS_DIAGRAM_ELEMENT_ID,

@@ -16,7 +16,7 @@
  */
 
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type InitFile, type InitHead, planInitFiles, resolveInitComposition, runInit } from '../src/commands/init.js';
 import type { JsonValue, WorkspaceProbe } from '../src/commands/init-workspace.js';
 
@@ -700,7 +700,13 @@ describe('runInit', () => {
  * here so neither half can pass by leaning on the other.
  */
 describe('planInitFiles, detected workspace facts', () => {
-   const plan = (workspace: { printWidth?: number; eslintConfig?: string; oxlintConfig?: string }): readonly InitFile[] =>
+   const plan = (workspace: {
+      printWidth?: number;
+      eslintConfig?: string;
+      oxlintConfig?: string;
+      packageManagerNpm?: string;
+      npmVersion?: string;
+   }): readonly InitFile[] =>
       planInitFiles(
          resolveInitComposition('Bookstore', undefined, ['lsp', 'data', 'glsp'], {
             private: true,
@@ -736,6 +742,41 @@ describe('planInitFiles, detected workspace facts', () => {
    it('emits a lint script only where the workspace has an eslint config', () => {
       expect(contentOf(plan({ eslintConfig: 'eslint.config.js' }), 'package.json')).toContain('"lint": "eslint src test --max-warnings 0"');
       expect(contentOf(plan({}), 'package.json')).not.toContain('"lint"');
+   });
+
+   const vitestOf = (files: readonly InitFile[]): string | undefined =>
+      (JSON.parse(contentOf(files, 'package.json')) as { devDependencies: Record<string, string> }).devDependencies.vitest;
+
+   /** npm before 11.6 crashes on vitest 4.1's peer set during the first install. */
+   it('holds vitest below 4.1 in a standalone project', () => {
+      const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
+      expect(vitestOf(standalone)).toBe('~4.0.18');
+      expect(contentOf(standalone, 'README.md')).toContain('`vitest` is held below 4.1');
+      expect(vitestOf(plan({}))).toBe('~4.0.18');
+   });
+
+   /** npm does not enforce `packageManager`, so a root declaring 11.15 can still be installed with Node 22's 10.9; an unknown npm keeps the pin. */
+   it.each([
+      ['11.5.2', '10.9.3', '~4.0.18'],
+      ['11.5.2', '11.6.0', '~4.0.18'],
+      ['11.5.2', '11.15.0', '~4.0.18'],
+      ['11.5.2', undefined, '~4.0.18'],
+      ['11.6.0', '10.9.3', '~4.0.18'],
+      ['11.6.0', '11.6.0', '^4.0.0'],
+      ['11.6.0', '11.15.0', '^4.0.0'],
+      ['11.6.0', undefined, '~4.0.18'],
+      ['11.15.0', '10.9.3', '~4.0.18'],
+      ['11.15.0', '11.6.0', '^4.0.0'],
+      ['11.15.0', '11.15.0', '^4.0.0'],
+      ['11.15.0', undefined, '~4.0.18'],
+      ['11.15.0', '11.6.0-rc.1', '~4.0.18'],
+      ['11.6.0-rc.1', '11.15.0', '~4.0.18'],
+      ['11.15.0', '11.6.1-rc.1', '^4.0.0'],
+      ['12.0.0', '12.0.0', '^4.0.0']
+   ])('emits vitest for a root declaring npm %s and init running under npm %s as %s', (packageManagerNpm, npmVersion, expected) => {
+      const files = plan({ packageManagerNpm, npmVersion });
+      expect(vitestOf(files)).toBe(expected);
+      expect(contentOf(files, 'README.md').includes('`vitest` is held below 4.1')).toBe(expected === '~4.0.18');
    });
 });
 
@@ -831,6 +872,39 @@ describe('runInit --monorepo', () => {
       // supplied them would be pointing every member at one directory.
       expect(tsconfig).not.toContain('"target"');
       expect(tsconfig).not.toContain('"strict"');
+   });
+
+   it.each([
+      [undefined, '~4.0.18'],
+      ['pnpm/9.0.0 npm/? node/v22.18.0 linux x64', '~4.0.18'],
+      ['npm/11.15.0 node/v22.18.0 linux x64 workspaces/false', '^4.0.0'],
+      ['npm/11.6.0-rc.1 node/v22.18.0 linux x64 workspaces/false', '~4.0.18'],
+      ['npm/10.9.2 node/v22.13.0 linux x64 workspaces/false', '~4.0.18']
+   ])("takes the vitest range from the root's packageManager and the npm user agent %s", (userAgent, expected) => {
+      vi.stubEnv('npm_config_user_agent', userAgent);
+      try {
+         expect(contentOf(scaffold().files, 'package.json')).toContain('"vitest": "~4.0.18"');
+
+         const rootManifest = path.join(ROOT, 'package.json');
+         const declaringNpm: Record<string, JsonValue> = {
+            ...TREE,
+            [rootManifest]: { ...(TREE[rootManifest] as Record<string, JsonValue>), packageManager: 'npm@11.15.0' }
+         };
+         let captured: readonly InitFile[] = [];
+         runInit({
+            targetDir: TARGET,
+            name: 'Bookstore',
+            monorepo: true,
+            probe: { ...probe, readJson: filePath => declaringNpm[filePath] },
+            write: () => undefined,
+            __writeFilesForTest: (_targetDir, files) => {
+               captured = files;
+            }
+         });
+         expect(contentOf(captured, 'package.json')).toContain(`"vitest": "${expected}"`);
+      } finally {
+         vi.unstubAllEnvs();
+      }
    });
 
    it('narrows .gitignore to the one entry the workspace root cannot be assumed to have', () => {

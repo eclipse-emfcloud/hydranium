@@ -7,8 +7,11 @@ Each entry starts with what you actually see.
 
 Two entries live in that other file but bite here just as often: `instanceof`
 answering `false` for a node that is obviously the right type, and `Unknown
-parameter structure auto` during head initialization. Both are a duplicated
-physical copy in the install, and both are fixed by a from-scratch install.
+parameter structure auto` from a typed send. Both are a duplicated physical copy
+in the install. Here a from-scratch install fixes the first, since the root
+`overrides` hold Langium on one copy. The second it does not: this tree keeps
+the `vscode-jsonrpc` copies GLSP and Theia pin, as an adopter's does, so send
+the message by method name.
 
 ## `Cannot find module …/deps_ssr/<dep>.js` — every suite in one package
 

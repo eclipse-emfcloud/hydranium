@@ -253,10 +253,7 @@ jobs:
       # The key carries the OS and the arch because `node_modules` holds
       # compiled binaries and actions/cache does NOT namespace by runner: one
       # shared key hands Windows a Linux tree. `.nvmrc` joins them because a
-      # Node major re-ABIs every native module, and `patches/**` because
-      # `patch-package` runs from `postinstall` and MUTATES the installed tree,
-      # so a restored tree carries whichever patches were current when it was
-      # saved.
+      # Node major re-ABIs every native module.
       #
       # No `restore-keys`. A prefix match would restore a tree resolved from a
       # different lockfile, which is worse than installing rather than a
@@ -283,7 +280,7 @@ jobs:
             packages/*/node_modules
             examples/*/*/node_modules
             !**/node_modules/.vite
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
 
       # Read from `.nvmrc` rather than stated here, so one edit moves both
       # workflows and a local `nvm use` together. A version literal repeated in
@@ -596,7 +593,7 @@ jobs:
             packages/*/node_modules
             examples/*/*/node_modules
             !**/node_modules/.vite
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json', 'patches/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -706,3 +703,46 @@ jobs:
             exit 1
           fi
           echo "e2e shards: $result"
+
+  # Its own job so a scaffold that will not install, or whose heads fail,
+  # reports as its own check. The check picks the npm that runs `init` and
+  # installs each scaffold, whatever npm this job has.
+  scaffold:
+    name: init scaffold
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    env:
+      NODE_OPTIONS: --report-on-fatalerror
+      FORCE_COLOR: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Restore only: two jobs of one run saving the same key race to reserve it.
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ !inputs.skip_node_modules_cache }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
+
+      # The npm cache even on a node_modules hit: the scaffold installs fetch.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        run: npm ci --no-fund --no-audit
+
+      - name: Scaffold, install, build and smoke
+        run: npm run check:init-scaffold

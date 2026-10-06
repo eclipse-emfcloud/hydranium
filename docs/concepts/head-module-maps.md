@@ -137,7 +137,7 @@ bound per `DiagramModule` — there is no framework GModel factory.
 | folder | subpath | role |
 | --- | --- | --- |
 | `launcher/` | `.` | `HydraniumGlspAppModule` (DI app-module + `configureAdditionalBindings` hook) and `AbstractHydraniumGlspDiagramModule` — the abstract `DiagramModule` base an adopter subclasses to declare which grammar a diagram type edits, plus the `bindDiagramLanguage` binder it applies; the framework-overrides module both bringups share is deliberately not re-exported |
-| `node/` | `./node` | `startGlspServer` (socket launcher, GLSP `SocketServerLauncher`) |
+| `node/` | `./node` | `startGlspServer` (socket launcher, `HydraniumGlspSocketServerLauncher` over GLSP's `SocketServerLauncher`) |
 | `browser/` | `./browser` | `startGlspServerInWorker` (web-worker launcher, `HydraniumGlspWorkerServerLauncher` over GLSP's `WorkerServerLauncher`, on a transferred `MessagePort`) |
 | `state/` | `.` | base state classes (`AbstractHydraniumGlspState`, `Reconciling…`, `FullText…`), `HydraniumGlspIndex`, the `HydraniumTypes` DI token registry |
 | `storage/` | `.` | `HydraniumGlspStorage` (load/save + settle/parse-error seams) + `SaveDeliveryPolicy` |
@@ -153,12 +153,16 @@ bound per `DiagramModule` — there is no framework GModel factory.
 ### How it wires
 
 `startGlspServer(options)` (`node/start-glsp-server.ts`) builds the app
-`Container`, loads the framework `defaultAppModule` (`HydraniumGlspAppModule`,
-which binds the `HydraniumTypes.*` tokens against the shared services) + adopter
-`appModules`, resolves GLSP's `SocketServerLauncher`, and listens.
-`startGlspServerInWorker(options)` (`browser/start-glsp-server-in-worker.ts`)
-mirrors that structure over `HydraniumGlspWorkerServerLauncher` and drops the
-socket lifecycle; its `context` is a required transferred `MessagePort`. Per
+`Container` and loads GLSP's own app module (`createAppModule`), the framework
+overrides (GLSP's logger routed through the adopter's, plus the shared tracer),
+a module binding GLSP's `SocketServerLauncher` token to
+`HydraniumGlspSocketServerLauncher`, and then the adopter's `appModules`, which
+can `rebind` that token. The adopter passes a `HydraniumGlspAppModule` there to
+bind the `HydraniumTypes.*` tokens against the shared services. It resolves the
+launcher from the token and listens. `startGlspServerInWorker(options)`
+(`browser/start-glsp-server-in-worker.ts`) mirrors that structure over
+`WorkerServerLauncher`, bound to `HydraniumGlspWorkerServerLauncher`, and drops
+the socket lifecycle; its `context` is a required transferred `MessagePort`. Per
 diagram open, `HydraniumGlspStorage` registers the GLSP client id as a client
 session and loads the document through it, the adopter GModel factory renders
 it, and each user operation edits a working copy of the source root, written

@@ -58,47 +58,18 @@ it is free to widen it back below the `22.18` floor. `.nvmrc` currently reads
 `22.18.0`, and a CI step compares the two workflows' `node-version-file`
 values so they cannot drift apart.
 
-**Install with dev dependencies, always.** The root `postinstall` runs
-`patch-package`, which re-adds the `main` and `typings` fields that
-`vscode-jsonrpc@9.0.1` ships without; every `moduleResolution: "Node"` project
-in the graph fails with `TS2307` on `vscode-jsonrpc` if the patch is missing.
-`patch-package` is itself a devDependency, so an install that omits dev
-dependencies — `npm ci --omit=dev`, or `NODE_ENV=production` — cannot find the
-binary and the patch is not applied. Both workflows run a plain `npm ci`;
-keep them that way, or move `patch-package` to `dependencies` first, which
-changes what a consumer of this repository installs and so is not obviously
-the cheaper option. The patch repairs *this* tree only and is not
-redistributable; what a project consuming the published packages has to do
-instead is
-[`docs/adopting/requirements.md`](docs/adopting/requirements.md).
+### A standing constraint on npm lifecycle scripts
 
-The consumer-side half of the same packaging defect — what a project
-compiling against the *published* packages has to do, given that the patch
-reaches no published tarball — is stated in
-[`README.md`](README.md#requirement-your-project-must-resolve-vscode-jsonrpc9).
+**A failing workspace `prepare` rolls back the *entire* install.** `npm ci`
+exits non-zero and leaves no `node_modules` directory at all — so the next
+command dies with `turbo: not found`, and the only error the contributor is
+shown is a TypeScript error in some package they never asked to build. The real
+cause and the visible symptom are two packages apart.
 
-### Two standing constraints on npm lifecycle scripts
-
-Both were measured on a cold clone, and together they are why no workspace in
-this repository defines a `prepare` script.
-
-- **npm runs a workspace's `prepare` before the root `postinstall`.** So no
-  workspace lifecycle script can compile against the patched
-  `vscode-jsonrpc`: while `prepare` runs, the dependency is still exports-only
-  and every `moduleResolution: "Node"` project in the graph fails with
-  `TS2307`. The order is not negotiable from inside a workspace manifest.
-- **A failing workspace `prepare` rolls back the *entire* install.** `npm ci`
-  exits non-zero and leaves no `node_modules` directory at all — so the next
-  command dies with `turbo: not found`, and the only error the contributor is
-  shown is a TypeScript error in some package they never asked to build. The
-  real cause and the visible symptom are two packages apart.
-
-That pair is why the publish guards are `prepack` and not `prepare` (see the
+That is why the publish guards are `prepack` and not `prepare` (see the
 `//prepack` note in any package manifest): `prepack` runs when a tarball is
 made and never on install, so it cannot break an install it has no business
-touching. Before proposing any new install-time lifecycle script, check it
-against both constraints — they have invalidated three otherwise reasonable
-fixes.
+touching. Check any new install-time lifecycle script against it.
 
 ## Linting
 

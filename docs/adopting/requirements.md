@@ -10,41 +10,62 @@ preference: the compiled CommonJS in the Theia client packages `require()`s the
 ESM heads across a published package boundary, which Node supports unflagged
 only from 22.13.
 
-## One physical copy of Langium, and of the wire stack under it
+## npm 11.6 or newer, or `vitest` below 4.1
+
+npm before 11.6, which includes every npm a Node 22 release bundles, crashes on
+a fresh install that includes `vitest` 4.1 or later, with `Cannot read
+properties of null (reading 'edgesOut')`
+([npm/cli#8261](https://github.com/npm/cli/issues/8261)). `init` holds the
+scaffold's `vitest` at `~4.0.18` so its first install works on Node 22. It
+lifts the hold only in a workspace whose root `packageManager` declares npm 11.6
+or later, and only when the npm running `init` is known to be 11.6 or later too,
+since npm does not enforce `packageManager`. `init` learns that npm from the
+user agent `npx` and `npm run` set, so run any other way, as a global binary or
+through pnpm or yarn, it keeps the hold. Raise it once every npm that installs
+your project is 11.6 or later.
+
+## One physical copy of Langium, and the wire stack pinned under it
 
 Hydranium re-exports Langium's types through a single chokepoint package, and
 identity-sensitive checks — `instanceof` on an AST node, on a `URI` — break
 silently when two copies are installed. Nothing throws; the checks just answer
 `false`.
 
-The version is therefore pinned exactly, and so is everything beneath it. Treat
-these four as **one atomic chain with no independently movable link**:
+The version is therefore pinned exactly, and the LSP stack beneath it moves with
+it. Each `vscode-languageserver-protocol` release pins its own `vscode-jsonrpc`
+exactly:
 
 ```text
 langium 4.3.1
   → vscode-languageserver ~10.0.1
-    → vscode-languageserver-protocol ~3.18.1
-      → vscode-jsonrpc 9.0.1
+    → vscode-languageserver-protocol 3.18.1 (exact) → vscode-jsonrpc 9.0.0
+  → vscode-languageserver-protocol ~3.18.1
+    → 3.18.2 → vscode-jsonrpc 9.0.1
+    → 3.18.3 → vscode-jsonrpc 9.0.2
+    → 3.18.4 → vscode-jsonrpc 9.0.3
 ```
 
-Bumping one link alone reintroduces the split. So does downgrading
-`vscode-jsonrpc` to `8.x` — see the section below for why that is not an option.
+Bump `langium` and the stack beneath it together. Downgrading `vscode-jsonrpc`
+to `8.x` only adds a copy — see the section below.
 
-The peer declarations say exactly this and nothing wider: every head declares
-`vscode-jsonrpc` at the exact version `9.0.1`, and `@hydranium/core` declares
+The peer declarations follow the chain. `@hydranium/core` declares
 `vscode-languageserver` at `~10.0.1` and `vscode-languageserver-protocol` at
-`~3.18.1`, each admitting what `langium@4.3.1` itself admits. A range that
-reached further would say a version works when it in fact produces a second
-copy. Supplying something else does not stop the install — npm downgrades an
-unsatisfiable peer to a warning — but you get a named `ERESOLVE` line that
-prints the required version beside the one it found, instead of the silent
-resolution a wider range would have accepted. Under `--strict-peer-deps` it is
-an error.
+`~3.18.1`, each admitting what `langium@4.3.1` itself admits; a range reaching
+back past the 3.18 stack would admit a release on the `8.x` transport. Within
+them, any protocol but `3.18.1` brings a second 9.x transport beside the one
+`vscode-languageserver@10.0.1` uses, which is why `init` pins the protocol
+exactly. Every head
+declares `vscode-jsonrpc` at `^9.0.0`, so it shares the 9.x your install
+resolves, down to the `9.0.0` that `vscode-languageserver@10.0.1` resolves, and
+excludes `8.x`. Supplying something outside a range does not stop
+the install — npm downgrades an unsatisfiable peer to a warning — but you get a
+named `ERESOLVE` line that prints the required version beside the one it found.
+Under `--strict-peer-deps` it is an error.
 `vscode-languageserver-types` and `vscode-languageserver-textdocument` are
 deliberately left on a caret: both declare no dependencies of their own and
 expose structural APIs, so a duplicate of either pulls no transport in.
 
-Pins and patches take effect only on a **from-scratch install**. Deleting the
+Pins take effect only on a **from-scratch install**. Deleting the
 lockfile alone leaves stale nested copies behind:
 
 ```bash
@@ -52,81 +73,104 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
+**If you followed an earlier version of this page**, remove the
+`vscode-jsonrpc` and `vscode-languageserver-protocol` entries from your root
+`overrides`, and the `vscode-jsonrpc` patch with the `patch-package`
+`postinstall` that applied it. Without the patch those overrides stop GLSP at
+startup, since `@eclipse-glsp/protocol` requires `vscode-jsonrpc/browser`, and
+they conflict with the versions `init` declares. Keep `langium` pinned, declare
+`vscode-languageserver` `10.0.1`, `vscode-languageserver-protocol` `3.18.1` and
+`vscode-jsonrpc` `9.0.0` as `init` does, and reinstall from scratch as above.
+
 ## A resolver that reads `exports`
 
 Every head package declares `vscode-jsonrpc` as a peer dependency, and the
 version is not really yours to choose: `langium@4.3.1` depends on
-`vscode-languageserver-protocol@~3.18.1`, which depends on `vscode-jsonrpc` at
-the **exact** version `9.0.1`. Installing the framework installs that copy.
+`vscode-languageserver-protocol@~3.18.1`, each release of which pins a 9.x of
+`vscode-jsonrpc` exactly. Installing the framework installs a 9.x.
 
-`vscode-jsonrpc@9.0.1` ships an `exports` map and no `main` or `typings` field.
+Every 9.x release ships an `exports` map and no `main` or `typings` field.
 A project compiled under classic `moduleResolution: "Node"` (node10) ignores
 `exports` and resolves physically, so it cannot see the package at all and fails
 with `TS2307: Cannot find module 'vscode-jsonrpc'` — before reaching any
-Hydranium code. The subpaths do not rescue it: `9.0.1` publishes no `node.js` or
+Hydranium code. The subpaths do not rescue it: 9.x publishes no `node.js` or
 `browser.js` at the package root either, so `vscode-jsonrpc/node` fails the same
 way.
 
-**The framework does not repair this for you, and cannot.** This repository
-repairs its own `node_modules` with a `patch-package` patch
-(`patches/vscode-jsonrpc+9.0.1.patch`, described in
-[`NOTICE.md`](../../NOTICE.md)), applied by a root `postinstall`. A patch to a
-local install tree is not redistributable: no published `@hydranium/*` tarball
-contains it, none of them declares a `postinstall`, and the patch file is in no
-package's `files` list. Installing from npm gets you the unpatched dependency.
-
-So a consuming project needs:
-
-- **A resolver that reads `exports`, always** — `moduleResolution` set to
-  `"Bundler"`, `"Node16"` or `"NodeNext"`. For the LSP and data heads nothing
-  else is required, and every `@hydranium/*` subpath is declared for both
-  resolvers.
-- **The same patch in your own tree, whenever the GLSP server runs in Node** —
-  copy the patch file out of this repository and wire `patch-package` into your
-  own `postinstall`. It is additive and changes no runtime logic;
-  [`NOTICE.md`](../../NOTICE.md) lists exactly what it modifies. A resolver
-  does not replace it here: `@eclipse-glsp/protocol`, which the GLSP server
-  loads, `require()`s `vscode-jsonrpc/browser` from CommonJS, and `9.0.1`
-  exposes that subpath to CommonJS only through the `default` condition the
-  patch adds. Compilation succeeds without it; the server fails at startup.
+**The framework does not repair this for you, and cannot**: the packaging is
+`vscode-jsonrpc`'s own, and this repository builds against it unmodified. So a
+consuming project needs **a resolver that reads `exports`** —
+`moduleResolution` set to `"Bundler"`, `"Node16"` or `"NodeNext"`. Every
+`@hydranium/*` subpath is declared for both resolvers.
 
 ### Why `vscode-jsonrpc@8` is not a way out
 
-The Langium chain above pins `9.0.1` exactly, so an `8.x` install produces two
-physical copies in one process, and this wire stack breaks on copy identity
-rather than on structure — a request type built by one copy and sent over a
-connection owned by the other throws `Unknown parameter structure auto`.
+Every protocol release in the Langium chain above pins a 9.x exactly, so an
+`8.x` install adds a physical copy beside Langium's rather than replacing it.
 
-### Pinning it in your own root manifest
+### Several copies of `vscode-jsonrpc` in one install
 
-An exact peer declaration forces the copy at the TOP of your tree. It cannot
+A peer declaration settles the copy at the TOP of your tree. It cannot
 reach a **nested** one, because a peer states what you must supply and says
-nothing about what your other dependencies bring with them.
+nothing about what your other dependencies bring with them. A fresh install
+nests several: `@eclipse-glsp/*` bring `vscode-jsonrpc@8.2.0`, and
+`vscode-languageserver` and `vscode-languageserver-protocol` can bring 9.x
+copies of their own.
 
-**For the GLSP head that is not a caveat but a requirement.**
-`@eclipse-glsp/server`, `@eclipse-glsp/protocol` and `@eclipse-glsp/client` each
-depend on `vscode-jsonrpc@8.2.0` exactly. This repository collapses that onto one
-copy with a root `overrides` block, and `overrides` are not published — nothing
-in a `@hydranium/*` tarball can apply them to your tree. So a first install of
-`@hydranium/glsp-server` alongside `@eclipse-glsp/*` contains two copies every
-time, and the symptom is the `Unknown parameter structure auto` above, thrown
-during GLSP server init.
+This wire stack breaks on copy identity rather than on structure: a typed
+message — a `RequestType` or `NotificationType` — built by one copy and sent
+over a connection another copy created throws
+`Unknown parameter structure auto`. The framework sends by method name on the
+connections it creates or hands to GLSP, and `vscode-languageserver` does so on
+the LSP connection.
 
-Pin the chain yourself:
+A connection your own code creates or hands over is not covered. Each
+`@eclipse-glsp/*` package can nest its own copy of `vscode-jsonrpc` `8.2.0`
+(GLSP's upgrade to 9.x is open as
+[eclipse-glsp/glsp#1720](https://github.com/eclipse-glsp/glsp/issues/1720)),
+so GLSP's packages can split from each other: GLSP's VS Code integration
+creates its connection from its own copy, while GLSP's client sends typed
+messages built by `@eclipse-glsp/protocol`'s. So wherever you hand GLSP a
+connection, wrap it with `sendByMethodName` from `@hydranium/protocol`, which
+sends every typed message by its method name. One such place is GLSP's VS Code
+integration, even unchanged: its `SocketGlspVscodeServer` creates the
+connection from the integration's own copy, so override `createConnection` to
+return `sendByMethodName(this.createSocketConnection(...))`, as the order-flow
+VS Code example does. Where your code sends a typed message over a raw
+connection, such as the data socket, wrap it the same way or send by method
+string. `sendByMethodName` returns the connection typed as whichever copy's
+connection the place you pass it to expects, such as GLSP's
+`connectionProvider`, so the TypeScript mismatch between two copies'
+`MessageConnection` types needs no cast.
 
-```json
-{
-   "overrides": {
-      "langium": "4.3.1",
-      "vscode-languageserver-protocol": "3.18.2",
-      "vscode-jsonrpc": "9.0.1"
-   }
-}
-```
+Errors do not survive the copies everywhere. A connection keeps a thrown
+`ResponseError`'s code and data only when the error comes from the connection's
+own copy; any other reaches the caller as a generic `InternalError`. A
+`ResponseError` a handler returns from another copy is sent as a successful
+result.
 
-Then reinstall from scratch, as above. The `//overrides` note in this
-repository's root `package.json` records the full chain and why each entry is
-there.
+- The data socket and both GLSP launchers build their connections from the
+  framework's copy, so the framework's errors keep their code there.
+- On the LSP connection, Langium's own errors, such as a request for a document
+  the server does not have, are right only with one copy of
+  `vscode-languageserver-protocol`, since Langium returns them. And an LSP
+  handler of yours that throws a `@hydranium/protocol` error keeps its code only
+  when the framework shares the connection's `vscode-jsonrpc`. `init` pins
+  `vscode-languageserver` to `10.0.1` exactly, and the protocol and
+  `vscode-jsonrpc` to the versions it pins, `3.18.1` and `9.0.0`. A project
+  not scaffolded by `init` should declare the same. The pins hold because npm
+  settles Langium's `~3.18.1` on the declared `3.18.1`. Yarn 1 resolves it to the newest 3.18
+  instead and nests that under `langium`, so under yarn 1 also add
+  `"resolutions": { "**/langium/vscode-languageserver-protocol": "3.18.1" }`.
+  A resolution for `vscode-jsonrpc` itself would force GLSP's `8.2.0` onto 9.x,
+  which breaks GLSP at startup. The Langium 4.4 upgrade
+  ([#142](https://github.com/eclipse-emfcloud/hydranium/issues/142)) replaces
+  these pins.
+
+The framework recognises a `ResponseError` by its shape. Do the same in your
+code: recognise errors with `isResponseError` and the `is…Error` guards from
+`@hydranium/protocol`, not `instanceof`. A handler of yours that throws a
+`ResponseError` from another copy than its connection's loses the code.
 
 ## Install Hydranium's LSP connection features
 
@@ -152,5 +196,5 @@ afterward.
 
 - [Status, limitations and roadmap](status.md) — what the exact pin costs you,
   alongside the other known limitations.
-- [Troubleshooting a server you are building](troubleshooting.md) — the two
+- [Troubleshooting a server you are building](troubleshooting.md) — the
   symptoms a duplicated copy actually produces.

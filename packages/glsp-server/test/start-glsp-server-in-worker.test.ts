@@ -29,14 +29,20 @@
  * the startup-string test below.
  */
 
-import { ServerModule, WORKER_START_UP_COMPLETE_MSG } from '@eclipse-glsp/server/browser.js';
+import {
+   ServerModule,
+   WORKER_START_UP_COMPLETE_MSG,
+   WorkerServerLauncher,
+   type WorkerLaunchOptions
+} from '@eclipse-glsp/server/browser.js';
 import { JsonrpcGLSPClient } from '@eclipse-glsp/protocol';
-import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
+import { ContainerModule, injectable } from 'inversify';
+import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { IntegratedServer } from '@hydranium/core';
-import { createMessagePortTransport } from '@hydranium/protocol';
+import { createMessagePortTransport, sendByMethodName, type TransferredMessagePort } from '@hydranium/protocol';
 import { makeMessagePortPair, type MessagePortPair } from '@hydranium/protocol/testing/node';
-import { startGlspServerInWorker } from '../src/browser/index.js';
+import { HydraniumGlspWorkerServerLauncher, startGlspServerInWorker } from '../src/browser/index.js';
 import { makeCapturingGlspLogger, type CapturingGlspLogger } from '../src/testing/index.js';
 
 /**
@@ -81,11 +87,29 @@ function stubGlobalPostMessage(): GlobalPostMessageStub {
    };
 }
 
+/** A connection typed by GLSP's copy of `vscode-jsonrpc`, whose message types it sends. */
+type GlspConnection = ReturnType<WorkerServerLauncher['createConnection']>;
+
+@injectable()
+class AdopterLauncher extends HydraniumGlspWorkerServerLauncher {}
+
+/** A module recording the launcher a head resolves, under GLSP's token or bypassing it. */
+function observeLauncher(resolved: WorkerServerLauncher[]): ContainerModule {
+   return new ContainerModule((_bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
+      for (const id of [WorkerServerLauncher, HydraniumGlspWorkerServerLauncher]) {
+         onActivation<WorkerServerLauncher>(id, (_context, launcher) => {
+            resolved.push(launcher);
+            return launcher;
+         });
+      }
+   });
+}
+
 describe('startGlspServerInWorker', () => {
    let ports: MessagePortPair;
    let globalPostMessage: GlobalPostMessageStub;
    let capturing: CapturingGlspLogger;
-   let clientConnection: MessageConnection | undefined;
+   let clientConnection: GlspConnection | undefined;
    let server: IntegratedServer | undefined;
 
    beforeEach(() => {
@@ -103,16 +127,18 @@ describe('startGlspServerInWorker', () => {
    });
 
    /** Start a head on `port2` and return a client connection on `port1`. */
-   function startHeadAndConnect(): MessageConnection {
+   function startHeadAndConnect(appModules: ContainerModule[] = []): GlspConnection {
       server = startGlspServerInWorker({
          context: ports.port2,
          createLogger: () => capturing.logger,
-         serverModule: new ServerModule()
+         serverModule: new ServerModule(),
+         appModules
       });
       // The page's end speaks the same transport as the head's, so a dispose
       // here reaches the head as a close.
       const transport = createMessagePortTransport(ports.port1);
-      const connection = createMessageConnection(transport.reader, transport.writer);
+      // The page's end sends GLSP's typed messages, as GLSP's client does.
+      const connection: GlspConnection = sendByMethodName(createMessageConnection(transport.reader, transport.writer));
       connection.listen();
       clientConnection = connection;
       return connection;
@@ -195,5 +221,68 @@ describe('startGlspServerInWorker', () => {
       // `stopped` settles on the same connection close that makes upstream
       // dispose the server instance, and with it every client session.
       await expect(server?.stopped).resolves.toBeUndefined();
+   });
+
+   it("runs on HydraniumGlspWorkerServerLauncher, whose connection sends GLSP's typed message", async () => {
+      const resolved: WorkerServerLauncher[] = [];
+      const connection = startHeadAndConnect([observeLauncher(resolved)]);
+      const method = JsonrpcGLSPClient.ActionMessageNotification.method;
+      const received = new Promise<unknown>(resolve => connection.onNotification(method, resolve));
+      const message = { clientId: 'client-1', action: { kind: 'test' } };
+
+      const [launcher] = resolved;
+      expect(launcher).toBeInstanceOf(HydraniumGlspWorkerServerLauncher);
+      const headConnection = (launcher as unknown as { readonly connection: GlspConnection }).connection;
+      await headConnection.sendNotification(JsonrpcGLSPClient.ActionMessageNotification, message);
+      await expect(received).resolves.toEqual(message);
+   });
+
+   it("runs on the launcher an adopter's appModules rebind", async () => {
+      const resolved: WorkerServerLauncher[] = [];
+      const adopter = new ContainerModule((_bind, _unbind, _isBound, rebind) => {
+         rebind(WorkerServerLauncher).to(AdopterLauncher);
+      });
+      const connection = startHeadAndConnect([adopter, observeLauncher(resolved)]);
+
+      const result = await connection.sendRequest(JsonrpcGLSPClient.InitializeRequest, {
+         applicationId: 'test-app',
+         protocolVersion: '1.0.0'
+      });
+
+      expect(resolved[0]).toBeInstanceOf(AdopterLauncher);
+      expect(result.protocolVersion).toBe('1.0.0');
+   });
+
+   it("refuses a launcher an adopter's appModules bind a second time", () => {
+      const adopter = new ContainerModule(bind => {
+         bind(WorkerServerLauncher).to(AdopterLauncher);
+      });
+
+      expect(() => startHeadAndConnect([adopter])).toThrow('Ambiguous match found for serviceIdentifier');
+   });
+
+   /** GLSP sends typed messages, built by the copy of `vscode-jsonrpc` its
+    *  protocol resolves, over the connection this launcher builds from another. */
+   it("sends a message typed by GLSP's copy of vscode-jsonrpc over the launcher's connection", async () => {
+      class ConnectingLauncher extends HydraniumGlspWorkerServerLauncher {
+         connect(context: TransferredMessagePort): GlspConnection {
+            return this.createConnection({ context } as unknown as WorkerLaunchOptions);
+         }
+      }
+      const headConnection = new ConnectingLauncher().connect(ports.port2);
+      const transport = createMessagePortTransport(ports.port1);
+      const connection = createMessageConnection(transport.reader, transport.writer);
+      const method = JsonrpcGLSPClient.ActionMessageNotification.method;
+      const received = new Promise<unknown>(resolve => connection.onNotification(method, resolve));
+      connection.listen();
+      const message = { clientId: 'client-1', action: { kind: 'test' } };
+
+      try {
+         await headConnection.sendNotification(JsonrpcGLSPClient.ActionMessageNotification, message);
+         await expect(received).resolves.toEqual(message);
+      } finally {
+         headConnection.dispose();
+         connection.dispose();
+      }
    });
 });

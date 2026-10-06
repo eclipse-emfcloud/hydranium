@@ -11,10 +11,14 @@ import { ClientState, type GLSPClient, type InitializeResult } from '@eclipse-gl
 import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
 import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/lib/browser';
+import { sendByMethodName } from '@hydranium/protocol';
 import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+// GLSP's channel connection uses the top-level `vscode-jsonrpc`'s root entry, which
+// installs no runtime layer; without the browser entry, no message is received.
+import 'vscode-jsonrpc/browser';
 import { HydraniumGlspClient } from './glsp-client';
 
 export const DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS = 30_000;
@@ -147,7 +151,10 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
          // Ahead of the client's own listener, whose teardown rejects with a
          // transport message instead.
          connection.onClose(() => pending.reject(new Error(this.unreachableMessage())));
-         const client = await this.createGLSPClient(connection);
+         // Upstream builds the connection from the `vscode-jsonrpc` hoisted
+         // beside it and the client's typed messages from its protocol's copy;
+         // a type sent over another copy's connection throws.
+         const client = await this.createGLSPClient(sendByMethodName(connection));
          connection.onDispose(() => client.stop());
          await this.start(client);
          pending.resolve(client);

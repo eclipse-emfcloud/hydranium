@@ -30,6 +30,7 @@ import {
    findEslintConfig,
    findOxlintConfig,
    findFormatterPrintWidth,
+   findPackageManagerNpm,
    workspaceGlobCovers
 } from '../src/commands/init-workspace.js';
 
@@ -262,5 +263,20 @@ describe('findOxlintConfig', () => {
       expect(findOxlintConfig(ROOT, fakeProbe({ 'oxlint.config.cjs': 'module.exports = {};' }))).toBe('oxlint.config.cjs');
       expect(findOxlintConfig(ROOT, fakeProbe({ '.oxlintrc.json': {} }))).toBe('.oxlintrc.json');
       expect(findOxlintConfig(ROOT, fakeProbe({ 'eslint.config.js': {} }))).toBeUndefined();
+   });
+});
+
+describe('findPackageManagerNpm', () => {
+   it("reads the npm version from the root's packageManager field", () => {
+      expect(findPackageManagerNpm(ROOT, fakeProbe({ 'package.json': { packageManager: 'npm@11.15.0' } }))).toBe('11.15.0');
+      expect(findPackageManagerNpm(ROOT, fakeProbe({ 'package.json': { packageManager: 'npm@11.6.0+sha512.abc' } }))).toBe('11.6.0');
+      expect(findPackageManagerNpm(ROOT, fakeProbe({ 'package.json': { packageManager: 'npm@11.6.0-rc.1+sha512.abc' } }))).toBe(
+         '11.6.0-rc.1'
+      );
+   });
+
+   it('is undefined for another package manager, or without the field', () => {
+      expect(findPackageManagerNpm(ROOT, fakeProbe({ 'package.json': { packageManager: 'pnpm@9.0.0' } }))).toBeUndefined();
+      expect(findPackageManagerNpm(ROOT, fakeProbe({ 'package.json': {} }))).toBeUndefined();
    });
 });

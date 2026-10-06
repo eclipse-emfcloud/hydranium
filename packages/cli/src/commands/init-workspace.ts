@@ -192,6 +192,8 @@ export interface WorkspaceDetection {
    readonly eslintConfig?: string;
    /** Filename of the root Oxlint config, when present. */
    readonly oxlintConfig?: string;
+   /** The npm version the root's `packageManager` field declares, when it names npm. */
+   readonly packageManagerNpm?: string;
 }
 
 /**
@@ -407,6 +409,17 @@ export function findOxlintConfig(rootDir: string, probe: WorkspaceProbe): string
    return probe.listFiles(rootDir).find(name => /^(oxlint\.config\.[cm]?[jt]s|\.oxlintrc\.jsonc?)$/.test(name));
 }
 
+/** The npm version the root's `packageManager` field declares (`npm@11.15.0` gives `11.15.0`), when it names npm. */
+export function findPackageManagerNpm(rootDir: string, probe: WorkspaceProbe): string | undefined {
+   const manifest = probe.readJson(path.join(rootDir, 'package.json'));
+   return parseNpmVersion(isJsonObject(manifest) && typeof manifest.packageManager === 'string' ? manifest.packageManager : undefined);
+}
+
+/** The npm version, prerelease included, of a `packageManager` field (`npm@…`) or a user agent (`npm/…`); undefined for another tool. */
+export function parseNpmVersion(spec: string | undefined): string | undefined {
+   return /^npm[@/](\d+\.\d+\.\d+(?:-[\w.]+)?)/.exec(spec ?? '')?.[1];
+}
+
 /** POSIX-style relative path, which is what both `extends` and `--prefix` want on every platform. */
 function posixRelative(from: string, to: string): string {
    return path.relative(from, to).split(path.sep).join('/');
@@ -447,6 +460,7 @@ export function detectWorkspace(targetDir: string, probe: WorkspaceProbe): Works
       baseCompilerOptions: base?.compilerOptions,
       printWidth: findFormatterPrintWidth(rootDir, probe),
       eslintConfig: findEslintConfig(rootDir, probe),
-      oxlintConfig: findOxlintConfig(rootDir, probe)
+      oxlintConfig: findOxlintConfig(rootDir, probe),
+      packageManagerNpm: findPackageManagerNpm(rootDir, probe)
    };
 }

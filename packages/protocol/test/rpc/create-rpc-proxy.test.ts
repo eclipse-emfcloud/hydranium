@@ -347,6 +347,21 @@ describe('createRpcProxy with localTarget binding', () => {
 });
 
 describe('createRpcProxy revives the typed errors', () => {
+   /** A `ResponseError` as another copy builds it: the same shape, another class. */
+   class ForeignResponseError extends Error {
+      constructor(
+         readonly code: number,
+         message: string,
+         readonly data?: unknown
+      ) {
+         super(message);
+      }
+
+      toJson(): { code: number; message: string; data?: unknown } {
+         return { code: this.code, message: this.message, data: this.data };
+      }
+   }
+
    async function rejectionOf(thrown: unknown, renderErrorMessage?: (error: ResponseError<unknown>) => string): Promise<unknown> {
       const pair = makeDuplexConnectionPair();
       try {
@@ -421,6 +436,32 @@ describe('createRpcProxy revives the typed errors', () => {
       const caught = await rejectionOf(new ConflictError('file:///a.of', asModelVersion(3), 5), () => 'Rendered.');
       expect(caught).toBeInstanceOf(ConflictError);
       expect((caught as ConflictError).message).toBe('Rendered.');
+   });
+
+   it('keeps the code and renders the message of a ResponseError from another copy of vscode-jsonrpc', async () => {
+      const caught = await rejectionOf(new ForeignResponseError(4242, 'Not ours.', { uri: 'file:///a.of' }), () => 'Rendered.');
+      expect(caught).toMatchObject({ code: 4242, message: 'Rendered.', data: { uri: 'file:///a.of' } });
+   });
+
+   it('keeps the code of a ResponseError from another copy of vscode-jsonrpc with no renderer', async () => {
+      const caught = await rejectionOf(new ForeignResponseError(4242, 'Not ours.', { uri: 'file:///a.of' }));
+      expect(caught).toMatchObject({ code: 4242, message: 'Not ours.', data: { uri: 'file:///a.of' } });
+   });
+
+   it('sends a ResponseError subclass from this copy as its own toJson builds it', async () => {
+      class DetailedError extends ResponseError<unknown> {
+         constructor(code: number, message: string) {
+            super(code, message);
+            // As the typed errors do: ResponseError's constructor resets the prototype.
+            Object.setPrototypeOf(this, DetailedError.prototype);
+         }
+
+         override toJson() {
+            return { ...super.toJson(), data: { detail: 'from toJson' } };
+         }
+      }
+      const caught = await rejectionOf(new DetailedError(4242, 'Ours.'));
+      expect(caught).toMatchObject({ code: 4242, message: 'Ours.', data: { detail: 'from toJson' } });
    });
 
    it('passes a code that is not one of the typed errors through unchanged', async () => {

@@ -14,6 +14,7 @@ import {
    HYDRANIUM_ERROR_CODES,
    isDocumentSource,
    isElementSource,
+   isResponseError,
    isSyntheticSource,
    messageData,
    messageError,
@@ -1066,7 +1067,7 @@ export class DataServer<
     * `ReentrantWriteLockError`, is the caller's to see.
     */
    protected isMissingDocument(error: unknown, uri: string): boolean {
-      return error instanceof ResponseError && error.code === SERVER_CANCELLED && this.modelService.getDocument(uri) === undefined;
+      return isResponseError(error) && error.code === SERVER_CANCELLED && this.modelService.getDocument(uri) === undefined;
    }
 
    /**

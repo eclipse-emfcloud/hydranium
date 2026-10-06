@@ -40,16 +40,24 @@ vi.mock('@theia/workspace/lib/browser', () => ({
 }));
 
 import { ClientState } from '@eclipse-glsp/client';
+import { createChannelConnection } from '@eclipse-glsp/theia-integration/lib/common';
 import { type Channel } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
+import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { NotificationType, ParameterStructures, RAL, type MessageConnection } from 'vscode-jsonrpc';
 import { DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS, HydraniumGlspClientContribution } from '../../src/browser/client-contribution';
 
 interface FakeConnection {
    onDispose(): void;
    onClose(listener: () => void): void;
    close(): void;
+}
+
+/** Whether `value` is a connection rather than a function providing one. */
+function isMessageConnection(value: unknown): value is MessageConnection {
+   return typeof value === 'object' && value !== null && 'sendNotification' in value;
 }
 
 function makeConnection(): FakeConnection {
@@ -80,8 +88,10 @@ interface ReportedAttempt {
 /** Each start takes its connection from `connections`, in order, so a test
  *  decides when, and whether, each one arrives. */
 class TestContribution extends HydraniumGlspClientContribution {
-   readonly connections: Array<Deferred<FakeConnection>> = [];
+   readonly connections: Array<Deferred<FakeConnection | MessageConnection>> = [];
    readonly clients: FakeClient[] = [];
+   /** The connection each client was created over. */
+   readonly clientConnections: unknown[] = [];
    readonly attempts: ReportedAttempt[] = [];
    readonly infos = vi.fn();
    /** Whether each client's `initializeServer` never answers. */
@@ -116,8 +126,8 @@ class TestContribution extends HydraniumGlspClientContribution {
    }
 
    /** Queue the connection the next start receives. */
-   nextConnection(): Deferred<FakeConnection> {
-      const connection = new Deferred<FakeConnection>();
+   nextConnection(): Deferred<FakeConnection | MessageConnection> {
+      const connection = new Deferred<FakeConnection | MessageConnection>();
       this.connections.push(connection);
       return connection;
    }
@@ -126,7 +136,7 @@ class TestContribution extends HydraniumGlspClientContribution {
       return this.disposeChannel({} as never, channel);
    }
 
-   openChannel(): Promise<unknown> {
+   openChannel(): ReturnType<HydraniumGlspClientContribution['createChannelConnection']> {
       return this.createChannelConnection();
    }
 
@@ -138,7 +148,10 @@ class TestContribution extends HydraniumGlspClientContribution {
       return next.promise as never;
    }
 
-   protected override async createGLSPClient(): Promise<never> {
+   protected override async createGLSPClient(
+      connectionProvider: Parameters<HydraniumGlspClientContribution['createGLSPClient']>[0]
+   ): Promise<never> {
+      this.clientConnections.push(connectionProvider);
       const listeners: Array<(state: ClientState) => void> = [];
       const client: FakeClient = {
          name: `client ${this.clients.length + 1}`,
@@ -408,5 +421,34 @@ describe('HydraniumGlspClientContribution', () => {
       opens[1].handler('path', makeChannel(unwanted));
       expect(unwanted).toHaveBeenCalledTimes(1);
       expect(opens.map(open => open.reconnect)).toEqual([false, false]);
+   });
+
+   /** GLSP's client sends typed messages, built by whichever copy of
+    *  `vscode-jsonrpc` its protocol resolves, over the connection it is given. */
+   it('creates the client over a connection that sends a message typed by another copy of vscode-jsonrpc', async () => {
+      const contribution = make();
+      const written: unknown[] = [];
+      const channel = new ForwardingChannel('test', vi.fn(), () => {
+         const buffer = new Uint8ArrayWriteBuffer();
+         buffer.onCommit(bytes => written.push(JSON.parse(new TextDecoder().decode(new Uint8ArrayReadBuffer(bytes).readBytes()))));
+         return buffer;
+      });
+      contribution.nextConnection().resolve(createChannelConnection(channel));
+      await contribution.begin();
+
+      const [connection] = contribution.clientConnections;
+      if (!isMessageConnection(connection)) {
+         throw new Error('the client was created without a connection');
+      }
+      // Another copy's `auto` is a different object, which is all the connection compares.
+      const foreignAuto: ParameterStructures = Object.create(ParameterStructures.auto);
+      await connection.sendNotification(new NotificationType<{ value: number }>('test/notify', foreignAuto), { value: 1 });
+
+      expect(written).toEqual([{ jsonrpc: '2.0', method: 'test/notify', params: { value: 1 } }]);
+   });
+
+   /** GLSP's channel connection uses the top-level copy's root entry, which installs no runtime layer. */
+   it("installs the runtime layer of the vscode-jsonrpc copy GLSP's channel connection receives on", () => {
+      expect(() => RAL()).not.toThrow();
    });
 });

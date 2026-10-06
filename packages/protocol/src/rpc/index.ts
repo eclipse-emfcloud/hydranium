@@ -13,4 +13,5 @@
 
 export * from './bind-rpc-methods';
 export * from './create-rpc-proxy';
+export * from './send-by-method-name';
 export * from './wire-prefix';

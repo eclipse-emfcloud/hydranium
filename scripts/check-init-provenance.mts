@@ -66,6 +66,9 @@
  * A SECOND claim rides along, over the same re-derived scaffold: every
  * third-party version the scaffold pins still matches the manifest this repo
  * declares it in. See {@link SCAFFOLD_PIN_SOURCES} for why that belongs here.
+ * The one exception is a standalone scaffold's `vitest` hold below 4.1: a
+ * policy for older npm, not a version this repo declares, so `init.test.ts`
+ * and the golden fixtures pin it instead.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -74,12 +77,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+/** The CLI's own parser, from the build {@link main} drives as well. */
+const { parseNpmVersion } = (await import(pathToFileURL(join(REPO_ROOT, 'packages/cli/lib/commands/init-workspace.js')).href)) as {
+   parseNpmVersion(spec: string | undefined): string | undefined;
+};
+
+/**
+ * The npm this repository's `packageManager` declares. The scaffold is derived
+ * as if `init` ran under it, since the npm running this gate can be older and
+ * would pin `vitest`.
+ */
+const DECLARED_NPM = parseNpmVersion(
+   (JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8')) as { packageManager?: string }).packageManager
+);
+
 /** 8-line SPDX block plus the blank line after it, which the scaffold does not emit. */
 const HEADER_LINES = 9;
 
 /** The slice of `packages/cli/lib/commands/init.js` this gate drives; its own types live in a build this script cannot assume. */
 interface InitModule {
-   resolveInitPackaging(targetDir: string, options: { monorepo?: boolean; public?: boolean; scope?: string }): unknown;
+   resolveInitPackaging(targetDir: string, options: { monorepo?: boolean; public?: boolean; scope?: string; npmVersion?: string }): unknown;
    resolveInitComposition(name: string, grammars?: readonly { name: string }[], heads?: readonly string[], packaging?: unknown): unknown;
    planInitFiles(composition: unknown): InitFile[];
 }
@@ -624,7 +641,8 @@ function deriveScaffold(init: InitModule, target: ScaffoldTarget): { files: Init
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, target.dir), {
       monorepo: invocation.monorepo,
       public: invocation.public,
-      scope: invocation.scope
+      scope: invocation.scope,
+      npmVersion: DECLARED_NPM
    });
    return {
       files: init.planInitFiles(init.resolveInitComposition(invocation.name, invocation.grammars, invocation.heads, packaging))
@@ -701,6 +719,18 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    // a given langium minor, so the minor is the part that has to agree.
    'langium-cli': { file: 'package.json', path: ['overrides', 'langium'], rule: 'minor' },
    'vscode-languageserver': { file: 'packages/cli/package.json', path: ['devDependencies', 'vscode-languageserver'], rule: 'exact' },
+   // The protocol `vscode-languageserver` pins, and the transport that protocol
+   // pins: the scaffold names those copies so Langium and the framework share them.
+   'vscode-languageserver-protocol': {
+      file: 'package-lock.json',
+      path: ['packages', 'node_modules/vscode-languageserver', 'dependencies', 'vscode-languageserver-protocol'],
+      rule: 'exact'
+   },
+   'vscode-jsonrpc': {
+      file: 'package-lock.json',
+      path: ['packages', 'node_modules/vscode-languageserver-protocol', 'dependencies', 'vscode-jsonrpc'],
+      rule: 'exact'
+   },
    '@eclipse-glsp/server': { file: 'packages/glsp-server/package.json', path: ['devDependencies', '@eclipse-glsp/server'], rule: 'exact' },
    // `graph` has no declaration of its own anywhere in `packages/` — it reaches
    // the framework as a transitive of `server` — and the GLSP packages ship as
@@ -871,9 +901,15 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
    return problems;
 }
 
-/** Every version the scaffold emits, at the head set that carries all of them. */
+/**
+ * Every version the scaffold emits, at the head set that carries all of them.
+ * Placed as a member of this repository under {@link DECLARED_NPM}: a
+ * standalone scaffold holds `vitest` below the version the root declares, for
+ * an npm older than the root's.
+ */
 function emittedPins(init: InitModule): Record<string, string> {
-   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp']);
+   const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
+   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging);
    const content = init.planInitFiles(composition).find(file => file.path === 'package.json')?.content;
    if (content === undefined) {
       throw new Error('the scaffold emitted no package.json, so its pins cannot be checked');

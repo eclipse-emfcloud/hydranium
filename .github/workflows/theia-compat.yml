@@ -480,8 +480,8 @@ jobs:
             }
             overrides[name] = target;
           }
-          // The pre-existing overrides pin langium and the vscode-jsonrpc
-          // chain to exact versions for single-physical-copy identity.
+          // The pre-existing overrides pin langium to an exact version for
+          // single-physical-copy identity.
           // Dropping one does not fail the install; it produces a second
           // physical copy and an identity comparison that returns false at
           // runtime, which surfaces as an unrelated defect in whatever this

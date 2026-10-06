@@ -30,7 +30,7 @@
     "@eclipse-glsp/protocol": "2.7.0",
     "@hydranium/protocol": "^1.0.0-next",
     "inversify": "^6.1.3",
-    "vscode-jsonrpc": "~9.0.1"
+    "vscode-jsonrpc": "9.0.0"
   },
   "devDependencies": {
     "@hydranium/core": "^1.0.0-next",

@@ -218,7 +218,12 @@ const HEAD_FRAMEWORK_DEPENDENCIES: Record<InitHead, readonly string[]> = {
 const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, string>>> = {
    lsp: {
       langium: '4.3.1',
-      'vscode-languageserver': '~10.0.1'
+      // Exact, as are the protocol and transport it pins, so Langium and the
+      // framework share their copies; across copies, an error a handler throws
+      // or returns loses its code, and a later patch can pin another protocol.
+      'vscode-languageserver': '10.0.1',
+      'vscode-jsonrpc': '9.0.0',
+      'vscode-languageserver-protocol': '3.18.1'
    },
    data: {},
    glsp: {
@@ -230,6 +235,24 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, st
       'reflect-metadata': '~0.2.2'
    }
 };
+
+/** Whether an npm version is 11.6.0 or later, the first that installs `vitest` 4.1's peer set; `11.6.0-rc.1` is earlier. */
+function installsVitest41(npmVersion: string | undefined): boolean {
+   const [release, prerelease] = (npmVersion ?? '0.0.0').split('-', 2);
+   const [major, minor, patch] = release.split('.').map(Number);
+   return major > 11 || (major === 11 && (minor > 6 || (minor === 6 && (patch > 0 || prerelease === undefined))));
+}
+
+/**
+ * Whether the scaffold holds `vitest` below 4.1, whose peer set crashes npm
+ * before 11.6 (every npm a Node 22 release bundles) on the first install. Only a
+ * workspace root declaring a newer npm lifts it, and only when `init` runs under
+ * an npm known to be newer: npm does not enforce `packageManager`.
+ */
+function pinsVitest(composition: InitComposition): boolean {
+   const workspace = composition.packaging.workspace;
+   return !(installsVitest41(workspace?.packageManagerNpm) && installsVitest41(workspace?.npmVersion));
+}
 
 /** The dependency block for a head set, merged and sorted as npm writes it. */
 function dependencyBlock(composition: InitComposition, indent: string): string {
@@ -315,7 +338,7 @@ __DEPENDENCIES__
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.0.0"
+    "vitest": "__VITEST__"
   },
   "engines": {
     "node": ">=22.13"
@@ -385,6 +408,7 @@ function packageJson(composition: InitComposition): string {
       .replace('__KEYWORDS__', keywords)
       .replace('__BIN__', binBlock(composition))
       .replace('__LINT__', lint)
+      .replace('__VITEST__', pinsVitest(composition) ? '~4.0.18' : '^4.0.0')
       .replace('__PRIVATE__', composition.packaging.private ? '  "private": true,\n' : '')
       .replace('__NPM_RUN__', npmRun(composition))
       .replace('__FRAMEWORK_PIN__', frameworkPin(composition))
@@ -1565,6 +1589,24 @@ function readme(composition: InitComposition): string {
       'atomic set and depends on a single physical copy, so a floating range can',
       'silently resolve a second one.',
       '',
+      '`vscode-languageserver` is pinned to `10.0.1`, and',
+      '`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and',
+      '`9.0.0` it pins, so Langium, the LSP connection and the framework share one',
+      'copy of each. With two, an error a Langium handler returns, such as a request',
+      'for a document the server does not have, reaches the client as a result, and a',
+      'framework error your own LSP handler throws loses its code. The Langium 4.4',
+      'upgrade',
+      '([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))',
+      'replaces these pins.',
+      '',
+      ...(pinsVitest(composition)
+         ? [
+              '`vitest` is held below 4.1, whose peer set crashes the npm every Node 22',
+              'release bundles. Raise it once every npm that installs this project is',
+              '11.6 or later.',
+              ''
+           ]
+         : []),
       '## If your repo gates license headers',
       '',
       'The emitted `.ts` files carry no copyright header — the scaffold cannot know',

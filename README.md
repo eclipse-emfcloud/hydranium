@@ -348,17 +348,17 @@ roadmap.
 
 ### Requirement: your project must resolve `vscode-jsonrpc@9`
 
-Installing the framework installs `vscode-jsonrpc@9.0.1` — the Langium chain
-pins it exactly — and that release ships an `exports` map with no `main` or
-`typings`. So a consuming project must compile with a resolver that reads
-`exports`: `moduleResolution` set to `"Bundler"`, `"Node16"` or `"NodeNext"`.
+Installing the framework installs `vscode-jsonrpc@9` — each release of the
+Langium chain's protocol pins its own 9.x exactly — and 9.x ships an `exports`
+map with no `main` or `typings`. So a consuming project must compile with a
+resolver that reads `exports`: `moduleResolution` set to `"Bundler"`,
+`"Node16"` or `"NodeNext"`.
 Under classic `"Node"` resolution the build fails with `TS2307: Cannot find
 module 'vscode-jsonrpc'` before reaching any Hydranium code.
 
 [`docs/adopting/requirements.md`](./docs/adopting/requirements.md) has the full
-picture — why the framework cannot repair this for you, the escape hatch if you
-are stuck on classic resolution, and the rest of what a consuming project has
-to satisfy.
+picture — why the framework cannot repair this for you, and the rest of what a
+consuming project has to satisfy.
 
 ## Documentation
 
@@ -464,7 +464,7 @@ Third-party copyrights are preserved in the headers of the files that carry
 them — grep for `^ \* Copyright` to list them.
 
 [`NOTICE.md`](./NOTICE.md) records the third-party notices the dependency
-licences require, and the one patch applied to a dependency at install time.
+licences require.
 
 ## Trademarks
 

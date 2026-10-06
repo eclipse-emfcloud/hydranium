@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildInitTemplates, readFrameworkVersion } from './init-templates.js';
-import { createNodeWorkspaceProbe, detectWorkspace, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
+import { createNodeWorkspaceProbe, detectWorkspace, parseNpmVersion, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
 
 /**
  * The protocol heads a scaffold can start, in composition order.
@@ -134,6 +134,10 @@ export interface InitWorkspacePlacement {
    readonly eslintConfig?: string;
    /** Filename of the workspace Oxlint config, when present. */
    readonly oxlintConfig?: string;
+   /** The npm version the workspace root's `packageManager` declares; with {@link npmVersion} it decides the scaffold's `vitest` range. */
+   readonly packageManagerNpm?: string;
+   /** The npm running `init`, when known. npm does not enforce `packageManager`, so a declaration alone cannot lift `vitest`. */
+   readonly npmVersion?: string;
 }
 
 /**
@@ -434,6 +438,8 @@ export interface InitPackagingOptions {
    readonly scope?: string;
    readonly public?: boolean;
    readonly probe?: WorkspaceProbe;
+   /** The npm running `init`. Defaults to the one `npm_config_user_agent` names, which `npx` and `npm run` set. */
+   readonly npmVersion?: string;
 }
 
 /**
@@ -469,7 +475,9 @@ export function resolveInitPackaging(targetDir: string, options: InitPackagingOp
          baseCompilerOptions: detection.baseCompilerOptions,
          printWidth: detection.printWidth,
          eslintConfig: detection.eslintConfig,
-         oxlintConfig: detection.oxlintConfig
+         oxlintConfig: detection.oxlintConfig,
+         packageManagerNpm: detection.packageManagerNpm,
+         npmVersion: options.npmVersion ?? parseNpmVersion(process.env.npm_config_user_agent)
       }
    };
 }

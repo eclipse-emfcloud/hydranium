@@ -251,6 +251,32 @@ describe('DataServer', () => {
          }
       });
 
+      it('answers a URI with no document with no model, on a ServerCancelled from another copy of vscode-jsonrpc', async () => {
+         /** A `ResponseError` as another copy builds it, which is the copy Langium's wait rejects from. */
+         class ForeignResponseError extends Error {
+            constructor(
+               readonly code: number,
+               message: string
+            ) {
+               super(message);
+            }
+
+            toJson(): { code: number; message: string } {
+               return { code: this.code, message: this.message };
+            }
+         }
+         const bundle = buildBundle();
+         vi.spyOn(bundle.documentBuilder, 'waitUntil').mockRejectedValueOnce(new ForeignResponseError(-32802, 'No document.'));
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            const result = await proxy.getModelDocument({ uri: URI_A });
+            expect(result.uri).toBe(URI_A);
+            expect(result.model).toBeUndefined();
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('waits for an in-flight build rather than returning stale state', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'stale' });

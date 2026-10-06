@@ -7,7 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { configDefaults, defineConfig, type UserConfigExport } from 'vitest/config';
+
+// `vscode-jsonrpc` 9 exports `./browser` under the `browser` condition alone, so
+// a Node test of a browser transport reaches it by path. A `browser` resolve
+// condition instead breaks Langium's test helpers' imports from `vscode-languageserver`.
+const jsonrpcBrowser = join(dirname(createRequire(import.meta.url).resolve('vscode-jsonrpc')), '../browser/main.js');
 
 /**
  * Shared Vitest base for every hydranium package. A package's `vitest.config.ts`
@@ -28,6 +35,7 @@ import { configDefaults, defineConfig, type UserConfigExport } from 'vitest/conf
  */
 export function definePackageVitestConfig(name: string, options: { exclude?: readonly string[] } = {}): UserConfigExport {
    return defineConfig({
+      resolve: { alias: [{ find: /^vscode-jsonrpc\/browser$/, replacement: jsonrpcBrowser }] },
       test: {
          name,
          environment: 'node',

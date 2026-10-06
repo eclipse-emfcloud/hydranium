@@ -29,7 +29,7 @@
 // re-derives one half of it from the manifests: no published package's `files`
 // entry may escape its own directory, so the only sources that can be packed
 // are `packages/**` plus whatever the BUILD reads — the root configs, the
-// lockfile, the patches — and this list names none of those. The other half is
+// lockfile — and this list names none of those. The other half is
 // pinned by fixtures taken from real merges, and the fixtures are themselves
 // controlled: an emptied skip list must change at least one verdict, or they
 // have stopped discriminating and would report universal agreement.

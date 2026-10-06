@@ -43,11 +43,8 @@ would inherit — for example a parser input that crashes or hangs a server head
 a path in the filesystem seam that escapes the workspace root, or a
 transport-level flaw in the RPC layer.
 
-Two things are outside what the framework can fix, and are noted here so a
-report is not filed against the wrong project:
+One thing is outside what the framework can fix, and is noted here so a report
+is not filed against the wrong project:
 
 - **Peer dependencies.** Theia, GLSP and the Eclipse stack beneath them are
   installed by the consuming application and carry their own security processes.
-- **The `vscode-jsonrpc` packaging patch.** The patch in `patches/` is applied
-  to a local install tree only, changes no runtime logic, and reaches no
-  published tarball. See [`NOTICE.md`](NOTICE.md).

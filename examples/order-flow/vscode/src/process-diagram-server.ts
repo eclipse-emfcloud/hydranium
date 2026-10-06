@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { SocketGlspVscodeServer } from '@eclipse-glsp/vscode-integration';
-import type { MessageConnection } from 'vscode-jsonrpc';
+import { sendByMethodName } from '@hydranium/protocol';
 
 /** What {@link OrderFlowGlspVscodeServer} needs beyond the GLSP client identity. */
 export interface OrderFlowGlspVscodeServerOptions {
@@ -57,12 +57,14 @@ export class OrderFlowGlspVscodeServer extends SocketGlspVscodeServer {
       this.findPort = options.findPort;
    }
 
-   protected override async createConnection(): Promise<MessageConnection> {
+   protected override async createConnection(): ReturnType<SocketGlspVscodeServer['createConnection']> {
       const port = await this.findPort();
       // `127.0.0.1`, not `localhost`, and it has to match the head: `startGlspServer`
       // binds `127.0.0.1` by default, so on a dual-stack machine where `localhost`
       // resolves to `::1` first the dial fails as ECONNREFUSED with nothing in the
       // message naming the address family as the cause.
-      return this.createSocketConnection({ port, host: '127.0.0.1' });
+      // The connection comes from GLSP's VS Code integration's copy of `vscode-jsonrpc`,
+      // and GLSP's client sends typed messages built by `@eclipse-glsp/protocol`'s copy.
+      return sendByMethodName(this.createSocketConnection({ port, host: '127.0.0.1' }));
    }
 }

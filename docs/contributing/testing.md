@@ -130,18 +130,51 @@ npm run check:packed-consumer
 This builds and packs the server-side framework packages, installs their
 tarballs into a disposable project outside the npm workspace, compiles the
 bookstore server with `NodeNext`, opens a document over LSP and expects it to
-publish no diagnostics, then requests its model over the data socket. It applies the documented `vscode-jsonrpc` patch in the consumer's
-own `postinstall`, then checks the resolved versions and single-copy Langium and
-JSON-RPC installs. Run it when changing package exports, peers, the patch, or
-server bootstrap. It is separate from the regular gate because it performs a
-fresh npm install. Set `HYDRANIUM_KEEP_PACKED_CONSUMER=1` to inspect the
-disposable project after a failure.
+publish no diagnostics, then requests its model over the data socket. It
+installs the bookstore server's own dependencies with no overrides, then checks
+the resolved versions, one physical Langium and LSP protocol, and one 9.x
+JSON-RPC. Run it when changing package exports, peers, or server bootstrap.
+It is separate from the regular gate because it performs a fresh npm install.
+Set `HYDRANIUM_KEEP_PACKED_CONSUMER=1` to inspect the disposable project after
+a failure.
 
 The package-file assertion has a deliberate negative control. After a build,
 run `node scripts/check-packed-consumer.mts --negative-missing-package-file`;
 it must fail with `consumer package @hydranium/core is missing or installed
 through a symlink`. This confirms the check reaches the install-shape assertion
 rather than merely completing the consumer smoke.
+
+### Scaffold smoke (every pull request)
+
+```bash
+npm run check:init-scaffold
+```
+
+This installs the packed `@hydranium/cli`, with the framework packages it
+needs packed too, and scaffolds with that binary, the way an adopter's `npx`
+does, in six shapes: standalone with every head, standalone with LSP and data,
+standalone with LSP and GLSP, standalone LSP-only, and two `--monorepo` members,
+each of its own fresh workspace whose root declares an npm that installs
+`vitest` 4.1. The first member, with every head, is scaffolded and installed under the npm the
+oldest supported Node bundles, like the standalone shapes, so `init` holds
+`vitest` below 4.1; the second, LSP-only, under the root's npm, so `init` lifts
+the hold. Each shape asserts which `vitest` range `init` emitted. The check
+changes each scaffold's manifest in two ways: it repoints the `@hydranium/*` packages the scaffold
+declares at the packed candidates, and adds the framework peers those need,
+which npm would otherwise fetch from the registry, to the block of the package
+that needs them. It also copies in the smoke script that drives the heads. A
+framework package the shape does not declare and nothing it declares needs must
+not be installed. After each install it asserts one physical copy each of
+`langium` and `vscode-languageserver-protocol` and one 9.x `vscode-jsonrpc` (the
+8.x copies `@eclipse-glsp/*` nest are allowed), then builds the project, runs its
+own tests and drives every head the shape has over `lib/main.js`: LSP, the data
+socket and the GLSP socket. An LSP request for a missing document must reject
+with `-32802`, which it resolves with instead when the protocol splits, and a
+data read of one must resolve with no model. The standalone scaffold
+with every head is then reinstalled with `--omit=dev` and driven again, as a
+deployment would. CI runs it as its own job, because the bookstore consumer
+above is assembled by hand and so cannot show what an adopter's first install
+meets. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the project, as for that smoke.
 
 ### Published prerelease baseline smoke
 

@@ -282,7 +282,9 @@ treats `langium` and its `vscode-*` chain as one atomic set and depends on a
 single physical copy: `@hydranium/langium` re-exports `langium`, and that
 re-export is only identity-transparent — the same `URI` class object, the same
 nominal `AstNode` — while one install exists. Two installs break `instanceof`
-across the seam. This example declares ordinary ranges and the repo root
-collapses them with an npm `overrides` block; outside this repo you have to
-supply that pin yourself, since a floating range can otherwise resolve a second
-copy under a transitive dependency.
+across the seam. This example declares `langium` as an ordinary range and the
+repo root collapses it with an npm `overrides` block; outside this repo you have
+to supply that pin yourself, since a floating range can otherwise resolve a
+second copy under a transitive dependency. `vscode-languageserver-protocol` and
+`vscode-jsonrpc` are pinned to the `3.18.1` and `9.0.0` that
+`vscode-languageserver@10.0.1` pins, as an `init` scaffold pins them.
