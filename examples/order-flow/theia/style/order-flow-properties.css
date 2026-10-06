@@ -30,6 +30,26 @@
    margin: 4px 0 10px;
 }
 
+/* The editors' dirty dot, with empty alt text: the note already says it to a
+   screen reader, and is clipped rather than `display: none`, which would
+   silence it. */
+.order-flow-properties-body [data-dirty]::after {
+   content: ' ●';
+   content: ' ●' / '';
+}
+
+.order-flow-properties-body .unsaved {
+   position: absolute;
+   width: 1px;
+   height: 1px;
+   margin: -1px;
+   padding: 0;
+   border: 0;
+   overflow: hidden;
+   clip-path: inset(50%);
+   white-space: nowrap;
+}
+
 .order-flow-properties-body .field {
    display: flex;
    flex-direction: column;

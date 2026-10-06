@@ -124,24 +124,31 @@ test.describe.serial('Order-flow properties panel in Theia', () => {
    });
 
    test("marks the document unsaved while an editor holds an edit, and clears it on the editor's save", async () => {
-      // The panel has no save of its own, so the note follows the server's
+      // The panel has no save of its own, so the mark follows the server's
       // view of the document: an edit from any client, cleared by any save.
       // The layout is used because it opens in a text editor, and no earlier
       // test in this serial suite edits it.
       await selectFile(app, 'orders/fulfillment.layout');
       await expect(app.page.locator(PANEL)).toContainText('This document root has no editable text properties.');
+      const dirtyHeading = app.page.locator(`${PANEL} h1[data-dirty]`);
+      // The note by its text, not its visibility: it is clipped for screen
+      // readers only, and Playwright counts a clipped element as visible.
       const unsaved = app.page.locator(`${PANEL} .unsaved`);
-      await expect(unsaved).toBeHidden();
+      await expect(dirtyHeading).toHaveCount(0);
+      await expect(unsaved).toHaveText('');
 
       const editor = await app.openEditor('orders/fulfillment.layout', TheiaTextEditor);
       await editor.placeCursorInLineWithLineNumber(1);
       await app.page.keyboard.press('End');
       await app.page.keyboard.type(' ');
-      await expect(unsaved).toBeVisible();
+      await expect(dirtyHeading).toHaveAttribute('title', 'Unsaved changes');
       await expect(unsaved).toHaveText('Unsaved changes');
+      // The status note says it to a screen reader; the dot must not join the name.
+      await expect(dirtyHeading).toHaveAccessibleName('fulfillment.layout');
 
       await editor.activate();
       await app.page.keyboard.press('Control+s');
-      await expect(unsaved).toBeHidden();
+      await expect(dirtyHeading).toHaveCount(0);
+      await expect(unsaved).toHaveText('');
    });
 });
