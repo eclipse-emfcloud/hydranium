@@ -26,11 +26,12 @@ import {
    type ConflictResolver,
    type Logger,
    type Tracer,
+   type TransferElement,
    asModelVersion,
    TIMED_OUT,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
-import { openOperationOf, workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
+import { type OperationTransition, openOperationOf, workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -870,6 +871,22 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * out as `'any'`.
     */
    abstract updateSourceModel(model: TSourceModel, baseVersion?: BaseVersion): MaybePromise<void>;
+
+   /**
+    * `transition` as the documents would hold both ends after a write. A
+    * serializer may normalize what it writes, provided normalizing again
+    * changes nothing; an end left as recorded makes an undo or redo conflict
+    * with the write it follows. Default: unchanged.
+    */
+   async normalizeTransition(transition: OperationTransition<TSourceModel>): Promise<OperationTransition<TSourceModel>> {
+      return transition;
+   }
+
+   /** The root `model` parses back to once serialized for `uri`, as a write would leave it; nothing is written. */
+   protected async roundTrip(uri: string, model: TransferElement): Promise<AstNode> {
+      const text = await this.sharedServices.model.ModelService.modelToText(uri, model);
+      return this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri)).parseResult.value;
+   }
 }
 
 const SEVERITY_RANK: Readonly<Record<NonNullable<DiagramStatusEntry['severity']>, number>> = { INFO: 0, WARNING: 1, ERROR: 2, FATAL: 3 };

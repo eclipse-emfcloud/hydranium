@@ -37,9 +37,9 @@ import {
    nestedCommand,
    openDiagram,
    place,
-   replay,
    spyOnPersist,
-   textOf
+   textOf,
+   undoOrRedo
 } from './uncommitted-edit-harness.js';
 
 describe('the exits of an operation', () => {
@@ -181,7 +181,7 @@ describe('the exits of an operation', () => {
          sideEffects
       };
       // The one undo step there is the move of Cancel.
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          dropped,
@@ -227,7 +227,7 @@ describe('the exits of an operation', () => {
          submits: submissions.mock.calls.length
       };
       // The one undo there is reverts the move that landed, not the operation that failed.
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          afterFailure,
@@ -422,7 +422,7 @@ describe('composition inside one operation', () => {
          task: textOf(opened, processUri).includes('task NewTask'),
          ship: textOf(opened, layoutUri).includes('node Ship at 700, 220')
       };
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          done,
@@ -446,7 +446,7 @@ describe('composition inside one operation', () => {
 
       await apply(diagram, create);
       const done = { writes: persist.mock.calls.length, moved: textOf(opened, layoutUri).includes('node Pay at 50, 110') };
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
       expect({
          done,

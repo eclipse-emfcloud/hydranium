@@ -531,7 +531,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
       });
 
       it('forces every document of the set when the write is based on any version', async () => {
-         // An undo or redo replaying a patch, or a merged retry: the decision to
+         // An undo or redo applying a recorded patch, or a merged retry: the decision to
          // win covers the whole set, or the secondary's stale gate would refuse
          // what the reconcile already accepted.
          const harness = makeHarness();

@@ -38,10 +38,10 @@ import {
    move,
    openDiagram,
    readBeforeRefetch,
-   replay,
    spyOnPersist,
    spyOnRefetch,
-   textOf
+   textOf,
+   undoOrRedo
 } from './uncommitted-edit-harness.js';
 
 describe('a diagram edit before its write commits', () => {
@@ -190,9 +190,9 @@ describe('the roots an operation copies', () => {
       await apply(diagram, movePay);
       const moved = textOf(opened, layoutUri).includes('node Pay at 50, 110');
 
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const undone = textOf(opened, layoutUri).includes('node Pay at 40, 100');
-      await replay(diagram, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
 
       expect({ moved, undone, redone: textOf(opened, layoutUri).includes('node Pay at 50, 110') }).toEqual({
          moved: true,
@@ -220,7 +220,7 @@ describe('the roots an operation copies', () => {
       // foreign edit to it must survive the undo.
       await changeTextBuilt(opened, layoutUri, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'));
       const resolve = vi.spyOn(diagram.state.conflictResolver, 'resolve');
-      await replay(diagram, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
       const outcomes = await Promise.all(resolve.mock.results.map(result => result.value as Promise<{ status: string }>));
 
       expect({

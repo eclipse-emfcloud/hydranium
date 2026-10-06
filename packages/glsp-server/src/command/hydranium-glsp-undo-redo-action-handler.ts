@@ -14,10 +14,10 @@ import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-gls
 
 /**
  * GLSP's undo and redo handler inside the state's `runExclusive`. GLSP's
- * command stack moves its position before it replays the entry, so the
- * boundary covers the whole action: taken around the replay alone, an undo
- * arriving while an operation runs would move the position past an entry it
- * then cannot replay.
+ * command stack moves its position before it undoes or redoes the entry, so
+ * the boundary covers the whole action: taken around the undo or redo alone,
+ * an undo arriving while an operation runs would move the position past an
+ * entry it then cannot undo.
  */
 @injectable()
 export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {

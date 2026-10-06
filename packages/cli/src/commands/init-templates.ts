@@ -1827,7 +1827,7 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
 // where \`sourceRoot\` is a copy of the built root: the recording command's
 // runnable appends to the copy, and the operation writes the copy's text through
 // the grammar's \`Serializer\` once, gated on the version the copy was made at,
-// with undo and redo replaying that one change. A command that writes the
+// with undo and redo applying that one change. A command that writes the
 // document itself instead reads no text off the copy, which has no \`$document\`,
 // and the operation's own write then overwrites it.
 //

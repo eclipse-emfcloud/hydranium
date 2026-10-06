@@ -13,7 +13,7 @@ import { type AstNode } from '@hydranium/langium';
 import { type ClientSession, type ClientSessionWriteArgs } from '@hydranium/core';
 import { asModelVersion, type BaseVersion, type ModelVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
-import { openOperationOf } from '../command/hydranium-glsp-operation-command.js';
+import { type OperationTransition, openOperationOf } from '../command/hydranium-glsp-operation-command.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
 
 /**
@@ -63,7 +63,7 @@ export interface VersionedMultiDocumentSourceModel<TPrimary extends TransferElem
  * it had when the source root was last read. A conflict on any of them is
  * reconciled against the whole write set, and the merged retry is gated on
  * the versions its refetch read. A write based on `'any'` — an undo or redo
- * replaying a patch — forces every document of the set.
+ * applying a recorded patch — forces every document of the set.
  *
  * A secondary is written only while the diagram's session has it open. The
  * storage opens it as it joins the write set, and {@link openForWrite} opens it
@@ -109,6 +109,34 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       super.captureSourceRoot(uri, root);
       this.trackWriteSet(uri);
       this.base = this.sourceModel;
+   }
+
+   /**
+    * Each document whose ends differ, either end serialized for its URI and
+    * parsed back; a document equal on both ends is left as it is, since it
+    * stays out of the transition's patch anyway.
+    */
+   override async normalizeTransition(
+      transition: OperationTransition<MultiDocumentSourceModel<TPrimary>>
+   ): Promise<OperationTransition<MultiDocumentSourceModel<TPrimary>>> {
+      const from = { primary: transition.from.primary, secondaries: { ...transition.from.secondaries } };
+      const to = { primary: transition.to.primary, secondaries: { ...transition.to.secondaries } };
+      if (JSON.stringify(from.primary) !== JSON.stringify(to.primary)) {
+         from.primary = this.projectRoot<TPrimary>(await this.roundTrip(this._sourceUri, from.primary));
+         to.primary = this.projectRoot<TPrimary>(await this.roundTrip(this._sourceUri, to.primary));
+      }
+      for (const uri of new Set([...Object.keys(from.secondaries), ...Object.keys(to.secondaries)])) {
+         if (JSON.stringify(from.secondaries[uri]) === JSON.stringify(to.secondaries[uri])) {
+            continue;
+         }
+         for (const end of [from, to]) {
+            const secondary = end.secondaries[uri];
+            if (secondary !== undefined) {
+               end.secondaries[uri] = this.projectRoot(await this.roundTrip(uri, secondary));
+            }
+         }
+      }
+      return { from, to };
    }
 
    /**
@@ -207,7 +235,8 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * the primary's root, the one already captured when the primary did not
     * change. A write that bypasses `updateAll` gives up the all-or-none
     * guarantee the class describes. Throws without a session
-    * ({@link requireModelSession}).
+    * ({@link requireModelSession}). An override that serializes otherwise than
+    * `ModelService.modelToText` overrides {@link normalizeTransition} alongside.
     */
    protected async persist(
       model: MultiDocumentSourceModel<TPrimary>,

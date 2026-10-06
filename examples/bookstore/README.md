@@ -76,7 +76,7 @@ rather than through a hint.
 The handler appends the node to the operation's working copy of the AST, and
 the operation writes the copy's text once through the per-URI `Serializer`,
 which `init` emits as `server/src/language-server/bookstore-serializer.ts`; undo
-and redo replay that one change. `server/test/bookstore-diagram.test.ts` runs
+and redo apply that one change. `server/test/bookstore-diagram.test.ts` runs
 the handler through an in-process GLSP server and checks the document keeps its
 existing nodes across the create, the undo and the redo. A diagram edit reaches
 the file the way a real host works: the change lands in the text document, the

@@ -10,5 +10,10 @@
 export * from './hydranium-glsp-recording-command.js';
 export * from './hydranium-glsp-command-stack.js';
 export * from './hydranium-glsp-operation-action-handler.js';
-export { HydraniumGlspOperationCommand } from './hydranium-glsp-operation-command.js';
+export {
+   HydraniumGlspOperationCommand,
+   type OperationSideEffect,
+   type OperationTransition,
+   type UndoRedoDirection
+} from './hydranium-glsp-operation-command.js';
 export * from './hydranium-glsp-undo-redo-action-handler.js';

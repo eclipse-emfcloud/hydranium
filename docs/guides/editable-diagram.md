@@ -68,8 +68,9 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
 2. Add an operation handler for every advertised edit. Mutate `sourceRoot`
    inside `HydraniumGlspRecordingCommand`; the operation writes the copy's
    projection once when it completes, which persists and republishes it to the
-   other heads, and undo and redo replay that one change. During an operation `sourceRoot` is a working copy of the built
-   root, so no other reader sees the edit before its write lands.
+   other heads, and undo and redo apply that one change. During an operation
+   `sourceRoot` is a working copy of the built root, so no other reader sees
+   the edit before its write lands.
 
    Reach the root of any other document the handler edits through
    `modelState.workingRootOf(uri)`; a root read from the model service is the
