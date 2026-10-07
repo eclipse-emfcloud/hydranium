@@ -797,12 +797,13 @@ describe('runInit --monorepo into a yo langium root', () => {
    // an enumerated `workspaces` list, and a `.gitignore` of its own.
    const ROOT = fileURLToPath(new URL('./fixtures/yo-langium-root/', import.meta.url));
 
-   function scaffold(): { files: readonly InitFile[]; output: string } {
+   function scaffold(heads?: readonly InitHead[]): { files: readonly InitFile[]; output: string } {
       const lines: string[] = [];
       let captured: readonly InitFile[] = [];
       runInit({
          targetDir: path.join(ROOT, 'packages/my-lang'),
          name: 'MyLang',
+         heads,
          monorepo: true,
          probe: createNodeWorkspaceProbe(),
          write: line => lines.push(line),
@@ -835,6 +836,23 @@ describe('runInit --monorepo into a yo langium root', () => {
 
    it('names the entry an enumerated workspaces list needs', () => {
       expect(scaffold().output).toContain('"packages/my-lang"');
+   });
+
+   // The fixture's language package declares `langium ~4.4.0`, which an installed yo root holds at the top.
+   it('names the exact pins the root has to declare to keep the shared copies at the top', () => {
+      expect(scaffold().output).toContain(
+         "package.json, so another member's version of one cannot displace the copy this package shares with the framework:\n" +
+            '    "langium": "4.3.1",\n' +
+            '    "vscode-jsonrpc": "9.0.0",\n' +
+            '    "vscode-languageserver": "10.0.1",\n' +
+            '    "vscode-languageserver-protocol": "3.18.1"\n'
+      );
+   });
+
+   it('adds the GLSP pins for the GLSP head, but no range', () => {
+      const { output } = scaffold(['lsp', 'glsp']);
+      expect(output).toContain('    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/server": "2.7.0",\n    "langium": "4.3.1",\n');
+      expect(output).not.toContain('inversify');
    });
 });
 
@@ -1008,8 +1026,10 @@ describe('runInit --monorepo', () => {
       expect(output).toContain('pass --scope @acme to match them');
    });
 
-   it('says the target is already covered rather than printing a root-manifest line', () => {
-      expect(scaffold().output).toContain('Already covered by the "packages/*" workspaces entry');
+   it('says the target is already covered, and still asks the root for its pins', () => {
+      const { output } = scaffold();
+      expect(output).toContain('Already covered by the "packages/*" workspaces entry.\n  Add these to "devDependencies"');
+      expect(output).not.toMatch(/no root manifest change/);
    });
 
    it('prints the workspaces entry to add when no glob reaches the target', () => {

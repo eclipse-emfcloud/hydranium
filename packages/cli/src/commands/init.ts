@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { buildInitTemplates, readFrameworkVersion } from './init-templates.js';
+import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { createNodeWorkspaceProbe, detectWorkspace, parseNpmVersion, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
 
 /**
@@ -538,8 +538,13 @@ export function runInit(options: InitCommandOptions): void {
          write(`  Add this to "workspaces" in ${path.join(detection.rootDir, 'package.json')}:\n`);
          write(`    "${detection.targetPath}"\n`);
       } else {
-         write(`  Already covered by the "${detection.coveredBy}" workspaces entry — no root manifest change needed.\n`);
+         write(`  Already covered by the "${detection.coveredBy}" workspaces entry.\n`);
       }
+      const pins = workspaceRootPins(composition.heads).map(([name, version]) => `    "${name}": "${version}"`);
+      write(
+         `  Add these to "devDependencies" in ${path.join(detection.rootDir, 'package.json')}, so another member's version of one ` +
+            `cannot displace the copy this package shares with the framework:\n${pins.join(',\n')}\n`
+      );
       if (composition.packaging.scope === undefined && detection.scope !== undefined) {
          write(`  Sibling packages all use the "${detection.scope}" scope; pass --scope ${detection.scope} to match them.\n`);
       }

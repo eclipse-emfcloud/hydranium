@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { AbstractAstReflection, type AstMetaData, type AstReflection, type PropertyMetaData, type TypeMetaData } from '@hydranium/langium';
+import { assertSingleLangiumCopy } from './single-langium-copy.js';
 
 /**
  * One `AstReflection` over the reflections of separately generated language
@@ -26,6 +27,9 @@ import { AbstractAstReflection, type AstMetaData, type AstReflection, type Prope
  * is lost. Each package's generated `isX` guards keep using that package's own
  * reflection and answer false for subtypes only another package declares.
  *
+ * Each reflection is checked with {@link assertSingleLangiumCopy}, because the
+ * composite itself extends the framework copy's base whichever copy they use.
+ *
  * The protected merge methods run from the constructor, so an override cannot
  * read its own class's fields.
  */
@@ -36,6 +40,7 @@ export class CompositeAstReflection extends AbstractAstReflection {
       super();
       const firstDefinedAt = new Map<string, number>();
       reflections.forEach((reflection, index) => {
+         assertSingleLangiumCopy(reflection, () => this.formatReflection(reflections, index));
          for (const [type, metaData] of Object.entries(reflection.types)) {
             const ownerIndex = firstDefinedAt.get(type);
             if (ownerIndex === undefined) {
@@ -83,13 +88,13 @@ export class CompositeAstReflection extends AbstractAstReflection {
    }
 
    /**
-    * Names `reflections[index]` for the clash error: its position and class
-    * name. The position is needed because minified bundles and scaffolds
+    * Names `reflections[index]` for the composite's errors: its position and
+    * class name. The position is needed because minified bundles and scaffolds
     * sharing a project name leave class names that do not tell reflections
     * apart. An override can name the package each reflection came from.
     */
    protected formatReflection(reflections: readonly AstReflection[], index: number): string {
-      return `reflections[${index}] (${reflections[index].constructor.name})`;
+      return `reflections[${index}] (${reflections[index].constructor?.name ?? 'no constructor'})`;
    }
 }
 

@@ -36,6 +36,7 @@ export * from './langium/workspace/index.js';
 export * from './langium/service-registry.js';
 export * from './langium/language-types.js';
 export * from './langium/composite-ast-reflection.js';
+export * from './langium/single-langium-copy.js';
 export * from './launcher/index.js';
 export * from './locale/index.js';
 // The renderer only. The `./messages` subpath additionally enumerates this

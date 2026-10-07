@@ -1083,7 +1083,10 @@ Guaranteed by a root `overrides`/`resolutions` pin of `langium` to the exact
 version — independent of import paths. An
 adopter that declares its own `langium` must align to that version (or add a
 root override at its own risk); the supported way to move Langium forward is
-to bump `@hydranium/langium`, not to pin `langium` per-app.
+to bump `@hydranium/langium`, not to pin `langium` per-app. An adopter that
+does not align finds out at bootstrap: `assertSingleLangiumCopy` rejects a
+shared `AstReflection` built on another copy, which is what its generated code
+then produces.
 
 **Enforcement is SOFT.** A `no-restricted-imports` lint rule bans direct
 `langium` / `langium/*` / `vscode-uri` imports across this repo's

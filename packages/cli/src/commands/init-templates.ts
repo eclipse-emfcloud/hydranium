@@ -236,6 +236,19 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, st
    }
 };
 
+/**
+ * The exact pins of `heads`, for a workspace root to declare too. npm installs a
+ * root's own dependencies at the top of the tree, so another member's version of
+ * one nests beneath that member instead of taking the place of the copy this
+ * package shares with the framework.
+ */
+export function workspaceRootPins(heads: readonly InitHead[]): ReadonlyArray<readonly [string, string]> {
+   return heads
+      .flatMap(head => Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]))
+      .filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version))
+      .sort(([left], [right]) => left.localeCompare(right));
+}
+
 /** Whether an npm version is 11.6.0 or later, the first that installs `vitest` 4.1's peer set; `11.6.0-rc.1` is earlier. */
 function installsVitest41(npmVersion: string | undefined): boolean {
    const [release, prerelease] = (npmVersion ?? '0.0.0').split('-', 2);

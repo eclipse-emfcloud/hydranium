@@ -26,10 +26,20 @@ your project is 11.6 or later.
 
 ## One physical copy of Langium, and the wire stack pinned under it
 
-Hydranium re-exports Langium's types through a single chokepoint package, and
-identity-sensitive checks — `instanceof` on an AST node, on a `URI` — break
-silently when two copies are installed. Nothing throws; the checks just answer
-`false`.
+Hydranium re-exports Langium through a single chokepoint package, but the files
+`langium-cli` generates import `langium` directly, so your project declares
+`langium` too. If that declaration resolves to a different version from the one
+`@hydranium/langium` depends on, such as a range reaching past it, npm
+installs a second copy without a warning, and your generated code runs on one
+copy while the framework runs on the other. `tsc` then fails with type errors
+that do not name the cause, such as
+`Types have separate declarations of a private property`. At runtime, values
+Langium compares by identity, such as its cancellation signal, are not
+recognised across the copies: a validation check that imports `langium` and is
+cancelled reports the diagnostic
+`An error occurred during validation: Symbol(OperationCancelled)`. The server
+refuses to start when its AST reflection is built on a copy other than the
+framework's.
 
 The version is therefore pinned exactly, and the LSP stack beneath it moves with
 it. Each `vscode-languageserver-protocol` release pins its own `vscode-jsonrpc`
@@ -73,6 +83,14 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
+**In a workspace**, declare the same exact pins in the root's `devDependencies`
+too, as `init --monorepo` prints; not in its `overrides`, which would force them
+on every other member as well. npm installs a root's own dependencies at the
+top of the tree. Without them another member's `langium` or LSP packages can
+hold the top, as in an installed root that `generator-langium` wrote, and your
+package then gets its own copies beside the framework's, even of the same
+versions.
+
 **If you followed an earlier version of this page**, remove the
 `vscode-jsonrpc` and `vscode-languageserver-protocol` entries from your root
 `overrides`, and the `vscode-jsonrpc` patch with the `patch-package`
@@ -81,6 +99,15 @@ startup, since `@eclipse-glsp/protocol` requires `vscode-jsonrpc/browser`, and
 they conflict with the versions `init` declares. Keep `langium` pinned, declare
 `vscode-languageserver` `10.0.1`, `vscode-languageserver-protocol` `3.18.1` and
 `vscode-jsonrpc` `9.0.0` as `init` does, and reinstall from scratch as above.
+
+## TypeScript 5.4 or newer
+
+The declarations of Langium and of the LSP packages pinned beneath it use
+`NoInfer`, which TypeScript 5.4 introduced, so the floor is theirs rather than
+the framework's. `skipLibCheck`, which an `init` scaffold sets, hides the errors
+an older compiler reports for them, but those types then resolve to an error
+type rather than what they declare. The published packages declare TypeScript
+only as a development dependency, so nothing in your install enforces it.
 
 ## A resolver that reads `exports`
 

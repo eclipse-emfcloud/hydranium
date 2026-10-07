@@ -163,8 +163,8 @@ hydranium-cli projects --server "node ./lib/data-server-main.js ./models"
 
 `init` writes a project you can build immediately, and it writes **only inside the target
 directory** — it refuses a non-empty directory without `--force`, and it never edits a surrounding
-manifest (a root `workspaces` entry is printed, not added). It also does **not** run `npm install`
-or `langium generate`; both are printed as next steps.
+manifest (a root `workspaces` entry and dependency pins are printed, not added). It also does
+**not** run `npm install` or `langium generate`; both are printed as next steps.
 
 Project options are position-free:
 
@@ -174,6 +174,9 @@ Project options are position-free:
   mandatory — it owns the workspace, the build pipeline and the shared tier the others read through.
 - `--monorepo` scaffolds a member of the surrounding npm workspace, `--scope <@scope>` sets the npm
   scope, `--public` drops the emitted `"private": true`, `--force` allows a non-empty directory.
+  `--monorepo` also prints the exact pins, `langium` and the LSP stack among them, for the root's
+  `devDependencies`: npm installs a root's own dependencies at the top of the tree, so another
+  member's version cannot leave this package on a copy the framework does not share.
 
 The emitted manifest carries `files` (`lib`, `src`, `syntaxes`), a derived `description` and
 `keywords`, and an empty `author` for you to fill. It is `"private": true` unless you pass

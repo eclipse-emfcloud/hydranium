@@ -40,6 +40,14 @@ if ([negativeMissingPackageFile, publishedPrerelease, upgradeFromPublished, init
 /** The npm bundled with the oldest Node the scaffold declares, which its first install has to survive. */
 const SCAFFOLD_NPM = '10.9.2';
 
+/**
+ * The oldest TypeScript adopters are told compiles a project; every scaffold is
+ * compiled with it too, so raise it together with the adopter requirements. The
+ * scaffold's `skipLibCheck` stays on, so this holds its own and generated
+ * sources, not the dependencies' declarations.
+ */
+const TYPESCRIPT_FLOOR = '5.4.5';
+
 /** A scaffold smoke starts a server and makes a handful of requests; one that hangs fails at this. */
 const SMOKE_TIMEOUT_MS = 2 * 60_000;
 
@@ -216,16 +224,19 @@ function repointFramework(manifestPath: string, packages: Map<string, string>): 
 /**
  * Assert each framework package is a real directory, named as expected, and
  * came from where its specifier says: a `file:` tarball, or exactly the
- * published version from the registry.
+ * published version from the registry. In a workspace, a package npm nested
+ * beneath the `workspace` member is the one that member resolves.
  */
-function assertInstalledFrom(packages: Map<string, string>, installRoot = consumer): void {
+function assertInstalledFrom(packages: Map<string, string>, installRoot = consumer, workspace?: string): void {
    const lock = JSON.parse(readFileSync(join(installRoot, 'package-lock.json'), 'utf8')) as {
       packages?: Record<string, { resolved?: string }>;
    };
    for (const [name, dependencySpec] of packages) {
-      const installedDir = join(installRoot, 'node_modules', name);
+      const nested = workspace === undefined ? undefined : `${workspace}/node_modules/${name}`;
+      const location = nested !== undefined && existsSync(join(installRoot, nested)) ? nested : `node_modules/${name}`;
+      const installedDir = join(installRoot, location);
       const manifest = join(installedDir, 'package.json');
-      const resolved = String(lock.packages?.[`node_modules/${name}`]?.resolved);
+      const resolved = String(lock.packages?.[location]?.resolved);
       const installed = existsSync(manifest) ? (JSON.parse(readFileSync(manifest, 'utf8')) as InstalledManifest) : undefined;
       if (!installed || lstatSync(installedDir).isSymbolicLink() || installed.name !== name) {
          throw new Error(`consumer package ${name} is missing or installed through a symlink`);
@@ -238,24 +249,33 @@ function assertInstalledFrom(packages: Map<string, string>, installRoot = consum
    }
 }
 
+function workspaceArgs(workspace: string | undefined): string[] {
+   return workspace === undefined ? [] : ['-w', workspace];
+}
+
 const WIRE_STACK_PINS: ReadonlyArray<readonly [string, string]> = [
    ['langium', '4.3.1'],
    ['vscode-jsonrpc', '9.0.0'],
    ['vscode-languageserver-protocol', '3.18.1']
 ];
 
-/** Assert `pins` resolved at the top of the tree, and `singles` to one physical copy each. */
+/**
+ * Assert `pins` resolved at the top of the tree, and `singles` to one physical
+ * copy each among `workspace`'s dependencies when one is named, since another
+ * member can hold its own.
+ */
 function assertSingleCopies(
    singles: string[],
    pins: ReadonlyArray<readonly [string, string]> = WIRE_STACK_PINS,
    installRoot = consumer,
-   lsEnv: NodeJS.ProcessEnv = env
+   lsEnv: NodeJS.ProcessEnv = env,
+   workspace?: string
 ): void {
    for (const [name, version] of pins) {
       const installed = JSON.parse(readFileSync(join(installRoot, 'node_modules', name, 'package.json'), 'utf8')) as InstalledManifest;
       if (installed.version !== version) throw new Error(`${name} resolved to ${installed.version}, expected ${version}`);
    }
-   const physical = execFileSync('npm', ['ls', ...singles, '--all', '--parseable'], {
+   const physical = execFileSync('npm', ['ls', ...singles, '--all', '--parseable', ...workspaceArgs(workspace)], {
       cwd: installRoot,
       env: lsEnv,
       encoding: 'utf8'
@@ -272,8 +292,12 @@ function assertSingleCopies(
  * Assert one physical 9.x `vscode-jsonrpc`. A second leaves an LSP handler's
  * framework error without its code; the 8.x copies `@eclipse-glsp/*` nest are its own.
  */
-function assertOneTransport(installRoot: string, lsEnv: NodeJS.ProcessEnv): void {
-   const copies = execFileSync('npm', ['ls', 'vscode-jsonrpc', '--all', '--parseable'], { cwd: installRoot, env: lsEnv, encoding: 'utf8' })
+function assertOneTransport(installRoot: string, lsEnv: NodeJS.ProcessEnv, workspace?: string): void {
+   const copies = execFileSync('npm', ['ls', 'vscode-jsonrpc', '--all', '--parseable', ...workspaceArgs(workspace)], {
+      cwd: installRoot,
+      env: lsEnv,
+      encoding: 'utf8'
+   })
       .trim()
       .split('\n')
       .filter(path => path.endsWith('/node_modules/vscode-jsonrpc'))
@@ -290,6 +314,8 @@ interface ScaffoldShape {
    readonly heads: string;
    /** Scaffold as a member of a fresh workspace. */
    readonly monorepo?: boolean;
+   /** Use the generator-langium root `init`'s tests use instead, installed before `init` runs, as an adopter's is. */
+   readonly yoRoot?: boolean;
    /** Reinstall with `--omit=dev` and smoke again, as a deployment does. */
    readonly production?: boolean;
    /** The npm that runs `init` and installs; {@link SCAFFOLD_NPM} by default. */
@@ -304,8 +330,28 @@ const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
    { label: 'standalone, LSP and GLSP', heads: 'lsp,glsp', vitest: '~4.0.18' },
    { label: 'standalone, LSP only', heads: 'lsp', vitest: '~4.0.18' },
    { label: 'workspace member, all heads', heads: 'lsp,data,glsp', monorepo: true, vitest: '~4.0.18' },
-   { label: 'workspace member under its root npm, LSP only', heads: 'lsp', monorepo: true, npm: WORKSPACE_NPM, vitest: '^4.0.0' }
+   { label: 'workspace member under its root npm, LSP only', heads: 'lsp', monorepo: true, npm: WORKSPACE_NPM, vitest: '^4.0.0' },
+   // npm 11.6 or later, because the root's own `vitest` 4.1 crashes an earlier one.
+   {
+      label: 'workspace member of a generator-langium root, LSP only',
+      heads: 'lsp',
+      monorepo: true,
+      yoRoot: true,
+      npm: WORKSPACE_NPM,
+      vitest: '~4.0.18'
+   }
 ];
+
+/** Make the root manifest changes `init --monorepo` printed, as an adopter following them does. */
+function applyPrintedRootChanges(manifestPath: string, printed: string): void {
+   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { workspaces: string[]; devDependencies?: Record<string, string> };
+   const workspace = /Add this to "workspaces" in [^\n]*\n {4}"([^"]+)"/.exec(printed)?.[1];
+   if (workspace !== undefined) manifest.workspaces.push(workspace);
+   const pins = /Add these to "devDependencies" in [^\n]*\n((?: {4}"[^"]+": "[^"]+",?\n)+)/.exec(printed)?.[1];
+   if (pins === undefined) throw new Error('init --monorepo printed no root pins');
+   manifest.devDependencies = { ...manifest.devDependencies, ...(JSON.parse(`{${pins}}`) as Record<string, string>) };
+   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
 
 /** The packed CLI installed on its own, so `init` runs from what an adopter downloads, with its framework peers packed too. */
 function installPackedCli(candidates: Map<string, string>): string {
@@ -325,7 +371,8 @@ function installPackedCli(candidates: Map<string, string>): string {
 /** Scaffold one shape with the packed CLI, install it with the floor npm, then build, test and smoke it. */
 function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, candidates: Map<string, string>): void {
    const installRoot = join(scratch, `scaffold-${index}`);
-   const project = shape.monorepo ? join(installRoot, 'packages/my-lang') : installRoot;
+   const member = shape.monorepo ? 'packages/my-lang' : undefined;
+   const project = member === undefined ? installRoot : join(installRoot, member);
    const init = [cli, 'init', project, '--name', 'MyLang', '--heads', shape.heads];
    // A workspace has to see its members, which the inherited setting would hide, and
    // npm refuses it for any script run inside a member.
@@ -337,13 +384,27 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    const initEnv = { ...env, npm_config_user_agent: `npm/${npm} node/${process.version} ${process.platform} ${process.arch}` };
 
    if (shape.monorepo) {
-      mkdirSync(installRoot);
-      // A root declaring a newer npm than the one installing it, which npm does not enforce.
-      writeFileSync(
-         join(installRoot, 'package.json'),
-         `{ "name": "scaffold-workspace", "private": true, "packageManager": "npm@${WORKSPACE_NPM}", "workspaces": ["packages/*"] }\n`
-      );
-      run(`${shape.label}: scaffold`, 'node', [...init, '--monorepo'], installRoot, initEnv);
+      if (shape.yoRoot) {
+         cpSync(join(root, 'packages/cli/test/fixtures/yo-langium-root'), installRoot, { recursive: true });
+         // The adopter's own install, so not held to this check's strict peers; it puts the root's other `langium` at the top.
+         shapeInstall('root install before init', ['install', '--no-audit', '--no-fund']);
+      } else {
+         mkdirSync(installRoot);
+         // A root declaring a newer npm than the one installing it, which npm does not enforce.
+         writeFileSync(
+            join(installRoot, 'package.json'),
+            `{ "name": "scaffold-workspace", "private": true, "packageManager": "npm@${WORKSPACE_NPM}", "workspaces": ["packages/*"] }\n`
+         );
+      }
+      // Captured rather than run, so the root changes it prints can be applied.
+      const printed = execFileSync('node', [...init, '--monorepo'], {
+         cwd: installRoot,
+         env: initEnv,
+         encoding: 'utf8',
+         timeout: 10 * 60_000
+      });
+      process.stdout.write(printed);
+      applyPrintedRootChanges(join(installRoot, 'package.json'), printed);
    } else {
       run(`${shape.label}: scaffold`, 'node', init, scratch, initEnv);
    }
@@ -354,17 +415,30 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    cpSync(join(root, 'scripts/fixtures/packed-consumer/scaffold-smoke.mjs'), join(project, 'scaffold-smoke.mjs'));
 
    shapeInstall('install');
-   assertInstalledFrom(repointed, installRoot);
+   assertInstalledFrom(repointed, installRoot, member);
    for (const name of candidates.keys()) {
-      if (!repointed.has(name) && existsSync(join(installRoot, 'node_modules', name))) {
+      if (!repointed.has(name) && [installRoot, project].some(directory => existsSync(join(directory, 'node_modules', name)))) {
          throw new Error(`${shape.label}: installed ${name}, which the scaffold does not declare`);
       }
    }
    // GLSP's server and graph pin their protocol exactly, so a second copy means something declared another release.
    const glspSingles = shape.heads.split(',').includes('glsp') ? ['@eclipse-glsp/protocol'] : [];
-   assertSingleCopies(['langium', 'vscode-languageserver-protocol', ...glspSingles], [['langium', '4.3.1']], installRoot, installEnv);
-   assertOneTransport(installRoot, installEnv);
+   assertSingleCopies(
+      ['langium', 'vscode-languageserver-protocol', ...glspSingles],
+      [['langium', '4.3.1']],
+      installRoot,
+      installEnv,
+      member
+   );
+   assertOneTransport(installRoot, installEnv, member);
    run(`${shape.label}: build`, 'npm', ['run', 'build'], project, installEnv);
+   run(
+      `${shape.label}: compile with TypeScript ${TYPESCRIPT_FLOOR}`,
+      'npx',
+      ['--yes', '-p', `typescript@${TYPESCRIPT_FLOOR}`, 'tsc', '--noEmit', '-p', 'tsconfig.json'],
+      project,
+      installEnv
+   );
    run(`${shape.label}: tests`, 'npm', ['test'], project, installEnv);
    run(`${shape.label}: smoke`, 'node', ['scaffold-smoke.mjs', shape.heads], project, env, SMOKE_TIMEOUT_MS);
    if (shape.production) {

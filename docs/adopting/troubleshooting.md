@@ -8,29 +8,65 @@ see [Status, limitations and roadmap](status.md). For failures that only happen
 while building or testing the framework repository itself, see
 [Troubleshooting the repository](../contributing/troubleshooting.md).
 
-## `instanceof` and typeguards fail on nodes that are obviously the right type
+<!-- The startup error links to this heading's anchor: change both together. -->
 
-A validation never fires, a scope provider sees no candidates, or a `URI`
-comparison is false for two spellings of the same document. No error message
-names the cause.
+## Startup rejects the AST reflection, or a cancelled validation reports `Symbol(OperationCancelled)`
 
-Two physical copies of `langium` in the install. Class identity is nominal, so
-an `AstNode` or `URI` produced by one copy fails every identity check made by
-the other, and nothing throws — the checks just answer `false`.
+The server throws a `[hydranium]` error at startup saying its AST reflection
+extends `AbstractAstReflection` from another instance of `langium` than the one
+`@hydranium/langium` loads. If you type-check first, `tsc` rejects your
+generated modules with errors that name no cause, such as
+`Types have separate declarations of a private property 'linker'`.
+
+The files `langium-cli` generates import `langium` directly, so they run on the
+instance your package resolves, and the framework runs on the one
+`@hydranium/langium` resolves. Values Langium compares by identity, such as its
+cancellation signal, are not recognised across two instances. The startup check
+sees only the instance your generated code runs on, and misses it in a build
+that mangles property names. A second copy that reaches the server another way,
+such as one nested under another dependency, can show up instead as the
+diagnostic `An error occurred during validation: Symbol(OperationCancelled)` on
+a cancelled validation.
+
+To see the copies installed and what requires each, run the following, adding
+`-w <your package>` in a workspace to leave out the other members' copies:
+
+```bash
+npm explain langium
+npm ls langium --all --parseable
+```
+
+The second lists one path per physical copy. Then find the cause:
+
+- **Your package's `langium` resolves to another version.** A range such as
+  `^4.3.1` can resolve past the version `@hydranium/langium` pins, and npm then
+  nests the framework's copy beneath `@hydranium/langium` without a warning.
+  Declare `langium` at that exact version, as `init` does, and reinstall from
+  scratch. Pins take effect only on a from-scratch install; deleting the lockfile
+  alone leaves stale nested copies behind:
+
+  ```bash
+  rm -rf node_modules package-lock.json
+  npm install
+  ```
+
+- **Another workspace member's `langium` holds the top of the tree.** Your
+  package then gets its own copy, and `@hydranium/langium` another, even at the
+  same version, so pinning your package alone does not help. Declare the exact
+  pins `init --monorepo` prints in the root's `devDependencies` as well: npm
+  installs a root's own dependencies at the top of the tree, so the other
+  member's version nests beneath that member instead. The pins include the LSP
+  packages, which split the same way; see
+  [the `ResponseError` entry](#a-responseerror-arrives-as-internalerror-or-as-a-result-or-an-instanceof-check-misses-it).
+- **One install is loaded twice.** `npm ls` shows one copy, but a test runner or
+  bundler that inlines `langium` and leaves `@hydranium/*` external, such as
+  vitest with `langium` in `server.deps.inline`, gives your generated code its
+  own instance. Load `langium` and `@hydranium/*` the same way: inline both, or
+  neither.
 
 The single-physical-copy requirement and the pinned chain it implies are stated
 in [Requirements](requirements.md); bumping one link of that chain alone
 reintroduces the split.
-
-**Remedy:** confirm the duplication, then reinstall from scratch. Pins take
-effect only on a from-scratch install; deleting the lockfile alone leaves stale
-nested copies behind.
-
-```bash
-npm ls langium
-rm -rf node_modules package-lock.json
-npm install
-```
 
 ## The lint rule banning direct `langium` imports never fires
 
@@ -181,6 +217,11 @@ arrives as the request's result. Langium returns its errors, so an LSP request
 for a missing document can resolve with `{"code":-32802}`. Declare
 `vscode-languageserver` at `10.0.1` and `vscode-languageserver-protocol` at
 `3.18.1`, the version it pins, as `init` does, and reinstall from scratch.
+
+In a workspace, declare these pins in the root's `devDependencies` too, as
+`init --monorepo` prints. Otherwise another member's LSP packages can hold the
+top of the tree, and your package then gets copies of its own beside the
+framework's.
 
 ## `MethodNotFound` on `workspace/applyEdit`, or a server-side write that never appears
 

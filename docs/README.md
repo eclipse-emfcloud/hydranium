@@ -17,8 +17,9 @@ way to waste someone's afternoon is to hand a release runbook to an adopter.
   what is known-missing, and the versioning policy. Read this first.
 - [**Requirements**](adopting/requirements.md) — what your own project has to
   satisfy: the Node floor, the npm `vitest` 4.1 needs, the single-copy Langium
-  chain, the `moduleResolution` setting `vscode-jsonrpc@9` forces on you, and
-  the connections to wrap where copies of `vscode-jsonrpc` meet.
+  chain, the TypeScript floor, the `moduleResolution` setting `vscode-jsonrpc@9`
+  forces on you, and the connections to wrap where copies of `vscode-jsonrpc`
+  meet.
 - [**Troubleshooting a server you are building**](adopting/troubleshooting.md) —
   failure modes whose message names the wrong layer: duplicate `langium` /
   `vscode-jsonrpc` copies, an unbound `workspace/applyEdit`, semantic tokens

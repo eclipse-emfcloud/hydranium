@@ -14,38 +14,28 @@
  * this package is that there is ONE physical copy of Langium in the graph. Given
  * one copy, re-export is transparent: a symbol reached through
  * `@hydranium/langium` and the same symbol reached through `langium` are the
- * same object, and identity-sensitive checks (`instanceof` on an AST node, on a
- * `URI`) hold across the boundary.
+ * same object.
  *
- * Two copies break that silently. Nothing throws; `instanceof` simply starts
- * answering `false`, and a scope lookup or a URI comparison quietly stops
- * matching. That failure mode is why the assertion belongs in a test rather
- * than in a comment — and why this package had none was that the invariant
- * looked too obvious to check.
+ * Two copies break that for every class and module-level value Langium owns,
+ * such as its cancellation signal, which the other copy no longer recognises.
+ * That failure mode is why the assertion belongs in a test rather than in a
+ * comment.
  *
  * Importing `langium` directly is banned repo-wide by an eslint rule and
  * deliberately exempted here: comparing the two import paths is the one thing
  * that cannot be done through the chokepoint alone.
  */
 
-import { AstUtils as DirectAstUtils, URI as DirectURI, UriUtils as DirectUriUtils } from 'langium';
+import { AstUtils as DirectAstUtils, OperationCancelled as DirectOperationCancelled, UriUtils as DirectUriUtils } from 'langium';
 import { describe, expect, it } from 'vitest';
-import { AstUtils, URI, UriUtils } from '../src/index.js';
+import { AstUtils, OperationCancelled, URI, UriUtils } from '../src/index.js';
 
 describe('@hydranium/langium chokepoint', () => {
-   it('re-exports the same class object as a direct langium import', () => {
-      // Object identity, not structural equality: a second physical copy would
-      // pass any `toEqual` and fail this.
-      expect(URI).toBe(DirectURI);
+   it('re-exports the same Langium-owned values as a direct langium import', () => {
+      // Langium's own values, not `URI`, which a second copy can share through
+      // `vscode-uri`.
       expect(AstUtils).toBe(DirectAstUtils);
-   });
-
-   it('keeps instanceof working across the two import paths', () => {
-      const throughChokepoint = URI.parse('file:///a/b.x');
-      const throughDirect = DirectURI.parse('file:///a/b.x');
-
-      expect(throughChokepoint instanceof DirectURI).toBe(true);
-      expect(throughDirect instanceof URI).toBe(true);
+      expect(OperationCancelled).toBe(DirectOperationCancelled);
    });
 
    it('augments the shared UriUtils object rather than shadowing it', () => {
