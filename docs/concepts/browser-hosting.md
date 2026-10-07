@@ -157,9 +157,10 @@ without it — which would be type-checking by accident rather than by contract.
 
 For the same reason, upstream's `GLSPWebWorkerProvider` is **not** the page-side
 piece: it constructs its own worker — a second Langium store — and reads the
-worker object rather than a port. Build a `MessageConnection` over the port and
-hand it to `BaseJsonrpcGLSPClient`, which takes any `ConnectionProvider`. No new
-upstream package is needed.
+worker object rather than a port. Build a `MessageConnection` over the port,
+wrap it with `sendByMethodName` since GLSP's client sends message types built by
+its own copy of `vscode-jsonrpc`, and hand it to `BaseJsonrpcGLSPClient`, which
+takes any `ConnectionProvider`. No new upstream package is needed.
 
 ## Not an accommodation — the data head's diagnostics default themselves
 

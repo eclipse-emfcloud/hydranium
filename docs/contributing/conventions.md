@@ -1099,7 +1099,7 @@ range.
 transparency (`import { AstNode } from 'langium'` and `from '@hydranium/langium'`
 resolve to the *same* class object) holds only given ONE physical install.
 Guaranteed by a root `overrides`/`resolutions` pin of `langium` to the exact
-version (mirrors the `vscode-jsonrpc` pin) — independent of import paths. An
+version — independent of import paths. An
 adopter that declares its own `langium` must align to that version (or add a
 root override at its own risk); the supported way to move Langium forward is
 to bump `@hydranium/langium`, not to pin `langium` per-app.

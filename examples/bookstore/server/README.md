@@ -79,6 +79,16 @@ ranged: the framework treats `langium` and its `vscode-*` chain as one
 atomic set and depends on a single physical copy, so a floating range can
 silently resolve a second one.
 
+`vscode-languageserver` is pinned to `10.0.1`, and
+`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and
+`9.0.0` it pins, so Langium, the LSP connection and the framework share one
+copy of each. With two, an error a Langium handler returns, such as a request
+for a document the server does not have, reaches the client as a result, and a
+framework error your own LSP handler throws loses its code. The Langium 4.4
+upgrade
+([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))
+replaces these pins.
+
 ## If your repo gates license headers
 
 The emitted `.ts` files carry no copyright header — the scaffold cannot know

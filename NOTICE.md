@@ -2,7 +2,7 @@
 
 Hydranium is distributed under the MIT License; see [`LICENSE`](./LICENSE).
 This file records the third-party notices that other licences in the dependency
-tree require us to carry, and the one local patch we apply at install time.
+tree require us to carry.
 
 It covers what a consumer is **forced to install** — the transitive closure of
 the published packages' `dependencies`. Peer dependencies (Theia, GLSP and the
@@ -51,23 +51,6 @@ each package with its own `LICENSE` file. Notable direct dependencies:
 `langium`, `vscode-jsonrpc`, `vscode-languageserver`,
 `vscode-languageserver-protocol`, `vscode-uri`, `commander`, `@clack/prompts`,
 `ts-morph`, `uuid`, `fast-json-patch`.
-
-## Patched dependency
-
-`patches/vscode-jsonrpc+9.0.1.patch` is applied to `vscode-jsonrpc@9.0.1` at
-install time via `patch-package`, wired to the root `postinstall` script.
-
-`vscode-jsonrpc` is MIT-licensed, Copyright (c) Microsoft Corporation. The
-patch is **additive and changes no runtime logic**: it restores the `main` and
-`typings` fields that 9.x dropped in favour of an exports-only map, adds four
-one-line re-export shims (`node.js`, `node.d.ts`, `browser.js`, `browser.d.ts`,
-each carrying Microsoft's own header verbatim), and adds a `default` export
-condition beside the existing `node` and `browser` conditions. Together these
-let consumers on classic `moduleResolution: "Node"` — the Theia client packages,
-and Theia itself — keep resolving the package.
-
-The patch applies only to a local `node_modules` tree. It is not redistributed:
-no published Hydranium package contains patched Microsoft code.
 
 ## Vendored source
 

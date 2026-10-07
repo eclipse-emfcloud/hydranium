@@ -22,9 +22,9 @@ The single-physical-copy requirement and the pinned chain it implies are stated
 in [Requirements](requirements.md); bumping one link of that chain alone
 reintroduces the split.
 
-**Remedy:** confirm the duplication, then reinstall from scratch. `overrides`
-and patches take effect only on a from-scratch install; deleting the lockfile
-alone leaves stale nested copies behind.
+**Remedy:** confirm the duplication, then reinstall from scratch. Pins take
+effect only on a from-scratch install; deleting the lockfile alone leaves stale
+nested copies behind.
 
 ```bash
 npm ls langium
@@ -124,25 +124,63 @@ than an accident.
 
 ## `Unknown parameter structure auto`
 
-Thrown while a server head initializes — the GLSP head is where it usually
-surfaces first.
+Thrown when a typed message, a `RequestType` or `NotificationType`, is sent over
+a raw `vscode-jsonrpc` connection: by your own code, or by GLSP over a
+connection it was handed. GLSP's VS Code integration does this even unchanged:
+its `SocketGlspVscodeServer` creates the connection from the integration's own
+copy.
 
 Two physical copies of `vscode-jsonrpc`. `ParameterStructures.auto` is a
-singleton compared by identity, so a request type built by one copy, sent over a
-connection owned by another, falls through the dispatch and throws. The heads
-share one connection in a single process, so the copies have to collapse onto
-one.
+singleton compared by identity, so a typed message built by one copy and sent
+over a connection another copy created falls through the dispatch and throws.
+An install holds several copies as a matter of course: the published packages
+declare `vscode-jsonrpc` as a peer, which settles the copy at the TOP of your
+tree and cannot reach the ones the LSP packages nest, or the one each
+`@eclipse-glsp/*` package can nest for itself. The framework sends by method
+name on the connections it creates or hands to GLSP, and so does the LSP
+connection.
 
-This is the same class of fault as the `langium` entry above and has the same
-remedy — a from-scratch install, so the root `overrides` and the
-`patch-package` patch both apply.
+Wrap every connection you hand GLSP with `sendByMethodName` from
+`@hydranium/protocol`, including the VS Code integration's, by overriding its
+`createConnection`, and send your own messages by method string or over a
+connection wrapped the same way. If your root `overrides` pin `vscode-jsonrpc`
+or `vscode-languageserver-protocol`, or you apply a `vscode-jsonrpc` patch, as
+an earlier version of [Requirements](requirements.md) advised, remove them as
+that page now describes. It also has the detail.
 
-The published packages declare `vscode-jsonrpc` as an exact peer, which forces
-the copy at the TOP of your tree and cannot reach a nested one. `@eclipse-glsp/*`
-depends on `vscode-jsonrpc@8.2.0` exactly and this repository's root `overrides`
-are not published, so a first install of the GLSP head lands two copies every
-time — for that head the pin is mandatory rather than a fallback. Add it to your
-own root manifest; [Requirements](requirements.md) gives the exact block.
+A GLSP diagram in Theia that never receives a message, with
+`No runtime abstraction layer installed` in the console, is the same split:
+`@hydranium/glsp-client-theia` sets up the copy it resolves, so it has to
+resolve the top-level copy GLSP's Theia integration uses, not a nested one.
+
+## A `ResponseError` arrives as `InternalError` or as a result, or an `instanceof` check misses it
+
+A handler throws a `ResponseError` with a code, and the caller receives
+`InternalError` with the message folded into `Request … failed with message: …`.
+Or your code checks a rejection with `instanceof ResponseError`, and the check
+answers `false` for an error that plainly carries a code.
+
+The same copies as above. A connection keeps a thrown `ResponseError`'s code and
+data only when the error comes from the connection's own copy of
+`vscode-jsonrpc`, and `instanceof` recognises only the copy it was imported
+from. The framework's own errors keep their code over the data and GLSP
+connections it builds. The LSP connection is `vscode-languageserver`'s, so an
+LSP handler of yours that throws a `@hydranium/protocol` error keeps its code
+only when the framework shares that copy. Declare `vscode-jsonrpc` at `9.0.0`,
+the version `vscode-languageserver@10.0.1` resolves, as `init` does, until the
+Langium 4.4 upgrade
+([#142](https://github.com/eclipse-emfcloud/hydranium/issues/142)) replaces the
+pin.
+
+Recognise errors with `isResponseError` and the `is…Error` guards from
+`@hydranium/protocol` instead of `instanceof`, and throw a `ResponseError` from
+the copy that built the connection the handler runs on.
+
+A `ResponseError` a handler returns, rather than throws, from another copy
+arrives as the request's result. Langium returns its errors, so an LSP request
+for a missing document can resolve with `{"code":-32802}`. Declare
+`vscode-languageserver` at `10.0.1` and `vscode-languageserver-protocol` at
+`3.18.1`, the version it pins, as `init` does, and reinstall from scratch.
 
 ## `MethodNotFound` on `workspace/applyEdit`, or a server-side write that never appears
 

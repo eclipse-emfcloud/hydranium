@@ -93,7 +93,7 @@ declared peer dependencies are:
 | `@theia/filesystem`   | `^1.70.0`     |
 | `@theia/output`       | `^1.70.0`     |
 | `inversify`           | `^6.0.0`      |
-| `vscode-jsonrpc`      | `9.0.1`       |
+| `vscode-jsonrpc`      | `^9.0.0`      |
 
 `@theia/output` is easy to miss: the memory-diagnostics commands and the channel
 logger both write to an Output channel, so a host that does not already depend on

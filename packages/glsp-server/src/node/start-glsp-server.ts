@@ -15,13 +15,43 @@ import {
    createAppModule,
    defaultSocketLaunchOptions
 } from '@eclipse-glsp/server/node.js';
-import { Container, type ContainerModule } from 'inversify';
-import { Deferred, type Logger } from '@hydranium/protocol';
+import { Container, ContainerModule, injectable } from 'inversify';
+import { Deferred, sendByMethodName, type Logger } from '@hydranium/protocol';
 import type * as net from 'node:net';
+import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '@hydranium/core';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
 import type { LspConnectionLike } from '@hydranium/core/node';
+
+/**
+ * The default socket launcher of {@link startGlspServer}: GLSP's own,
+ * with each connection built from this package's copy of `vscode-jsonrpc`, so a
+ * framework error thrown in a handler keeps its code. The connection sends
+ * GLSP's typed messages by method name, since GLSP builds them from its copy.
+ */
+@injectable()
+export class HydraniumGlspSocketServerLauncher extends SocketServerLauncher {
+   protected override createConnection(socket: net.Socket): ReturnType<SocketServerLauncher['createConnection']> {
+      return sendByMethodName(createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket), console));
+   }
+}
+
+/**
+ * Binds GLSP's own `SocketServerLauncher` token to
+ * {@link HydraniumGlspSocketServerLauncher}. {@link startGlspServer} loads it
+ * before the adopter's `appModules`, so an adopter replaces the launcher with
+ * `rebind`; a second `bind` makes the resolve ambiguous and the start throws.
+ * A replacement extends {@link HydraniumGlspSocketServerLauncher}: GLSP's own
+ * launcher builds its connection from GLSP's copy, so framework errors lose
+ * their code, and GLSP's typed messages throw where its packages nest
+ * separate copies.
+ */
+export function createGlspSocketLauncherModule(): ContainerModule {
+   return new ContainerModule(bind => {
+      bind(SocketServerLauncher).to(HydraniumGlspSocketServerLauncher);
+   });
+}
 
 /**
  * Options for {@link startGlspServer}.
@@ -64,10 +94,11 @@ export interface GlspServerOptions {
    /**
     * Additional Inversify modules to load on the app container AFTER GLSP's
     * own app module (via `createAppModule`, which binds `InjectionContainer`
-    * plus the GLSP-version-specific app bindings) and the framework overrides
+    * plus the GLSP-version-specific app bindings), the framework overrides
     * that route GLSP's logger and logger factory through the adopter logger
-    * and add the shared Tracer. Adopters wire language-services bindings
-    * (e.g. their own shared-services symbol) here.
+    * and add the shared Tracer, and {@link createGlspSocketLauncherModule}.
+    * Adopters wire language-services bindings (e.g. their own shared-services
+    * symbol) here, and replace the launcher with `rebind`.
     */
    readonly appModules?: ReadonlyArray<ContainerModule>;
    /**
@@ -119,11 +150,12 @@ export interface StartedGlspServer extends IntegratedServer {
 /**
  * Start a GLSP socket head. Builds the GLSP app container with framework-
  * default `Logger` / `LoggerFactory` bindings, layers adopter modules,
- * resolves {@link SocketServerLauncher}, configures the adopter
+ * resolves the launcher bound to {@link SocketServerLauncher}, by default
+ * {@link HydraniumGlspSocketServerLauncher}, configures the adopter
  * {@link ServerModule}, and starts listening.
  *
  * **GLSP launcher coupling.** GLSP's {@link SocketServerLauncher} owns the
- * `net.Server` and per-connection `MessageConnection` construction;
+ * `net.Server` and each connection's server instance;
  * the framework wrapper composes ABOVE that launcher rather than replacing
  * it. The framework's own `startSocketServer`
  * helper is NOT used here — it's designed for stdio/raw-JSON-RPC heads
@@ -149,9 +181,14 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
    const glspAppModule = createAppModule({ ...launchOptions, consoleLog: false, fileLog: false });
 
    const appContainer = new Container();
-   appContainer.load(glspAppModule, createGlspFrameworkOverrides(options.createLogger), ...(options.appModules ?? []));
+   appContainer.load(
+      glspAppModule,
+      createGlspFrameworkOverrides(options.createLogger),
+      createGlspSocketLauncherModule(),
+      ...(options.appModules ?? [])
+   );
 
-   const launcher = appContainer.resolve<SocketServerLauncher>(SocketServerLauncher);
+   const launcher = appContainer.get<SocketServerLauncher>(SocketServerLauncher);
    // Passed as an additional module rather than folded into the app container:
    // the launcher loads these into the per-connection SERVER container, which is
    // the tier where each connection gets a server of its own.

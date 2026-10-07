@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
+import { isResponseError } from '../errors';
 import type { LatencyCollector } from '../latency-collector';
 import { type Disposable, DisposableCollection } from '../util';
 import { defaultIsNotification } from './create-rpc-proxy';
@@ -97,9 +98,17 @@ export interface BindRpcMethodsOptions {
    readonly renderErrorMessage?: (error: ResponseError<unknown>) => string;
 }
 
-/** The rejection to throw in place of `err`, with its message rendered. */
-function renderRejection(err: unknown, render: (error: ResponseError<unknown>) => string): unknown {
-   return err instanceof ResponseError ? new ResponseError(err.code, render(err), err.data) : err;
+/**
+ * The rejection to throw in place of `err`. A `ResponseError` from another copy
+ * of `vscode-jsonrpc` is rebuilt on this package's, since a connection keeps the
+ * code only of its own copy's errors; one from this copy is thrown as is, so a
+ * subclass keeps its `toJson`, unless `render` rewrites its message.
+ */
+function renderRejection(err: unknown, render?: (error: ResponseError<unknown>) => string): unknown {
+   if (!isResponseError(err) || (!render && err instanceof ResponseError)) {
+      return err;
+   }
+   return new ResponseError(err.code, render ? render(err) : err.message, err.data);
 }
 
 /**
@@ -121,8 +130,12 @@ function renderRejection(err: unknown, render: (error: ResponseError<unknown>) =
  *
  * Errors thrown synchronously from a request handler — or surfaced as a
  * rejected promise — propagate back to the caller through vscode-jsonrpc's
- * standard error envelope, with the message rendered when
- * {@link BindRpcMethodsOptions.renderErrorMessage} is supplied. Errors from a
+ * standard error envelope, its message rendered when
+ * {@link BindRpcMethodsOptions.renderErrorMessage} is supplied. A
+ * `ResponseError` from another copy of `vscode-jsonrpc` is rebuilt on this
+ * package's copy, so its code and data reach the caller when `connection` comes
+ * from that copy too, as the framework's own connections do; over a connection
+ * from another copy the caller receives a generic `InternalError`. Errors from a
  * notification handler cannot propagate, and are routed to
  * {@link BindRpcMethodsOptions.onNotificationError} instead.
  *
@@ -189,9 +202,6 @@ export function bindRpcMethods<T extends object>(
             const render = options.renderErrorMessage;
             disposables.push(
                resolved.onRequest(wireName, async (params: unknown) => {
-                  if (!render) {
-                     return dispatch(params);
-                  }
                   try {
                      // Awaited inside the try, or a rejected promise escapes it.
                      return await dispatch(params);

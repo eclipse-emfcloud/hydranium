@@ -29,8 +29,6 @@ import {
    createFeatureSet
 } from '@eclipse-glsp/client';
 import { type Clock } from '@hydranium/protocol';
-// `lib/` subpath, not the `./testing` export: this package compiles with classic
-// `moduleResolution: Node`, which does not read the exports map.
 import { makeFakeClock } from '@hydranium/protocol/lib/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type VNode } from 'snabbdom';

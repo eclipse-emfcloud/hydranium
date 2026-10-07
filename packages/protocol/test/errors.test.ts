@@ -29,10 +29,50 @@ import {
    isDocumentNotOpenError,
    isDuplicateClientIdError,
    isReservedClientIdError,
-   isSessionClosedError
+   isResponseError,
+   isSessionClosedError,
+   reviveProtocolError
 } from '../src/errors';
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
 import { asModelVersion } from '../src/model-service/base-version';
+
+/** A `ResponseError` as another copy of `vscode-jsonrpc` builds it: the same shape, another class. */
+class ForeignResponseError extends Error {
+   constructor(
+      readonly code: number,
+      message: string,
+      readonly data?: unknown
+   ) {
+      super(message);
+   }
+
+   toJson(): { code: number; message: string; data?: unknown } {
+      return { code: this.code, message: this.message, data: this.data };
+   }
+}
+
+describe('isResponseError', () => {
+   it('recognises a ResponseError from this copy and from another', () => {
+      expect(isResponseError(new ResponseError(4242, 'Ours.'))).toBe(true);
+      expect(isResponseError(new ForeignResponseError(4242, 'Another copy.'))).toBe(true);
+   });
+
+   it('rejects an error whose code is not an integer, or that has no toJson', () => {
+      expect(isResponseError(Object.assign(new Error('Not found.'), { code: 'ENOENT' }))).toBe(false);
+      expect(isResponseError(Object.assign(new Error('Half.'), { code: 1.5, toJson: () => ({}) }))).toBe(false);
+      expect(isResponseError(Object.assign(new Error('Status.'), { code: 404 }))).toBe(false);
+      expect(isResponseError({ code: 4242, message: 'Not an error.', toJson: () => ({}) })).toBe(false);
+   });
+});
+
+describe('reviveProtocolError', () => {
+   it('revives a typed error that arrived through another copy of vscode-jsonrpc', () => {
+      const arrived = new ForeignResponseError(DUPLICATE_CLIENT_ID_ERROR_CODE, 'Taken.', { clientId: 'client-1' });
+      const revived = reviveProtocolError(arrived);
+      expect(revived).toBeInstanceOf(DuplicateClientIdError);
+      expect(revived).toMatchObject({ clientId: 'client-1', message: 'Taken.' });
+   });
+});
 
 describe('ConflictError', () => {
    it('exposes uri / baseVersion / actualVersion via getters backed by the data payload', () => {

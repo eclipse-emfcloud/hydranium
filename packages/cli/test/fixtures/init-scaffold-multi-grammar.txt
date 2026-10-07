@@ -44,7 +44,9 @@ package.json
     "@hydranium/langium": "^__FRAMEWORK_VERSION__",
     "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
     "langium": "4.3.1",
-    "vscode-languageserver": "~10.0.1"
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageserver": "10.0.1",
+    "vscode-languageserver-protocol": "3.18.1"
   },
   "devDependencies": {
     "@hydranium/cli": "^__FRAMEWORK_VERSION__",
@@ -52,7 +54,7 @@ package.json
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.0.0"
+    "vitest": "~4.0.18"
   },
   "engines": {
     "node": ">=22.13"
@@ -251,6 +253,20 @@ The `langium` / `langium-cli` versions are pinned exactly rather than
 ranged: the framework treats `langium` and its `vscode-*` chain as one
 atomic set and depends on a single physical copy, so a floating range can
 silently resolve a second one.
+
+`vscode-languageserver` is pinned to `10.0.1`, and
+`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and
+`9.0.0` it pins, so Langium, the LSP connection and the framework share one
+copy of each. With two, an error a Langium handler returns, such as a request
+for a document the server does not have, reaches the client as a result, and a
+framework error your own LSP handler throws loses its code. The Langium 4.4
+upgrade
+([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))
+replaces these pins.
+
+`vitest` is held below 4.1, whose peer set crashes the npm every Node 22
+release bundles. Raise it once every npm that installs this project is
+11.6 or later.
 
 ## If your repo gates license headers
 

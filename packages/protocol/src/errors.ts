@@ -321,6 +321,17 @@ const PROTOCOL_ERROR_REVIVERS: ReadonlyMap<number, ProtocolErrorReviver> = new M
 ]);
 
 /**
+ * Whether `error` is a `ResponseError` from any copy of `vscode-jsonrpc`. An
+ * install holds several copies, and `instanceof` recognises only its own. An
+ * error that merely carries an integer `code` has no `toJson`, and is not one.
+ */
+export function isResponseError(error: unknown): error is ResponseError<unknown> {
+   return (
+      error instanceof Error && 'code' in error && Number.isInteger(error.code) && 'toJson' in error && typeof error.toJson === 'function'
+   );
+}
+
+/**
  * `error` as an instance of the typed error class its code names, with its
  * message, data and stack kept, or `error` itself when its code names none or
  * its data lacks the fields that class reads.
@@ -328,10 +339,10 @@ const PROTOCOL_ERROR_REVIVERS: ReadonlyMap<number, ProtocolErrorReviver> = new M
  * none of the class getters.
  */
 export function reviveProtocolError(error: unknown): unknown {
-   if (!(error instanceof ResponseError) || error.data === null || typeof error.data !== 'object') {
+   if (!isResponseError(error) || error.data === null || typeof error.data !== 'object') {
       return error;
    }
-   const revived = PROTOCOL_ERROR_REVIVERS.get(error.code)?.(error.data);
+   const revived = PROTOCOL_ERROR_REVIVERS.get(error.code)?.({ ...error.data });
    if (!revived) {
       return error;
    }

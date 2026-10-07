@@ -14,9 +14,9 @@ import {
    WorkerServerLauncher,
    createAppModule
 } from '@eclipse-glsp/server/browser.js';
-import { Container, injectable, type ContainerModule } from 'inversify';
-import { createMessagePortTransport, type Logger, type TransferredMessagePort } from '@hydranium/protocol';
-import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
+import { Container, ContainerModule, injectable } from 'inversify';
+import { createMessagePortTransport, sendByMethodName, type Logger, type TransferredMessagePort } from '@hydranium/protocol';
+import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import type { IntegratedServer } from '@hydranium/core';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
@@ -25,7 +25,7 @@ import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js'
 export type { TransferredMessagePort } from '@hydranium/protocol';
 
 /**
- * The worker launcher every {@link startGlspServerInWorker} head runs on: GLSP's
+ * The default worker launcher of {@link startGlspServerInWorker}: GLSP's
  * own, with its connection built over `createMessagePortTransport` rather than
  * over `BrowserMessageReader`/`BrowserMessageWriter`, which never report a
  * close. So the client disposing its connection closes this one, and upstream
@@ -34,18 +34,33 @@ export type { TransferredMessagePort } from '@hydranium/protocol';
  *
  * Requires `context`: unlike upstream it never falls back to the worker global.
  *
- * **The install needs a single `vscode-jsonrpc`.** The connection comes from
- * this package's copy, and GLSP's request and notification types from the copy
- * `@eclipse-glsp/protocol` resolves. With two copies, a typed notification or
- * request GLSP sends throws `Unknown parameter structure auto`, because the
- * connection compares the type's parameter-structure marker by identity.
+ * The connection sends GLSP's typed messages by method name: it comes from this
+ * package's copy of `vscode-jsonrpc` and the types from the copy
+ * `@eclipse-glsp/protocol` resolves, and a type sent over another copy's
+ * connection throws.
  */
 @injectable()
 export class HydraniumGlspWorkerServerLauncher extends WorkerServerLauncher {
-   protected override createConnection(options: WorkerLaunchOptions): MessageConnection {
+   protected override createConnection(options: WorkerLaunchOptions): ReturnType<WorkerServerLauncher['createConnection']> {
       const transport = createMessagePortTransport(options.context as unknown as TransferredMessagePort);
-      return createMessageConnection(transport.reader, transport.writer);
+      return sendByMethodName(createMessageConnection(transport.reader, transport.writer));
    }
+}
+
+/**
+ * Binds GLSP's own `WorkerServerLauncher` token to
+ * {@link HydraniumGlspWorkerServerLauncher}. {@link startGlspServerInWorker}
+ * loads it before the adopter's `appModules`, so an adopter replaces the launcher
+ * with `rebind`; a second `bind` makes the resolve ambiguous and the start throws.
+ * A replacement extends {@link HydraniumGlspWorkerServerLauncher}: GLSP's own
+ * launcher builds its connection from GLSP's copy, so framework errors lose
+ * their code, and GLSP's typed messages throw where its packages nest
+ * separate copies.
+ */
+export function createGlspWorkerLauncherModule(): ContainerModule {
+   return new ContainerModule(bind => {
+      bind(WorkerServerLauncher).to(HydraniumGlspWorkerServerLauncher);
+   });
 }
 
 /**
@@ -89,8 +104,10 @@ export interface BrowserGlspServerOptions {
    readonly serverModule: ServerModule;
    /**
     * Additional Inversify modules to load on the app container AFTER GLSP's
-    * own app module and the framework overrides. Adopters wire language-services
-    * bindings (e.g. their own shared-services symbol) here.
+    * own app module, the framework overrides and
+    * {@link createGlspWorkerLauncherModule}. Adopters wire language-services
+    * bindings (e.g. their own shared-services symbol) here, and replace the
+    * launcher with `rebind`.
     */
    readonly appModules?: ReadonlyArray<ContainerModule>;
    /**
@@ -140,9 +157,14 @@ export function startGlspServerInWorker(options: BrowserGlspServerOptions): Inte
    const glspAppModule = createAppModule({ consoleLog: false });
 
    const appContainer = new Container();
-   appContainer.load(glspAppModule, createGlspFrameworkOverrides(options.createLogger), ...(options.appModules ?? []));
+   appContainer.load(
+      glspAppModule,
+      createGlspFrameworkOverrides(options.createLogger),
+      createGlspWorkerLauncherModule(),
+      ...(options.appModules ?? [])
+   );
 
-   const launcher = appContainer.resolve<WorkerServerLauncher>(HydraniumGlspWorkerServerLauncher);
+   const launcher = appContainer.get<WorkerServerLauncher>(WorkerServerLauncher);
    // Additional module rather than an app-container binding, as on Node: the
    // launcher loads these into the per-connection SERVER container, the tier
    // where each connection gets a server of its own.

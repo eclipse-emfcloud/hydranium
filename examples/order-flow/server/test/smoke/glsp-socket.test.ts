@@ -42,6 +42,7 @@
 import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { type ActionMessage, BaseJsonrpcGLSPClient, GLSPClient, RequestBoundsAction, RequestModelAction } from '@eclipse-glsp/protocol';
 import { type GNode, SOURCE_URI_ARG } from '@eclipse-glsp/server';
+import { sendByMethodName } from '@hydranium/protocol';
 import * as net from 'node:net';
 import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -167,7 +168,8 @@ describe('order-flow GLSP socket smoke', () => {
       // calls it, and a second call throws — which `start` catches and turns
       // into a silent `StartFailed`, surfacing only as "not ready yet" on the
       // next request.
-      glspClient = new BaseJsonrpcGLSPClient({ id: 'order-flow-smoke-client', connectionProvider: rpc });
+      // GLSP's client sends message types built by its own copy of `vscode-jsonrpc`.
+      glspClient = new BaseJsonrpcGLSPClient({ id: 'order-flow-smoke-client', connectionProvider: sendByMethodName(rpc) });
       await glspClient.start();
       await glspClient.initializeServer({
          applicationId: 'order-flow-smoke',
