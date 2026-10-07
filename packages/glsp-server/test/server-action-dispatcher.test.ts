@@ -7,15 +7,24 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
-import type { Action, ActionDispatchScope, ActionHandlerRegistry, ClientActionForwarder } from '@eclipse-glsp/server/node.js';
-import type { Tracer } from '@hydranium/protocol';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type {
+   Action,
+   ActionDispatchScope,
+   ActionHandlerRegistry,
+   ClientActionForwarder,
+   Logger as GlspLogger
+} from '@eclipse-glsp/server/node.js';
+import { Logger, type LogThreshold, type Tracer } from '@hydranium/protocol';
 import { HydraniumGlspServerActionDispatcher } from '../src/dispatcher/server-action-dispatcher.js';
-import type { GlspClientLogger } from '../src/logging/glsp-client-logger.js';
+import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
 class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
    public timedLabels: string[] = [];
+   public timedLevels: (LogThreshold | undefined)[] = [];
    public dispatched: Action[] = [];
+   public handledKinds: string[] = [];
+   public summarizeCalls = 0;
    public override loggedKinds: ReadonlySet<string> | undefined = undefined;
    public summaries = new Map<string, string>();
 
@@ -26,22 +35,18 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
       // `readonly` on the framework class (matches GLSP's `@inject` shape);
       // the writable cast lands the stubs on the instance.
       const writable = this as unknown as {
-         logger: GlspClientLogger;
+         logger: GlspLogger;
          tracer: Tracer;
          clientActionForwarder: ClientActionForwarder & { handle: (a: Action) => boolean };
          actionHandlerRegistry: ActionHandlerRegistry;
          dispatchScope: ActionDispatchScope;
       };
-      writable.logger = {
-         debug: () => undefined,
-         info: () => undefined,
-         warn: () => undefined,
-         error: () => undefined
-      } as unknown as GlspClientLogger;
+      writable.logger = makeNoopGlspLogger();
       // Dispatch timing goes through the injected, caller-tagged `Tracer`.
       writable.tracer = {
-         time: <T>(label: string, callback: () => T) => {
+         time: <T>(label: string, callback: () => T, logLevel?: LogThreshold) => {
             this.timedLabels.push(label);
+            this.timedLevels.push(logLevel);
             return Promise.resolve(callback() as Awaited<T>);
          }
       } as unknown as Tracer;
@@ -50,7 +55,10 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
          handle: () => true
       } as unknown as ClientActionForwarder & { handle: (a: Action) => boolean };
       writable.actionHandlerRegistry = {
-         get: () => []
+         get: (kind: string) => {
+            this.handledKinds.push(kind);
+            return [];
+         }
       } as unknown as ActionHandlerRegistry;
       // GLSP injects this so the dispatcher can route a reentrant dispatch
       // inline while queueing an external one. Report every dispatch as
@@ -72,6 +80,7 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
    }
 
    protected override summarize(action: Action): string {
+      this.summarizeCalls++;
       return this.summaries.get(action.kind) ?? '';
    }
 
@@ -82,10 +91,34 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
 }
 
 describe('HydraniumGlspServerActionDispatcher', () => {
+   let previousLevel: LogThreshold;
+   beforeEach(() => {
+      previousLevel = Logger.getLevel();
+      Logger.setLevel('debug');
+   });
+   afterEach(() => {
+      Logger.setLevel(previousLevel);
+   });
+
    it('logs every dispatched action by default with `→ server` direction', async () => {
       const dispatcher = new TestableDispatcher();
       await dispatcher.dispatch({ kind: 'foo' });
       expect(dispatcher.timedLabels).toEqual([`Dispatch action 'foo' → server`]);
+   });
+
+   it('times at debug', async () => {
+      const dispatcher = new TestableDispatcher();
+      await dispatcher.dispatch({ kind: 'foo' });
+      expect(dispatcher.timedLevels).toEqual(['debug']);
+   });
+
+   it('neither summarizes nor times a dispatch below debug, and still handles it', async () => {
+      Logger.setLevel('info');
+      const dispatcher = new TestableDispatcher();
+      await dispatcher.dispatch({ kind: 'foo' });
+      expect(dispatcher.summarizeCalls).toBe(0);
+      expect(dispatcher.timedLabels).toEqual([]);
+      expect(dispatcher.handledKinds).toEqual(['foo']);
    });
 
    it('shows `→ client` direction when the forwarder routes to client', async () => {

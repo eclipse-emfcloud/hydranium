@@ -13,7 +13,14 @@ import { Container } from 'inversify';
 import type { ServerLanguageServices, ServerSharedServices } from '@hydranium/core';
 import type { LanguageMetaData } from '@hydranium/langium';
 import { makeNoopSharedServices, makeStubServiceRegistry, type StubServiceRegistry } from '@hydranium/core/testing';
-import { ActionHandlerConstructor, InstanceMultiBinding, SaveModelActionHandler } from '@eclipse-glsp/server';
+import {
+   type ActionDispatcher,
+   ActionHandlerConstructor,
+   type BindingTarget,
+   InstanceMultiBinding,
+   SaveModelActionHandler
+} from '@eclipse-glsp/server';
+import { HydraniumGlspServerActionDispatcher } from '../src/dispatcher/server-action-dispatcher.js';
 import { AbstractHydraniumGlspDiagramModule, bindDiagramLanguage } from '../src/launcher/abstract-hydranium-glsp-diagram-module.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../src/storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
@@ -112,8 +119,8 @@ describe('bindDiagramLanguage', () => {
    });
 });
 
-/** Exposes the action handlers the base registers; the bindings it never reaches throw. */
-class ActionHandlerProbeModule extends AbstractHydraniumGlspDiagramModule {
+/** Exposes what the base registers; the bindings it never reaches throw. */
+class ProbeModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = 'probe';
 
    protected declareLanguage(): LanguageMetaData {
@@ -137,13 +144,23 @@ class ActionHandlerProbeModule extends AbstractHydraniumGlspDiagramModule {
       this.configureActionHandlers(binding);
       return binding.getAll();
    }
+
+   boundActionDispatcher(): BindingTarget<ActionDispatcher> {
+      return this.bindActionDispatcher();
+   }
 }
 
 describe('AbstractHydraniumGlspDiagramModule action handlers', () => {
    it('answers the Theia client’s save request and keeps GLSP’s save for other clients', () => {
-      const handlers = new ActionHandlerProbeModule().registeredActionHandlers();
+      const handlers = new ProbeModule().registeredActionHandlers();
 
       expect(handlers).toContain(HydraniumGlspRequestSaveModelActionHandler);
       expect(handlers).toContain(SaveModelActionHandler);
+   });
+});
+
+describe('AbstractHydraniumGlspDiagramModule action dispatcher', () => {
+   it('times every dispatch through HydraniumGlspServerActionDispatcher', () => {
+      expect(new ProbeModule().boundActionDispatcher()).toBe(HydraniumGlspServerActionDispatcher);
    });
 });
