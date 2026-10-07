@@ -332,8 +332,8 @@ describe('the headless-harness subcommands', () => {
    });
 
    /**
-    * The verbosity control, asserted over the SET of `--services` subcommands
-    * rather than one test each.
+    * The verbosity control and the loader flag, asserted over the SET of
+    * `--services` subcommands rather than one test each.
     *
     * The defect is a command drifting out of the set — a per-command test nobody
     * thought to add cannot see that, and a caller who has to remember which
@@ -341,11 +341,14 @@ describe('the headless-harness subcommands', () => {
     * discovered by asking the flag lists, so a command that stops declaring it
     * fails the discovery rather than being quietly skipped.
     */
-   describe('the log threshold spans every --services subcommand', () => {
+   describe('the shared flags span every --services subcommand', () => {
       const SERVICES_COMMANDS: ReadonlyArray<{
          name: string;
          flags: readonly string[];
-         parse: (args: string[], onError: UsageError) => { logLevel?: LogThreshold; logFile?: string; logFileLevel?: LogThreshold };
+         parse: (
+            args: string[],
+            onError: UsageError
+         ) => { imports?: readonly string[]; logLevel?: LogThreshold; logFile?: string; logFileLevel?: LogThreshold };
          /** The positionals this command needs after `--services`, so the parse reaches its flags. */
          tail: readonly string[];
       }> = [
@@ -389,6 +392,14 @@ describe('the headless-harness subcommands', () => {
          expect(() => parse(['--services', 'M', ...tail, '--log-file-level', 'chatty'], onError)).toThrow(
             /^Invalid --log-file-level: chatty/
          );
+      });
+
+      it.each(SERVICES_COMMANDS)('$name: declares --import and hands its values to the runner in order', ({ flags, parse, tail }) => {
+         expect(flags).toContain('--import');
+         expect(parse(['--services', 'M', ...tail, '--import', 'tsx', '--import', './hook.mjs'], onError)).toMatchObject({
+            imports: ['tsx', './hook.mjs']
+         });
+         expect(parse(['--services', 'M', ...tail], onError).imports).toBeUndefined();
       });
 
       it.each(SERVICES_COMMANDS)('$name: refuses a level the protocol does not define', ({ parse, tail }) => {

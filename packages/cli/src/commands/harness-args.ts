@@ -56,8 +56,17 @@ export function exitWithUsage(message: string): never {
    process.exit(2);
 }
 
-/** The value flag {@link parseHarnessArgs} consumes itself, before any the subcommand declares. */
+/** Names the head's services module; every harness subcommand requires it. */
 export const SERVICES_FLAG = '--services';
+
+/**
+ * Registers a loader in the driver child that imports the head. The child is a
+ * fresh `node`, so a loader registered on the CLI's own process never reaches it.
+ */
+export const IMPORT_FLAG = '--import';
+
+/** The value flags {@link parseHarnessArgs} consumes itself, before any the subcommand declares. */
+export const HARNESS_VALUE_FLAGS = [SERVICES_FLAG, IMPORT_FLAG] as const;
 
 /**
  * The one spelling of the log threshold, shared by both subcommand families.
@@ -88,13 +97,20 @@ export const SERVER_SPAWN_VALUE_FLAGS: readonly string[] = ['--server', '--cwd',
  * next line, at the column.
  */
 export function logHelpLines(padTo: number, head = 'the head this boots'): string[] {
-   const line = (flag: string, text: string): string[] =>
-      flag.length < padTo - 1 ? [`  ${flag.padEnd(padTo)}${text}`] : [`  ${flag}`, `${' '.repeat(padTo + 2)}${text}`];
    return [
-      line(`${LOG_LEVEL_FLAG} <lvl>`, `Log threshold for ${head} (off|error|warn|info|debug|trace).`),
-      line(`${LOG_FILE_FLAG} <file>`, `Also write ${head}'s log to <file>; {workspace} expands to the workspace.`),
-      line(`${LOG_FILE_LEVEL_FLAG} <lvl>`, `Threshold for that file, which the log-level setting does not change.`)
+      helpLine(`${LOG_LEVEL_FLAG} <lvl>`, `Log threshold for ${head} (off|error|warn|info|debug|trace).`, padTo),
+      helpLine(`${LOG_FILE_FLAG} <file>`, `Also write ${head}'s log to <file>; {workspace} expands to the workspace.`, padTo),
+      helpLine(`${LOG_FILE_LEVEL_FLAG} <lvl>`, `Threshold for that file, which the log-level setting does not change.`, padTo)
    ].flat();
+}
+
+/** The `--help` lines every `--services` subcommand describes {@link IMPORT_FLAG} with, aligned as {@link logHelpLines}. */
+export function importHelpLines(padTo: number): string[] {
+   return helpLine(`${IMPORT_FLAG} <specifier>`, 'Loader to register before importing <module>, e.g. tsx (repeatable).', padTo);
+}
+
+function helpLine(flag: string, text: string, padTo: number): string[] {
+   return flag.length < padTo - 1 ? [`  ${flag.padEnd(padTo)}${text}`] : [`  ${flag}`, `${' '.repeat(padTo + 2)}${text}`];
 }
 
 /**
@@ -158,6 +174,8 @@ export function printHelp(lines: readonly string[]): void {
 /** What {@link parseHarnessArgs} recovered from an argv. */
 export interface ParsedHarnessArgs {
    servicesModule: string;
+   /** The {@link IMPORT_FLAG} values in the order given, absent when there were none. */
+   imports?: string[];
    /**
     * An absolute directory path, resolved by {@link resolveWorkspaceArgument} and
     * checked to exist. `''` when the subcommand declared `requireWorkspace: false`.
@@ -187,12 +205,12 @@ export interface HarnessArgsConfig {
 
 /**
  * Shared parser for the headless-harness subcommands. Consumes the required
- * `--services <module>` value flag and a single positional `<workspace>`, plus
- * the `valueFlags` (each takes a value) and `boolFlags` (presence-only, recorded
- * as `'true'`) the subcommand recognises. Unknown flags or a missing
- * `--services`/`<workspace>` are usage errors, and so is a `<workspace>` that
- * reaches no directory — see {@link resolveWorkspaceArgument} for why that cannot
- * be left to the run.
+ * `--services <module>` value flag, the repeatable `--import <specifier>` and a
+ * single positional `<workspace>`, plus the `valueFlags` (each takes a value)
+ * and `boolFlags` (presence-only, recorded as `'true'`) the subcommand
+ * recognises. Unknown flags or a missing `--services`/`<workspace>` are usage
+ * errors, and so is a `<workspace>` that reaches no directory — see
+ * {@link resolveWorkspaceArgument} for why that cannot be left to the run.
  */
 export function parseHarnessArgs(
    args: string[],
@@ -209,6 +227,7 @@ export function parseHarnessArgs(
    const options: Record<string, string | undefined> = {};
    const values: Record<string, string[]> = {};
    let servicesModule: string | undefined;
+   let imports: string[] | undefined;
    let workspace: string | undefined;
    for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
@@ -220,8 +239,10 @@ export function parseHarnessArgs(
          index += 1;
          return value;
       };
-      if (flag === '--services') {
+      if (flag === SERVICES_FLAG) {
          servicesModule = next();
+      } else if (flag === IMPORT_FLAG) {
+         (imports ??= []).push(next());
       } else if (boolSet.has(flag)) {
          options[flag] = 'true';
       } else if (repeatableSet.has(flag)) {
@@ -237,7 +258,8 @@ export function parseHarnessArgs(
       }
    }
    return {
-      servicesModule: assertRequired(servicesModule, '--services', commandName, onError),
+      servicesModule: assertRequired(servicesModule, SERVICES_FLAG, commandName, onError),
+      imports,
       workspace: requireWorkspace
          ? resolveWorkspaceArgument(assertRequired(workspace, '<workspace>', commandName, onError), commandName, onError)
          : (workspace ?? ''),

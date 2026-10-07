@@ -19,6 +19,7 @@ import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDriverArgs, runMeasureMemory } from '../src/commands/measure-memory.js';
 import { buildGroundTruthDriverArgs, runAstGroundTruth } from '../src/commands/ast-ground-truth.js';
@@ -128,6 +129,32 @@ describe('ast-ground-truth', () => {
    });
 });
 
+/** The six `--services` parents, each of which spawns its driver through {@link runDriverChild}. */
+const PARENTS: ReadonlyArray<{
+   name: string;
+   run: (options: DriverSpawnOptions & { servicesModule: string; workspace: string }) => Promise<void>;
+}> = [
+   { name: 'ast-ground-truth', run: runAstGroundTruth },
+   { name: 'lint-grammar', run: runLintGrammar },
+   { name: 'measure-memory', run: runMeasureMemory },
+   { name: 'model-docs', run: runModelDocs },
+   { name: 'reflect', run: runReflect },
+   { name: 'validate', run: runValidate }
+];
+
+describe('PARENTS', () => {
+   it('covers the six of them, so no assertion below runs on a short list', () => {
+      expect(PARENTS.map(parent => parent.name)).toEqual([
+         'ast-ground-truth',
+         'lint-grammar',
+         'measure-memory',
+         'model-docs',
+         'reflect',
+         'validate'
+      ]);
+   });
+});
+
 /**
  * The heap ceiling reaches every driver child from ONE place, which is why no
  * subcommand carries a literal. Only that routing is asserted here; what the
@@ -152,6 +179,62 @@ describe('runDriverChild', () => {
       });
       expect(captured).toEqual([CEILING, '/drivers/x.js', '--services', './svc.js']);
    });
+
+   it('registers each loader after the heap ceiling, in the order given', async () => {
+      let captured: string[] = [];
+      await runDriverChild(['/drivers/x.js', '--services', './svc.ts'], {
+         imports: ['tsx', '@scope/loader'],
+         __heapReadingForTest: DESKTOP,
+         __spawnForTest: execArgs => {
+            captured = execArgs;
+            return Promise.resolve(0);
+         }
+      });
+      expect(captured).toEqual([CEILING, '--import=tsx', '--import=@scope/loader', '/drivers/x.js', '--services', './svc.ts']);
+   });
+
+   it('passes a loader path as a file URL, which Node would otherwise misread on Windows', async () => {
+      const absolute = path.resolve('hooks', 'abs.mjs');
+      let captured: string[] = [];
+      await runDriverChild(['/drivers/x.js'], {
+         imports: [absolute, './hooks/rel.mjs', '.\\hooks\\win.mjs', 'tsx'],
+         __heapReadingForTest: DESKTOP,
+         __spawnForTest: execArgs => {
+            captured = execArgs;
+            return Promise.resolve(0);
+         }
+      });
+      // A Windows `C:\…` reads as the URL scheme `c:` and a `.\…` as a package
+      // name, so every path form must arrive as a file URL; a package name must not.
+      expect(captured[1]).toBe(`--import=${pathToFileURL(absolute).href}`);
+      expect(captured[2]).toBe(`--import=${pathToFileURL(path.resolve('hooks', 'rel.mjs')).href}`);
+      expect(captured[3]).toMatch(/^--import=file:/);
+      expect(captured.slice(4)).toEqual(['--import=tsx', '/drivers/x.js']);
+   });
+});
+
+/**
+ * The loader has to reach the child as a Node flag, so it must sit before the
+ * driver script: Node passes everything after the script to the script itself,
+ * where the driver would reject it as an unknown option.
+ */
+describe('the loaders reach the driver child', () => {
+   it.each(PARENTS)('$name: registers each --import before the driver script', async ({ run }) => {
+      let argv: string[] = [];
+      await run({
+         servicesModule: './svc.ts',
+         workspace: '/ws',
+         imports: ['tsx'],
+         __spawnForTest: execArgs => {
+            argv = execArgs;
+            return Promise.resolve(0);
+         }
+      });
+      const driverIndex = argv.findIndex(arg => arg.endsWith('-driver.js'));
+      expect(driverIndex).toBeGreaterThan(-1);
+      expect(argv.indexOf('--import=tsx')).toBeGreaterThan(-1);
+      expect(argv.indexOf('--import=tsx')).toBeLessThan(driverIndex);
+   });
 });
 
 /**
@@ -166,29 +249,6 @@ describe('runDriverChild', () => {
  * report, which no per-command test that nobody added can see.
  */
 describe('the log threshold reaches the driver child', () => {
-   const PARENTS: ReadonlyArray<{
-      name: string;
-      run: (options: DriverSpawnOptions & { servicesModule: string; workspace: string }) => Promise<void>;
-   }> = [
-      { name: 'ast-ground-truth', run: runAstGroundTruth },
-      { name: 'lint-grammar', run: runLintGrammar },
-      { name: 'measure-memory', run: runMeasureMemory },
-      { name: 'model-docs', run: runModelDocs },
-      { name: 'reflect', run: runReflect },
-      { name: 'validate', run: runValidate }
-   ];
-
-   it('covers the six of them, so no assertion below runs on a short list', () => {
-      expect(PARENTS.map(parent => parent.name)).toEqual([
-         'ast-ground-truth',
-         'lint-grammar',
-         'measure-memory',
-         'model-docs',
-         'reflect',
-         'validate'
-      ]);
-   });
-
    it.each(PARENTS)('$name: sets the log-level variable on the child env, and only that', async ({ run }) => {
       let captured: Record<string, string> | undefined;
       let argv: string[] = [];

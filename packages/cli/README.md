@@ -61,6 +61,14 @@ Most subcommands take `--services <module>`: an ESM module exporting a zero-arg
 `createServices(): { shared }` thunk — normally your build's `./lib/services.js`. The head wires its
 own filesystem inside, so the CLI boots it with no arguments.
 
+To run the head from its TypeScript source instead, register a loader with `--import <specifier>`
+(repeatable), which the CLI passes as Node's own `--import` to the process that imports the head:
+`npx hydranium-cli reflect --import tsx --services ./src/services.ts`. A package name resolves from
+the directory the command runs in, as Node's flag does; a path, absolute or relative, is resolved
+against that directory and passed on as a file URL, so Windows paths work too. Node's built-in type
+stripping is not enough on its own: it neither maps a head's `./x.js` imports to their `.ts` sources
+nor accepts the namespaces Langium generates.
+
 **Scaffolding**
 
 - `init <target-dir>` — scaffold a new language project. See the section below.
