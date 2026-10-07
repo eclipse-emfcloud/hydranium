@@ -1,0 +1,30 @@
+{
+  "name": "hello-world-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Base workspace package",
+  "workspaces": [
+    "packages/language",
+    "packages/cli",
+    "packages/extension"
+  ],
+  "type": "module",
+  "scripts": {
+    "clean": "npm run clean --workspaces",
+    "watch": "tsc -b tsconfig.build.json --watch",
+    "build": "tsc -b tsconfig.build.json && npm run build --workspaces",
+    "build:clean": "npm run clean && npm run build",
+    "langium:generate": "npm run --workspace packages/language langium:generate",
+    "langium:watch": "npm run --workspace packages/language langium:watch",
+    "test": "npm run --workspace packages/language test"
+  },
+  "devDependencies": {
+    "@types/node": "~20.19.43",
+    "shx": "~0.4.0",
+    "typescript": "~5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  }
+}

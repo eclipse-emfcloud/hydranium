@@ -1,0 +1,28 @@
+{
+  "name": "hello-world-cli",
+  "version": "0.0.1",
+  "description": "The cli specific package",
+  "bin": {
+    "hello-world-cli": "./bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "out",
+    "src"
+  ],
+  "type": "module",
+  "scripts": {
+    "clean": "shx rm -fr *.tsbuildinfo out",
+    "build": "echo 'No build step'",
+    "build:clean": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "chalk": "~5.6.2",
+    "commander": "~15.0.0",
+    "hello-world-language": "0.0.1"
+  },
+  "engines": {
+    "node": ">=20.10.0",
+    "npm": ">=10.2.3"
+  }
+}

@@ -81,12 +81,10 @@ grammar names.
 `--monorepo` is the one flag that is about the *repo* rather than the language.
 It makes `tsconfig.json` extend the root config that actually carries
 `compilerOptions` — `tsconfig.json` at this repo's root is a solution file, so
-extending that would inherit nothing — swaps the standalone `.gitignore` for the
-workspace-member one, which keeps only the rule a monorepo root cannot be assumed
-to have (`syntaxes/`, a Langium artefact) — and
-addresses this package by `--prefix` in the regen command it writes into
-`package.json`. It never writes outside the target: the `workspaces` entry a new
-package needs is printed for you to add.
+extending that would inherit nothing — and addresses this package by
+`--prefix` in the regen command it writes into `package.json`. It never writes
+outside the target: the `workspaces` entry a new package needs is printed for
+you to add.
 
 That is what "the templates are derived from the reference example" is supposed
 to mean: running the command reproduces the example's own shape rather than
@@ -153,7 +151,7 @@ from the scaffold.
 | `src/main.ts` | **adapted** — adds the GLSP head on the reconciling strategy, and the data head's root type is the union of every grammar's transfer root |
 | `src/data-server-main.ts` | **adapted** — `init` emits this entry with the `data` head; what differs here is the transfer-import comment naming `.layout` as the third grammar one data server serves |
 | `src/head-ports.ts` | **adapted** — adds the GLSP command, which the default head set does not emit |
-| `.gitignore` | **dropped** — the scaffold does emit the member ignore file; this example predates that template, so the repo root ignores its `syntaxes/` by wildcard instead. Adding the file would be correct, and the root pattern would have to stay either way |
+| `.gitignore` | **dropped** — the scaffold does emit one; this example predates it, so the repo root's rules cover its `lib/` and `syntaxes/` instead. Adding the file would be correct, and the root patterns would have to stay either way |
 | `test/services.test.ts` | **replaced by** `test/composition.test.ts`: rendered at this three-grammar invocation the scaffolded test already asserts all three, being grammar-agnostic — the successor widens it to what composing them into ONE shared tier means: shared-tier identity, per-extension routing, per-language serializers, the scope-provider overrides and the explicit `lsp.configurationRoot` |
 | `test/serialization.test.ts` | **replaced by** `test/serializer.test.ts`: the scaffolded round-trip covers one grammar over the starter syntax, this example covers three real ones with a workspace-wide golden beside it |
 | `test/parsing.test.ts` | **dropped** — the scaffold emits it; here the real grammars are parsed by every suite that loads the workspace fixture |
