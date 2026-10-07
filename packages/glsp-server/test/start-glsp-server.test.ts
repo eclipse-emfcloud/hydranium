@@ -8,8 +8,14 @@
  ********************************************************************************/
 
 import * as net from 'node:net';
-import { JsonrpcGLSPClient, type InitializeParameters, type InitializeResult } from '@eclipse-glsp/protocol';
-import { type Logger as GlspLogger, ServerModule, SocketServerLauncher } from '@eclipse-glsp/server/node.js';
+import {
+   type InitializeParameters,
+   type InitializeResult,
+   JsonrpcGLSPClient,
+   type Logger as GlspLogger,
+   ServerModule,
+   SocketServerLauncher
+} from '@eclipse-glsp/server/node.js';
 import { DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError } from '@hydranium/protocol';
 import { ContainerModule, injectable } from 'inversify';
 import { waitFor } from '@hydranium/protocol/testing';

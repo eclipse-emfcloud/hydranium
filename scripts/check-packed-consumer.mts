@@ -360,7 +360,9 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
          throw new Error(`${shape.label}: installed ${name}, which the scaffold does not declare`);
       }
    }
-   assertSingleCopies(['langium', 'vscode-languageserver-protocol'], [['langium', '4.3.1']], installRoot, installEnv);
+   // GLSP's server and graph pin their protocol exactly, so a second copy means something declared another release.
+   const glspSingles = shape.heads.split(',').includes('glsp') ? ['@eclipse-glsp/protocol'] : [];
+   assertSingleCopies(['langium', 'vscode-languageserver-protocol', ...glspSingles], [['langium', '4.3.1']], installRoot, installEnv);
    assertOneTransport(installRoot, installEnv);
    run(`${shape.label}: build`, 'npm', ['run', 'build'], project, installEnv);
    run(`${shape.label}: tests`, 'npm', ['test'], project, installEnv);

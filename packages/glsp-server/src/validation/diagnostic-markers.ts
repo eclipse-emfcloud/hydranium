@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Marker, MarkerKind } from '@eclipse-glsp/protocol';
+import { type Marker, MarkerKind } from '@eclipse-glsp/server';
 import { type AstNode } from '@hydranium/langium';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-types';
 import { type AstDiagnostic } from '@hydranium/core';

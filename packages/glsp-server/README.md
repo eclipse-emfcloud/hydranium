@@ -44,10 +44,11 @@ the diagram model is adopter-side, bound per diagram module.
 npm install @hydranium/glsp-server
 ```
 
-Peers: `@eclipse-glsp/server` and `@eclipse-glsp/protocol`, `inversify` and
-`reflect-metadata` (the DI runtime — import `reflect-metadata` once at your entry
-point), `@hydranium/core`, `@hydranium/protocol`, `@hydranium/langium`,
-`vscode-jsonrpc` and `vscode-languageserver-types`. The only bundled runtime
+Peers: `@eclipse-glsp/server`, `inversify` and `reflect-metadata` (the DI
+runtime — import `reflect-metadata` once at your entry point),
+`@hydranium/core`, `@hydranium/protocol`, `@hydranium/langium`,
+`vscode-jsonrpc` and `vscode-languageserver-types`. GLSP's protocol comes
+through the server, so it shares the server's copy. The only bundled runtime
 dependency is `uuid`. You must already have a composed hydranium shared services
 tree, a grammar, and a GModel factory of your own — there is no framework GModel
 factory.

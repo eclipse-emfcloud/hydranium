@@ -11,12 +11,12 @@ import {
    type ClientSession,
    DefaultGLSPServer,
    GLSPServerError,
+   type InitializeClientSessionParameters,
    RejectAction,
    type RequestAction,
    type ResponseAction,
    SourceModelStorage
 } from '@eclipse-glsp/server';
-import { type InitializeClientSessionParameters } from '@eclipse-glsp/protocol';
 import { RequestSaveModelAction } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';

@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Marker } from '@eclipse-glsp/protocol';
-import { type GModelElement, ModelState, type ModelValidator } from '@eclipse-glsp/server';
+import { type GModelElement, type Marker, ModelState, type ModelValidator } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';

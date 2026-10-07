@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { MarkerKind } from '@eclipse-glsp/protocol';
-import { ModelState } from '@eclipse-glsp/server';
+import { MarkerKind, ModelState } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { describe, expect, it } from 'vitest';

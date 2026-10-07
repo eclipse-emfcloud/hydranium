@@ -36,9 +36,8 @@ export type { TransferredMessagePort } from '@hydranium/protocol';
  * Requires `context`: unlike upstream it never falls back to the worker global.
  *
  * The connection sends GLSP's typed messages by method name: it comes from this
- * package's copy of `vscode-jsonrpc` and the types from the copy
- * `@eclipse-glsp/protocol` resolves, and a type sent over another copy's
- * connection throws.
+ * package's copy of `vscode-jsonrpc` and the types from GLSP's own copy, and a
+ * type sent over another copy's connection throws.
  */
 @injectable()
 export class HydraniumGlspWorkerServerLauncher extends WorkerServerLauncher {
