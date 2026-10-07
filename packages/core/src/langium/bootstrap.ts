@@ -544,11 +544,11 @@ export function assertDistinctFileRouting(languages: ReadonlyArray<LangiumServic
  *
  * The check is per language, on the types its grammar can produce, and costs
  * one grammar walk per language at boot; a single-language composition, which
- * nothing can clobber, is skipped entirely. It cannot repair the situation — a
- * reflection that spans independently generated grammars is a real design piece
- * (a composite reflection dispatching per owning language) and is not attempted
- * here; the point is to turn a silent runtime misbehaviour into a boot failure
- * that names the language and the mistake.
+ * nothing can clobber, is skipped entirely. It cannot repair the situation, since
+ * the losing reflection is already gone; the point is to turn a silent runtime
+ * misbehaviour into a boot failure that names the language and the mistake. The
+ * repair is the adopter's: bind a `CompositeAstReflection` over every package's
+ * generated reflection, or generate all grammars in one `langium-cli` run.
  *
  * **Two severities, because a clobber is not always total.** Throwing only when
  * NONE of a language's types are known misses the realistic case: two grammars
@@ -590,8 +590,9 @@ export function assertReflectionCoversLanguages(shared: LangiumSharedServices, l
          `[hydranium] the shared AstReflection knows NONE of the ${produced.size} types the language ` +
             `'${languageId}' can produce (e.g. ${missing.slice(0, 3).join(', ')}). ` +
             'AstReflection is a single shared slot, so composing two independently generated language ' +
-            'packages leaves only the last one bound. Generate all grammars in ONE langium-cli run (one ' +
-            'langium-config with several entry grammars) so a single combined reflection covers them all.'
+            "packages leaves only the last one bound. Bind a CompositeAstReflection over every package's " +
+            'generated reflection, or generate all grammars in ONE langium-cli run (one langium-config with ' +
+            'several entry grammars) so a single combined reflection covers them all.'
       );
    }
 }
@@ -613,7 +614,8 @@ function warnPartialReflectionCoverage(
       'For those types `isSubtype` answers false and `getTypeMetaData` is empty, so `IndexManager.allElements` ' +
       'finds nothing, reference routing misses, and the encoder emits nothing. Most likely two independently ' +
       'generated language packages each bound the single shared AstReflection slot and the last one won — ' +
-      'generate all grammars in ONE langium-cli run so a single combined reflection covers them. If instead ' +
+      "bind a CompositeAstReflection over every package's generated reflection, or generate all grammars in " +
+      'ONE langium-cli run so a single combined reflection covers them. If instead ' +
       'these are rules your generator legitimately folded away, this warning is expected.';
    if (logger) {
       logger.warn(message);

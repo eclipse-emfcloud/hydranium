@@ -69,17 +69,17 @@ export interface IntegrationServicesOptions<
       /**
        * Module emitted by `langium-cli` (grammar metadata, AST reflection).
        *
-       * `AstReflection` is a SINGLE shared slot, so in a multi-grammar
-       * composition this must be the *combined* generated shared module of
-       * ONE `langium-cli` run over all grammars (one `langium-config.json`
-       * with several entry grammars). Two independently generated language
-       * packages each bind this one slot and the last one wins, leaving the
-       * other grammar's types unknown to reflection — `isSubtype` answers
-       * false, `getTypeMetaData` is empty, and indexing, reference routing
-       * and the transfer encoder all silently miss those types.
+       * `AstReflection` is a single shared slot, so in a multi-grammar
+       * composition this must cover every grammar: either the combined
+       * generated shared module of one `langium-cli` run over all grammars,
+       * or a module binding `AstReflection` to a `CompositeAstReflection`
+       * over each separately generated package's reflection. Spreading two
+       * packages' generated shared modules instead keeps only the last one's
+       * reflection — `isSubtype` answers false for the other grammar's types,
+       * `getTypeMetaData` is empty, and indexing, reference routing and the
+       * transfer encoder all silently miss them.
        * {@link bootstrapLangiumLanguages} throws when a language's types are
-       * wholly absent and warns on a partial gap, because the types cannot
-       * express "these modules came from one generator run".
+       * wholly absent and warns on a partial gap.
        */
       generated: Module<TShared, PartialLangiumSharedServices>;
       /** Adopter's override module (workspace manager, file-system provider, integrity rules, etc.). */
@@ -196,11 +196,9 @@ export interface IntegrationServicesOptions<
     * language's, so a second grammar that reuses the same service
     * overrides only supplies its own `generated` module.
     *
-    * Every grammar composed here must come from ONE `langium-cli` run —
-    * see the `generated` note on {@link IntegrationServicesOptions.sharedModules}.
-    * The shared `AstReflection` slot cannot hold two independently
-    * generated reflections, so separately generated language packages are
-    * detected at bootstrap rather than supported.
+    * The primary `generated` shared module must reflect every grammar
+    * composed here — see the `generated` note on
+    * {@link IntegrationServicesOptions.sharedModules}.
     *
     * Multi-grammar adopters should also rebind `lsp.configurationRoot`
     * (it defaults to the first registered language's id) and, if they
@@ -230,9 +228,9 @@ export interface AdditionalLanguageModules<
    TLanguage extends LangiumServices
 > {
    /**
-    * Module emitted by `langium-cli` for this grammar — from the SAME run
-    * that produced the primary language's modules and the shared
-    * `generated` module, not a separately generated language package.
+    * Module emitted by `langium-cli` for this grammar. The shared
+    * `generated` module must reflect its types, either from the same run or
+    * through a `CompositeAstReflection`.
     */
    generated: Module<TLanguage, PartialLangiumServices>;
    /** Adopter overrides for this language. Defaults to the primary language's. */

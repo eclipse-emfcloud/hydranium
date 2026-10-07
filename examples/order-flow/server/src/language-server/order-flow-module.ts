@@ -66,7 +66,8 @@ import { ProcessSerializer } from './process-serializer.js';
  * shared slot, so independently generated language packages would leave
  * the last-composed one bound and the other grammars' types unknown to
  * reflection — `assertReflectionCoversLanguages` fails the boot rather than
- * letting that pass silently.
+ * letting that pass silently. Such packages bind a `CompositeAstReflection`
+ * over all their reflections instead.
  *
  * What each language overrides, and why:
  *

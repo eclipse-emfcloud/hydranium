@@ -42,12 +42,14 @@ The guides generalise the seams; this example remains the executable reference f
 
 ## Why multiple grammars matter to the framework
 
-`AstReflection` is a **single shared slot**, so all three grammars must come
-from ONE `langium-cli` run over one `langium-config.json`. Independently
-generated language packages each bind that slot and the last one wins,
-leaving the other grammar's types unknown to reflection —
-`assertReflectionCoversLanguages` fails the boot rather than letting that pass
-silently. `test/composition.test.ts` pins the supported shape.
+`AstReflection` is a **single shared slot**, so it must know all three
+grammars' types. Here they come from one `langium-cli` run over one
+`langium-config.json`. Independently generated language packages each bind
+that slot and the last one wins, leaving the other grammar's types unknown to
+reflection — `assertReflectionCoversLanguages` fails the boot rather than
+letting that pass silently. Such packages bind a `CompositeAstReflection`
+over all their reflections instead. `test/composition.test.ts` pins the
+one-run shape.
 
 This is also the in-repo adopter that exercises the multi-grammar composition
 path with real grammars, real parsers and real reflection — which is how it
