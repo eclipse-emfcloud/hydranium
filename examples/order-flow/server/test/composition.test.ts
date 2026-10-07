@@ -64,9 +64,9 @@ describe('order-flow composition — three grammars, one shared tier', () => {
    it('binds ONE AstReflection that knows the types of both grammars', () => {
       const { shared } = makeServices();
 
-      // The single-`langium-config.json` constraint made observable: a
-      // separately generated pair would leave one of these two unknown, and
-      // `isSubtype` would answer false across the grammar boundary.
+      // One run's combined reflection made observable: spreading a separately
+      // generated pair's shared modules would leave one of these two unknown,
+      // and `isSubtype` would answer false across the grammar boundary.
       const types = shared.AstReflection.getAllTypes();
       expect(types).toContain('Entity');
       expect(types).toContain('Write');

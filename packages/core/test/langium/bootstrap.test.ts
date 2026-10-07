@@ -20,7 +20,15 @@ import {
 } from '../../src/langium/bootstrap.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import { ExtendedServiceRegistry } from '../../src/langium/service-registry.js';
-import { DefaultLangiumDocumentFactory, DefaultLangiumDocuments, URI } from '@hydranium/langium';
+import {
+   AbstractAstReflection,
+   DefaultLangiumDocumentFactory,
+   DefaultLangiumDocuments,
+   URI,
+   type AstMetaData,
+   type AstReflection
+} from '@hydranium/langium';
+import { CompositeAstReflection } from '../../src/langium/composite-ast-reflection.js';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
 /** One `ServiceRegistry.register` call, recorded by the stub registry. */
@@ -301,6 +309,13 @@ describe('assertReflectionCoversLanguages', () => {
       return Object.assign(shared, { warns });
    }
 
+   /** A generated-style reflection knowing exactly these types. */
+   function reflectionOf(...types: string[]): AstReflection {
+      return new (class extends AbstractAstReflection {
+         override readonly types: AstMetaData = Object.fromEntries(types.map(name => [name, { name, properties: {}, superTypes: [] }]));
+      })();
+   }
+
    it('accepts a reflection that spans every registered language, silently', () => {
       const shared = sharedKnowing('Element', 'OtherElement');
       const languages = [languageProducing('langA', 'Element'), languageProducing('langB', 'OtherElement')];
@@ -315,7 +330,21 @@ describe('assertReflectionCoversLanguages', () => {
       const shared = sharedKnowing('Element');
       const languages = [languageProducing('langA', 'Element'), languageProducing('langB', 'OtherElement')];
 
-      expect(() => assertReflectionCoversLanguages(shared, languages)).toThrow(/'langB'.*OtherElement.*ONE langium-cli run/s);
+      expect(() => assertReflectionCoversLanguages(shared, languages)).toThrow(
+         /'langB'.*OtherElement.*CompositeAstReflection.*ONE langium-cli run/s
+      );
+   });
+
+   it('accepts a composite over separately generated reflections', () => {
+      const shared = sharedKnowing();
+      (shared as unknown as { AstReflection: unknown }).AstReflection = new CompositeAstReflection([
+         reflectionOf('Element'),
+         reflectionOf('OtherElement')
+      ]);
+      const languages = [languageProducing('langA', 'Element'), languageProducing('langB', 'OtherElement')];
+
+      expect(() => assertReflectionCoversLanguages(shared, languages)).not.toThrow();
+      expect(shared.warns).toEqual([]);
    });
 
    it('warns rather than throwing on a partially-known grammar, which may be generator folding', () => {
