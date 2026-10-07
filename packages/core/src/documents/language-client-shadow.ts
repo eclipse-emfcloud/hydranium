@@ -9,13 +9,7 @@
 
 import { type CanonicalUri, type LanguageClientUri, textHash, type Tracer } from '@hydranium/protocol';
 import { diffLines } from 'diff';
-import {
-   Range,
-   TextDocumentContentChangeEvent as ContentChange,
-   type TextDocumentsConfiguration,
-   type TextEdit,
-   uinteger
-} from 'vscode-languageserver';
+import { Range, type TextDocumentsConfiguration, type TextEdit, uinteger } from 'vscode-languageserver';
 import { TextDocument, type TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
 
 /**
@@ -40,19 +34,6 @@ export interface LanguageClientDocumentState {
  * these per URI is the explicit correlation.
  */
 export interface PendingLanguageClientPush {
-   /**
-    * The text the client held BEFORE this push, and therefore the text its
-    * echo addresses with its ranges. A hash of the pushed text alone cannot
-    * reconstruct an incremental echo: its ranges address the previous buffer,
-    * and applied to the already-advanced synced text the line they insert
-    * lands twice.
-    *
-    * `undefined` only when that buffer is unknown, because a rejection or
-    * {@link LanguageClientShadow.invalidateClientText} dropped what was
-    * tracked. The echo is then reconstructed against the synced text, which
-    * is sound only for a position-independent (full-text) change.
-    */
-   readonly before: string | undefined;
    /** {@link textHash} of the text this push moves the client to. */
    readonly afterHash: string;
 }
@@ -67,7 +48,11 @@ export interface PreparedLanguageClientPush {
     * buffer and is the caller's retry after a refusal.
     */
    readonly version: number | null;
-   /** Record what the client answered. Only the first call counts; a refusal of an addressed push is logged. */
+   /**
+    * Record what the client answered. Only the first call counts; a refusal of
+    * an addressed push is logged; an answer that arrives after the client
+    * reopened the URI changes nothing.
+    */
    notifyOutcome(outcome: LanguageClientPushOutcome): void;
 }
 
@@ -85,13 +70,6 @@ export type LanguageClientChangeVerdict =
     * splice the wrong lines; `text` is what it now holds, and is authoritative.
     */
    | { readonly kind: 'divergent'; readonly text: string }
-   /**
-    * The change carries ranges and no known text addresses them. Adopting one
-    * anyway splices the document and stores an edit nobody made; dropping costs
-    * at most the one keystroke the client still holds and the next push
-    * contradicts.
-    */
-   | { readonly kind: 'unreconstructable' }
    /** The client's buffer is the synced text, so its ranges apply as sent. */
    | { readonly kind: 'direct' };
 
@@ -111,11 +89,12 @@ export type LanguageClientChangeVerdict =
  */
 export interface LanguageClientShadow {
    /**
-    * The client opened `key` under `clientUri`. `firstOpen`, the store's first
-    * open of `key`: its text becomes the diff baseline; otherwise an
-    * equality-only baseline, since a buffer opened from disk can lag the
-    * synced text. Either replaces what was tracked for `clientUri` before the
-    * open. A no-op when this URI is already open.
+    * The client opened `key` under `clientUri` holding `text`. `firstOpen`,
+    * the store's first open of `key`: that text becomes the diff baseline;
+    * otherwise there is none, since a buffer opened from disk can lag the
+    * synced text, and a push of other text is a full replace. Either replaces
+    * what was tracked for `clientUri` before the open. A no-op when this URI
+    * is already open.
     */
    addOpen(key: CanonicalUri, clientUri: LanguageClientUri, version: number, text: string, firstOpen: boolean): void;
    /** The version the client last declared for `key` under `clientUri`; `undefined` when it never opened it there. */
@@ -123,7 +102,11 @@ export interface LanguageClientShadow {
    /**
     * Take `version` as the client's newest for `clientUri`, and classify its
     * change against `document`, the synced document. The caller has already
-    * dropped a stale change.
+    * dropped a stale change. After a `direct` or `divergent` verdict the caller
+    * commits the change and reports the synced text through
+    * {@link LanguageClientShadow.setClientText}: a `direct` change advances what
+    * the client was last heard to hold only through that call, and without it
+    * the next change is rebuilt against a stale text.
     */
    acceptChange(
       key: CanonicalUri,
@@ -154,7 +137,12 @@ export interface LanguageClientShadow {
     * land while the push to another of its URIs is in flight.
     */
    preparePush(key: CanonicalUri, clientUri: LanguageClientUri, text: string): PreparedLanguageClientPush | undefined;
-   /** Forget what the client holds under `clientUri`; its next push is a full replace. */
+   /**
+    * Drop the diff baseline and the pushes in flight under `clientUri`; its
+    * next push is a full replace, or nothing when the client was last heard to
+    * hold that text. What the client was last heard to hold stays, and its
+    * changes are still rebuilt against it.
+    */
    invalidateClientText(clientUri: LanguageClientUri): void;
 }
 
@@ -183,14 +171,17 @@ export function isFullReplace(edits: readonly TextEdit[]): boolean {
 
 export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> implements LanguageClientShadow {
    protected readonly opens = new Map<CanonicalUri, Map<LanguageClientUri, LanguageClientDocumentState>>();
-   /** The diff baseline: the text the client is believed to hold. */
+   /** The diff baseline: the text the client holds once every push in flight has landed. */
    protected readonly baselines = new Map<LanguageClientUri, string>();
    /**
-    * The text the client declared at an open with no diff baseline, compared
-    * for equality only. A line-keyed diff keyed to this snapshot splices a
-    * buffer the client may have moved past.
+    * What the client was last heard to hold: the text of its open, advanced
+    * through every change since. Each change's ranges address the text the
+    * previous one left, so changes are rebuilt against this; the diff baseline
+    * moves ahead at a push and does not hold it. A push compares against it
+    * for equality only: a line-keyed diff keyed to it splices a buffer the
+    * client may have moved past.
     */
-   protected readonly openedTexts = new Map<LanguageClientUri, string>();
+   protected readonly heardTexts = new Map<LanguageClientUri, string>();
    protected readonly pending = new Map<LanguageClientUri, PendingLanguageClientPush[]>();
 
    /**
@@ -218,10 +209,9 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       // Dropped: a seed set before the open names no buffer, and a line diff
       // against it splices text the client does not hold.
       this.invalidateClientText(clientUri);
+      this.heardTexts.set(clientUri, text);
       if (firstOpen) {
          this.baselines.set(clientUri, text);
-      } else {
-         this.openedTexts.set(clientUri, text);
       }
    }
 
@@ -244,16 +234,14 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
    }
 
    /**
-    * Reconstruct the client's resulting buffer against the text its ranges
-    * address: the pre-push buffer of the oldest push still in flight, else
-    * what the client is believed to hold.
+    * Reconstruct the client's resulting buffer against what it was last heard
+    * to hold, which its ranges address whatever was pushed meanwhile.
     *
-    * The client applies pushes in order and echoes each against the buffer it
-    * held before that push, so the first echo belongs to the oldest entry.
-    * Matching against every pending hash, not only the oldest, recognises an
-    * echo a newer push already superseded, and consumes everything older too.
-    * A reconstruction matching none means the client's buffer went somewhere
-    * we did not send it, and the queue drops.
+    * The client applies pushes in order, so the first echo belongs to the
+    * oldest entry. Matching against every pending hash, not only the oldest,
+    * recognises an echo a newer push already superseded, and consumes
+    * everything older too. A reconstruction matching none means the client's
+    * buffer went somewhere we did not send it, and the queue drops.
     *
     * Content equality is a sound echo proof because entries live only between
     * a push and its echo, and `didChange` arrives in mutation order: an undo
@@ -265,23 +253,20 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       document: TextDocument,
       changes: TextDocumentContentChangeEvent[]
    ): LanguageClientChangeVerdict {
-      const queued = this.pending.get(clientUri);
-      const pending = queued?.length ? queued : undefined;
-      const clientText = pending?.[0].before ?? this.clientText(clientUri);
-      if (pending === undefined && (clientText === undefined || clientText === document.getText())) {
+      // The synced text stands in only for a URI with nothing recorded, which
+      // has nothing in flight either.
+      const heard = this.heardTexts.get(clientUri) ?? document.getText();
+      const pending = this.pending.get(clientUri);
+      if (!pending?.length && heard === document.getText()) {
+         // The ranges apply to the synced text as sent, and the caller's
+         // setClientText records the result. Were it rebuilt here too, every
+         // keystroke would copy the whole text a second time and rescan its lines.
          return { kind: 'direct' };
       }
-      if (pending !== undefined && pending[0].before === undefined && changes.some(change => ContentChange.isIncremental(change))) {
-         // A push sent to a buffer it did not know: the tracked text is now the
-         // text that push moves the client to, the one text these ranges
-         // provably do not address. Dropped, the next push is a full replace. A
-         // full-text change reconstructs identically against any baseline.
-         this.invalidateClientText(clientUri);
-         return { kind: 'unreconstructable' };
-      }
-      const probe = this.configuration.create(clientUri, document.languageId, 0, clientText ?? document.getText());
+      const probe = this.configuration.create(clientUri, document.languageId, 0, heard);
       const reconstructed = this.configuration.update(probe, changes, 0).getText();
-      if (pending !== undefined) {
+      this.heardTexts.set(clientUri, reconstructed);
+      if (pending?.length) {
          const matchIndex = pending.findIndex(push => push.afterHash === textHash(reconstructed));
          if (matchIndex >= 0) {
             pending.splice(0, matchIndex + 1);
@@ -289,11 +274,12 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
          }
          this.pending.delete(clientUri);
       }
-      return { kind: 'divergent', text: reconstructed };
+      return heard === document.getText() ? { kind: 'direct' } : { kind: 'divergent', text: reconstructed };
    }
 
    setClientText(clientUri: LanguageClientUri, text: string): void {
       this.baselines.set(clientUri, text);
+      this.heardTexts.set(clientUri, text);
       this.pending.delete(clientUri);
    }
 
@@ -301,6 +287,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       const uris = this.opens.get(key);
       if (uris?.delete(clientUri)) {
          this.invalidateClientText(clientUri);
+         this.heardTexts.delete(clientUri);
          if (uris.size === 0) {
             this.opens.delete(key);
          }
@@ -315,6 +302,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
    removeAllOpens(key: CanonicalUri): void {
       for (const clientUri of this.opens.get(key)?.keys() ?? []) {
          this.invalidateClientText(clientUri);
+         this.heardTexts.delete(clientUri);
       }
       this.opens.delete(key);
    }
@@ -329,14 +317,11 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       if (state === undefined) {
          return undefined;
       }
-      // Read before computing the edits, which moves the baseline: this is the
-      // only text the push's echo can be reconstructed against.
-      const before = this.clientText(clientUri);
       const edits = this.computeEdits(clientUri, text);
       if (edits.length === 0) {
          return undefined;
       }
-      this.recordPendingPush(clientUri, before, text);
+      this.recordPendingPush(clientUri, text);
       // Gating a full replace turns a stale-by-one version into a refused
       // update for no safety gain, and refuses the retry after a rejection.
       const version = isFullReplace(edits) ? null : Math.max(state.declaredVersion, state.pushedVersion ?? state.declaredVersion);
@@ -355,7 +340,10 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
                         `Language client refused applyEdit addressed at version ${version} (it last declared version ${state.declaredVersion})`
                      );
                }
-               this.settle(clientUri, version, state, outcome);
+               // A reopen while the push was in flight reset what is tracked for the new buffer.
+               if (this.opens.get(key)?.get(clientUri) === state) {
+                  this.settle(clientUri, version, state, outcome);
+               }
             }
          }
       };
@@ -379,22 +367,16 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
 
    invalidateClientText(clientUri: LanguageClientUri): void {
       this.baselines.delete(clientUri);
-      this.openedTexts.delete(clientUri);
       this.pending.delete(clientUri);
-   }
-
-   /** The text the client is believed to hold: the diff baseline, else what it declared at open. */
-   protected clientText(clientUri: LanguageClientUri): string | undefined {
-      return this.baselines.get(clientUri) ?? this.openedTexts.get(clientUri);
    }
 
    /**
     * The edits that bring the client from its baseline to `text`, moving the
     * baseline to `text`. A full replace without a baseline, none when the
-    * client opened with exactly `text` (pushing it anyway dirties the buffer on
-    * open), and otherwise a line diff, verified by applying it: a diff that
-    * does not reproduce `text` falls back to a full replace rather than
-    * corrupting the client.
+    * client was last heard to hold exactly `text` (pushing it anyway dirties
+    * the buffer and adds an undo step), and otherwise a line diff, verified by
+    * applying it: a diff that does not reproduce `text` falls back to a full
+    * replace rather than corrupting the client.
     */
    protected computeEdits(clientUri: LanguageClientUri, text: string): TextEdit[] {
       const old = this.baselines.get(clientUri);
@@ -404,9 +386,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       this.baselines.set(clientUri, text);
       const fullReplace: TextEdit = { range: FULL_RANGE, newText: text };
       if (old === undefined) {
-         const openedText = this.openedTexts.get(clientUri);
-         this.openedTexts.delete(clientUri);
-         return openedText === text ? [] : [fullReplace];
+         return this.heardTexts.get(clientUri) === text ? [] : [fullReplace];
       }
       const edits = diffToEdits(old, text);
       const probe = this.configuration.create(clientUri, 'plaintext', 0, old);
@@ -418,13 +398,13 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
    }
 
    /** Bounded, so an echo that never arrives cannot grow the queue without limit. */
-   protected recordPendingPush(clientUri: LanguageClientUri, before: string | undefined, text: string): void {
+   protected recordPendingPush(clientUri: LanguageClientUri, text: string): void {
       let queue = this.pending.get(clientUri);
       if (!queue) {
          queue = [];
          this.pending.set(clientUri, queue);
       }
-      queue.push({ before, afterHash: textHash(text) });
+      queue.push({ afterHash: textHash(text) });
       if (queue.length > PENDING_ECHO_CAP) {
          queue.shift();
          this.tracer.with(clientUri).debug(`Pending-echo queue exceeded ${PENDING_ECHO_CAP} entries; dropped the oldest`);

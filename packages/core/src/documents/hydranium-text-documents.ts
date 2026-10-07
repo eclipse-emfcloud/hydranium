@@ -451,10 +451,6 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.logUri(uri, `Skip rebuild: echo of a server-authored push (client version ${td.version})`, 'debug');
             return;
          }
-         if (verdict.kind === 'unreconstructable') {
-            this.tracer.with(uri).warn(`Drop change: no known client buffer for its ranges (client version ${td.version})`);
-            return;
-         }
 
          // A divergent change is applied as its reconstructed text rather than
          // as its own ranges: those ranges address the editor's own buffer, so
@@ -1361,7 +1357,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     *     the document's own open delivers its text instead.
     *
     * On `applyEdit` rejection (`result.applied === false`) or RPC failure the
-    * shadow is invalidated so the next call sends a full-replace baseline.
+    * shadow is invalidated so the next call sends a full replace, or nothing
+    * when the client was last heard to hold that text.
     * Errors are re-thrown — callers wrap with their own retry / coalescing
     * policy as needed.
     *
@@ -1381,7 +1378,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * than at `null` ("version intentionally unknown"), which is what lets the
     * client reject a push its buffer has outrun. On rejection the shadow is invalidated,
     * so the caller's retry is a full-range replace — position-independent, and
-    * safe to apply to whatever the client now holds.
+    * safe to apply to whatever the client now holds — or nothing when the
+    * client was last heard to hold that text.
     */
    async applyEditToLanguageClient(
       uri: DocumentUri,
@@ -1448,7 +1446,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       this.languageClientShadow.setClientText(this.toLanguageClientUri(uri), text);
    }
 
-   /** Drop the shadow baseline for a URI; the next applyEditToLanguageClient sends a full replace. */
+   /**
+    * Drop the shadow baseline for a URI; the next applyEditToLanguageClient
+    * sends a full replace, or nothing when the client was last heard to hold
+    * that text.
+    */
    invalidateLanguageClientText(uri: DocumentUri): void {
       this.languageClientShadow.invalidateClientText(this.toLanguageClientUri(uri));
    }

@@ -236,8 +236,9 @@ Two things this settled by measurement, both of which the design left open:
   Applying the edit makes Monaco emit a `didChange`, and one drag costs exactly
   one inbound request with no push after it, so nothing ping-pongs. That echo
   carries *incremental* ranges addressing the text as it stood before the push,
-  and the server reconciles them against the pre-push text it kept for each
-  in-flight push, so an echo is recognised and consumed rather than re-applied.
+  and the server reconciles them against the text the editor was last heard to
+  hold, which a push does not move, so an echo is recognised and consumed rather
+  than re-applied.
 
   Echo incrementally, exactly as a conforming client does, and work around
   nothing. The echo is what keeps the server's shadow and per-client version

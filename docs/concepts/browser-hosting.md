@@ -582,9 +582,10 @@ loses the whole inbound direction in silence.
 - **Echo incrementally**, exactly as a conforming client does, and do not work
   around anything. `vscode-languageclient` echoes `didChange` with incremental
   ranges relative to its previous buffer, and the store reconstructs an incoming
-  change against the pre-push text so an echo is recognised rather than
-  re-applied. A host that switched to full-text echoes would be encoding a
-  workaround into the one place adopters copy from.
+  change against the text the client was last heard to hold, which a push does
+  not move, so an echo is recognised rather than re-applied. A host that
+  switched to full-text echoes would be encoding a workaround into the one
+  place adopters copy from.
 
 ## A note on what "gated neutral" does and does not promise
 

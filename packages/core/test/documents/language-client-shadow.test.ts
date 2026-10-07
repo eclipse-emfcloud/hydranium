@@ -181,7 +181,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       shadow.setClientText(URI, 'a\nb\n');
       const push = shadow.preparePush(KEY, URI, 'a\nB\n');
       push?.notifyOutcome('applied');
-      // A refusal invalidates the baseline; counted, the next push would be a full replace.
+      // A refusal drops the diff baseline; counted, the next push would be a full replace.
       push?.notifyOutcome('refused');
       expect(isFullReplace(editsOf(shadow, 'a\nB\nc\n'), 'a\nB\nc\n')).toBe(false);
    });
