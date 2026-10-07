@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { MarkersReason, MessageAction, SetMarkersAction } from '@eclipse-glsp/protocol';
 import {
    type Action,
    ActionDispatcher,
@@ -19,7 +18,9 @@ import {
    type Disposable,
    GLSPServerError,
    Logger as GlspLogger,
+   MarkersReason,
    type MaybePromise,
+   MessageAction,
    ModelState,
    ModelSubmissionHandler,
    ModelValidator,
@@ -27,6 +28,7 @@ import {
    SOURCE_URI_ARG,
    type SaveModelAction,
    SetDirtyStateAction,
+   SetMarkersAction,
    type SourceModelStorage,
    TEMPORARY_CLIENT_ID
 } from '@eclipse-glsp/server';

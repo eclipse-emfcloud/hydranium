@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Marker, MarkersReason, SetMarkersAction } from '@eclipse-glsp/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import {
@@ -21,12 +20,15 @@ import {
    GModelIndex,
    GModelSerializer,
    Logger as GlspLogger,
+   type Marker,
+   MarkersReason,
    ModelState,
    ModelSubmissionHandler,
    RequestModelAction,
    SOURCE_URI_ARG,
    SaveModelAction,
-   SetDirtyStateAction
+   SetDirtyStateAction,
+   SetMarkersAction
 } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container } from 'inversify';

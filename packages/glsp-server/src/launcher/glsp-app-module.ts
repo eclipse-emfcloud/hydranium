@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { GLSPModule } from '@eclipse-glsp/server';
-import type { BindingContext } from '@eclipse-glsp/protocol/lib/di/inversify-util.js';
+import { type BindingContext, GLSPModule } from '@eclipse-glsp/server';
 import type { ServerSharedServices } from '@hydranium/core';
 import { type ConflictResolver, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { injectable, type interfaces } from 'inversify';

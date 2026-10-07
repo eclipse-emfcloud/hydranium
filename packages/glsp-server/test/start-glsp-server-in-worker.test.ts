@@ -30,12 +30,12 @@
  */
 
 import {
+   JsonrpcGLSPClient,
    ServerModule,
    WORKER_START_UP_COMPLETE_MSG,
    WorkerServerLauncher,
    type WorkerLaunchOptions
 } from '@eclipse-glsp/server/browser.js';
-import { JsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { ContainerModule, injectable } from 'inversify';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
