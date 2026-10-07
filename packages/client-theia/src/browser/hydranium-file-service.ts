@@ -40,7 +40,7 @@ import { ETAG_DISABLED } from '@theia/filesystem/lib/common/files';
  * as it does for Theia's own check. A file whose mtime moves while its text
  * stays the same costs a whole-text write rather than the edits.
  *
- * The adopter binds it with `rebind(FileService).to(HydraniumFileService).inSingletonScope()`.
+ * Bound by `bindEditorDiskSync`.
  */
 @injectable()
 export class HydraniumFileService extends FileService {

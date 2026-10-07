@@ -7,10 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindChannelLogger, bindConnectionDiagnostics, EditorDiskSync, HydraniumFileService } from '@hydranium/client-theia/browser';
-import { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
-import { FileService } from '@theia/filesystem/lib/browser/file-service';
 
 /**
  * Records the websocket lifecycle into an Output channel, and warns the user
@@ -33,10 +31,8 @@ import { FileService } from '@theia/filesystem/lib/browser/file-service';
  * `EditorDiskSync` cannot catch writes the whole text instead of applying its
  * edits to a file that already holds them.
  */
-export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
+export default new ContainerModule((bind, _unbind, isBound, rebind) => {
    bindChannelLogger(bind, { channelName: 'Order Flow Connection' });
    bindConnectionDiagnostics(bind);
-   bind(EditorDiskSync).toSelf().inSingletonScope();
-   bind(FrontendApplicationContribution).toService(EditorDiskSync);
-   rebind(FileService).to(HydraniumFileService).inSingletonScope();
+   bindEditorDiskSync(bind, isBound, rebind);
 });

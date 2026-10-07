@@ -44,15 +44,16 @@ hydranium server; a non-Theia host does not need it.
   file holds, so the save writes only the rest, a save participant's included;
   on each watched change of the file to the editor's text it marks the editor
   clean. Theia otherwise keeps the editor dirty, and its next save applies the
-  editor's edits to a file that already holds them. You bind it as a
-  `FrontendApplicationContribution`.
+  editor's edits to a file that already holds them.
+  `bindEditorDiskSync(bind, isBound, rebind)` binds it, with
+  `HydraniumFileService`.
 - **`HydraniumFileService`** — Theia's `FileService`, refusing an editor's
   incremental save once the file's mtime has moved past the one the editor
   read, so the editor writes its whole text instead. Theia's own check passes a
   file of unchanged size, and the save then applies the editor's edits to a
   file that may already hold them; `write` keeps Theia's check. The safety net
-  behind `EditorDiskSync`, for a save the sync cannot catch. You bind it with
-  `rebind(FileService).to(HydraniumFileService).inSingletonScope()`.
+  behind `EditorDiskSync`, for a save the sync cannot catch, and bound with it
+  by `bindEditorDiskSync`.
 - **`captureBrowserRuntime` / `formatBrowserRuntime`** — the renderer's own memory
   reading as a `BrowserRuntimeReport`, preferring the standardized
   `performance.measureUserAgentSpecificMemory()` and falling back to Chromium's
@@ -108,7 +109,8 @@ from here:
 
 - a **frontend** module (a `ContainerModule` in the extension's `browser/` tier)
   calls the `bind*` helpers — `bindChannelLogger`, `bindLogLevelPreference`,
-  `bindMemoryDiagnostics` — and binds `MemoryDiagnosticsService` to your
+  `bindMemoryDiagnostics`, and `bindEditorDiskSync` whenever a server writes
+  files an editor can have open — and binds `MemoryDiagnosticsService` to your
   data-server frontend;
 - a **backend** module (the extension's `node/` tier) registers a
   `AbstractSocketForwardingConnectionHandler` subclass as a Theia `ConnectionHandler`. In

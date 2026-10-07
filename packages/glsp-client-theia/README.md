@@ -120,7 +120,9 @@ frontend/backend pair:
   `export default new MyDiagramModule()`, where `MyDiagramModule` extends
   `AbstractHydraniumGlspTheiaFrontendModule`. Your `DiagramConfiguration`
   subclass calls `createGlspClientTheiaModule` in its container initialisation,
-  passing the `channelLogger` name;
+  passing the `channelLogger` name. One of the extension's frontend modules
+  also calls `bindEditorDiskSync` from `@hydranium/client-theia`, since a
+  diagram save writes a file an editor can have open;
 - the **backend** entry is typically
   `export default createGlspConnectionContainerModule(MyHandler)`, where
   `MyHandler` extends `GlspServerConnectionHandler`. The handler's

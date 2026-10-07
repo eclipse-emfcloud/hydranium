@@ -19,11 +19,13 @@ import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protoco
 import { Emitter } from '@theia/core';
 import { ILogger } from '@theia/core/lib/common/logger';
 import URI from '@theia/core/lib/common/uri';
-import { Container, injectable } from '@theia/core/shared/inversify';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
+import { Container, ContainerModule, injectable } from '@theia/core/shared/inversify';
 import { EditorManager } from '@theia/editor/lib/browser/editor-manager';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { describe, expect, it, vi } from 'vitest';
-import { EditorDiskSync, isResyncableEditorDocument } from '../../src/browser/editor-disk-sync';
+import { bindEditorDiskSync, EditorDiskSync, isResyncableEditorDocument } from '../../src/browser/editor-disk-sync';
+import { HydraniumFileService } from '../../src/browser/hydranium-file-service';
 import { Clock } from '../../src/common/clock';
 
 const FILE = 'file:///workspace/a.domain';
@@ -377,5 +379,42 @@ describe('EditorDiskSync in a container', () => {
    it('bounds its reads on the Clock the container binds', () => {
       const clock = makeFakeClock();
       expect(resolve(clock).boundClock).toBe(clock);
+   });
+});
+
+describe('bindEditorDiskSync', () => {
+   /** A container with Theia's own bindings the sync and the file service rest on, and `moduleCount` modules loaded. */
+   function load(moduleCount: number): Container {
+      const container = new Container();
+      container.bind(FileService).toSelf().inSingletonScope();
+      container.bind<object>(EditorManager).toConstantValue({});
+      container.bind(ILogger).toConstantValue({});
+      for (let i = 0; i < moduleCount; i++) {
+         container.load(new ContainerModule((bind, _unbind, isBound, rebind) => bindEditorDiskSync(bind, isBound, rebind)));
+      }
+      return container;
+   }
+
+   it('binds the sync as a frontend contribution and the file service as HydraniumFileService', () => {
+      const container = load(1);
+
+      const contributions = container.getAll(FrontendApplicationContribution);
+      expect(contributions).toHaveLength(1);
+      expect(contributions[0]).toBe(container.get(EditorDiskSync));
+      expect(container.get(FileService)).toBeInstanceOf(HydraniumFileService);
+   });
+
+   it('hands a subclass rebound after it to the frontend contributions', () => {
+      const container = load(1);
+      container.rebind(EditorDiskSync).to(ClockReadingSync).inSingletonScope();
+
+      expect(container.getAll(FrontendApplicationContribution)[0]).toBeInstanceOf(ClockReadingSync);
+   });
+
+   it('binds nothing more when a second module calls it', () => {
+      const container = load(2);
+
+      expect(container.getAll(FrontendApplicationContribution)).toHaveLength(1);
+      expect(container.get(FileService)).toBeInstanceOf(HydraniumFileService);
    });
 });

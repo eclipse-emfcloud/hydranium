@@ -380,11 +380,11 @@ connection's options.
 
 ### In Theia
 
-A Theia frontend binds `DataSessionStopContribution` from
-`@hydranium/data-client-theia/browser` as a `FrontendApplicationContribution`
-and calls its `track(connection)` once for each data connection, which takes in
-the sessions the connection has and every one it starts. When the page stops, it
-disposes every tracked session, so the server ends them as closed, and each
+A Theia frontend binds each data connection with `bindDataConnection` from
+`@hydranium/data-client-theia/browser`, which has a
+`DataSessionStopContribution` track it: the contribution takes in the sessions
+the connection has and every one it starts. When the page stops, it disposes
+every tracked session, so the server ends them as closed, and each
 document one of them was the last to hold is released at once; otherwise the
 server sees the page go only when its connection does, which Theia may hold open
 for its reconnect timeout, and then ends them as lost. A session with a call
@@ -607,24 +607,24 @@ handler sends the state once the save is done, reason `save`, and GLSP's own
 saveable waits for that answer. An editor keeps a dirty flag of its own, since
 LSP has none to send it.
 
-In Theia, bind `EditorDiskSync` from `@hydranium/client-theia/browser` as a
-`FrontendApplicationContribution`. A server save of a document an editor shows
-unsaved writes the editor's text, and Theia keeps the editor dirty; its next
-save applies the editor's pending edits to that file a second time, since its
-check that the file is unchanged passes when the size is. Before each save of
-an editor, `EditorDiskSync` reads the file, and when it holds the text the
-editor held as the save began, drops the edits pending then and has the save
-expect the file's version. The save goes on and writes only what changed
-after that point, such as a save participant's trim of trailing whitespace,
-onto the file. Save All relies on that check: it saves a diagram and an editor
-on the same file one after the other, faster than the file watcher reports
-the diagram's write. A file that cannot be read within a second leaves the
-save to Theia as it is. A watched change to the editor's text marks it clean
+In Theia, call `bindEditorDiskSync` from `@hydranium/client-theia/browser`,
+which binds `EditorDiskSync` and `HydraniumFileService`. A server save of a
+document an editor shows unsaved writes the editor's text, and Theia keeps the
+editor dirty; its next save applies the editor's pending edits to that file a
+second time, since its check that the file is unchanged passes when the size is.
+Before each save of an editor, `EditorDiskSync` reads the file, and when it
+holds the text the editor held as the save began, drops the edits pending then
+and has the save expect the file's version. The save goes on and writes only
+what changed after that point, such as a save participant's trim of trailing
+whitespace, onto the file. Save All relies on that check: it saves a diagram and
+an editor on the same file one after the other, faster than the file watcher
+reports the diagram's write. A file that cannot be read within a second leaves
+the save to Theia as it is. A watched change to the editor's text marks it clean
 too, once any save of it in flight has finished.
 
-Beside it, rebind Theia's `FileService` to `HydraniumFileService` from the same
-entry. It refuses an editor's incremental save once the file's mtime is past
-the one the editor read, whatever the size, and the editor then writes its
+`HydraniumFileService`, which the same call puts in place of Theia's
+`FileService`, refuses an editor's incremental save once the file's mtime is
+past the one the editor read, whatever the size, and the editor then writes its
 whole text, through Theia's own check. That covers the save `EditorDiskSync`
 leaves alone because the file holds neither the editor's text nor the text it
 read.
@@ -905,8 +905,8 @@ the language client closes last, the document reverts at once. An editor's
   an await, and its first one awaits before it edits, so none has changed the
   buffer by then. A participant ordered ahead of it that edits before its first
   await makes the save apply every pending edit again, unless
-  `HydraniumFileService` is bound, which has the save write the whole text,
-  or ask when the file's size changed.
+  `HydraniumFileService` is bound, as `bindEditorDiskSync` does, which has the
+  save write the whole text, or ask when the file's size changed.
 
 ## Logs
 

@@ -7,7 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
+// The browser barrel touches `document` at load; the module behind the reporter
+// does not, and the binding tests need its real `bindConnectionReporter`.
+vi.mock('@hydranium/client-theia/browser', () => vi.importActual('../../client-theia/lib/browser/connection-reporter'));
+
+import 'reflect-metadata';
+import { describe, expect, it, vi } from 'vitest';
+import { ConnectionReporter, DefaultConnectionReporter } from '@hydranium/client-theia/browser';
 import {
    DataConnection,
    DataEvents,
@@ -18,8 +24,11 @@ import {
    type TransferElement
 } from '@hydranium/protocol';
 import { makeFakeDataPort, tick } from '@hydranium/protocol/testing';
+import { MessageService } from '@theia/core';
 import type { OnWillStopAction } from '@theia/core/lib/browser';
-import { DataSessionStopContribution } from '../src/browser/data-session-stop-contribution';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
+import { Container, ContainerModule, injectable, type interfaces } from '@theia/core/shared/inversify';
+import { bindDataConnection, DataSessionStopContribution } from '../src/browser/data-session-stop-contribution';
 
 type Server = RpcProxy<DataServerProtocol<TransferElement>>;
 
@@ -74,6 +83,7 @@ function makeConnection(saveGate?: Promise<void>): {
 }
 
 /** Exposes the per-session seam, and how many sessions the stop still holds, which no public member shows. */
+@injectable()
 class InspectableStop extends DataSessionStopContribution {
    get trackedCount(): number {
       return this.sessions.size;
@@ -269,5 +279,105 @@ describe('DataSessionStopContribution', () => {
       await saving;
       await tick(20);
       expect(contribution.trackedCount).toBe(0);
+   });
+});
+
+/** A connection class for the container to build, its sessions talking to `server`. */
+function connectionClass(server: Server): interfaces.Newable<DataConnection<TransferElement>> {
+   @injectable()
+   class BoundConnection extends DataConnection<TransferElement> {
+      constructor() {
+         const port = makeFakeDataPort({
+            connect: () => {
+               throw new Error('the sessions here talk to the stand-in, never to the port');
+            }
+         });
+         super(port, new DataEvents<TransferElement>(), {
+            sessionFactory: (clientId, _host, label) => new DataSession<TransferElement>(clientId, { connected: async () => server }, label)
+         });
+      }
+   }
+   return BoundConnection;
+}
+
+/** Load `connection` through its own module, as a frontend entry does. */
+function loadConnection(container: Container, connection: interfaces.Newable<DataConnection<TransferElement>>): void {
+   container.load(new ContainerModule((bind, _unbind, isBound) => bindDataConnection(bind, isBound, connection)));
+}
+
+describe('bindDataConnection', () => {
+   it('ends the sessions of every connection bound through it, from one contribution', async () => {
+      const { server, closed } = makeConnection();
+      const One = connectionClass(server);
+      const Two = connectionClass(server);
+      const container = new Container();
+      loadConnection(container, One);
+      loadConnection(container, Two);
+
+      const panel = container.get(One).createSession('panel', 'panel');
+      const tree = container.get(Two).createSession('tree', 'tree');
+      await Promise.all([panel.connected(), tree.connected()]);
+      const contribution = container.get(DataSessionStopContribution);
+      const contributions = container.getAll(FrontendApplicationContribution);
+      expect(contributions).toHaveLength(1);
+      expect(contributions[0]).toBe(contribution);
+      contribution.onStop();
+      await tick(5);
+
+      expect(closed).toEqual(['panel', 'tree']);
+   });
+
+   it("runs a frontend's own activation hook on the connection beside the tracking", async () => {
+      const { server, closed } = makeConnection();
+      const One = connectionClass(server);
+      const hooked: DataConnection<TransferElement>[] = [];
+      const container = new Container();
+      container.load(
+         new ContainerModule((bind, _unbind, isBound, _rebind, _unbindAsync, onActivation) => {
+            bindDataConnection(bind, isBound, One);
+            onActivation(One, (_context, connection) => {
+               hooked.push(connection);
+               return connection;
+            });
+         })
+      );
+
+      const connection = container.get(One);
+      const panel = connection.createSession('panel', 'panel');
+      await panel.connected();
+      container.get(DataSessionStopContribution).onStop();
+      await tick(5);
+
+      expect(hooked).toEqual([connection]);
+      expect(closed).toEqual(['panel']);
+   });
+
+   it('tracks into a subclass of the contribution rebound after it', () => {
+      const { server } = makeConnection();
+      const One = connectionClass(server);
+      const container = new Container();
+      loadConnection(container, One);
+      container.rebind(DataSessionStopContribution).to(InspectableStop).inSingletonScope();
+
+      container.get(One).createSession('panel', 'panel');
+      const stop = container.get(DataSessionStopContribution);
+
+      expect(container.getAll(FrontendApplicationContribution)[0]).toBe(stop);
+      expect(stop).toBeInstanceOf(InspectableStop);
+      expect(stop instanceof InspectableStop && stop.trackedCount).toBe(1);
+   });
+
+   it('binds the ConnectionReporter the port injects, keeping one bound before it', () => {
+      const { server } = makeConnection();
+      const unbound = new Container();
+      unbound.bind<object>(MessageService).toConstantValue({});
+      loadConnection(unbound, connectionClass(server));
+      expect(unbound.get(ConnectionReporter)).toBeInstanceOf(DefaultConnectionReporter);
+
+      const reporter = {};
+      const prebound = new Container();
+      prebound.bind(ConnectionReporter).toConstantValue(reporter);
+      loadConnection(prebound, connectionClass(server));
+      expect(prebound.get(ConnectionReporter)).toBe(reporter);
    });
 });
