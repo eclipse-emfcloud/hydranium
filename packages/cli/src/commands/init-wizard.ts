@@ -219,10 +219,10 @@ async function askHeads(prompt: PromptPort): Promise<InitHead[]> {
 /**
  * Mark the grammar a scaffolded diagram edits.
  *
- * Only a real question with `glsp` on AND several grammars: a diagram type
- * binds exactly ONE grammar, and with a single grammar the scaffolder derives
- * that answer already — so asking would offer a choice whose "no" it would
- * silently overrule.
+ * Only a real question with `glsp` on AND several grammars: the scaffolded
+ * diagram is typed over one grammar's model, and with a single grammar the
+ * scaffolder derives that answer already — so asking would offer a choice
+ * whose "no" it would silently overrule.
  */
 async function askDiagramGrammar(
    prompt: PromptPort,

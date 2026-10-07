@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type GModelElement, GModelIndex } from '@eclipse-glsp/server';
-import { inject, injectable, optional } from 'inversify';
+import { inject, injectable } from 'inversify';
 import { type AstNode, AstUtils, type URI } from '@hydranium/langium';
 import * as uuid from 'uuid';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
@@ -62,28 +62,8 @@ export class HydraniumGlspIndex extends GModelIndex {
     * source root in {@link indexSourceRoot}. Used only as the fallback for a
     * node that routes nowhere — a synthetic or freshly-built node with no
     * `$document` yet, which a GModel factory legitimately hands us mid-edit.
-    *
-    * Captured rather than injected because it is the language the loaded
-    * document ACTUALLY routes to, which is not necessarily the one the diagram
-    * module declared — precisely the drift
-    * `AbstractHydraniumGlspState.checkDeclaredLanguage` warns about. (Not
-    * a cost argument: {@link HydraniumTypes}.DiagramLanguage is bound
-    * `inSingletonScope`, so injecting it would resolve once per session too.)
     */
    protected diagramLanguage?: ServerLanguageServices;
-
-   /**
-    * The grammar the diagram module declared, as the last resort behind
-    * {@link diagramLanguage}.
-    *
-    * Order-independent where the captured one is not: GLSP builds every
-    * operation handler at `InitializeClientSession`, so a document-less node
-    * can reach {@link createId} before the first {@link indexSourceRoot} — and
-    * with no language at all that mints an unstable `fallback_<uuid>` where a
-    * stable positional key was available. `@optional()` so a harness that binds
-    * no diagram module still resolves.
-    */
-   @inject(HydraniumTypes.DiagramLanguage) @optional() protected readonly declaredLanguage?: ServerLanguageServices;
 
    /**
     * Reverse map: the *stable id* of the AST element a GModel element
@@ -151,8 +131,8 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /**
     * The {@link ElementKeyProvider} of the language owning `node`'s document,
-    * falling back to the language the diagram document routes to and then to
-    * the one its module declared, for a node that routes nowhere.
+    * falling back to the language the diagram document routes to for a node
+    * that routes nowhere.
     *
     * **Resolved per node on the cross-document entry points.** This index is
     * deliberately cross-document — {@link registerElementId} and
@@ -168,7 +148,7 @@ export class HydraniumGlspIndex extends GModelIndex {
    protected elementKeyProviderFor(node?: AstNode): ElementKeyProvider | undefined {
       // A copy node has no `$document`; it routes by its working root's URI.
       const route = node === undefined ? undefined : workingUriOfCopy(node);
-      const language = this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage ?? this.declaredLanguage;
+      const language = this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage;
       return language?.references.ElementKeyProvider;
    }
 

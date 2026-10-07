@@ -189,8 +189,8 @@ describe('resolveInitComposition, heads', () => {
    });
 
    it('requires a marked grammar when glsp is on and there are several', () => {
-      // A diagram type binds exactly one grammar, and guessing wrong surfaces
-      // much later as references resolving against the wrong scope.
+      // The scaffolded diagram is typed over one grammar's model, so a guess
+      // would emit a diagram of the wrong model.
       expect(() => resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process' }], ['lsp', 'glsp'])).toThrow(
          /no grammar carries --diagram. Mark the one the diagram edits: Domain, Process/
       );
@@ -318,12 +318,9 @@ describe('planInitFiles, heads', () => {
       expect(contentOf(files, 'src/head-ports.ts')).toContain("export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';");
    });
 
-   it('binds the declared language and the full-text state in the diagram module', () => {
+   it('binds the diagram type and the full-text state in the diagram module', () => {
       const files = filesFor(['lsp', 'glsp']);
       const module = contentOf(files, 'src/glsp/bookstore/diagram-module.ts');
-      // declareLanguage is the multi-grammar seam, and it names ONE grammar's
-      // generated metadata constant.
-      expect(module).toContain('return BookstoreLanguageMetaData;');
       expect(module).toContain('readonly diagramType = BOOKSTORE_DIAGRAM_TYPE;');
       expect(contentOf(files, 'src/glsp/bookstore/state.ts')).toContain(
          'export class BookstoreGlspState extends FullTextHydraniumGlspState<BookstoreModel> {}'
@@ -339,8 +336,6 @@ describe('planInitFiles, heads', () => {
       const glspPaths = files.map(file => file.path).filter(path => path.startsWith('src/glsp/'));
       expect(glspPaths.every(path => path.startsWith('src/glsp/process/'))).toBe(true);
       expect(glspPaths).toHaveLength(8);
-      // A grammar with no diagram still registers on the same server, which is
-      // why the language binding is per-session rather than process-wide.
       expect(contentOf(files, 'src/main.ts')).toContain('.configureDiagramModule(new ProcessDiagramModule())');
    });
 

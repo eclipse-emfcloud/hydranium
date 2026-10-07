@@ -55,10 +55,9 @@ export interface InitGrammarSpec {
    /**
     * Scaffold a GLSP diagram for this grammar. Requires the `glsp` head.
     *
-    * Per grammar rather than per project because
-    * `AbstractHydraniumGlspDiagramModule.declareLanguage()` returns ONE grammar's
-    * `LanguageMetaData` — a diagram type has exactly one grammar, and a grammar
-    * with no diagram sitting on the same server is the normal case.
+    * Per grammar rather than per project because the scaffolded diagram is typed
+    * over one grammar's model, and a grammar with no diagram sitting on the same
+    * server is the normal case.
     */
    readonly diagram?: boolean;
 }
@@ -303,8 +302,9 @@ function resolveGrammar(spec: InitGrammarSpec, projectId: string, qualify: boole
  *
  * With the `glsp` head on and nothing marked, a lone grammar is unambiguous and
  * is taken as the diagram's; with several it is a real choice, so it is required
- * rather than guessed — binding a diagram to the wrong grammar surfaces much
- * later as references resolving against the wrong scope.
+ * rather than guessed — the scaffolded state, storage and GModel factory are
+ * typed over the chosen grammar's model, so a wrong guess emits a diagram of
+ * the wrong model.
  */
 function resolveDiagrams(specs: readonly InitGrammarSpec[], heads: readonly InitHead[]): boolean[] {
    const marked = specs.map(spec => spec.diagram === true);

@@ -185,9 +185,6 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
       }
    } as never);
    container.bind(HydraniumTypes.ConflictResolver).toConstantValue(new ReconcilingConflictResolver());
-   // What a diagram module's `declareLanguage()` would bind: this diagram type
-   // edits `.a` documents.
-   container.bind(HydraniumTypes.DiagramLanguage).toConstantValue(registry.languagesById.get('main')!);
    container.bind(HydraniumGlspIndex).toSelf().inSingletonScope();
    container.bind(GModelSerializer).toConstantValue({} as GModelSerializer);
    container.bind(GModelIndex).toService(HydraniumGlspIndex);
@@ -218,40 +215,36 @@ function nodeInDoc(uri: string): AstNode {
 
 describe('AbstractHydraniumGlspState', () => {
    describe('diagramLanguage / languageServicesFor', () => {
-      it('exposes the declared diagram language', () => {
+      it('has no language before a source root is captured', () => {
          const { state } = createState(makeHarness());
-         expect(state.diagramLanguage?.LanguageMetaData.languageId).toBe('main');
+         expect(state.diagramLanguage).toBeUndefined();
       });
 
-      it('exposes it BEFORE a source root is captured, since handlers are built first', () => {
-         const { state } = createState(makeHarness());
-         // No setSourceRoot yet — GLSP constructs operation handlers at
-         // InitializeClientSession, so anything derived from sourceUri would
-         // be unavailable here.
-         expect(state.diagramLanguage?.LanguageMetaData.languageId).toBe('main');
-      });
-
-      it('warns when the loaded document does not route to the declared language', () => {
+      it('answers the language the loaded document routes to once a source root is captured', () => {
          const harness = makeHarness();
          const { state } = createState(harness);
          state.setSourceRoot('file:///a.other', makeRoot());
-         expect(harness.logger.warns.some(line => line.includes("declares language 'main'") && line.includes("routes to 'other'"))).toBe(
-            true
-         );
+         expect(state.diagramLanguage?.LanguageMetaData.languageId).toBe('other');
+         expect(harness.logger.warns).toEqual([]);
       });
 
-      it('stays quiet when the loaded document matches the declared language', () => {
-         const harness = makeHarness();
-         const { state } = createState(harness);
+      it('follows the document of each capture, not the first', () => {
+         const { state } = createState(makeHarness());
+         state.setSourceRoot('file:///a.other', makeRoot());
          state.setSourceRoot('file:///a.a', makeRoot());
-         expect(harness.logger.warns.filter(line => line.includes('declares language'))).toEqual([]);
+         expect(state.diagramLanguage?.LanguageMetaData.languageId).toBe('main');
       });
 
-      it('stays quiet for a document that routes nowhere', () => {
-         const harness = makeHarness();
-         const { state } = createState(harness);
+      it('has no language for a document that routes nowhere', () => {
+         const { state } = createState(makeHarness());
          state.setSourceRoot('file:///a.unknown', makeRoot());
-         expect(harness.logger.warns.filter(line => line.includes('declares language'))).toEqual([]);
+         expect(state.diagramLanguage).toBeUndefined();
+      });
+
+      it('falls back to the loaded document language for an unroutable target', () => {
+         const { state } = createState(makeHarness());
+         state.setSourceRoot('file:///a.other', makeRoot());
+         expect(state.languageServicesFor(makeFakeAstNode<AstNode>({ $type: 'Thing' }))?.LanguageMetaData.languageId).toBe('other');
       });
 
       it('resolves a foreign node own language, not the diagram one', () => {
