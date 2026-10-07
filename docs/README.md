@@ -21,8 +21,8 @@ way to waste someone's afternoon is to hand a release runbook to an adopter.
   the connections to wrap where copies of `vscode-jsonrpc` meet.
 - [**Troubleshooting a server you are building**](adopting/troubleshooting.md) —
   failure modes whose message names the wrong layer: duplicate `langium` /
-  `vscode-jsonrpc` copies, an unbound `workspace/applyEdit`, missing semantic
-  tokens under a Theia plugin-host.
+  `vscode-jsonrpc` copies, an unbound `workspace/applyEdit`, semantic tokens
+  Theia does not colour.
 - The [repository README](../README.md) carries the getting-started path: one
   `hydranium-cli init` invocation to a buildable project.
 

@@ -164,8 +164,8 @@ result.
   `vscode-languageserver` to `10.0.1` exactly, and the protocol and
   `vscode-jsonrpc` to the versions it pins, `3.18.1` and `9.0.0`. A project
   not scaffolded by `init` should declare the same. The pins hold because npm
-  settles Langium's `~3.18.1` on the declared `3.18.1`. Yarn 1 resolves it to the newest 3.18
-  instead and nests that under `langium`, so under yarn 1 also add
+  settles Langium's `~3.18.1` on the declared `3.18.1`. Yarn 1 resolves it to
+  the newest 3.18 instead and nests that under `langium`, so yarn 1 also needs
   `"resolutions": { "**/langium/vscode-languageserver-protocol": "3.18.1" }`.
   A resolution for `vscode-jsonrpc` itself would force GLSP's `8.2.0` onto 9.x,
   which breaks GLSP at startup. The Langium 4.4 upgrade

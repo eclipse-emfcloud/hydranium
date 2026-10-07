@@ -200,15 +200,16 @@ editor's model, and surface `window/logMessage` somewhere a developer will see
 it. A host that only reads documents and never displays them still wants the
 second one.
 
-## Semantic tokens are missing under a Theia plugin-host
+## Semantic tokens add no colour in Theia
 
-Highlighting from the language server does not reach Monaco when the server runs
-inside a Theia plugin-host, while the same server highlights correctly in VS
-Code and in a direct Theia backend connection.
+The server's semantic highlighting shows in VS Code but not in Theia, wherever
+Theia runs the server; turning `editor.semanticHighlighting.enabled` on leaves
+most names in the editor's default foreground.
 
-This is a known limitation rather than a misconfiguration; it is described with
-what has been established about it in
-[Status, limitations and roadmap](status.md).
+This is a known limitation rather than a misconfiguration: Theia's themes have
+no colours for semantic token types. The mechanism, and what a host can do about
+it, are in
+[Status, limitations and roadmap](status.md#semantic-tokens-add-no-colour-in-theia).
 
 ## Still stuck
 

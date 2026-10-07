@@ -251,8 +251,9 @@ and the `runProjects` / `runQuery` / `runSave` / `runWatch` command bodies.
 
 ## Status
 
-Alpha — pre-v0, not yet published. The subcommand surface and the programmatic API are both still
-moving. See the [repository README](../../README.md) for the current status and known limitations.
+Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The subcommand surface and the
+programmatic API are both still moving. See the [repository README](../../README.md) for the
+current status and known limitations.
 
 ## License
 

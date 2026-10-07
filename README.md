@@ -12,7 +12,12 @@ for building modeling-language servers — LSP for textual editing, and a typed
 RPC data-server head for non-LSP clients (form editors, diagrams,
 code-generators) that need direct access to the live AST.
 
-**Status:** alpha — pre-v0, under active development. Not yet published.
+**Status:** alpha — pre-v0, under active development, published nightly to npm
+as `1.0.0-next` prereleases.
+
+**[Try the live demo](https://eclipse-emfcloud.github.io/hydranium/)** — the
+order-flow example running entirely in your browser: a diagram and three text
+editors, served by all three heads from one web worker, with nothing to install.
 
 ## What this is
 
@@ -340,10 +345,10 @@ adopter really needs, a shipping out-of-tree adopter is the better oracle.
 
 ## Status and limitations
 
-Hydranium is alpha, pre-v0, and not yet published. The known limitations — no
-internationalization layer, whole-document data-head updates, an exact Langium
-pin, Theia-only client libraries, and a Theia plugin-host semantic-token gap —
-are described with their consequences in
+Hydranium is alpha, pre-v0, and published nightly as `1.0.0-next` prereleases.
+The known limitations — no internationalization layer, whole-document data-head
+updates, an exact Langium pin, Theia-only client libraries, and semantic tokens
+Theia does not colour — are described with their consequences in
 [`docs/adopting/status.md`](./docs/adopting/status.md), alongside the versioning policy and the
 roadmap.
 

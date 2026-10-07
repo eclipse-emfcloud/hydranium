@@ -95,9 +95,10 @@ also [`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) and
 
 ## Status
 
-Alpha — pre-v0, not yet published. The API is not stable and may change without a
-deprecation cycle. See the [repository README](../../README.md) for the current
-status and known limitations.
+Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
+stable and may change without a deprecation cycle. See the
+[repository README](../../README.md) for the current status and known
+limitations.
 
 ## License
 
