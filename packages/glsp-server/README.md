@@ -90,8 +90,9 @@ depends on `.` naming only the bare `@eclipse-glsp/server` specifier: a slip bac
 to a `/node` subpath in the portable tree fails that gate. `./browser` is
 browser-only rather than neutral — no portability is claimed for it. What the
 gate does and does not promise is [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
-Each subpath also has a `./lib/…` twin for consumers on
-`moduleResolution: "Node"`.
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them.
 
 ## Getting oriented
 

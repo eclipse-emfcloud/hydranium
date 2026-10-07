@@ -61,8 +61,8 @@ No peer dependencies: `langium` is a direct, exact dependency of this package.
 | `./node` | `langium/node` | `NodeFileSystem`.                         |
 | `./test` | `langium/test` | Parsing / validation test helpers.        |
 
-Each named subpath also resolves as `@hydranium/langium/lib/<name>`, so a consumer on classic
-`moduleResolution: "Node"` can reach it.
+Resolve the subpaths with [a resolver that reads `exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them.
 
 ## Usage
 

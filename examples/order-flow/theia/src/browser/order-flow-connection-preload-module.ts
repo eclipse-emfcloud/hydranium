@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindConnectionResilience } from '@hydranium/client-theia/lib/browser';
+import { bindConnectionResilience } from '@hydranium/client-theia/browser';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { ContainerModule } from '@theia/core/shared/inversify';
 

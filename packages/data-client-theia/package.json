@@ -46,18 +46,6 @@
     "./node": {
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
-    },
-    "./lib/common": {
-      "types": "./lib/common/index.d.ts",
-      "default": "./lib/common/index.js"
-    },
-    "./lib/browser": {
-      "types": "./lib/browser/index.d.ts",
-      "default": "./lib/browser/index.js"
-    },
-    "./lib/node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
     }
   },
   "publishConfig": {

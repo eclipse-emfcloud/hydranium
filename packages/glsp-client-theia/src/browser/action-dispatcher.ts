@@ -30,7 +30,7 @@ import {
    StatusAction,
    UpdateModelAction
 } from '@eclipse-glsp/client';
-import { ChannelLogger, ChannelTracer } from '@hydranium/client-theia/lib/browser';
+import { ChannelLogger, ChannelTracer } from '@hydranium/client-theia/browser';
 import { type Tracer } from '@hydranium/protocol';
 import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
 

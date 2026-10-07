@@ -100,8 +100,11 @@ way.
 **The framework does not repair this for you, and cannot**: the packaging is
 `vscode-jsonrpc`'s own, and this repository builds against it unmodified. So a
 consuming project needs **a resolver that reads `exports`** —
-`moduleResolution` set to `"Bundler"`, `"Node16"` or `"NodeNext"`. Every
-`@hydranium/*` subpath is declared for both resolvers.
+`module` and `moduleResolution` both set to `"NodeNext"`, or, for bundled code,
+`moduleResolution: "Bundler"` with `module: "ESNext"`. `"Node16"` reads
+`exports` too, but `module: "Node16"` rejects a CommonJS file importing one of
+the ES-module `@hydranium/*` packages (TS1479). Every `@hydranium/*` module
+subpath is declared once, bare, so `"Node"` reaches none of them.
 
 ### Why `vscode-jsonrpc@8` is not a way out
 

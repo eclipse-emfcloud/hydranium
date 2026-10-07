@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { HostMemoryDiagnosticsService } from '@hydranium/client-theia/lib/browser';
+import { HostMemoryDiagnosticsService } from '@hydranium/client-theia/browser';
 import { HOST_DIAGNOSTICS_PATH, type HostDiagnosticsProtocol } from '@hydranium/protocol';
 import { RemoteConnectionProvider, type ServiceConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
 import { type interfaces } from '@theia/core/shared/inversify';

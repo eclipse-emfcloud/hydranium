@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { DiagramLoader, type DiagramLoadingOptions, StatusAction } from '@eclipse-glsp/client';
-import { ChannelLogger } from '@hydranium/client-theia/lib/browser';
+import { ChannelLogger } from '@hydranium/client-theia/browser';
 import { Deferred } from '@hydranium/protocol';
 import { nls } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';

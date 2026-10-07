@@ -14,7 +14,7 @@
 // The overlay's *lifecycle* — when it is created, when it comes down — is what is
 // under test. Its DOM construction is not: no vitest environment here provides a
 // document, so `createLoadingOverlay` is substituted.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {}
 }));
 vi.mock('@eclipse-glsp/theia-integration', () => ({

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ChannelDataPort } from '@hydranium/data-client-theia/lib/browser';
+import { ChannelDataPort } from '@hydranium/data-client-theia/browser';
 import { DATA_SERVER_PATH } from '@hydranium/protocol';
 import { injectable } from '@theia/core/shared/inversify';
 

@@ -17,7 +17,7 @@ import {
    type RpcProxy,
    type TransferElement
 } from '@hydranium/protocol';
-import { makeFakeDataPort, tick } from '@hydranium/protocol/lib/testing';
+import { makeFakeDataPort, tick } from '@hydranium/protocol/testing';
 import type { OnWillStopAction } from '@theia/core/lib/browser';
 import { DataSessionStopContribution } from '../src/browser/data-session-stop-contribution';
 

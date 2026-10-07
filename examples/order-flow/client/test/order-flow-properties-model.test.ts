@@ -34,15 +34,15 @@
  */
 
 import { initializeWorkspaceProgrammatically, type ServerSharedServices } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lib/lsp';
-import { NodeFileSystem } from '@hydranium/core/lib/node';
+import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { NodeFileSystem } from '@hydranium/core/node';
 import {
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
    type ScratchWorkspace,
    makeScratchWorkspace
-} from '@hydranium/core/lib/testing/node';
+} from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
    DataConnection,
@@ -52,8 +52,8 @@ import {
    type DataPort,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/lib/testing';
-import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/lib/testing/node';
+import { waitFor } from '@hydranium/protocol/testing';
+import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import type {
    DomainModel,

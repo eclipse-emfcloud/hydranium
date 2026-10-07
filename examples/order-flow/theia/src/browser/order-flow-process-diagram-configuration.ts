@@ -9,7 +9,7 @@
 
 import { type ContainerConfiguration, ConsoleLogger, LogLevel, TYPES } from '@eclipse-glsp/client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
-import { AbstractHydraniumGlspDiagramConfiguration, createGlspClientTheiaModule } from '@hydranium/glsp-client-theia/lib/browser';
+import { AbstractHydraniumGlspDiagramConfiguration, createGlspClientTheiaModule } from '@hydranium/glsp-client-theia/browser';
 import { type Container, ContainerModule } from '@theia/core/shared/inversify';
 import { ORDER_FLOW_OUTPUT_CHANNEL, OrderFlowProcessDiagramLanguage } from '../common/order-flow-diagram-language';
 

@@ -40,10 +40,6 @@
       "types": "./lib/client/index.d.ts",
       "default": "./lib/client/index.js"
     },
-    "./lib/client": {
-      "types": "./lib/client/index.d.ts",
-      "default": "./lib/client/index.js"
-    },
     "./data": {
       "types": "./lib/data/index.d.ts",
       "default": "./lib/data/index.js"
@@ -52,15 +48,7 @@
       "types": "./lib/messages/index.d.ts",
       "default": "./lib/messages/index.js"
     },
-    "./lib/messages": {
-      "types": "./lib/messages/index.d.ts",
-      "default": "./lib/messages/index.js"
-    },
     "./node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
-    },
-    "./lib/node": {
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
@@ -69,18 +57,6 @@
       "default": "./lib/testing/index.js"
     },
     "./testing/node": {
-      "types": "./lib/testing/node/index.d.ts",
-      "default": "./lib/testing/node/index.js"
-    },
-    "./lib/data": {
-      "types": "./lib/data/index.d.ts",
-      "default": "./lib/data/index.js"
-    },
-    "./lib/testing": {
-      "types": "./lib/testing/index.d.ts",
-      "default": "./lib/testing/index.js"
-    },
-    "./lib/testing/node": {
       "types": "./lib/testing/node/index.d.ts",
       "default": "./lib/testing/node/index.js"
     }

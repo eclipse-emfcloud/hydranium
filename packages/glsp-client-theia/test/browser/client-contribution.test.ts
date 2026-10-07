@@ -31,7 +31,7 @@ vi.mock('@eclipse-glsp/theia-integration', async () => {
       }
    };
 });
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {},
    ConnectionReporter: Symbol('ConnectionReporter')
 }));

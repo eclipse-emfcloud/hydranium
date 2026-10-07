@@ -10,7 +10,7 @@
 // The real `@hydranium/client-theia/browser` module loads `@theia/output` → DOM
 // globals unavailable in the node test env. A bare class stand-in is enough since
 // the loader is constructed directly, never via a container.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {}
 }));
 

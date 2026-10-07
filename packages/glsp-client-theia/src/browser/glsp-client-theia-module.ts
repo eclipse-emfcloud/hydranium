@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindChannelLogger, type ChannelLoggerOptions } from '@hydranium/client-theia/lib/browser';
+import { bindChannelLogger, type ChannelLoggerOptions } from '@hydranium/client-theia/browser';
 import { type BindingContext, DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater, StatusOverlay } from '@eclipse-glsp/client';
 import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { HydraniumDiagramLoader } from './diagram-loader';

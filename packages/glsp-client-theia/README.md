@@ -145,11 +145,12 @@ stylesheet loaded afterwards.
 | `./node`    | `GlspServerConnectionHandler`, `createGlspConnectionContainerModule`                                                                                                                                             | Node / Theia backend             |
 | `./testing` | `makeBindRecorder`, the GLSP-module-specific Inversify double (the cross-head doubles live in `@hydranium/client-theia/testing`)                                                                                 | browser-neutral (gated)          |
 
-Every subpath also has a `./lib/<name>` twin for consumers on
-`moduleResolution: "Node"`. "Gated" means the repository's neutral-bundle check
-enforces that the entry bundles for the browser with no `node:*` import,
-transitive ones included; `./node` is deliberately outside that gate. Also
-worth reading: [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them. "Gated" means the
+repository's neutral-bundle check enforces that the entry bundles for the
+browser with no `node:*` import, transitive ones included; `./node` is
+deliberately outside that gate. Also worth reading: [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
 
 ## Status
 

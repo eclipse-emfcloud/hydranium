@@ -10,7 +10,7 @@
 import { ClientState, type GLSPClient, type InitializeResult } from '@eclipse-glsp/client';
 import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
-import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/lib/browser';
+import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/browser';
 import { sendByMethodName } from '@hydranium/protocol';
 import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';

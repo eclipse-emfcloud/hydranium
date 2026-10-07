@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindMemoryDiagnostics, MemoryDiagnosticsService } from '@hydranium/client-theia/lib/browser';
-import { bindHostDiagnostics } from '@hydranium/data-client-theia/lib/browser';
+import { bindMemoryDiagnostics, MemoryDiagnosticsService } from '@hydranium/client-theia/browser';
+import { bindHostDiagnostics } from '@hydranium/data-client-theia/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
 import { bindOrderFlowDataConnection } from './order-flow-data-connection';
 import { OrderFlowMemoryDiagnostics } from './order-flow-memory-diagnostics';

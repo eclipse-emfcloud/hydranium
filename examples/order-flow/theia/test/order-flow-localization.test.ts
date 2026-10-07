@@ -8,15 +8,12 @@
  ********************************************************************************/
 
 import { collectMessages, renderFrameworkMessage, resolve } from '@hydranium/protocol';
-// The `./lib/testing` twin, not the short `./testing` specifier: this package
-// resolves with `moduleResolution: "Node"`, which reaches no `exports` subpath —
-// the same reason the message barrels below are spelled `/lib/messages`.
-import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/lib/testing';
-import * as protocolMessages from '@hydranium/protocol/lib/messages';
-import { DATA_SERVER_CONNECT_FAILED, SESSION_CLOSED } from '@hydranium/protocol/lib/messages';
-import * as coreMessages from '@hydranium/core/lib/messages';
-import * as dataServerMessages from '@hydranium/data-server/lib/messages';
-import * as glspServerMessages from '@hydranium/glsp-server/lib/messages';
+import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/testing';
+import * as protocolMessages from '@hydranium/protocol/messages';
+import { DATA_SERVER_CONNECT_FAILED, SESSION_CLOSED } from '@hydranium/protocol/messages';
+import * as coreMessages from '@hydranium/core/messages';
+import * as dataServerMessages from '@hydranium/data-server/messages';
+import * as glspServerMessages from '@hydranium/glsp-server/messages';
 import * as orderFlowMessages from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import * as orderFlowServerMessages from '@hydranium/example-order-flow-server/lib/messages';
 import { readdirSync, readFileSync } from 'node:fs';

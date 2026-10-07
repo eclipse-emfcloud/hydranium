@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { createHostDiagnosticsBackendModule } from '@hydranium/data-client-theia/lib/node';
+import { createHostDiagnosticsBackendModule } from '@hydranium/data-client-theia/node';
 
 // Exposes the host-process (Theia backend) memory diagnostics as an in-process
 // RPC service. That process is NOT the data-server child wired in

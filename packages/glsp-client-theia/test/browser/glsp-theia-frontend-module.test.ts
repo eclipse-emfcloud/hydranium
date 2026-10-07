@@ -24,7 +24,7 @@ const { bindConnectionReporterMock, bindLogLevelPreferenceMock, registerDiagramM
    superCalls: { initialize: 0, bindGLSPClientContribution: 0, bindDiagramWidgetFactory: 0 }
 }));
 
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    bindConnectionReporter: bindConnectionReporterMock,
    bindLogLevelPreference: bindLogLevelPreferenceMock,
    ChannelLogger: class ChannelLogger {}

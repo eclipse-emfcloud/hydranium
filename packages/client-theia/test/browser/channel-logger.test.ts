@@ -18,7 +18,7 @@ vi.mock('@theia/output/lib/browser/output-channel', () => ({
 }));
 
 import { DefaultTracer, Logger, type Tracer } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/lib/testing';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { type OutputChannelManager } from '@theia/output/lib/browser/output-channel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {

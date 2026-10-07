@@ -44,15 +44,7 @@
       "types": "./lib/lsp/index.d.ts",
       "default": "./lib/lsp/index.js"
     },
-    "./lib/lsp": {
-      "types": "./lib/lsp/index.d.ts",
-      "default": "./lib/lsp/index.js"
-    },
     "./node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
-    },
-    "./lib/node": {
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
@@ -64,27 +56,11 @@
       "types": "./lib/testing/node/index.d.ts",
       "default": "./lib/testing/node/index.js"
     },
-    "./lib/testing/node": {
-      "types": "./lib/testing/node/index.d.ts",
-      "default": "./lib/testing/node/index.js"
-    },
-    "./lib/testing": {
-      "types": "./lib/testing/index.d.ts",
-      "default": "./lib/testing/index.js"
-    },
     "./testing/playwright": {
       "types": "./lib/testing/playwright/index.d.ts",
       "default": "./lib/testing/playwright/index.js"
     },
-    "./lib/testing/playwright": {
-      "types": "./lib/testing/playwright/index.d.ts",
-      "default": "./lib/testing/playwright/index.js"
-    },
     "./messages": {
-      "types": "./lib/messages/index.d.ts",
-      "default": "./lib/messages/index.js"
-    },
-    "./lib/messages": {
       "types": "./lib/messages/index.d.ts",
       "default": "./lib/messages/index.js"
     }

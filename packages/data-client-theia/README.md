@@ -110,11 +110,12 @@ its loading state indefinitely with nothing in the server log to say why.
 | `./browser` | `openChannelConnection`, `createChannelConnection`, the three `Abstract*DataServiceFrontend` bases, `bindHostDiagnostics`, `whenWorkspaceOpen`, `DataSessionStopContribution` | browser / Theia frontend (gated) |
 | `./node`    | `DataServerConnectionHandler`, `createDataServerConnectionContainerModule`, `HostDiagnosticsServer`, `createHostDiagnosticsBackendModule`                                    | Node / Theia backend             |
 
-Every subpath also has a `./lib/<name>` twin for consumers on
-`moduleResolution: "Node"`. "Gated" means the repository's neutral-bundle check
-enforces that the entry bundles for the browser with no `node:*` import,
-transitive ones included; `./node` is deliberately outside that gate. Also
-worth reading: [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them. "Gated" means the
+repository's neutral-bundle check enforces that the entry bundles for the
+browser with no `node:*` import, transitive ones included; `./node` is
+deliberately outside that gate. Also worth reading: [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
 
 ## Status
 

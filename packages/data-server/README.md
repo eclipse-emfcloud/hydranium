@@ -75,8 +75,9 @@ launchers live in `@hydranium/core/node`, not here.
 stays that way through a `browser` field in `package.json` that swaps the
 diagnostics default for a browser twin, so a bundler never follows the
 `@hydranium/core/node` import a Node host resolves — see [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
-Each subpath also has a `./lib/…` twin for consumers on
-`moduleResolution: "Node"`.
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them.
 
 ## Getting oriented
 

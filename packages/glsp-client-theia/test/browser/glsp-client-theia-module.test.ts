@@ -13,7 +13,7 @@
 // cross-head logger surface also scopes these cases to what this module owns:
 // that it forwards to `bindChannelLogger`, not what that function then binds.
 const { bindChannelLoggerMock } = vi.hoisted(() => ({ bindChannelLoggerMock: vi.fn() }));
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    bindChannelLogger: bindChannelLoggerMock,
    ChannelLogger: class ChannelLogger {},
    ChannelTracer: Symbol('ChannelTracer')

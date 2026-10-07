@@ -71,8 +71,9 @@ and its generated AST already in place; `hydranium-cli init` scaffolds both.
 The browser-neutral entries are gated in CI (`scripts/check-neutral-bundles.mts`
 bundles them for the browser and fails on a `node:*` import, including a
 transitive one) — see [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
-Each subpath also has a `./lib/…` twin, so a consumer on
-`moduleResolution: "Node"` can reach it.
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them.
 
 Importing `./node` has two deliberate side effects at module load: it installs
 the `node:fs`-backed log-file sink and the `node:async_hooks`-backed write-lock

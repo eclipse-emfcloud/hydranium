@@ -11,7 +11,7 @@
 // module loads `@theia/output` → `@theia/monaco` → `@lumino/widgets` (DOM globals at
 // module load, unavailable in the node test env). The dispatcher tests never resolve a
 // container, so a bare token stand-in is enough.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {},
    ChannelTracer: Symbol('ChannelTracer')
 }));

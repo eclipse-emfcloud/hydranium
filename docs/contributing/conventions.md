@@ -47,14 +47,13 @@ import { makeFakeDocument } from '@hydranium/core/testing';
   to use a `src/testing/` helper from production code, the helper is
   misplaced — move it to `src/` proper.
 
-## `exports` field — every subpath twice
+## `exports` field — one name per subpath
 
 Every package's `package.json` declares its public surface via the
 `exports` field, mapping import paths to compiled artefacts under
 `lib/`. A map is **mandatory, not optional** — see "A package with no
 map" below for what its absence does. **Every subpath is declared
-twice** — once bare, once under `./lib/` — pointing at the same two
-artefacts:
+once, bare**, pointing at its two artefacts:
 
 ```jsonc
 {
@@ -67,50 +66,30 @@ artefacts:
       "./testing": {
          "types": "./lib/testing/index.d.ts",
          "default": "./lib/testing/index.js"
-      },
-      "./lib/testing": {
-         "types": "./lib/testing/index.d.ts",
-         "default": "./lib/testing/index.js"
       }
    }
 }
 ```
 
-**Why both spellings.** The repo has two module resolvers and neither
-reads both forms:
+**Why one spelling.** Every resolver that reads `exports` —
+`moduleResolution: "NodeNext"` or `"Bundler"`, vite / vitest, webpack,
+Node at runtime — reaches exactly the keys the map declares, so the
+bare key is the only specifier a consumer needs. A second key for the
+same artefact, such as `./lib/testing` beside `./testing`, is a second
+public name that semver applies to, and the two can drift to different
+targets with nothing erroring. `moduleResolution: "Node"` (node10)
+ignores `exports` and reaches no bare subpath, so a consumer compiling
+under it moves to `NodeNext`; `module: "Node16"` is not enough for a
+CommonJS file importing one of the ES-module packages, which it
+rejects with TS1479.
 
-- `moduleResolution: "Node"` (node10) — the `tsconfig.base.json` default,
-  and therefore what the Theia client packages and the host-agnostic
-  example clients compile under — **ignores the `exports` map entirely**
-  and resolves physically. It can reach `@hydranium/pkg/lib/testing`
-  and nothing else.
-- vite / vitest and `moduleResolution: "NodeNext"` resolve **through**
-  the map. They can reach `@hydranium/pkg/testing`, and reject any path
-  the map omits.
+`npm run check:exports` (`scripts/check-exports-map.mts`) enforces one
+name per artefact: no two keys may resolve to the same targets.
 
-A subpath declared only bare is therefore reachable from a node10
-consumer by **no specifier at all**: the bare form fails `tsc` ("could
-not be resolved under your current 'moduleResolution' setting"), and the
-`/lib/` form fails at runtime ("is not exported under the conditions").
-The failure is misleading rather than loud — it reads as a broken
-install in a package whose dependency is correctly declared, and it
-stays invisible until some consumer happens to compile under node10.
-
-`npm run check:exports` (`scripts/check-exports-aliases.mts`) enforces
-the pairing, including that the twins point at the *same* target — a
-twin aimed elsewhere resolves, so nothing errors and the two spellings
-of one subpath quietly deliver different modules.
-
-**The pairing rule is one-directional.** It says a subpath declared
-BARE needs a `./lib/` twin, and it does not say the reverse, because
-a key already spelled `./lib/x` resolves under both resolvers as it
-stands: node10 finds the file physically, and an `exports`-aware
-resolver finds the declared key. So a bare alias for it would only be
-a second name for one artefact. That is what lets `@hydranium/cli`
-declare the CLI binary as `./lib/cli.js` alone — a consumer that
-spawns the binary resolves that path by specifier
-(`createRequire(import.meta.url).resolve(...)`), and the `bin` field
-offers a shim on `PATH` rather than a path.
+**A key may name a file.** `@hydranium/cli` declares the CLI binary as
+`./lib/cli.js` — a consumer that spawns the binary resolves that path
+by specifier (`createRequire(import.meta.url).resolve(...)`), and the
+`bin` field offers a shim on `PATH` rather than a path.
 
 **A package with no map** is the worst case, not an exempt one, so
 `check:exports` fails it. `files` publishes a whole compiled tree, and
@@ -121,17 +100,19 @@ the map's absence is what *permits* the deep import, so no resolution
 ever fails and no consumer ever complains. Declare the surface, however
 small; two keys is a perfectly good map.
 
-**Assets are the one carve-out.** A key whose target lies wholly
+**Assets are checked differently.** A key whose target lies wholly
 outside `lib/` names a shipped asset rather than a compiled module —
 `@hydranium/glsp-client-theia`'s
-`"./style/diagram-loading.css": "./style/diagram-loading.css"` is the
-only one today. It has no twin and must not grow one: `tsc` emits no
-assets, so there is no `lib/style/` to point at, and a bundler is what
-resolves a stylesheet. `check:exports` holds an asset key to the two
-mistakes it can actually make instead — the target must exist, and
-some `files` entry must ship it, or the key resolves in this tree and
-404s from the tarball. It also refuses a **wildcard** asset key, which
-keeps the "nothing is reachable automatically" property below intact.
+`"./style/diagram-loading.css": "./style/diagram-loading.css"`. `tsc`
+emits no assets, so no build step produces the target, and
+`check:exports` holds an asset key to the two mistakes it can actually
+make — the target must exist, and some `files` entry must ship it, or
+the key resolves in this tree and 404s from the tarball.
+
+**No wildcard targets.** `check:exports` refuses any key whose target
+contains `*`, module or asset: a `"./lib/*": "./lib/*.js"` would give
+every declared subpath a second name without colliding with any of
+them. A `null` wildcard, which blocks paths, is allowed.
 
 **Why `lib/` at all?**
 
@@ -149,9 +130,9 @@ keeps the "nothing is reachable automatically" property below intact.
 - No package declares a `./*` wildcard, so nothing is reachable
   automatically. A new module in `src/<name>.ts` is reachable only
   through a barrel that already has an `exports` entry; giving it a
-  subpath of its own means adding **both** entries.
+  subpath of its own means adding its entry.
 - Add a new subtree (e.g. a new `cli/` folder) → put an `index.ts` at
-  its root and add `./cli` **and** `./lib/cli` to `exports`.
+  its root and add `./cli` to `exports`.
 - Never export from `./src/...` — adopters that do this are taking a
   dependency on the package's internal layout, which we don't intend
   to support.

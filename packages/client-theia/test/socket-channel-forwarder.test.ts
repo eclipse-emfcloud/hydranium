@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { makeFakeClock, tick } from '@hydranium/protocol/lib/testing';
+import { makeFakeClock, tick } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Channel, type ChannelCloseEvent, Emitter, type MessageProvider, type WriteBuffer } from '@theia/core';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';

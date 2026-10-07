@@ -39,15 +39,7 @@
       "types": "./lib/browser/index.d.ts",
       "default": "./lib/browser/index.js"
     },
-    "./lib/browser": {
-      "types": "./lib/browser/index.d.ts",
-      "default": "./lib/browser/index.js"
-    },
     "./common": {
-      "types": "./lib/common/index.d.ts",
-      "default": "./lib/common/index.js"
-    },
-    "./lib/common": {
       "types": "./lib/common/index.d.ts",
       "default": "./lib/common/index.js"
     },
@@ -55,15 +47,7 @@
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
-    "./lib/node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
-    },
     "./testing": {
-      "types": "./lib/testing/index.d.ts",
-      "default": "./lib/testing/index.js"
-    },
-    "./lib/testing": {
       "types": "./lib/testing/index.d.ts",
       "default": "./lib/testing/index.js"
     }

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type MemoryDiagnosticsService } from '@hydranium/client-theia/lib/browser';
+import { type MemoryDiagnosticsService } from '@hydranium/client-theia/browser';
 import type {
    DumpServerStateArgs,
    LatencyReport,

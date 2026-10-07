@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { createGlspConnectionContainerModule } from '@hydranium/glsp-client-theia/lib/node';
+import { createGlspConnectionContainerModule } from '@hydranium/glsp-client-theia/node';
 import { OrderFlowGlspConnectionHandler } from './order-flow-glsp-connection-handler';
 
 export default createGlspConnectionContainerModule(OrderFlowGlspConnectionHandler);

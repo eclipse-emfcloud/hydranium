@@ -35,10 +35,10 @@ import {
 import { GLSPSaveable } from '@eclipse-glsp/theia-integration/lib/browser/diagram/glsp-saveable';
 import { ChangeBoundsOperation, DefaultGLSPServer, ServerModule } from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { NodeFileSystem } from '@hydranium/core/lib/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
+import { NodeFileSystem } from '@hydranium/core/node';
+import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
-import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/lib/testing';
+import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module.js';
 import type { OrderFlowGlspState } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-glsp-state.js';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module.js';

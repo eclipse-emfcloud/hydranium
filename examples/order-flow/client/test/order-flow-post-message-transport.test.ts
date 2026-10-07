@@ -33,8 +33,8 @@
  */
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { NodeFileSystem } from '@hydranium/core/lib/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
+import { NodeFileSystem } from '@hydranium/core/node';
+import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
    DataConnection,
@@ -44,7 +44,7 @@ import {
    type DataPort,
    createPostMessageTransport
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/lib/testing';
+import { waitFor } from '@hydranium/protocol/testing';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import type {
    DomainModel,

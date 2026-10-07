@@ -64,8 +64,9 @@ package has no runtime dependencies of its own.
 | `./vitest` | Vitest adapter: `run{Data,Lsp,Glsp}Conformance`.             |
 | `./jest`   | Jest adapter: the same three entry points.                   |
 
-Each named subpath also resolves as `@hydranium/conformance/lib/<name>`, so a consumer on classic
-`moduleResolution: "Node"` can reach it. The root barrel deliberately re-exports none of the slices.
+Resolve the subpaths with [a resolver that reads `exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them.
+The root barrel deliberately re-exports none of the slices.
 
 ## Usage
 

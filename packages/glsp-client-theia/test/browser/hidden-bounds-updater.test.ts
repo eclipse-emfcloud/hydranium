@@ -10,7 +10,7 @@
 // The real `@hydranium/client-theia/browser` module loads `@theia/output` → DOM
 // globals unavailable in the node test env. The updater is constructed directly,
 // never via a container, so token stand-ins do.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {},
    ChannelTracer: Symbol('ChannelTracer')
 }));
@@ -29,7 +29,7 @@ import {
    createFeatureSet
 } from '@eclipse-glsp/client';
 import { type Clock } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/lib/testing';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type VNode } from 'snabbdom';
 import { HydraniumHiddenBoundsUpdater } from '../../src/browser/hidden-bounds-updater';

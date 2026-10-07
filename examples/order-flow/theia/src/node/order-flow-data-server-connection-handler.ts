@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DataServerConnectionHandler } from '@hydranium/data-client-theia/lib/node';
+import { DataServerConnectionHandler } from '@hydranium/data-client-theia/node';
 import { injectable } from '@theia/core/shared/inversify';
 import { ORDER_FLOW_HOST_PORT_COMMANDS } from '../common/order-flow-diagram-language';
 
