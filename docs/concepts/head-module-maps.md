@@ -28,8 +28,8 @@ source of truth) plus the thin LSP head folded in at `/lsp`. Its entry subpaths
 are `.` (neutral runtime), `./lsp` (LSP head), `./node` (server-only — may import
 `node:*`), `./testing`, `./testing/node` (test scaffolding needing a filesystem
 or a Node transport) and `./testing/playwright`; `jq '.exports|keys' packages/core/package.json`
-is the enumeration, and it also shows the `./lib/*` twin each one carries. The
-`.` root barrel (`src/index.ts`) re-exports every `langium/**/index.ts`.
+is the enumeration. The `.` root barrel (`src/index.ts`) re-exports every
+`langium/**/index.ts`.
 
 ### Top-level `src/` folders
 

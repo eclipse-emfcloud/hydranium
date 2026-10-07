@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { AbstractHydraniumGlspDiagramManager } from '@hydranium/glsp-client-theia/lib/browser';
+import { AbstractHydraniumGlspDiagramManager } from '@hydranium/glsp-client-theia/browser';
 import { injectable } from '@theia/core/shared/inversify';
 import { OrderFlowProcessDiagramLanguage } from '../common/order-flow-diagram-language';
 

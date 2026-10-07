@@ -42,23 +42,11 @@
       "types": "./lib/lsp.d.ts",
       "default": "./lib/lsp.js"
     },
-    "./lib/lsp": {
-      "types": "./lib/lsp.d.ts",
-      "default": "./lib/lsp.js"
-    },
     "./node": {
       "types": "./lib/node.d.ts",
       "default": "./lib/node.js"
     },
-    "./lib/node": {
-      "types": "./lib/node.d.ts",
-      "default": "./lib/node.js"
-    },
     "./test": {
-      "types": "./lib/test.d.ts",
-      "default": "./lib/test.js"
-    },
-    "./lib/test": {
       "types": "./lib/test.d.ts",
       "default": "./lib/test.js"
     }

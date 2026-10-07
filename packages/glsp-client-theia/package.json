@@ -52,18 +52,6 @@
       "types": "./lib/testing/index.d.ts",
       "default": "./lib/testing/index.js"
     },
-    "./lib/browser": {
-      "types": "./lib/browser/index.d.ts",
-      "default": "./lib/browser/index.js"
-    },
-    "./lib/node": {
-      "types": "./lib/node/index.d.ts",
-      "default": "./lib/node/index.js"
-    },
-    "./lib/testing": {
-      "types": "./lib/testing/index.d.ts",
-      "default": "./lib/testing/index.js"
-    },
     "./style/diagram-loading.css": "./style/diagram-loading.css"
   },
   "publishConfig": {
@@ -112,7 +100,7 @@
   "engines": {
     "node": ">=22.13"
   },
-  "//exports": "The stylesheet key is an ASSET entry, not a module subpath, and it is spelled as the exact filename rather than `./style/*` so nothing becomes reachable automatically — the same no-wildcard property every other key here has. It exists because the widget's own import is package-RELATIVE, which `exports` does not gate, so the map's silence broke nobody inside the package while blocking every adopter who wants to `@import` the sheet, re-bundle it or override it by specifier; that failure reads as \"not exported under the conditions\" rather than as a missing entry. It has NO `./lib/style/...` twin, and must not grow one: the twin rule exists so a bare subpath is reachable from a node10 MODULE resolver, `tsc` emits no assets so there is no `lib/style/` to point at, and a bundler — which is what resolves a stylesheet — reads the map. `check:exports` carves out exactly this shape and asserts instead that the target file exists and is covered by `files`, which is the pair of mistakes an asset key can actually make.",
+  "//exports": "The stylesheet key is an ASSET entry, not a module subpath, and it is spelled as the exact filename rather than `./style/*` so nothing becomes reachable automatically — the same no-wildcard property every other key here has. It exists because the widget's own import is package-RELATIVE, which `exports` does not gate, so the map's silence broke nobody inside the package while blocking every adopter who wants to `@import` the sheet, re-bundle it or override it by specifier; that failure reads as \"not exported under the conditions\" rather than as a missing entry. `tsc` emits no assets, so no build step produces the target; `check:exports` asserts that the file exists and is covered by `files`, which is the pair of mistakes an asset key can actually make.",
   "//peerDependencies": "`vscode-jsonrpc` is a peer because the client loads its `browser` entry for one effect: GLSP's Theia channel connection requires the top-level copy's root entry, which installs no runtime layer, so without that entry the frontend receives no message. A peer resolves to that same top-level copy. The caret matches the other framework packages.",
   "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
   "//sideEffects": "A stylesheet IS the side effect: `style/diagram-loading.css` is pulled in by a bare import in `browser/diagram-widget.js`, and a CSS module exports nothing, so under a blanket `false` a bundler drops the import as unused and the diagram loading overlay renders unstyled. Nothing fails at build time. The glob rather than the importing module, so a second stylesheet is covered without another edit; the widget itself is reached through its exported class and needs no flag."

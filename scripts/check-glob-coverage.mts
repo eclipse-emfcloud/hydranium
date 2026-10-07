@@ -49,6 +49,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readExports } from './exports-map.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -56,7 +57,7 @@ interface PackageManifest {
    name: string;
    workspaces?: string[];
    scripts?: Record<string, string>;
-   exports?: Record<string, string | { default?: string }>;
+   exports?: unknown;
 }
 
 interface WorkspacePackage {
@@ -439,21 +440,22 @@ function checkNeutralityEntryCoverage() {
    const problems = [];
    for (const directory of expandWorkspaceEntry('packages/*')) {
       const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf-8')) as PackageManifest;
-      for (const [key, value] of Object.entries(manifest.exports ?? {})) {
-         if (key.startsWith('./lib/') || /(^|\/)node$/.test(key)) {
+      for (const { key, blocked, runtimePaths } of readExports(manifest.exports)) {
+         if (blocked || /(^|\/)node$/.test(key)) {
             continue;
          }
-         const target = typeof value === 'string' ? value : value.default;
-         if (target === undefined) {
-            problems.push(`${manifest.name}: the \`${key}\` export has no \`default\` condition, so its artefact cannot be identified.`);
+         if (runtimePaths.length === 0) {
+            problems.push(`${manifest.name}: the \`${key}\` export loads no runtime file, so its artefact cannot be identified.`);
             continue;
          }
-         const entry = `${repoRelative(directory)}/${target.replace(/^\.\//, '')}`;
-         if (!gated.has(entry) && !excluded.has(entry)) {
-            problems.push(
-               `${manifest.name}: the \`${key}\` export (\`${entry}\`) is in neither TARGETS nor NOT_GATED in ` +
-                  'scripts/check-neutral-bundles.mts, so it is ungated for browser-neutrality with no recorded reason.'
-            );
+         for (const target of runtimePaths) {
+            const entry = `${repoRelative(directory)}/${target.replace(/^\.\//, '')}`;
+            if (!gated.has(entry) && !excluded.has(entry)) {
+               problems.push(
+                  `${manifest.name}: the \`${key}\` export (\`${entry}\`) is in neither TARGETS nor NOT_GATED in ` +
+                     'scripts/check-neutral-bundles.mts, so it is ungated for browser-neutrality with no recorded reason.'
+               );
+            }
          }
       }
    }

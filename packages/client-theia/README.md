@@ -126,10 +126,12 @@ from here:
 | `./node`    | `AbstractSocketForwardingConnectionHandler` and its options, `SocketChannelForwarder` — imports `node:net`                                                                                  | Node / Theia backend             |
 | `./testing` | `makeStubOutputChannelManager`, `makeStubInversifyContext`                                                                                                                                  | browser-neutral (gated)          |
 
-Every subpath also has a `./lib/<name>` twin, so a consumer on
-`moduleResolution: "Node"` can reach it. "Gated" means the entry is enforced
-browser-neutral by the repository's neutral-bundle check: it must bundle for the
-browser with no `node:*` import, including transitive ones — and [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+Resolve the subpaths with [a resolver that reads
+`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
+`"Node"` (node10) reaches none of them. "Gated" means the
+entry is enforced browser-neutral by the repository's neutral-bundle check: it
+must bundle for the browser with no `node:*` import, including transitive ones —
+and [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
 `./node` is deliberately not gated — that tier is where Node-only code belongs.
 
 ## Status

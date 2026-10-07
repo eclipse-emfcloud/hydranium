@@ -1,9 +1,8 @@
 # JSON-RPC primitives
 
 Exported from the package root, `@hydranium/protocol`. There is no
-`@hydranium/protocol/rpc` subpath: the package's `exports` map publishes `.`,
-`./client`, `./data` and `./testing` (plus their `./lib/*` twins), so importing
-this directory by path fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+`@hydranium/protocol/rpc` subpath: the package's `exports` map declares none,
+so importing this directory by path fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 
 Generic JSON-RPC primitives for typed protocol heads over a vscode-jsonrpc
 `MessageConnection`. This page is the reference; the shape of the pattern and

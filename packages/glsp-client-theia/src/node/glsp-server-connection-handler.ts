@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
-import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/lib/node';
+import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/node';
 import { injectable, unmanaged } from '@theia/core/shared/inversify';
 import type * as net from 'net';
 

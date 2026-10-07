@@ -64,7 +64,7 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
    }
 }));
 // Its browser barrel pulls `@theia/output`, which touches DOM globals at load.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {},
    ConnectionReporter: Symbol('ConnectionReporter')
 }));

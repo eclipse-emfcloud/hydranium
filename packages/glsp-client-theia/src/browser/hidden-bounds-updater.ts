@@ -19,8 +19,8 @@ import {
    ServerAction,
    isRoutable
 } from '@eclipse-glsp/client';
-import { ChannelLogger } from '@hydranium/client-theia/lib/browser';
-import { Clock } from '@hydranium/client-theia/lib/common';
+import { ChannelLogger } from '@hydranium/client-theia/browser';
+import { Clock } from '@hydranium/client-theia/common';
 import { SystemClock } from '@hydranium/protocol';
 import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import { type VNode } from 'snabbdom';

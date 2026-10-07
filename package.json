@@ -23,7 +23,7 @@
     "check": "node scripts/run-gate.mts check:turbo check:rest",
     "check:ast-grep": "ast-grep test --skip-snapshot-tests && ast-grep scan",
     "check:deps": "node scripts/check-dependency-agreement.mts",
-    "check:exports": "node scripts/check-exports-aliases.mts",
+    "check:exports": "node scripts/check-exports-map.mts",
     "check:gate-targets": "node scripts/check-gate-targets.mts",
     "check:glob-coverage": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-glob-coverage.mts",
     "check:headers": "node scripts/header.mts --check-all",

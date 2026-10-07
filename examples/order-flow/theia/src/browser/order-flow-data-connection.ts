@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindConnectionReporter } from '@hydranium/client-theia/lib/browser';
-import { DataSessionStopContribution } from '@hydranium/data-client-theia/lib/browser';
+import { bindConnectionReporter } from '@hydranium/client-theia/browser';
+import { DataSessionStopContribution } from '@hydranium/data-client-theia/browser';
 import {
    DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,

@@ -27,8 +27,8 @@
  */
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { NodeFileSystem } from '@hydranium/core/lib/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/lib/testing/node';
+import { NodeFileSystem } from '@hydranium/core/node';
+import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
@@ -42,7 +42,7 @@ import {
    createPostMessageTransport,
    relayToPostMessageChannel
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/lib/testing';
+import { waitFor } from '@hydranium/protocol/testing';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import * as net from 'node:net';

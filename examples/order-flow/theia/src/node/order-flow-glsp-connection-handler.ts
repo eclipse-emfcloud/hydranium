@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { GlspServerConnectionHandler } from '@hydranium/glsp-client-theia/lib/node';
+import { GlspServerConnectionHandler } from '@hydranium/glsp-client-theia/node';
 import { injectable } from '@theia/core/shared/inversify';
 import { ORDER_FLOW_DIAGRAM_LANGUAGE_ID, ORDER_FLOW_HOST_PORT_COMMANDS } from '../common/order-flow-diagram-language';
 

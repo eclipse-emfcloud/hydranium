@@ -9,7 +9,7 @@
 
 // These browser modules touch `document` at load; the port only uses them as
 // injection tokens.
-vi.mock('@hydranium/client-theia/lib/browser', () => ({
+vi.mock('@hydranium/client-theia/browser', () => ({
    ChannelLogger: class ChannelLogger {},
    ConnectionReporter: Symbol('ConnectionReporter')
 }));

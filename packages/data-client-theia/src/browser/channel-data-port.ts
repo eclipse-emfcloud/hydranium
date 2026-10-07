@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ChannelLogger, ConnectionReporter, type ConnectionAttempt, type ConnectionTarget } from '@hydranium/client-theia/lib/browser';
+import { ChannelLogger, ConnectionReporter, type ConnectionAttempt, type ConnectionTarget } from '@hydranium/client-theia/browser';
 import {
    DATA_SERVER_CONNECT_FAILED,
    DATA_SERVER_NOT_READY,

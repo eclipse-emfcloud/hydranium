@@ -17,7 +17,7 @@ import {
    registerDiagramManager
 } from '@eclipse-glsp/theia-integration';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
-import { bindConnectionReporter, bindLogLevelPreference } from '@hydranium/client-theia/lib/browser';
+import { bindConnectionReporter, bindLogLevelPreference } from '@hydranium/client-theia/browser';
 import type { interfaces } from '@theia/core/shared/inversify';
 import { HydraniumGlspDiagramWidget } from './diagram-widget';
 import { bindWindowSessionService } from './window-session';

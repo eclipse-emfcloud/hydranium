@@ -235,11 +235,9 @@ beside those defaults in
 ## Entry points
 
 This package declares a two-key `exports` map — the root barrel and the CLI
-binary — plus a `main` and a `bin`. The binary key is spelled `./lib/cli.js` and
-carries no bare alias: the pairing rule that gives every subpath a `./lib/` twin
-runs one way only, and a key already spelled that way resolves under both
-resolvers as it stands. A consumer that spawns the binary resolves it by
-specifier, and `bin` offers a shim on `PATH` rather than a path.
+binary — plus a `main` and a `bin`. The binary key names the file, `./lib/cli.js`:
+a consumer that spawns the binary resolves it by specifier, and `bin` offers a
+shim on `PATH` rather than a path.
 
 | Entry            | Kind   | Contents                         |
 | ---------------- | ------ | -------------------------------- |

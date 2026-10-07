@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindChannelLogger, bindConnectionDiagnostics, EditorDiskSync, HydraniumFileService } from '@hydranium/client-theia/lib/browser';
+import { bindChannelLogger, bindConnectionDiagnostics, EditorDiskSync, HydraniumFileService } from '@hydranium/client-theia/browser';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';

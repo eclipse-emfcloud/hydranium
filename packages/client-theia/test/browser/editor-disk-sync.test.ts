@@ -15,7 +15,7 @@ vi.mock('@theia/filesystem/lib/browser/file-service', () => ({ FileService: clas
 
 import 'reflect-metadata';
 import { Deferred, SystemClock } from '@hydranium/protocol';
-import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/lib/testing';
+import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { Emitter } from '@theia/core';
 import { ILogger } from '@theia/core/lib/common/logger';
 import URI from '@theia/core/lib/common/uri';

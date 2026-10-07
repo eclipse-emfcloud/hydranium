@@ -55,6 +55,7 @@ import ts from 'typescript-api';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readExports } from './exports-map.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
@@ -101,30 +102,22 @@ function isNamedTypeDeclaration(node: ts.Node): node is NamedTypeDeclaration {
  */
 function entryPointsOf(packageDir: string): { name: string; entries: string[] } {
    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as PackageManifest;
-   const entries = new Set<string>();
-   const collect = (node: unknown): void => {
-      if (typeof node === 'string') {
-         if (node.endsWith('.d.ts')) {
-            const source = join(
-               packageDir,
-               'src',
-               node
-                  .replace(/^\.\//, '')
-                  .replace(/^lib\//, '')
-                  .replace(/\.d\.ts$/, '.ts')
-            );
-            entries.add(source);
-         }
-         return;
-      }
-      if (node && typeof node === 'object') {
-         for (const value of Object.values(node)) {
-            collect(value);
-         }
-      }
-   };
-   collect(manifest.exports ?? {});
-   collect(manifest.types ?? {});
+   const declarationFiles = [
+      ...readExports(manifest.exports).flatMap(entry => entry.typePaths),
+      ...(typeof manifest.types === 'string' ? [manifest.types] : [])
+   ];
+   const entries = new Set(
+      declarationFiles.map(file =>
+         join(
+            packageDir,
+            'src',
+            file
+               .replace(/^\.\//, '')
+               .replace(/^lib\//, '')
+               .replace(/\.d\.([cm]?ts)$/, '.$1')
+         )
+      )
+   );
    return { name: manifest.name, entries: [...entries] };
 }
 

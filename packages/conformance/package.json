@@ -41,15 +41,7 @@
       "types": "./lib/data/index.d.ts",
       "default": "./lib/data/index.js"
     },
-    "./lib/data": {
-      "types": "./lib/data/index.d.ts",
-      "default": "./lib/data/index.js"
-    },
     "./lsp": {
-      "types": "./lib/lsp/index.d.ts",
-      "default": "./lib/lsp/index.js"
-    },
-    "./lib/lsp": {
       "types": "./lib/lsp/index.d.ts",
       "default": "./lib/lsp/index.js"
     },
@@ -57,23 +49,11 @@
       "types": "./lib/glsp/index.d.ts",
       "default": "./lib/glsp/index.js"
     },
-    "./lib/glsp": {
-      "types": "./lib/glsp/index.d.ts",
-      "default": "./lib/glsp/index.js"
-    },
     "./jest": {
       "types": "./lib/jest/index.d.ts",
       "default": "./lib/jest/index.js"
     },
-    "./lib/jest": {
-      "types": "./lib/jest/index.d.ts",
-      "default": "./lib/jest/index.js"
-    },
     "./vitest": {
-      "types": "./lib/vitest/index.d.ts",
-      "default": "./lib/vitest/index.js"
-    },
-    "./lib/vitest": {
       "types": "./lib/vitest/index.d.ts",
       "default": "./lib/vitest/index.js"
     }

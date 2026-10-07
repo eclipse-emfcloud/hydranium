@@ -351,8 +351,10 @@ roadmap.
 Installing the framework installs `vscode-jsonrpc@9` — each release of the
 Langium chain's protocol pins its own 9.x exactly — and 9.x ships an `exports`
 map with no `main` or `typings`. So a consuming project must compile with a
-resolver that reads `exports`: `moduleResolution` set to `"Bundler"`,
-`"Node16"` or `"NodeNext"`.
+resolver that reads `exports`: `module` and `moduleResolution` both set to
+`"NodeNext"`, or, for bundled code, `moduleResolution: "Bundler"` with
+`module: "ESNext"`. Avoid `module: "Node16"`, which rejects a CommonJS file
+importing an ES-module `@hydranium/*` package.
 Under classic `"Node"` resolution the build fails with `TS2307: Cannot find
 module 'vscode-jsonrpc'` before reaching any Hydranium code.
 

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/lib/node';
+import { AbstractSocketForwardingConnectionHandler } from '@hydranium/client-theia/node';
 import { DATA_SERVER_PATH, DATA_SERVER_PORT_COMMAND } from '@hydranium/protocol';
 import { injectable, unmanaged } from '@theia/core/shared/inversify';
 import type * as net from 'node:net';

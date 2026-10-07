@@ -15,7 +15,7 @@ const { formatProcessMemoryMock, writeHeapSnapshotToDirMock } = vi.hoisted(() =>
    writeHeapSnapshotToDirMock: vi.fn(() => '/tmp/snapshot.heapsnapshot')
 }));
 
-vi.mock('@hydranium/protocol/lib/node', () => ({
+vi.mock('@hydranium/protocol/node', () => ({
    formatProcessMemory: formatProcessMemoryMock,
    writeHeapSnapshotToDir: writeHeapSnapshotToDirMock
 }));

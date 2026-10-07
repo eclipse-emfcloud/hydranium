@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { createDataServerConnectionContainerModule } from '@hydranium/data-client-theia/lib/node';
+import { createDataServerConnectionContainerModule } from '@hydranium/data-client-theia/node';
 import { OrderFlowDataServerConnectionHandler } from './order-flow-data-server-connection-handler';
 
 // One handler, because the frontend opens one channel: every consumer of the

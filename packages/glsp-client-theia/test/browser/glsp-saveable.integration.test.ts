@@ -59,7 +59,7 @@ import {
    HydraniumGlspSubmissionHandler,
    HydraniumTypes
 } from '@hydranium/glsp-server';
-import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/lib/testing';
+import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import { ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
 import { ContainerModule, inject, injectable } from 'inversify';
