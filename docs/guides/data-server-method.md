@@ -23,6 +23,18 @@ to 42999. The framework reserves that block for its errors
 such as `isSessionClosedError`, match on the code alone, so your error carrying
 one of those codes reads as the framework's.
 
+## A notification of your own
+
+A server that sends a notification outside `DataClientProtocol` declares it on
+an interface extending that protocol, and narrows its proxy to that interface
+with `declare protected readonly clientProxy: AppDataClient`. The proxy sends
+any name of `on` plus a capital letter as a notification, except
+`onDidOpenConnection` and `onDidCloseConnection`, which it reserves. The client
+binds the name beside `DATA_CLIENT_PROTOCOL_METHODS` in `localMethods`, or in
+`clientMethods` on a `DataConnection`; a name left out of either is never
+delivered. `makeDataServerHarness` takes it in `additionalClientMethods` and
+captures it into `additionalNotifications`.
+
 ## Steps
 
 1. Define the request and response shape, then implement it on a `DataServer`

@@ -469,7 +469,13 @@ export class DataServer<
     * and fails with the session's own error.
     */
    protected readonly clientSessions = new Map<string, ClientSession<AstNode, AstDiagnostic, TTransfer>>();
-   /** Typed client proxy — sends `data-server/on*` notifications back over the same wire. */
+   /**
+    * Typed client proxy — sends `data-server/on*` notifications back over the same wire.
+    * The proxy sends any `on[A-Z]*` name other than `onDidOpenConnection` and
+    * `onDidCloseConnection`, for which it returns its own events, so a subclass
+    * with notifications of its own narrows only the type:
+    * `declare protected readonly clientProxy: TheirClient`.
+    */
    protected readonly clientProxy: DataClientProtocol<TTransfer, TDiagnostic, TProject>;
    protected readonly disposables = new DisposableCollection();
    protected readonly tracer: Tracer;

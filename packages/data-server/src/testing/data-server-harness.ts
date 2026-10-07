@@ -20,7 +20,7 @@ import {
    type TransferDocumentsBuiltEvent,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol/data';
-import { type Harness, makeCapturingDataClient } from '@hydranium/protocol/testing';
+import { type AdditionalClientMethod, type Harness, makeCapturingDataClient } from '@hydranium/protocol/testing';
 import { makeDuplexConnectionPair, type DuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import type { MessageConnection } from 'vscode-jsonrpc/node';
 
@@ -32,16 +32,17 @@ import type { MessageConnection } from 'vscode-jsonrpc/node';
  * (the "server side" of the duplex pair). The factory is invoked once,
  * synchronously, after the pair is wired.
  *
- * `client` lets tests override individual handlers on the captured
- * {@link DataClientProtocol}. Unspecified handlers default to pushing
- * incoming events into the {@link DataServerHarness} bundle's `events` /
- * `saves` / `projectsChanges` arrays — the typical assertion target.
+ * `client` lets tests override individual handlers on the captured client.
+ * Unspecified handlers default to pushing incoming events into the
+ * {@link DataServerHarness} bundle's `events` / `saves` / `projectsChanges`
+ * arrays — the typical assertion target.
  */
 export interface MakeDataServerHarnessOptions<
    TServer,
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TClient extends DataClientProtocol<TTransfer, TDiagnostic, TProject> = DataClientProtocol<TTransfer, TDiagnostic, TProject>
 > {
    /**
     * Construct the `DataServer` (or subclass) under test against
@@ -50,12 +51,19 @@ export interface MakeDataServerHarnessOptions<
     */
    server: (channel: MessageConnection) => TServer;
    /**
-    * Override per-method handlers on the captured {@link DataClientProtocol}.
-    * Each overridden handler REPLACES the default (which pushes into the
-    * bundle's capture arrays); test code wanting to BOTH capture AND
-    * react should push to the array manually inside the override.
+    * Override per-method handlers on the captured client. An additional
+    * method's override needs the method in `additionalClientMethods`, or the
+    * harness throws. Each overridden handler REPLACES the default (which
+    * pushes into the bundle's capture arrays); test code wanting to BOTH
+    * capture AND react should push to the array manually inside the override.
     */
-   client?: Partial<DataClientProtocol<TTransfer, TDiagnostic, TProject>>;
+   client?: Partial<TClient>;
+   /**
+    * Notification methods `TClient` adds to {@link DataClientProtocol}. Each is
+    * bound and captured into `additionalNotifications`; one left out reaches no
+    * handler.
+    */
+   additionalClientMethods?: readonly AdditionalClientMethod<TClient>[];
    /**
     * Wire namespace the proxy addresses the server under. Defaults to
     * {@link DATA_SERVER_WIRE_PREFIX}. Override when the `DataServer`
@@ -81,7 +89,8 @@ export interface DataServerHarness<
    TServer,
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TClient extends DataClientProtocol<TTransfer, TDiagnostic, TProject> = DataClientProtocol<TTransfer, TDiagnostic, TProject>
 > extends Harness {
    readonly server: TServer;
    readonly proxy: DataServerProtocol<TTransfer, TDiagnostic, TProject>;
@@ -98,6 +107,10 @@ export interface DataServerHarness<
    readonly builds: ReadonlyArray<TransferDocumentsBuiltEvent>;
    /** Captured `onProjectsChanged` events. */
    readonly projectsChanges: ReadonlyArray<ProjectsChangedEvent<TProject>>;
+   /** Captured events of each `additionalClientMethods` entry, keyed by method. */
+   readonly additionalNotifications: {
+      readonly [K in AdditionalClientMethod<TClient>]: TClient[K] extends (event: infer TEvent) => void ? ReadonlyArray<TEvent> : never;
+   };
    /** Dispose the underlying duplex pair. Idempotent. */
    dispose(): void;
 }
@@ -116,12 +129,14 @@ export function makeDataServerHarness<
    TServer,
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TClient extends DataClientProtocol<TTransfer, TDiagnostic, TProject> = DataClientProtocol<TTransfer, TDiagnostic, TProject>
 >(
-   options: MakeDataServerHarnessOptions<TServer, TTransfer, TDiagnostic, TProject>
-): DataServerHarness<TServer, TTransfer, TDiagnostic, TProject> {
+   options: MakeDataServerHarnessOptions<TServer, TTransfer, TDiagnostic, TProject, TClient>
+): DataServerHarness<TServer, TTransfer, TDiagnostic, TProject, TClient> {
    const pair = makeDuplexConnectionPair();
    const server = options.server(pair.left);
+   const additionalClientMethods = options.additionalClientMethods ?? [];
 
    // The capture half is the shared client double, not a local copy: the same
    // recording semantics (every channel, an override replacing rather than
@@ -135,17 +150,15 @@ export function makeDataServerHarness<
       dirtyChanges,
       deletions,
       builds,
-      projectsChanges
-   } = makeCapturingDataClient<TTransfer, TDiagnostic, TProject>(options.client);
+      projectsChanges,
+      additionalNotifications
+   } = makeCapturingDataClient<TTransfer, TDiagnostic, TProject, TClient>(options.client, additionalClientMethods);
 
-   const proxy = createRpcProxy<DataServerProtocol<TTransfer, TDiagnostic, TProject>, DataClientProtocol<TTransfer, TDiagnostic, TProject>>(
-      pair.right,
-      {
-         methodNamespace: options.methodNamespace ?? DATA_SERVER_WIRE_PREFIX,
-         localTarget: localClient,
-         localMethods: DATA_CLIENT_PROTOCOL_METHODS
-      }
-   );
+   const proxy = createRpcProxy<DataServerProtocol<TTransfer, TDiagnostic, TProject>, TClient>(pair.right, {
+      methodNamespace: options.methodNamespace ?? DATA_SERVER_WIRE_PREFIX,
+      localTarget: localClient,
+      localMethods: [...DATA_CLIENT_PROTOCOL_METHODS, ...additionalClientMethods]
+   });
 
    return {
       server,
@@ -157,6 +170,7 @@ export function makeDataServerHarness<
       deletions,
       builds,
       projectsChanges,
+      additionalNotifications,
       dispose: () => pair.dispose()
    };
 }

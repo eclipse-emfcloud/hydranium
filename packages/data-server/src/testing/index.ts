@@ -12,8 +12,11 @@
 // real wire. The duplex `MessageConnection` pair lives in
 // `@hydranium/protocol/testing`, which owns the transport; only its TYPE is
 // re-exported here, because `DataServerHarness.pair` names it in a public
-// signature. A test that wires its own server rather than using the harness
-// calls `makeDuplexConnectionPair` from `@hydranium/protocol/testing` directly.
+// signature; `AdditionalClientMethod` is re-exported for the same reason, as
+// the harness options name it. A test that wires its own server rather than
+// using the harness calls `makeDuplexConnectionPair` from
+// `@hydranium/protocol/testing` directly.
 
+export type { AdditionalClientMethod } from '@hydranium/protocol/testing';
 export type { DuplexConnectionPair } from '@hydranium/protocol/testing/node';
 export * from './data-server-harness.js';

@@ -33,6 +33,7 @@
 
 import { Emitter, type MessageConnection } from 'vscode-jsonrpc';
 import type { DataPort } from '../client/data-port';
+import { DATA_CLIENT_PROTOCOL_METHODS } from '../data/data-protocol-methods';
 import type { DataClientProtocol } from '../data/data-server-protocol';
 import type {
    ProjectsChangedEvent,
@@ -43,6 +44,7 @@ import type {
    TransferDocumentUpdatedEvent
 } from '../data/events';
 import type { ResolvedMessage } from '../messages/primitives';
+import type { RpcProxyLifecycle } from '../rpc/create-rpc-proxy';
 import type { Project } from '../project';
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
@@ -121,14 +123,52 @@ export function makeFakeDataPort(options: FakeDataPortOptions): FakeDataPort {
    };
 }
 
+type UpperLetter =
+   | 'A'
+   | 'B'
+   | 'C'
+   | 'D'
+   | 'E'
+   | 'F'
+   | 'G'
+   | 'H'
+   | 'I'
+   | 'J'
+   | 'K'
+   | 'L'
+   | 'M'
+   | 'N'
+   | 'O'
+   | 'P'
+   | 'Q'
+   | 'R'
+   | 'S'
+   | 'T'
+   | 'U'
+   | 'V'
+   | 'W'
+   | 'X'
+   | 'Y'
+   | 'Z';
+
+/**
+ * A notification name `TClient` adds to {@link DataClientProtocol}. Limited to
+ * `on` plus a letter A–Z, the names the proxy sends as notifications; any other
+ * name would be bound as a request. The {@link RpcProxyLifecycle} names are
+ * excluded too: the proxy returns its own events for them and sends nothing.
+ */
+export type AdditionalClientMethod<TClient> = Exclude<keyof TClient, keyof DataClientProtocol<TransferElement> | keyof RpcProxyLifecycle> &
+   `on${UpperLetter}${string}`;
+
 /** A {@link DataClientProtocol} plus the arrays it records into. */
 export interface CapturingDataClient<
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
-   TProject extends Project = Project
+   TProject extends Project = Project,
+   TClient extends DataClientProtocol<TTransfer, TDiagnostic, TProject> = DataClientProtocol<TTransfer, TDiagnostic, TProject>
 > {
    /** The client to hand to a `DataSession` or bind as an RPC `localTarget`. */
-   readonly client: DataClientProtocol<TTransfer, TDiagnostic, TProject>;
+   readonly client: TClient;
    /** Every `onDocumentUpdated` event, in arrival order. */
    readonly updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[];
    /** Every `onDocumentSaved` event, in arrival order. */
@@ -141,6 +181,14 @@ export interface CapturingDataClient<
    readonly builds: TransferDocumentsBuiltEvent[];
    /** Every `onProjectsChanged` event, in arrival order. */
    readonly projectsChanges: ProjectsChangedEvent<TProject>[];
+   /**
+    * Every event of each additional client method, keyed by method, in arrival
+    * order. A method of `TClient` left out of `additionalClientMethods` has no
+    * entry.
+    */
+   readonly additionalNotifications: {
+      readonly [K in AdditionalClientMethod<TClient>]: TClient[K] extends (event: infer TEvent) => void ? TEvent[] : never;
+   };
 }
 
 /**
@@ -155,49 +203,92 @@ export interface CapturingDataClient<
  * the corresponding array stays empty — that is what makes an override usable
  * as a barrier (rejecting, counting differently, throwing) rather than only as
  * a spy.
+ *
+ * `additionalClientMethods` names the notifications `TClient` adds to
+ * {@link DataClientProtocol}. Each is recorded and overridable the same way;
+ * one left out is not on the client at all, and overriding it throws, since
+ * nothing would call the override.
  */
 export function makeCapturingDataClient<
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic,
-   TProject extends Project = Project
->(overrides: Partial<DataClientProtocol<TTransfer, TDiagnostic, TProject>> = {}): CapturingDataClient<TTransfer, TDiagnostic, TProject> {
+   TProject extends Project = Project,
+   TClient extends DataClientProtocol<TTransfer, TDiagnostic, TProject> = DataClientProtocol<TTransfer, TDiagnostic, TProject>
+>(
+   overrides: Partial<TClient> = {},
+   additionalClientMethods: readonly AdditionalClientMethod<TClient>[] = []
+): CapturingDataClient<TTransfer, TDiagnostic, TProject, TClient> {
+   const bound = new Set<string>([...DATA_CLIENT_PROTOCOL_METHODS, ...additionalClientMethods]);
+   for (const name of Object.keys(overrides)) {
+      if (!bound.has(name)) {
+         throw new Error(
+            `Override '${name}' is neither a DataClientProtocol method nor listed in additionalClientMethods, so nothing would call it.`
+         );
+      }
+   }
+   const frameworkOverrides: Partial<DataClientProtocol<TTransfer, TDiagnostic, TProject>> = overrides;
    const updates: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[] = [];
    const saves: TransferDocumentSavedEvent<TTransfer, TDiagnostic>[] = [];
    const dirtyChanges: TransferDocumentDirtyChangedEvent[] = [];
    const deletions: TransferDocumentDeletedEvent[] = [];
    const builds: TransferDocumentsBuiltEvent[] = [];
    const projectsChanges: ProjectsChangedEvent<TProject>[] = [];
-   const client: DataClientProtocol<TTransfer, TDiagnostic, TProject> = {
+   const frameworkClient: DataClientProtocol<TTransfer, TDiagnostic, TProject> = {
       onDocumentUpdated:
-         overrides.onDocumentUpdated ??
+         frameworkOverrides.onDocumentUpdated ??
          (event => {
             updates.push(event);
          }),
       onDocumentSaved:
-         overrides.onDocumentSaved ??
+         frameworkOverrides.onDocumentSaved ??
          (event => {
             saves.push(event);
          }),
       onDocumentDirtyChanged:
-         overrides.onDocumentDirtyChanged ??
+         frameworkOverrides.onDocumentDirtyChanged ??
          (event => {
             dirtyChanges.push(event);
          }),
       onDocumentDeleted:
-         overrides.onDocumentDeleted ??
+         frameworkOverrides.onDocumentDeleted ??
          (event => {
             deletions.push(event);
          }),
       onDocumentsBuilt:
-         overrides.onDocumentsBuilt ??
+         frameworkOverrides.onDocumentsBuilt ??
          (event => {
             builds.push(event);
          }),
       onProjectsChanged:
-         overrides.onProjectsChanged ??
+         frameworkOverrides.onProjectsChanged ??
          (event => {
             projectsChanges.push(event);
          })
    };
-   return { client, updates, saves, dirtyChanges, deletions, builds, projectsChanges };
+   const additionalNotifications: Record<string, unknown[]> = {};
+   const additionalHandlers: Record<string, unknown> = {};
+   for (const method of additionalClientMethods) {
+      const events: unknown[] = [];
+      additionalNotifications[method] = events;
+      additionalHandlers[method] =
+         overrides[method] ??
+         ((event: unknown) => {
+            events.push(event);
+         });
+   }
+   return {
+      client: { ...frameworkClient, ...additionalHandlers } as unknown as TClient,
+      updates,
+      saves,
+      dirtyChanges,
+      deletions,
+      builds,
+      projectsChanges,
+      additionalNotifications: additionalNotifications as CapturingDataClient<
+         TTransfer,
+         TDiagnostic,
+         TProject,
+         TClient
+      >['additionalNotifications']
+   };
 }
