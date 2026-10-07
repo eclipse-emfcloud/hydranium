@@ -9,13 +9,14 @@
 
 import {
    exitWithUsage,
+   HARNESS_VALUE_FLAGS,
    helpRequested,
+   importHelpLines,
    LOG_VALUE_FLAGS,
    logHelpLines,
    logOptions,
    parseHarnessArgs,
    printHelp,
-   SERVICES_FLAG,
    type UsageError
 } from './harness-args.js';
 import { OUT_FILE_FLAG } from './headless-harness.js';
@@ -26,17 +27,18 @@ const BOOL_FLAGS = ['--json'] as const;
 
 /**
  * Every flag `reflect` accepts, derived from the sets the parser is handed so
- * the list cannot claim a flag the parser would reject. `--services` is consumed
- * by the shared harness parser itself, so it is in neither set.
+ * the list cannot claim a flag the parser would reject.
+ * {@link HARNESS_VALUE_FLAGS} are consumed by the shared harness parser itself,
+ * so they are in neither set.
  */
-export const REFLECT_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_FLAGS, ...BOOL_FLAGS];
+export const REFLECT_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...VALUE_FLAGS, ...BOOL_FLAGS];
 
 /** The subset that takes a value, so `--help` in a value position reads as data. */
-export const REFLECT_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_FLAGS];
+export const REFLECT_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...VALUE_FLAGS];
 
 /** The `--help` text, as data, held to {@link REFLECT_FLAGS} by a test. */
 export const REFLECT_HELP: readonly string[] = [
-   'Usage: hydranium-cli reflect --services <module> [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli reflect --services <module> [--import <specifier>]... [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Dump a head's grammar/AST reflection — the type hierarchy, each language's",
    'terminals and entry rule, and every cross-reference target. Read-only: no',
@@ -46,6 +48,7 @@ export const REFLECT_HELP: readonly string[] = [
    '',
    'Options:',
    '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   ...importHelpLines(22),
    '  --json                Emit the raw JSON reflection instead of the Markdown report.',
    '  --out-file <file>     Write the report to this file instead of stdout. Written',
    '                        only once the report exists, unlike a shell redirection,',
@@ -54,12 +57,13 @@ export const REFLECT_HELP: readonly string[] = [
 ];
 
 export function parseReflectArgs(args: string[], onError: UsageError = exitWithUsage): ReflectCommandOptions {
-   const { servicesModule, options } = parseHarnessArgs(args, 'reflect', VALUE_FLAGS, BOOL_FLAGS, {
+   const { servicesModule, imports, options } = parseHarnessArgs(args, 'reflect', VALUE_FLAGS, BOOL_FLAGS, {
       requireWorkspace: false,
       onError
    });
    return {
       servicesModule,
+      imports,
       json: options['--json'] === 'true',
       outFile: options[OUT_FILE_FLAG],
       ...logOptions(options)

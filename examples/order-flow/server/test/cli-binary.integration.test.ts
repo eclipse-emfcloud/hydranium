@@ -51,7 +51,7 @@
 
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,6 +225,58 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
          expect(run.stdout).toContain('- [DomainModel](#domainmodel)');
          expect(run.stdout).toContain('- [ProcessModel](#processmodel)');
          expect(run.stdout).toContain('- [LayoutModel](#layoutmodel)');
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'reflect: a TypeScript entry with no loader fails, and the failure names --import',
+      async () => {
+         const run = await runCli(['reflect', '--services', path.resolve(HERE, '../src/services.ts')]);
+
+         // Node's own error differs by version — an unknown extension before
+         // type stripping, a sibling's `.js` specifier after it — so only the
+         // hint appended to it is asserted.
+         expect(run.code, `stderr:\n${run.stderr}`).toBe(1);
+         expect(run.stderr).toContain('`--import tsx`');
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'reflect: a TypeScript entry that fails under a registered --import gets no loader hint',
+      async () => {
+         // An empty module registers no loader, so the entry still fails to load,
+         // but a hint to pass `--import` would repeat the caller's own command.
+         const run = await runCli(['reflect', '--import', 'data:text/javascript,', '--services', path.resolve(HERE, '../src/services.ts')]);
+
+         expect(run.code, `stderr:\n${run.stderr}`).toBe(1);
+         // The entry's own failure, so the absence below is not a run that
+         // failed earlier for an unrelated reason.
+         expect(run.stderr).toMatch(/Unknown file extension|Cannot find module/);
+         expect(run.stderr).not.toContain('`--import tsx`');
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'reflect: an --import given as a path, absolute or relative, registers the loader on every platform',
+      async () => {
+         // Windows is the case that matters: Node reads `C:\…` as a URL scheme and
+         // `.\…` as a package name, so the CLI must hand both over as file URLs for
+         // the hook to run at all. The relative form uses the platform separator.
+         const hookDir = scratch(outputDir, 'output directory').root;
+         writeFileSync(path.join(hookDir, 'hook.mjs'), "console.error('loader hook ran');\n");
+         const runs = [
+            await runCli(['reflect', '--import', path.join(hookDir, 'hook.mjs'), '--services', SERVICES_MODULE]),
+            await runCli(['reflect', '--import', `.${path.sep}hook.mjs`, '--services', SERVICES_MODULE], { cwd: hookDir })
+         ];
+
+         for (const run of runs) {
+            expect(run.code, `stderr:\n${run.stderr}`).toBe(0);
+            expect(run.stderr).toContain('loader hook ran');
+            expect(run.stdout).toContain('### order-flow-domain');
+         }
       },
       SPAWN_TIMEOUT_MS
    );

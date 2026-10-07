@@ -9,7 +9,9 @@
 
 import {
    exitWithUsage,
+   HARNESS_VALUE_FLAGS,
    helpRequested,
+   importHelpLines,
    LOG_FILE_FLAG,
    LOG_VALUE_FLAGS,
    logHelpLines,
@@ -17,7 +19,6 @@ import {
    numericOption,
    parseHarnessArgs,
    printHelp,
-   SERVICES_FLAG,
    type UsageError
 } from './harness-args.js';
 import { parseProfileDimensions, runMeasureMemory, type MeasureMemoryCommandOptions } from './measure-memory.js';
@@ -36,17 +37,18 @@ const BOOL_FLAGS = ['--snapshot', '--json'] as const;
 
 /**
  * Every flag `measure-memory` accepts, derived from the sets the parser is
- * handed so the list cannot claim a flag the parser would reject. `--services`
- * is consumed by the shared harness parser itself, so it is in neither set.
+ * handed so the list cannot claim a flag the parser would reject.
+ * {@link HARNESS_VALUE_FLAGS} are consumed by the shared harness parser itself,
+ * so they are in neither set.
  */
-export const MEASURE_MEMORY_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_FLAGS, ...BOOL_FLAGS];
+export const MEASURE_MEMORY_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...VALUE_FLAGS, ...BOOL_FLAGS];
 
 /** The subset that takes a value, so `--help` in a value position reads as data. */
-export const MEASURE_MEMORY_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...VALUE_FLAGS];
+export const MEASURE_MEMORY_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...VALUE_FLAGS];
 
 /** The `--help` text, as data, held to {@link MEASURE_MEMORY_FLAGS} by a test. */
 export const MEASURE_MEMORY_HELP: readonly string[] = [
-   'Usage: hydranium-cli measure-memory --services <module> <workspace> [options]',
+   'Usage: hydranium-cli measure-memory --services <module> [--import <specifier>]... <workspace> [options]',
    '',
    'Measure model-store memory for a workspace. `<module>` is an ESM module that',
    'exports a zero-arg `createServices(): { shared }` thunk (the head wires its own',
@@ -55,6 +57,7 @@ export const MEASURE_MEMORY_HELP: readonly string[] = [
    '',
    'Options:',
    '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   ...importHelpLines(22),
    '  <workspace>           Workspace root (path or file URI) to build (required).',
    '  --edits <N>           Rebuild-churn cycles to probe for retention. Default: 0 (skip).',
    '  --edit-docs <N>       Documents to churn per cycle. Default: 25.',
@@ -100,7 +103,7 @@ function validatedProfile(csv: string | undefined, onError: UsageError): string 
 }
 
 export function parseMeasureMemoryArgs(args: string[], onError: UsageError = exitWithUsage): MeasureMemoryCommandOptions {
-   const { servicesModule, workspace, options } = parseHarnessArgs(args, 'measure-memory', VALUE_FLAGS, BOOL_FLAGS, { onError });
+   const { servicesModule, imports, workspace, options } = parseHarnessArgs(args, 'measure-memory', VALUE_FLAGS, BOOL_FLAGS, { onError });
    // The profiling session points the log at its own `server.log`, which would
    // replace the requested file without a word.
    if (options['--profile'] !== undefined && options[LOG_FILE_FLAG] !== undefined) {
@@ -108,6 +111,7 @@ export function parseMeasureMemoryArgs(args: string[], onError: UsageError = exi
    }
    return {
       servicesModule,
+      imports,
       workspace,
       editCycles: numericOption(options['--edits'], '--edits', onError),
       editDocs: numericOption(options['--edit-docs'], '--edit-docs', onError),

@@ -87,6 +87,20 @@ describe('parseHarnessArgs', () => {
       expect(unused.values['--prop']).toBeUndefined();
    });
 
+   it('claims --import itself, in order, for every subcommand without it being declared', () => {
+      const parsed = parseHarnessArgs(['--import', 'tsx', '--services', 'M', '--import', './hook.mjs'], 'cmd-one', [], [], {
+         requireWorkspace: false,
+         onError
+      });
+      // Order is Node's registration order, so a loader another one builds on
+      // must stay ahead of it.
+      expect(parsed.imports).toEqual(['tsx', './hook.mjs']);
+      expect(parseHarnessArgs(['--services', 'M'], 'cmd-one', [], [], { requireWorkspace: false, onError }).imports).toBeUndefined();
+      expect(() => parseHarnessArgs(['--services', 'M', '--import'], 'cmd-one', [], [], { requireWorkspace: false, onError })).toThrow(
+         'Missing value for --import'
+      );
+   });
+
    it('rejects a positional when the subcommand takes no workspace', () => {
       expect(() => parseHarnessArgs(['--services', 'M', '/ws'], 'cmd-two', [], [], { requireWorkspace: false, onError })).toThrow(
          'Unexpected argument: /ws (hydranium-cli cmd-two --help)'

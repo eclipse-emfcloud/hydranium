@@ -9,13 +9,14 @@
 
 import {
    exitWithUsage,
+   HARNESS_VALUE_FLAGS,
    helpRequested,
+   importHelpLines,
    LOG_VALUE_FLAGS,
    logHelpLines,
    logOptions,
    parseHarnessArgs,
    printHelp,
-   SERVICES_FLAG,
    type UsageError
 } from './harness-args.js';
 import { runLintGrammar, type LintGrammarCommandOptions } from './lint-grammar.js';
@@ -26,17 +27,18 @@ const REPEATABLE_VALUE_FLAGS = ['--name-property'] as const;
 
 /**
  * Every flag `lint-grammar` accepts, derived from the sets the parser is handed
- * so the list cannot claim a flag the parser would reject. `--services` is
- * consumed by the shared harness parser itself, so it is in neither set.
+ * so the list cannot claim a flag the parser would reject.
+ * {@link HARNESS_VALUE_FLAGS} are consumed by the shared harness parser itself,
+ * so they are in neither set.
  */
-export const LINT_GRAMMAR_FLAGS: readonly string[] = [SERVICES_FLAG, ...REPEATABLE_VALUE_FLAGS, ...VALUE_FLAGS, ...BOOL_FLAGS];
+export const LINT_GRAMMAR_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...REPEATABLE_VALUE_FLAGS, ...VALUE_FLAGS, ...BOOL_FLAGS];
 
 /** The subset that takes a value, so `--help` in a value position reads as data. */
-export const LINT_GRAMMAR_VALUE_FLAGS: readonly string[] = [SERVICES_FLAG, ...REPEATABLE_VALUE_FLAGS, ...VALUE_FLAGS];
+export const LINT_GRAMMAR_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, ...REPEATABLE_VALUE_FLAGS, ...VALUE_FLAGS];
 
 /** The `--help` text, as data, held to {@link LINT_GRAMMAR_FLAGS} by a test. */
 export const LINT_GRAMMAR_HELP: readonly string[] = [
-   'Usage: hydranium-cli lint-grammar --services <module> [--name-property <p>]... [--strict] [--json] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli lint-grammar --services <module> [--import <specifier>]... [--name-property <p>]... [--strict] [--json] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Check a head's grammar against the framework's conventions — a CI gate: the",
    'process exits non-zero when a violation is found. Read-only: no workspace is',
@@ -48,6 +50,7 @@ export const LINT_GRAMMAR_HELP: readonly string[] = [
    '',
    'Options:',
    '  --services <module>    ESM module exporting `createServices(): { shared }` (required).',
+   ...importHelpLines(23),
    '  --name-property <p>    Property that satisfies the nameability convention',
    '                         (repeatable). Default: name.',
    '  --strict               Also fail (non-zero exit) on warnings, not only errors.',
@@ -56,13 +59,14 @@ export const LINT_GRAMMAR_HELP: readonly string[] = [
 ];
 
 export function parseLintGrammarArgs(args: string[], onError: UsageError = exitWithUsage): LintGrammarCommandOptions {
-   const { servicesModule, options, values } = parseHarnessArgs(args, 'lint-grammar', VALUE_FLAGS, BOOL_FLAGS, {
+   const { servicesModule, imports, options, values } = parseHarnessArgs(args, 'lint-grammar', VALUE_FLAGS, BOOL_FLAGS, {
       requireWorkspace: false,
       repeatableValueFlags: REPEATABLE_VALUE_FLAGS,
       onError
    });
    return {
       servicesModule,
+      imports,
       nameProperties: values['--name-property'],
       strict: options['--strict'] === 'true',
       json: options['--json'] === 'true',

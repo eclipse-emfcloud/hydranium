@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { driverHeapArgs, type HeapReading } from '../driver-heap.js';
 import { logEnv, type LogOptions } from '../log-level.js';
-import { SERVICES_FLAG } from './harness-args.js';
+import { IMPORT_FLAG, SERVICES_FLAG } from './harness-args.js';
 
 /** The flag every report-producing subcommand names its destination file with. */
 export const OUT_FILE_FLAG = '--out-file';
@@ -43,8 +43,9 @@ export interface HeadlessContext {
  * its `createServices` thunk AND the `@hydranium/core/node` harness, both
  * resolved from the HEAD's location rather than the CLI's.
  *
- * The module is an ESM file (typically a compiled `lib/*.js`) exporting a
- * ZERO-ARG `createServices(): { shared }`. `hydranium-cli` is language-agnostic
+ * The module is an ESM file exporting a ZERO-ARG `createServices(): { shared }`:
+ * a compiled `lib/*.js`, or the TypeScript source when the child was started
+ * with a loader through {@link IMPORT_FLAG}. `hydranium-cli` is language-agnostic
  * and cannot statically import a head's `create<Lang>Services`, so the dynamic
  * import is the seam that keeps the binary head-neutral. Resolving the harness
  * from the head's graph (via `createRequire` rooted at the head module) rather
@@ -65,12 +66,17 @@ export async function loadHeadlessContext(servicesModule: string): Promise<Headl
    if (stats === undefined || !stats.isFile()) {
       throw new Error(
          `${SERVICES_FLAG} must name an existing ESM file; '${servicesModule}' resolved to ${modulePath}, ` +
-            `which is not one. Pass the head's COMPILED entry, e.g. \`${SERVICES_FLAG} ./lib/services.js\` — ` +
-            'not the TypeScript source and not a package name.'
+            `which is not one. Pass the path of the head's entry, e.g. \`${SERVICES_FLAG} ./lib/services.js\` — ` +
+            'not a package name.'
       );
    }
    const moduleUrl = pathToFileURL(modulePath).href;
-   const imported = (await import(moduleUrl)) as Record<string, unknown>;
+   let imported: Record<string, unknown>;
+   try {
+      imported = (await import(moduleUrl)) as Record<string, unknown>;
+   } catch (err: unknown) {
+      throw withLoaderHint(err, modulePath);
+   }
    const createServices = imported.createServices;
    if (typeof createServices !== 'function') {
       throw new Error(
@@ -83,6 +89,32 @@ export async function loadHeadlessContext(servicesModule: string): Promise<Headl
    const coreNodePath = headRequire.resolve('@hydranium/core/node');
    const coreNode = (await import(pathToFileURL(coreNodePath).href)) as CoreNodeModule;
    return { createServices: createServices as ServicesFactory, coreNode };
+}
+
+/** The codes Node fails a TypeScript entry with when no loader handled it, depending on its version. */
+const UNLOADED_TYPESCRIPT_CODES: ReadonlySet<string> = new Set([
+   'ERR_UNKNOWN_FILE_EXTENSION',
+   'ERR_MODULE_NOT_FOUND',
+   'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX'
+]);
+
+/**
+ * Append a loader hint to a TypeScript entry's import failure, unless the child
+ * was started with {@link IMPORT_FLAG}, where the hint would only repeat the
+ * caller's own command. Appended rather than substituted: a loader set through
+ * `NODE_OPTIONS` does not show in `execArgv`, and under it the failure can be a
+ * missing module that only Node's own message names.
+ */
+function withLoaderHint(err: unknown, modulePath: string): unknown {
+   if (!(err instanceof Error) || !/\.[cm]?ts$/.test(modulePath) || !('code' in err) || typeof err.code !== 'string') {
+      return err;
+   }
+   if (!UNLOADED_TYPESCRIPT_CODES.has(err.code) || process.execArgv.some(arg => arg.startsWith(IMPORT_FLAG))) {
+      return err;
+   }
+   return new Error(`${err.message}\nA TypeScript head needs a loader registered with \`${IMPORT_FLAG}\`, e.g. \`${IMPORT_FLAG} tsx\`.`, {
+      cause: err
+   });
 }
 
 /**
@@ -137,6 +169,8 @@ export type SpawnDriverChild = (execArgs: string[], env?: Record<string, string>
  * variable still wins where a caller set one.
  */
 export interface DriverSpawnOptions extends LogOptions {
+   /** Specifiers the driver child registers with Node's `--import`, in order, before it imports the head. */
+   readonly imports?: readonly string[];
    /** Test-only: capture the node argv and env instead of spawning the real child. */
    readonly __spawnForTest?: SpawnDriverChild;
    /**
@@ -171,8 +205,21 @@ export interface DriverSpawnOptions extends LogOptions {
  */
 export async function runDriverChild(execArgs: string[], options: DriverSpawnOptions): Promise<void> {
    const spawnChild = options.__spawnForTest ?? spawnNodeChild;
-   const code = await spawnChild([...driverHeapArgs(options.__heapReadingForTest), ...execArgs], logEnv(options));
+   const importArgs = (options.imports ?? []).map(specifier => `${IMPORT_FLAG}=${loaderSpecifier(specifier)}`);
+   const code = await spawnChild([...driverHeapArgs(options.__heapReadingForTest), ...importArgs, ...execArgs], logEnv(options));
    if (code) {
       process.exitCode = code;
    }
+}
+
+/**
+ * A path, absolute or `./`/`../` relative with either separator, becomes a file
+ * URL resolved against the caller's directory. Node reads `--import` as a URL or
+ * package specifier, so it would take a Windows `C:\…` for the URL scheme `c:`
+ * and a `.\…` for a package name. Any other specifier passes through as Node
+ * reads it.
+ */
+function loaderSpecifier(specifier: string): string {
+   const isPath = path.isAbsolute(specifier) || /^\.\.?[\\/]/.test(specifier);
+   return isPath ? pathToFileURL(path.resolve(specifier)).href : specifier;
 }
