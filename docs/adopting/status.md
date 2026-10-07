@@ -2,7 +2,7 @@
 
 ## Status: alpha, pre-v0
 
-Hydranium is under active development and is **not yet published to npm**. Every
+Hydranium is under active development and **publishes to npm nightly**. Every
 package sits on the `1.0.0-next` prerelease line, and that number is not a
 stability claim — "Stability and versioning" below says what it does and does not
 mean. The public API is not frozen: names, module layout, service slots and DI
@@ -103,17 +103,24 @@ The cost lands in two places worth knowing about before you commit: a Langium
 release you want is a release you wait for, and every change to the pin needs a
 from-scratch reinstall rather than a lockfile refresh.
 
-### Semantic tokens do not reach Monaco on a Theia plugin-host
+### Semantic tokens add no colour in Theia
 
-When the language server runs inside a Theia plugin-host, LSP semantic tokens
-arrive at the plugin-host but are not propagated on to Monaco, so semantic-token
-highlighting is absent in that configuration. Syntactic (TextMate) highlighting
-is unaffected. It works fully in VS Code, and in Theia when the server is
-launched as a backend contribution rather than from the plugin-host.
+Theia hands a server's semantic tokens to Monaco wherever the server runs, but
+Monaco does not colour them. Theia loads a theme's `tokenColors` and drops its
+`semanticHighlighting` and `semanticTokenColors`, so under the default
+`editor.semanticHighlighting.enabled` value, `configuredByTheme`, semantic
+highlighting stays off. Turning the setting on does not fix it: Monaco looks a
+token's type up as a theme rule name, and Theia's themes name their rules by
+TextMate scope. A type that happens to name a styled scope (`comment`,
+`keyword`) takes that colour; every other type takes the editor's default
+foreground. Syntactic (TextMate) highlighting still applies, and VS Code
+colours the same tokens.
 
-This is an upstream gap, not fixable from the framework or from an adopter's
-code. The server's semantic-tokens implementation is correct and is exercised by
-the other hosts.
+The framework cannot ship the colours, because the token types are each
+language's own. A host can: the browser example turns the setting on and adds
+theme rules named by its server's token types, in
+[`monaco-lsp-adapter.ts`](../../examples/order-flow/browser/src/page/monaco-lsp-adapter.ts).
+No example does the same in a Theia application yet.
 
 ### Client libraries cover Theia only
 

@@ -94,9 +94,10 @@ boundary and the registration-contribution pattern the services follow are in
 
 ## Status
 
-Alpha — pre-v0, not yet published. The API is not stable and may change without a
-deprecation cycle. See the [repository README](../../README.md) for the current
-status and known limitations.
+Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
+stable and may change without a deprecation cycle. See the
+[repository README](../../README.md) for the current status and known
+limitations.
 
 For task-shaped adoption paths, start with the [validation check guide](../../docs/guides/add-validation-check.md). It shows the validation contribution boundary that this package supplies.
 

@@ -77,9 +77,9 @@ only the stock surface.
 
 ## Status
 
-Alpha — pre-v0, not yet published. The API is Langium's and is stable to the extent Langium's is;
-what is not yet settled is the augmentation set and the pinned version. See the
-[repository README](../../README.md) for the current status and known limitations.
+Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is Langium's and is stable
+to the extent Langium's is; what is not yet settled is the augmentation set and the pinned version.
+See the [repository README](../../README.md) for the current status and known limitations.
 
 ## License
 

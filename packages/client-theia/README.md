@@ -138,8 +138,9 @@ and [what "gated neutral" does and does not promise](../../docs/concepts/browser
 
 ## Status
 
-Alpha — pre-v0, not yet published. The API is not stable and may change without a
-deprecation cycle. See [`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) for
+Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
+stable and may change without a deprecation cycle. See
+[`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) for
 how the Theia client tier relates to the heads, and the
 [repository README](../../README.md) for current status and known limitations.
 

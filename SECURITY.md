@@ -26,13 +26,13 @@ This information will help us triage your report more quickly.
 
 ## Supported Versions
 
-Hydranium is **alpha and pre-v0**, and is not yet published to npm. There are no
-stable release lines, and therefore no maintained older versions: fixes land on
-`main` and ship in the next release.
+Hydranium is **alpha and pre-v0**, and publishes to npm only as nightly
+`1.0.0-next` prereleases. There are no stable release lines, and therefore no
+maintained older versions: fixes land on `main` and ship in the next release.
 
-Once publishing begins, releases carry the `alpha` dist-tag and all
-`@hydranium/*` packages version in lockstep, so a fix is delivered by taking the
-current release of the whole set rather than by backporting to a branch. See
+Until the first stable release, every nightly carries the `latest` dist-tag, and
+all `@hydranium/*` packages version in lockstep, so a fix is delivered by taking
+the current release of the whole set rather than by backporting to a branch. See
 [`docs/adopting/status.md`](docs/adopting/status.md) for the versioning policy.
 
 ## Scope
