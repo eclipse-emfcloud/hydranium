@@ -4,7 +4,9 @@ A navigation aid: the key modules of each head package and how they wire. It
 complements — does not repeat — [`architecture.md`](architecture.md) (what the
 heads *are* and how they share one workspace) and
 [`conventions.md`](../contributing/conventions.md) (the patterns the modules follow:
-role-names, the `./node` boundary, registration contributions, DI tokens). Read
+role-names, the `./node` boundary, DI tokens) and
+[`contributions.md`](contributions.md#registration-contributions) (registration
+contributions). Read
 those for the "why"; read this to find your way around a package. References
 name a file + symbol (grep for the symbol); verify against source before relying
 on a load-bearing claim.
@@ -176,7 +178,9 @@ Detail + gotchas: the `hydranium-glsp-server` skill.
 
 - [`architecture.md`](architecture.md) — the heads + shared workspace (the "why").
 - [`conventions.md`](../contributing/conventions.md) — role-names, the `./node` boundary,
-  registration contributions, GLSP DI tokens, package naming.
+  GLSP DI tokens, package naming.
+- [`contributions.md`](contributions.md#registration-contributions) — registration
+  contributions.
 - [`build-pipeline-registries.md`](build-pipeline-registries.md) — the phase grid
   the `document-builder`/`build-phase-pass`/`integrity` modules implement.
 - [`framework-vs-adopter.md`](framework-vs-adopter.md) — the scope/naming seams.

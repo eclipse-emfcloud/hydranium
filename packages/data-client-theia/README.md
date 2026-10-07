@@ -35,8 +35,8 @@ text edits.
   other shell uses.
 - **`EmitterDataClient`** (on `./common`, not `./browser`) — the default
   client-side implementation of the data protocol's inbound notifications,
-  fanning each one out to a Theia `Event`: `onDidUpdateDocument`,
-  `onDidSaveDocument`, `onDidChangeProjects`. Bind an instance as the
+  fanning each one out to a Theia `Event` of the matching name
+  (`onDidUpdateDocument`, `onDidSaveDocument`, …). Bind an instance as the
   `localTarget` of the frontend's RPC proxy. It sits on the common tier because
   its only runtime dependency is `@theia/core`'s root entry, which is Theia's own
   common tier, so a backend or a plain-Node consumer can bind it too.
@@ -112,7 +112,7 @@ its loading state indefinitely with nothing in the server log to say why.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `.`         | Nothing — the surface is split by environment, so the root barrel stays empty.                                                                                                                        | browser-neutral (gated)          |
 | `./common`  | `EmitterDataClient` — a module lands here only when values, types and relative imports are all neutral or Theia COMMON tier. No error-reconstruction bridge, and that is a property of the transport: the direct `vscode-jsonrpc` connection carries a typed error across the relay natively. | browser-neutral (gated)          |
-| `./browser` | `openChannelConnection`, `createChannelConnection`, the three `Abstract*DataServiceFrontend` bases, `bindHostDiagnostics`, `whenWorkspaceOpen`, `DataSessionStopContribution`, `bindDataConnection` | browser / Theia frontend (gated) |
+| `./browser` | `openChannelConnection`, `createChannelConnection`, `ChannelDataPort`, `bindHostDiagnostics`, `whenWorkspaceOpen`, `DataSessionStopContribution`, `bindDataConnection` | browser / Theia frontend (gated) |
 | `./node`    | `DataServerConnectionHandler`, `createDataServerConnectionContainerModule`, `HostDiagnosticsServer`, `createHostDiagnosticsBackendModule`                                    | Node / Theia backend             |
 
 Resolve the subpaths with [a resolver that reads
@@ -124,11 +124,11 @@ deliberately outside that gate. Also worth reading: [what "gated neutral" does a
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
-stable and may change without a deprecation cycle. See
-[`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) for
-the data head's place among the heads, and the
-[repository README](../../README.md) for current status and known limitations.
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
+The API is not stable and may change without a deprecation cycle. See
+[`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) for the
+data head's place among the heads, and the [repository README](../../README.md)
+for current status and known limitations.
 
 ## License
 

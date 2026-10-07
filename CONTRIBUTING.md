@@ -4,8 +4,9 @@ Thanks for your interest. The project is in **alpha** and the API is not yet
 stable — expect breaking changes between releases. The version number does not
 say so: the release line starts at 1.0.0, because a 0.x line cannot take a
 minor bump under this repository's peer topology, and the alpha signal is
-carried by an npm dist-tag instead. [`docs/contributing/releasing.md`](docs/contributing/releasing.md)
-has the measurement and the consequences.
+carried by the prerelease suffix instead, `1.0.0-next.<n>`.
+[Stability and versioning](docs/adopting/status.md#stability-and-versioning) has
+the reasoning and the consequences.
 
 ## Reporting issues
 
@@ -97,12 +98,9 @@ For editor formatting, use the Oxc extension with this repository configuration.
 ## The gate
 
 `npm run check` is a chain of clauses, not a single command: `turbo run build
-lint typecheck:test test`, then `check:neutral`, `check:host-load`,
-`check:webview-csp`, `check:exports`, `check:glob-coverage`, `check:readme`,
-`check:readmes`, `check:init-provenance`, `check:deps`, `check:link-tags`,
-`check:headers`, `check:licenses` and `format:check`. The
-list here is a map, not the contract — read the chain out of `package.json`
-before relying on its extent. Turbo is only the first element, so turbo's task
+lint typecheck:test test` first, then the repository's `check:*` gates and
+`format:check`. `scripts.check` in `package.json`, with the `check:rest*`
+scripts it calls, is the list. Turbo is only the first element, so turbo's task
 count is not the verdict — `Tasks: N successful` can print while a later clause
 reddens. The run ends in one line that is the verdict, `✓ GATE PASSED` or
 `✗ GATE FAILED` with the clause that decided it; if the capture has no such

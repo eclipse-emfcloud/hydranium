@@ -27,7 +27,7 @@ way to waste someone's afternoon is to hand a release runbook to an adopter.
 - The [repository README](../README.md) carries the getting-started path: one
   `hydranium-cli init` invocation to a buildable project.
 
-Task-shaped guides — "add a data-server method", "make a diagram editable", "add a validation check" — live under `guides/`, alongside the concept pages and the two executable examples.
+Task-shaped guides — "add a data-server method", "make a diagram editable", "add a validation check" — live under `guides/`.
 
 - [**Validation check**](guides/add-validation-check.md) — add a diagnostic contribution for a language-owned invariant.
 - [**Data-server method**](guides/data-server-method.md) — expose one typed adopter operation on the data head.
@@ -83,7 +83,8 @@ constraint behind it.
   failures that only happen while building or testing this repo: the vitest
   dep-optimizer cache, a segfaulting native addon, a Playwright server that
   outlived its run.
-- [**Releasing**](contributing/releasing.md) — the changesets flow.
+- [**Releasing**](contributing/releasing.md) — how every merge to `main`
+  becomes a prerelease, and how the first stable release is cut.
 - [**Performance baseline**](contributing/perf-baseline.md) — how to reproduce
   the build-cost and resident-heap measurements, so a number you take is
   comparable with one taken before your change.

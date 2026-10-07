@@ -185,7 +185,7 @@ function deriveRollingVersion(base: string): { version: string; lastTag: string;
  *
  * Exact rather than caret, and the difference is not stylistic: `^1.0.0-next.7`
  * also matches `1.0.0` and `1.1.0`, so a caret minted on a prerelease would let
- * a consumer of one nightly silently resolve a sibling package from a future
+ * a consumer of one prerelease silently resolve a sibling package from a future
  * stable line. The published set has to be the set that was built together.
  *
  * **A dry run must not reach the disk.** CI stamps a throwaway tree, but a
@@ -223,7 +223,7 @@ function stamp(workspace: Workspace, version: string, dryRun: boolean): void {
  * remember to flip at the first stable release. Before that release `latest`
  * has to track the newest prerelease, because npm assigns `latest` to the first
  * version of a new package whatever `--tag` asks for — so publishing only to
- * `next` would strand `latest` on the very first nightly forever. Afterwards
+ * `next` would strand `latest` on the very first prerelease forever. Afterwards
  * `latest` belongs to the stable line and the rolling one moves to `next`.
  *
  * A package that does not exist yet has no stable release, which is the

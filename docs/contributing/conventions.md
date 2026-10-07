@@ -186,7 +186,7 @@ lives behind a package's **`./node`** subpath and physically under
   `process` shim into browser builds, so `typeof process` alone lies (hence
   no coarse `isNode()`).
 - **The guard is enforced, not just convention:**
-  -- eslint bans `node:*` imports (+ `@eclipse-glsp/server/node`) across the
+  -- oxlint bans `node:*` imports (+ `@eclipse-glsp/server/node`) across the
      four neutral heads' `src/`, and bans the `process`/`Buffer` globals over a
      wider set — every package that publishes a gated browser-neutral entry,
      because the esbuild probe sees an import but never a global. `src/node/`
@@ -1020,15 +1020,14 @@ Two rules fall out:
   owns a head over a transport); the cross-head package is the runtime
   they sit on, not a peer server.
 
-**Decision (2026-06-01):** the cross-head client base, if/when the shared
-Theia-host forwarder is lifted out of `glsp-client-theia` /
+**Decision (2026-06-01):** the cross-head client base, which holds the shared
+Theia-host forwarder lifted out of `glsp-client-theia` /
 `data-client-theia`, is named **`client-theia`** — no qualifier
 (`shared`, `base`, `common`). Bare head-omission, consistent with
 `protocol`; the un-prefixed member *is* the base, the same way `core` is
 among the `*-server` packages. (`common` would collide with the
 intra-package `common/` folder; `shared` with `ServerSharedServices` /
-`services.shared`.) Until that lift happens, each head keeps its own
-sibling forwarder.
+`services.shared`.)
 
 ### Soft `core` / `lsp` boundary — inherited from Langium
 
@@ -1732,8 +1731,8 @@ fluent/chained builders. Compose them by shallow nesting
 - **Fluent builders are reserved for wired, stateful subjects** — that is the
   *harness* tier (`makeTestServices` / `make<Subject>Harness` returning a bundle
   with `dispose()`), not leaf value fixtures.
-- **Don't re-declare local fixture builders.** A `no-restricted-syntax` lint
-  rule (see `eslint.config.js`) bans re-introducing a local `fakeNode` /
+- **Don't re-declare local fixture builders.** An ast-grep rule
+  (`ast-grep/rules/test-fixture-builders.yml`) bans re-introducing a local `fakeNode` /
   `makeNode` / `fakeReflection` / `makeDescription` — or a local shadow of the
   logger/tracer/services helpers `makeNoopLogger` / `makeCapturingLogger` /
   `makeNoopTracer` / `makeCapturingTracer` / `makeNoopSharedServices` /
@@ -1750,8 +1749,8 @@ fluent/chained builders. Compose them by shallow nesting
   *deliberately* minimal/degenerate (the code under test reads only one field,
   or a value must be `undefined`) — the minimal literal documents that better
   than a fully-populated fake would.
-- **Cast-level bans grow per-type and per-form, only once clean.** The same
-  `no-restricted-syntax` rule also bans casting an object literal to a fixture
+- **Cast-level bans grow per-type and per-form, only once clean.** A second
+  ast-grep rule (`test-fixture-casts.yml`) bans casting an object literal to a fixture
   type — but only for the cast *form* whose `test/**` count has already reached
   zero, so the ban never fights a legitimate minimal cast. `AstNodeDescription`,
   `Logger`, `ServerSharedServicesMinimal`, and `GlspLogger` are banned in both

@@ -82,6 +82,7 @@ framework's launchers do, or the connection's faults leave no trace.
 | `.`         | Composition and the head itself: app / diagram modules, state, storage, submission, command, dispatcher, computed-bounds, validation, logging, `serviceIdentifier`.                       | browser-neutral |
 | `./browser` | `startGlspServerInWorker`, `BrowserGlspServerOptions`, `HydraniumGlspWorkerServerLauncher`, `createGlspWorkerLauncherModule` — the web-worker bringup on GLSP's `WorkerServerLauncher`.   | browser-only    |
 | `./node`    | `startGlspServer`, `GlspServerOptions`, `StartedGlspServer`, `HydraniumGlspSocketServerLauncher`, `createGlspSocketLauncherModule` — the socket bringup on GLSP's `SocketServerLauncher`. | Node-only       |
+| `./messages`| Every user-facing message the package raises, by code — what a translation catalogue keys on.                                                                                             | browser-neutral |
 | `./testing` | `makeGlspHarness`, `makeNoopGlspLogger`, `makeCapturingGlspLogger`.                                                                                                                       | browser-neutral |
 
 This is the one head with three platform subpaths
@@ -117,8 +118,8 @@ For the adopter path from a read-only projection to a writable diagram, see [Mak
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
-stable and may change without a deprecation cycle. See the
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
+The API is not stable and may change without a deprecation cycle. See the
 [repository README](../../README.md) for the current status and known
 limitations.
 

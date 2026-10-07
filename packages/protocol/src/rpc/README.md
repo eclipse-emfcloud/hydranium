@@ -43,8 +43,8 @@ data-server head ships with `'data-server/'` by default; adopters that
 combine the data-server with their own protocol head under one prefix pass
 their adopter namespace (e.g. `'myapp/'`) on both sides.
 
-Trailing-slash discipline is the adopter's responsibility — `'foo'` is a
-literal prefix, not interpreted as a namespace segment.
+A namespace ends in `/` or is empty: `bindRpcMethods` and `createRpcProxy`
+throw a `TypeError` for `'foo'`.
 
 ### Notification discrimination: `isNotification`
 

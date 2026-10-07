@@ -34,7 +34,7 @@ npx hydranium-cli lint-grammar --services examples/bookstore/server/lib/services
 npx hydranium-cli validate     --services examples/bookstore/server/lib/services.js \
    examples/bookstore/workspace
 
-# The four data-head subcommands, against the emitted stdio entry
+# A data-head subcommand, against the emitted stdio entry
 npx hydranium-cli projects --server \
    "node ./examples/bookstore/server/lib/data-server-main.js ./examples/bookstore/workspace"
 ```

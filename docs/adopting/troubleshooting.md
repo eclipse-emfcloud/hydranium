@@ -83,8 +83,7 @@ discarded rule is indistinguishable from a rule with nothing to report.
 The base `no-restricted-imports` and `@typescript-eslint/no-restricted-imports`
 are **separate rule ids**. Using the typescript-eslint one side-steps a shared
 config that owns the base one, and it is the right id anyway: it can distinguish
-type-only from value imports. (This framework's own config uses both, for
-exactly that independence.)
+type-only from value imports.
 
 **Remedy:** use the typescript-eslint id, and exempt generated output —
 `langium-cli` rewrites those files on every build, so a violation there is not

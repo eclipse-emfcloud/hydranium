@@ -16,7 +16,8 @@ against a shell that does nothing else, which is what this one is.
 
 The first three are frontend/backend pairs, and each is **separately loadable** —
 a deployment that wants properties without a diagram loads only the second. The
-fourth is backend-only.
+fourth is backend-only, and the fifth adds a `frontendPreload` module to its
+pair, because its rebinds must land before Theia builds its connection.
 
 | Frontend module                              | Backend module                            | What it adds                                                       |
 | -------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
@@ -24,6 +25,7 @@ fourth is backend-only.
 | `order-flow-properties-frontend-module`      | `order-flow-data-server-backend-module`   | the properties panel, over the data head                           |
 | `order-flow-memory-diagnostics-frontend-module` | `order-flow-host-diagnostics-backend-module` | the diagnostics / profiling commands, under the `Order Flow` category |
 | —                                            | `order-flow-localization-backend-module`  | the German catalogue, so the framework's messages render in another language |
+| `order-flow-connection-frontend-module`, plus `order-flow-connection-preload-module` | `order-flow-connection-backend-module` | reconnect hardening on both sides, and the connection log in an Output channel |
 
 Four things here are worth reading, because each is a decision rather than
 wiring:

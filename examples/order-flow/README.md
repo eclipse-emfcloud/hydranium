@@ -103,10 +103,11 @@ launch-configuration names.
 
 ## What `npm run check` covers here, and what it does not
 
-- The `server`, `client` and `theia` suites run under `turbo run test`, so they
-  are in `check`.
-- **Neither Playwright tier is.** `theia-app` and `browser` have no `test`
-  script, deliberately, so a full `check` needs no browser binary. `theia-app`
+- Every package's vitest suite runs under `turbo run test`, so it is in
+  `check`.
+- **Neither Playwright tier is.** `theia-app` has no `test` script, and
+  `browser`'s runs only its vitest suite, deliberately, so a full `check` needs
+  no browser binary. `theia-app`
   still typechecks its specs through `typecheck:test`, which turbo does run.
 - `check:host-load` requires the VS Code extension's built `main` in bare Node
   with `vscode` stubbed; `check:webview-csp` scans its two webview bundles;

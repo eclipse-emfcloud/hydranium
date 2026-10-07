@@ -27,12 +27,6 @@ operations against a spawned data-server.
 
 ## Install
 
-> **Nothing in `@hydranium/*` is on npm yet**, so every `npx` line below
-> resolves to no package and fails with `E404`. Until the first release the CLI
-> is reachable only from a clone of this repository: run `npm run build`, then
-> substitute `node packages/cli/lib/cli.js` for the `npx …` prefix. Subcommands,
-> flags and output are the same either way.
-
 `init` needs no install at all:
 
 ```bash
@@ -254,9 +248,9 @@ and the `runProjects` / `runQuery` / `runSave` / `runWatch` command bodies.
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The subcommand surface and the
-programmatic API are both still moving. See the [repository README](../../README.md) for the
-current status and known limitations.
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The subcommand
+surface and the programmatic API are both still moving. See the [repository README](../../README.md)
+for the current status and known limitations.
 
 ## License
 

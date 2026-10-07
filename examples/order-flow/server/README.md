@@ -202,7 +202,7 @@ from the scaffold.
 ## Build and test
 
 This is a workspace package of the framework repo, so `@hydranium/*` resolves
-to the local `packages/*` checkout rather than to the registry's nightlies:
+to the local `packages/*` checkout rather than to the registry's prereleases:
 
 ```bash
 npm --prefix examples/order-flow/server run build   # langium generate + tsc

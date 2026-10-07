@@ -19,9 +19,10 @@ because a reader consults it *instead of* the code. What this page carries
 instead is the criterion each tier admits a slot on, and the placements
 whose reasoning is not visible at the binding. For *how* a
 bound class consumes its services — the `(services, options = {})`
-constructor shape, `ServerSharedServicesMinimal`, the contribution-group
-idiom — see [`conventions.md`](../contributing/conventions.md); this page is only
-about *placement*.
+constructor shape and `ServerSharedServicesMinimal` — see
+[`conventions.md`](../contributing/conventions.md); for the contribution-group
+idiom, [`contributions.md`](contributions.md#registration-contributions). This
+page is only about *placement*.
 
 ## The rule
 

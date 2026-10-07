@@ -3,9 +3,9 @@
 The models `examples/order-flow/server` is exercised against. Two projects,
 three grammars, one deliberately broken file.
 
-> **This directory is a TEST FIXTURE, and the F5 launch edits it in place.**
-> `Run Order Flow VS Code Extension — order-flow-workspace` opens this folder,
-> so anything you type in the Extension Development Host — or write from the
+> **This directory is a TEST FIXTURE, and two launches edit it in place.**
+> `Run Order Flow VS Code Extension — order-flow-workspace` and the Theia app's
+> `npm start` both open this folder, so anything you type there — or write from the
 > properties panel, which reserializes the whole document — changes the seed
 > every suite copies with `makeScratchWorkspace`. Nothing warns you: the tests
 > still pass their own scratch copy, they just copy the file you changed. A

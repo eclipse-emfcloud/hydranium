@@ -55,7 +55,7 @@ Individual stages, all run across every package via turbo:
 
 ```bash
 npm test             # typecheck:test + vitest run
-npm run lint         # eslint
+npm run lint         # oxlint
 npm run typecheck    # typecheck:test only
 npm run build        # tsc -b (framework graph)
 npm run build:all    # framework + the example apps
