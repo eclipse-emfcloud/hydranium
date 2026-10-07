@@ -1332,17 +1332,16 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    /**
     * Stages integrity-updated content for a document no client holds.
     *
-    * When `workspace/applyEdit` targets a closed file, the client opens it from
-    * disk (stale) and sends `didOpen` before applying the edit. This staged
-    * content is consumed by {@link notifyDidOpenTextDocument} to replace the
-    * stale disk text, preventing a brief revert of the integrity update.
+    * Nothing is pushed to a file no client holds. The next open of it reads
+    * disk, which lacks the update; {@link notifyDidOpenTextDocument} takes this
+    * staged content in place of that text, and the open's sync then delivers
+    * it to an editor as an unsaved change.
     *
     * Only a FIRST open consumes it, so stage only for a URI no client holds
     * ({@link isOpenInAnyClient} is `false`). A URI held only through another
     * head is not closed: an editor attaching to it joins the existing entry and
-    * never reads the stage, and the release discards it. An entry lingers
-    * only if `workspace/applyEdit` fails and the file is never opened — the
-    * memory cost is one serialised string per URI.
+    * never reads the stage, and the release discards it. An entry waits for
+    * that first open, at one serialised string per URI.
     */
    stagePendingContent(uri: DocumentUri, text: string): void {
       this.__pendingContent.set(this.documentKey(uri), text);
@@ -1357,6 +1356,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     *   - The shared services have no LSP {@link Connection} bound (non-LSP
     *     hosts like CLI / tests).
     *   - The shadow already matches `newText` (no edits needed; quiet skip).
+    *   - The language client has not opened the document. A client applies an
+    *     edit to a closed file by opening it, and that open races the edit;
+    *     the document's own open delivers its text instead.
     *
     * On `applyEdit` rejection (`result.applied === false`) or RPC failure the
     * shadow is invalidated so the next call sends a full-replace baseline.
@@ -1394,7 +1396,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // under each URI it opened, and each is diffed against its own baseline.
       const key = this.documentKey(uri);
       let lastResult: ApplyWorkspaceEditResult | undefined;
-      for (const clientUri of this.languageClientShadow.pushTargets(key, this.toLanguageClientUri(uri))) {
+      for (const clientUri of this.languageClientShadow.pushTargets(key)) {
          // Prepared per target, after the previous target's reply: prepared up
          // front, a later target is diffed against what it held before a change
          // that arrived meanwhile.
@@ -1434,10 +1436,13 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
-    * Explicitly baseline the language-client shadow for a URI. Useful in
-    * tests and for adopters that need to seed the shadow without going through
-    * a `didOpen` event (e.g. after a sideband save). Normal didOpen / didChange
-    * paths from the LSP language client already auto-track the shadow.
+    * Explicitly baseline the language-client shadow for a URI the client has
+    * open, for an adopter that knows what the client holds without a
+    * `didChange` saying so (e.g. after a sideband save). Normal didOpen /
+    * didChange paths from the LSP language client already auto-track the
+    * shadow. A seed for a URI the client has not opened is kept but changes no
+    * push, since nothing is pushed there; its open replaces it with the text it
+    * declares.
     */
    setLanguageClientText(uri: DocumentUri, text: string): void {
       this.languageClientShadow.setClientText(this.toLanguageClientUri(uri), text);

@@ -47,10 +47,10 @@ export interface PendingLanguageClientPush {
     * and applied to the already-advanced synced text the line they insert
     * lands twice.
     *
-    * `undefined` only when that buffer is unknown — the client never declared
-    * one, or a rejection invalidated what was tracked. The echo is then
-    * reconstructed against the synced text, which is sound only for a
-    * position-independent (full-text) change.
+    * `undefined` only when that buffer is unknown, because a rejection or
+    * {@link LanguageClientShadow.invalidateClientText} dropped what was
+    * tracked. The echo is then reconstructed against the synced text, which
+    * is sound only for a position-independent (full-text) change.
     */
    readonly before: string | undefined;
    /** {@link textHash} of the text this push moves the client to. */
@@ -97,7 +97,7 @@ export type LanguageClientChangeVerdict =
 
 /**
  * The store's model of what the LSP language client holds for each URI it
- * opened or the store pushed to: the text, the version it declared and the version a push moved it
+ * opened: the text, the version it declared and the version a push moved it
  * to, and the pushes it has not echoed yet. The store speaks the protocol;
  * this answers what an incoming change is and what an outgoing push sends.
  *
@@ -112,10 +112,10 @@ export type LanguageClientChangeVerdict =
 export interface LanguageClientShadow {
    /**
     * The client opened `key` under `clientUri`. `firstOpen`, the store's first
-    * open of `key`: its text becomes the diff baseline, unless a push already
-    * waits for this URI; otherwise an equality-only baseline, since a buffer
-    * opened from disk can lag the synced text. A no-op when this URI is
-    * already open.
+    * open of `key`: its text becomes the diff baseline; otherwise an
+    * equality-only baseline, since a buffer opened from disk can lag the
+    * synced text. Either replaces what was tracked for `clientUri` before the
+    * open. A no-op when this URI is already open.
     */
    addOpen(key: CanonicalUri, clientUri: LanguageClientUri, version: number, text: string, firstOpen: boolean): void;
    /** The version the client last declared for `key` under `clientUri`; `undefined` when it never opened it there. */
@@ -140,12 +140,18 @@ export interface LanguageClientShadow {
    isOpen(key: CanonicalUri, clientUri?: LanguageClientUri): boolean;
    /** Forget every URI the client holds `key` under. */
    removeAllOpens(key: CanonicalUri): void;
-   /** The URIs a push of `key` goes to: each open of it, else `fallback`. */
-   pushTargets(key: CanonicalUri, fallback: LanguageClientUri): LanguageClientUri[];
+   /**
+    * The URIs a push of `key` goes to: each open of it, none when the client
+    * has not opened it. A client applies a push to a closed file by opening
+    * it, and an open racing its own push leaves no text to diff against.
+    */
+   pushTargets(key: CanonicalUri): LanguageClientUri[];
    /**
     * Diff `text` against what the client holds under `clientUri` and queue the
     * push for echo correlation, which has to precede the RPC because an echo
-    * can arrive before its response. `undefined` when there is nothing to send.
+    * can arrive before its response. `undefined` when there is nothing to send,
+    * which includes a `clientUri` the client no longer has open: a close can
+    * land while the push to another of its URIs is in flight.
     */
    preparePush(key: CanonicalUri, clientUri: LanguageClientUri, text: string): PreparedLanguageClientPush | undefined;
    /** Forget what the client holds under `clientUri`; its next push is a full replace. */
@@ -209,12 +215,13 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
          this.opens.set(key, uris);
       }
       uris.set(clientUri, { declaredVersion: version });
-      if (!firstOpen) {
-         this.openedTexts.set(clientUri, text);
-      } else if (!this.baselines.has(clientUri)) {
-         // A push to a closed file has the client open it from disk and apply
-         // afterwards, so a tracked text already names what it is about to hold.
+      // Dropped: a seed set before the open names no buffer, and a line diff
+      // against it splices text the client does not hold.
+      this.invalidateClientText(clientUri);
+      if (firstOpen) {
          this.baselines.set(clientUri, text);
+      } else {
+         this.openedTexts.set(clientUri, text);
       }
    }
 
@@ -312,12 +319,16 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       this.opens.delete(key);
    }
 
-   pushTargets(key: CanonicalUri, fallback: LanguageClientUri): LanguageClientUri[] {
-      const uris = this.opens.get(key);
-      return uris && uris.size > 0 ? [...uris.keys()] : [fallback];
+   pushTargets(key: CanonicalUri): LanguageClientUri[] {
+      return [...(this.opens.get(key)?.keys() ?? [])];
    }
 
    preparePush(key: CanonicalUri, clientUri: LanguageClientUri, text: string): PreparedLanguageClientPush | undefined {
+      // Captured now: a reopen while the push is in flight replaces the state.
+      const state = this.opens.get(key)?.get(clientUri);
+      if (state === undefined) {
+         return undefined;
+      }
       // Read before computing the edits, which moves the baseline: this is the
       // only text the push's echo can be reconstructed against.
       const before = this.clientText(clientUri);
@@ -326,12 +337,9 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
          return undefined;
       }
       this.recordPendingPush(clientUri, before, text);
-      // Captured now: a reopen while the push is in flight replaces the state.
-      const state = this.opens.get(key)?.get(clientUri);
       // Gating a full replace turns a stale-by-one version into a refused
       // update for no safety gain, and refuses the retry after a rejection.
-      const version =
-         isFullReplace(edits) || state === undefined ? null : Math.max(state.declaredVersion, state.pushedVersion ?? state.declaredVersion);
+      const version = isFullReplace(edits) ? null : Math.max(state.declaredVersion, state.pushedVersion ?? state.declaredVersion);
       let settled = false;
       return {
          clientUri,
@@ -344,7 +352,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
                   this.tracer
                      .with(key)
                      .warn(
-                        `Language client refused applyEdit addressed at version ${version} (it last declared version ${state?.declaredVersion})`
+                        `Language client refused applyEdit addressed at version ${version} (it last declared version ${state.declaredVersion})`
                      );
                }
                this.settle(clientUri, version, state, outcome);

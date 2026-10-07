@@ -59,12 +59,12 @@ export namespace IntegrityPhase {
  *    correction. Otherwise — the holder has unsaved edits, disk changed behind
  *    the server, or disk cannot be read — the correction waits in the text
  *    store for the next save.
- * - `editor`: open the file dirty via `applyEdit`. If the user closes without
- *    saving, the correction is suppressed until the file changes or the
- *    workspace reloads. A file held only through the data or GLSP head gets
- *    neither: the correction stays in the text store, and since those heads
- *    mark only their own edits unsaved, nothing shows that store and disk
- *    differ until a save or the last close.
+ * - `editor`: leave disk alone and stage the correction; the next open of the
+ *    file takes it over the disk text, and an editor shows it as an unsaved
+ *    change. Until then no editor sees it. A file held only through the data
+ *    or GLSP head is not staged: the correction stays in the text store, and
+ *    since those heads mark only their own edits unsaved, nothing shows that
+ *    store and disk differ until a save or the last close.
  */
 export type IntegritySyncMode = 'silent' | 'editor';
 

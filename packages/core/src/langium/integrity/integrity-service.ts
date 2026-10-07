@@ -469,7 +469,8 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     *   otherwise it waits for the next save. Editor mode always waits, and the
     *   repair leaves the document dirty until a save.
     * - **Closed, silent mode** → write to disk directly (disk is authoritative).
-    * - **Closed, editor mode** → stage so the next open picks it up via applyEdit.
+    * - **Closed, editor mode** → stage, so the next open takes the correction
+    *   over the disk text.
     *
     * A held URI is not closed. Writing it as one persists the holder's unsaved
     * edits with the repair, and staging it leaves text no open reads, because
@@ -520,7 +521,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return;
       }
 
-      // Closed files, editor mode: stage content so the next open picks it up via applyEdit.
+      // Closed files, editor mode: stage content for the next open.
       this.textDocuments.stagePendingContent(document.uri, document.getText());
    }
 

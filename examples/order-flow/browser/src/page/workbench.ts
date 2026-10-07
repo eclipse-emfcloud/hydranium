@@ -875,10 +875,11 @@ export async function main(locale: Locale | undefined): Promise<void> {
       locale,
       // `applyEdit` declared because the adapter answers it, and for no stronger
       // reason than that it is true. **It does not gate the request, measured:**
-      // `applyEditToLanguageClient` checks only that an LSP connection is bound
-      // and `vscode-languageserver` forwards `workspace/applyEdit`
-      // unconditionally, so a page that omits the declaration still receives the
-      // request on every server-side write — and answers `MethodNotFound` to it
+      // `applyEditToLanguageClient` checks no client capability, only that the
+      // document is open, and `vscode-languageserver` forwards
+      // `workspace/applyEdit` unconditionally, so a page that omits the
+      // declaration still receives the request on every server-side write to a
+      // document it has open — and answers `MethodNotFound` to it
       // if it has no handler, which is a silent, total loss of the inbound
       // direction. The declaration documents the client; the HANDLER is what
       // makes the sync work.
