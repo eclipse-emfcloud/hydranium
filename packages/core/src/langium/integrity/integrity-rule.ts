@@ -77,7 +77,7 @@ export type IntegritySyncMode = 'silent' | 'editor';
  * bucket. Lower runs first; ties break by registration order.
  */
 export interface IntegrityRule<T extends AstNode = AstNode> extends RegistryItem {
-   /** Which AST node type this rule applies to. */
+   /** Which AST node type this rule applies to, subtypes included. */
    readonly nodeType: string;
    /** At which document state this rule should run. Be aware that extension properties may not be available in all phases. */
    readonly phase: IntegrityPhase;
