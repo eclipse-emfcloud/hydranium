@@ -232,10 +232,9 @@ export interface InitCommandOptions {
    readonly force?: boolean;
    /**
     * Scaffold a member of the surrounding npm workspace: extend its base
-    * tsconfig, leave `.gitignore` to the root, and address the package by
-    * `--prefix` in the scripts it prints back at itself. Errors when no ancestor
-    * declares `workspaces`, rather than silently degrading to a standalone
-    * project the caller did not ask for.
+    * tsconfig and address the package by `--prefix` in the scripts it prints
+    * back at itself. Errors when no ancestor declares `workspaces`, rather than
+    * silently degrading to a standalone project the caller did not ask for.
     */
    readonly monorepo?: boolean;
    /** npm scope for the package name, e.g. `@acme`. */
@@ -524,7 +523,6 @@ export function runInit(options: InitCommandOptions): void {
       } else {
          write('  No root tsconfig carries compilerOptions, so the emitted one stands alone.\n');
       }
-      write("  .gitignore holds `syntaxes/` only — the workspace root's covers the rest.\n");
       if (detection.printWidth !== undefined) {
          write(`  Sources wrapped at ${detection.printWidth} columns, from ${detection.rootDir}'s formatter config.\n`);
       }

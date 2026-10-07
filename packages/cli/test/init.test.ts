@@ -16,9 +16,10 @@
  */
 
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { type InitFile, type InitHead, planInitFiles, resolveInitComposition, runInit } from '../src/commands/init.js';
-import type { JsonValue, WorkspaceProbe } from '../src/commands/init-workspace.js';
+import { createNodeWorkspaceProbe, type JsonValue, type WorkspaceProbe } from '../src/commands/init-workspace.js';
 
 describe('resolveInitComposition', () => {
    it('derives a single grammar named after the project when none is given', () => {
@@ -778,6 +779,68 @@ describe('planInitFiles, detected workspace facts', () => {
       expect(vitestOf(files)).toBe(expected);
       expect(contentOf(files, 'README.md').includes('`vitest` is held below 4.1')).toBe(expected === '~4.0.18');
    });
+
+   it('inherits every option tsc reads case-insensitively, spelled in lowercase', () => {
+      const files = planInitFiles(
+         resolveInitComposition('MyLang', undefined, ['lsp'], {
+            private: true,
+            workspace: {
+               targetPath: 'packages/my-lang',
+               baseTsconfig: '../../tsconfig.json',
+               baseCompilerOptions: { target: 'es2022', lib: ['es2022'], module: 'nodenext', moduleResolution: 'nodenext' }
+            }
+         })
+      );
+      const options = Object.keys((JSON.parse(contentOf(files, 'tsconfig.json')) as { compilerOptions: object }).compilerOptions);
+      expect(options.filter(option => ['target', 'lib', 'module', 'moduleResolution'].includes(option))).toEqual([]);
+   });
+});
+
+describe('runInit --monorepo into a yo langium root', () => {
+   // The root `generator-langium` 4.4.0 writes, without its sources: an
+   // options-carrying `tsconfig.json` beside a solution `tsconfig.build.json`,
+   // an enumerated `workspaces` list, and a `.gitignore` of its own.
+   const ROOT = fileURLToPath(new URL('./fixtures/yo-langium-root/', import.meta.url));
+
+   function scaffold(): { files: readonly InitFile[]; output: string } {
+      const lines: string[] = [];
+      let captured: readonly InitFile[] = [];
+      runInit({
+         targetDir: path.join(ROOT, 'packages/my-lang'),
+         name: 'MyLang',
+         monorepo: true,
+         probe: createNodeWorkspaceProbe(),
+         write: line => lines.push(line),
+         __writeFilesForTest: (_targetDir, files) => {
+            captured = files;
+         }
+      });
+      return { files: captured, output: lines.join('') };
+   }
+
+   it('inherits the options the root supplies, whatever case it spells them in', () => {
+      expect(scaffold().files.find(file => file.path === 'tsconfig.json')?.content).toBe(
+         `{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src", "src/**/*.json"]
+}
+`
+      );
+   });
+
+   it('names the entry an enumerated workspaces list needs', () => {
+      expect(scaffold().output).toContain('"packages/my-lang"');
+   });
 });
 
 describe('runInit --monorepo', () => {
@@ -907,21 +970,12 @@ describe('runInit --monorepo', () => {
       }
    });
 
-   it('narrows .gitignore to the one entry the workspace root cannot be assumed to have', () => {
-      const { files, output } = scaffold();
-      // Same file count as a standalone single-grammar scaffold: the member
-      // keeps the file and drops three of its four entries, rather than
-      // dropping the file and losing `syntaxes/` with it.
+   it('writes the .gitignore a standalone project gets, whatever the root ignores', () => {
+      const { files } = scaffold();
+      // Same file count as a standalone single-grammar scaffold.
       expect(files).toHaveLength(21);
-      // The RULES, not the file text: the comment above them names the three
-      // entries this file deliberately omits, so a substring search over the
-      // whole file finds every one of them and proves nothing.
-      const rules = (contentOf(files, '.gitignore') ?? '')
-         .split('\n')
-         .map(line => line.trim())
-         .filter(line => line.length > 0 && !line.startsWith('#'));
-      expect(rules).toEqual(['syntaxes/']);
-      expect(output).toContain('.gitignore holds `syntaxes/` only');
+      const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
+      expect(contentOf(files, '.gitignore')).toBe(contentOf(standalone, '.gitignore'));
    });
 
    it('scopes the package name and addresses itself by --prefix', () => {

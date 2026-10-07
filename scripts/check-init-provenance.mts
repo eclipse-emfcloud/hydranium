@@ -225,12 +225,12 @@ const ORDER_FLOW_MANIFEST: Manifest = {
       verdict: 'adapted',
       reason: "the example's own name and metadata, a second bin, extra scripts, and the GLSP head's dependencies"
    },
-   // This example predates the member `.gitignore` template, so the repo root
-   // ignores its `syntaxes/` by wildcard instead. Adding the file would be
-   // correct and would also be the only reason this package has one, so it is
-   // recorded as dropped rather than backfilled — and the root pattern has to
-   // stay either way, since it is what covers this example.
-   '.gitignore': { verdict: 'dropped', reason: "the repo root's wildcard covers this example's syntaxes/" },
+   // This example predates the scaffold's `.gitignore`, so the repo root's rules
+   // cover its `lib/` and `syntaxes/` instead. Adding the file would be correct
+   // and would also be the only reason this package has one, so it is recorded
+   // as dropped rather than backfilled — and the root patterns have to stay
+   // either way, since they are what covers this example.
+   '.gitignore': { verdict: 'dropped', reason: "the repo root's rules cover this example's lib/ and syntaxes/" },
    // The recorded invocation emits exactly the three language entries, ids,
    // extensions and TextMate paths the example has — the gate's strongest claim.
    'langium-config.json': { verdict: 'identical', reason: 'the scaffold emits all three language entries' },
@@ -348,11 +348,11 @@ const BOOKSTORE_MANIFEST: Manifest = {
    // `adapted` entry with no `exempt` list waives the whole file, and a package
    // manifest is where a template gain goes unnoticed longest.
    'package.json': { verdict: 'adapted', exempt: ['name'], reason: 'the in-repo example package name' },
-   // One rule — `syntaxes/` — which is the entry a workspace root cannot be
-   // assumed to have. This repo's root also covers it by wildcard, so bookstore
-   // is ignored twice; the overlap is inert (git ignore rules are additive) and
-   // the root pattern has to stay for `order-flow`, which predates the template.
-   '.gitignore': { verdict: 'identical', reason: 'the member ignore file, holding the one Langium artefact' },
+   // The scaffold's rules. This repo's root covers them all too, so bookstore is
+   // ignored twice; the overlap is inert (git ignore rules are additive) and the
+   // root patterns have to stay for `order-flow`, which predates the scaffold's
+   // `.gitignore`.
+   '.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
    'langium-config.json': { verdict: 'identical', reason: 'one language, derived from --name' },
    'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
    'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
@@ -438,13 +438,10 @@ const TARGETS: ProvenanceTarget[] = [
  * exemption itself.
  *
  * The overlay is what `--write` lays down; the field list is what the check
- * reports. **The remainder is compared per FIELD and not over the bytes**, which
- * an exempted `package.json` cannot be: Oxfmt's `sortPackageJson`
- * canonicalises key order in this repo, so a byte-compare against the template's
- * emission order is unsatisfiable on a file both tools own. Key order is left to
- * the tool that enforces it and everything else stays here — a value that
- * changed, a field that vanished and a field nobody accounted for are all
- * reported.
+ * reports. **The remainder is compared per FIELD and not over the bytes**: key
+ * order belongs to Oxfmt's `sortPackageJson`, which canonicalises it in this
+ * repo, and everything else stays here — a value that changed, a field that
+ * vanished and a field nobody accounted for are all reported.
  *
  * A field whose emitted spelling is not found exactly once is reported rather
  * than guessed at — silently failing to substitute would exempt the whole file

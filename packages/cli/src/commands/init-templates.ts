@@ -486,9 +486,20 @@ const TSCONFIG_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
  */
 const PACKAGE_LOCAL_OPTIONS: readonly string[] = ['rootDir', 'outDir'];
 
-/** Compare two JSON option values. Sound here because compiler options are scalars and flat arrays. */
-function jsonEquals(left: JsonValue | undefined, right: JsonValue): boolean {
-   return JSON.stringify(left) === JSON.stringify(right);
+/**
+ * The enum-valued options of {@link TSCONFIG_COMPILER_OPTIONS}, whose values
+ * `tsc` reads case-insensitively, so `nodenext` and `NodeNext` are one value.
+ * An enum-valued option added there belongs here too.
+ */
+const CASE_INSENSITIVE_OPTIONS: readonly string[] = ['target', 'lib', 'module', 'moduleResolution'];
+
+/** Compare two option values. Sound here because compiler options are scalars and flat arrays. */
+function optionEquals(key: string, left: JsonValue | undefined, right: JsonValue): boolean {
+   const normalise = (value: JsonValue | undefined) => {
+      const text = JSON.stringify(value);
+      return CASE_INSENSITIVE_OPTIONS.includes(key) ? text?.toLowerCase() : text;
+   };
+   return normalise(left) === normalise(right);
 }
 
 /**
@@ -507,7 +518,9 @@ function tsconfigJson(composition: InitComposition): string {
          ? TSCONFIG_COMPILER_OPTIONS
          : [
               ...TSCONFIG_COMPILER_OPTIONS.filter(([key]) => PACKAGE_LOCAL_OPTIONS.includes(key)),
-              ...TSCONFIG_COMPILER_OPTIONS.filter(([key, value]) => !PACKAGE_LOCAL_OPTIONS.includes(key) && !jsonEquals(base[key], value))
+              ...TSCONFIG_COMPILER_OPTIONS.filter(
+                 ([key, value]) => !PACKAGE_LOCAL_OPTIONS.includes(key) && !optionEquals(key, base[key], value)
+              )
            ];
    const extendsLine = workspace?.baseTsconfig === undefined ? '' : `  "extends": "${workspace.baseTsconfig}",\n`;
    const body = options.map(([key, value]) => `    "${key}": ${JSON.stringify(value)}`).join(',\n');
@@ -549,32 +562,16 @@ export default defineConfig({
 });
 `;
 
+/**
+ * The `.gitignore`, written for a workspace member too: its root may not ignore
+ * `lib/` (a `yo langium` root ignores `out/`), and a rule the root repeats
+ * costs nothing.
+ */
 const GITIGNORE = `node_modules/
 lib/
 *.tsbuildinfo
 
 # Langium-generated TextMate grammar (rewritten by every \`langium generate\`).
-syntaxes/
-`;
-
-/**
- * The workspace-member `.gitignore` — one entry, and the one entry a root
- * cannot be assumed to have.
- *
- * A member inherits the root's rules, and `node_modules/`, `lib/` and
- * `*.tsbuildinfo` are in every monorepo root already, so repeating them here
- * would be three lines to keep in step for no coverage. `syntaxes/` is not like
- * them: it is a Langium artefact, so a root that has never held a Langium
- * package has no rule for it, and the first `langium generate` then offers
- * generated output up for commit with nothing to warn the adopter. Dropping the
- * whole file rather than this subset is the mistake this template exists to
- * undo.
- */
-const GITIGNORE_WORKSPACE_MEMBER = `# The workspace root already covers \`node_modules/\`, \`lib/\` and \`*.tsbuildinfo\`.
-# It has no reason to know about this one: the TextMate grammar is a Langium
-# artefact, rewritten by every \`langium generate\`, so a root that has never held
-# a Langium package ignores nothing here and the generated file is offered for
-# commit.
 syntaxes/
 `;
 
@@ -2118,10 +2115,7 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       { path: 'tsconfig.json', content: tsconfigJson(composition) },
       { path: 'tsconfig.test.json', content: TSCONFIG_TEST },
       { path: 'vitest.config.ts', content: VITEST_CONFIG },
-      {
-         path: '.gitignore',
-         content: composition.packaging.workspace === undefined ? GITIGNORE : GITIGNORE_WORKSPACE_MEMBER
-      },
+      { path: '.gitignore', content: GITIGNORE },
       { path: 'README.md', content: readme(composition) },
       ...grammarFiles,
       { path: `src/language-server/${composition.projectId}-module.ts`, content: moduleFile(composition) },
