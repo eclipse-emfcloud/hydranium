@@ -71,6 +71,32 @@ export function makeCapturingLogger(): CapturingLogger {
    return { logger: new Capturing(), lines };
 }
 
+/** A captured line with the logger component it was emitted under. */
+export interface AttributedLine extends CapturedLine {
+   readonly component: string | undefined;
+}
+
+/** A {@link Logger} whose emitted lines are captured with their component. */
+export interface AttributingLogger {
+   readonly logger: Logger;
+   /** Every line emitted through the logger (and its derived children), in order. */
+   readonly lines: AttributedLine[];
+}
+
+/** A capturing logger that also records each line's component, which {@link makeCapturingLogger} drops. */
+export function makeAttributingLogger(): AttributingLogger {
+   const lines: AttributedLine[] = [];
+   class Attributing extends NoopLogger {
+      protected override emit(level: LogLevel, _label: string, message: string): void {
+         lines.push({ level, message, component: this.component });
+      }
+      protected override derive(component: string): this {
+         return new Attributing(component) as this;
+      }
+   }
+   return { logger: new Attributing(), lines };
+}
+
 /** A {@link Tracer} whose emitted lines are captured for assertions. */
 export interface CapturingTracer {
    readonly tracer: Tracer;

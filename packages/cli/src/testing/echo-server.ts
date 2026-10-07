@@ -21,7 +21,8 @@
 import { DataServer } from '@hydranium/data-server';
 import { makeTestServices } from '@hydranium/core/testing';
 import type { AstNode, URI } from '@hydranium/langium';
-import { StreamMessageReader, StreamMessageWriter, createMessageConnection } from 'vscode-jsonrpc/node';
+import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type ResponseMessage } from 'vscode-jsonrpc/node';
+import { STDERR_CONNECTION_LOGGER } from '../stderr-connection-logger.js';
 
 interface FakeRoot extends AstNode {
    readonly $type: 'FakeRoot';
@@ -72,7 +73,14 @@ function main(): void {
       }
    };
 
-   const connection = createMessageConnection(new StreamMessageReader(process.stdin), new StreamMessageWriter(process.stdout));
+   const writer = new StreamMessageWriter(process.stdout);
+   const connection = createMessageConnection(new StreamMessageReader(process.stdin), writer, STDERR_CONNECTION_LOGGER);
+
+   if (process.argv.includes('--send-response-without-id')) {
+      // A response the parent cannot match to a request, for its connection to log.
+      const response: ResponseMessage = { jsonrpc: '2.0', id: null, result: null };
+      writer.write(response).catch((error: unknown) => STDERR_CONNECTION_LOGGER.error(String(error)));
+   }
 
    if (process.argv.includes('--exit-on-request')) {
       // Fail-fast fixture mode: read a full request (the reader parses the whole

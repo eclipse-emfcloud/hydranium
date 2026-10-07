@@ -137,9 +137,11 @@ messages built by `@eclipse-glsp/protocol`'s. So wherever you hand GLSP a
 connection, wrap it with `sendByMethodName` from `@hydranium/protocol`, which
 sends every typed message by its method name. One such place is GLSP's VS Code
 integration, even unchanged: its `SocketGlspVscodeServer` creates the
-connection from the integration's own copy, so override `createConnection` to
-return `sendByMethodName(this.createSocketConnection(...))`, as the order-flow
-VS Code example does. Where your code sends a typed message over a raw
+connection from the integration's own copy, and its `createSocketConnection`
+takes no logger, so the connection's faults leave no trace. Override
+`createConnection` to build the socket connection yourself with
+`createMessageConnection(reader, writer, logger)` and return it wrapped in
+`sendByMethodName`, as the order-flow VS Code example does. Where your code sends a typed message over a raw
 connection, such as the data socket, wrap it the same way or send by method
 string. `sendByMethodName` returns the connection typed as whichever copy's
 connection the place you pass it to expects, such as GLSP's

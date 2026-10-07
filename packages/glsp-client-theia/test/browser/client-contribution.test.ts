@@ -423,6 +423,32 @@ describe('HydraniumGlspClientContribution', () => {
       expect(opens.map(open => open.reconnect)).toEqual([false, false]);
    });
 
+   it("logs its channel connection's protocol faults through its logger", async () => {
+      const contribution = make();
+      const errors = vi.fn();
+      let deliver = (_handler: (path: string, channel: Channel) => void): void => undefined;
+      const delivered = new Promise<(path: string, channel: Channel) => void>(resolve => (deliver = resolve));
+      Object.assign(contribution, {
+         logger: { info: vi.fn(), warn: vi.fn(), error: errors, log: vi.fn() },
+         connectionProvider: { listen: (_path: string, handler: (path: string, channel: Channel) => void) => deliver(handler) }
+      });
+      const channel = new ForwardingChannel('test', vi.fn(), () => new Uint8ArrayWriteBuffer());
+
+      const opened = contribution.openChannel();
+      (await delivered)('path', channel);
+      const connection = await opened;
+      connection.listen();
+      const message = new Uint8ArrayWriteBuffer();
+      message.writeBytes(new TextEncoder().encode(JSON.stringify({ jsonrpc: '2.0', id: null, result: null })));
+      message.onCommit(bytes => channel.onMessageEmitter.fire(() => new Uint8ArrayReadBuffer(bytes)));
+      message.commit();
+
+      await vi.waitFor(() =>
+         expect(errors).toHaveBeenCalledWith('Received response message without id. No further error information provided.')
+      );
+      connection.dispose();
+   });
+
    /** GLSP's client sends typed messages, built by whichever copy of
     *  `vscode-jsonrpc` its protocol resolves, over the connection it is given. */
    it('creates the client over a connection that sends a message typed by another copy of vscode-jsonrpc', async () => {

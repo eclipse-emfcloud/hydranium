@@ -1,0 +1,18 @@
+# A connection built without a logger falls back to vscode-jsonrpc's NullLogger, so a
+# malformed message or a failed write on it leaves no trace. A connection that never
+# calls `listen()` handles no message and may carry an inline `ast-grep-ignore`.
+# GLSP's VS Code `createSocketConnection` takes no logger, so every call is flagged. An
+# optional logger passed through is invisible here, so framework factories require one.
+id: connection-without-logger
+language: typescript
+severity: error
+message: Build the connection with a logger, so its protocol faults reach a log. GLSP's createSocketConnection takes none, so build that one by hand.
+files:
+  - packages/*/src/**/*.ts
+  - examples/**/src/**/*.ts
+rule:
+  any:
+    - pattern: createMessageConnection($READER, $WRITER)
+    - pattern: createProtocolConnection($READER, $WRITER)
+    - pattern: createChannelConnection($CHANNEL)
+    - pattern: $SERVER.createSocketConnection($$$OPTIONS)

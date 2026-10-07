@@ -15,7 +15,6 @@ import {
    DefaultTracer,
    isConflictError,
    Logger,
-   NoopLogger,
    type TransferElement,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
@@ -32,7 +31,9 @@ import { DefaultModelService, type ModelService } from '../../../src/langium/mod
 import { type ServerSharedServices } from '../../../src/langium/module.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import {
+   type AttributedLine,
    type CapturedLine,
+   makeAttributingLogger,
    makeCapturingLogger,
    makeFakeAstNode,
    makeNoopSharedServices,
@@ -95,25 +96,6 @@ function openSession<TTransfer extends TransferElement = TransferElement>(
       store.seedOpen(uri, text, clientId);
    }
    return session;
-}
-
-/** A captured line with the logger component it was emitted under. */
-interface AttributedLine extends CapturedLine {
-   readonly component: string | undefined;
-}
-
-/** A capturing logger that also records each line's component, which `makeCapturingLogger` drops. */
-function makeAttributingLogger(): { logger: Logger; lines: AttributedLine[] } {
-   const lines: AttributedLine[] = [];
-   class Attributing extends NoopLogger {
-      protected override emit(level: AttributedLine['level'], _label: string, message: string): void {
-         lines.push({ level, message, component: this.component });
-      }
-      protected override derive(component: string): this {
-         return new Attributing(component) as this;
-      }
-   }
-   return { logger: new Attributing(), lines };
 }
 
 /**

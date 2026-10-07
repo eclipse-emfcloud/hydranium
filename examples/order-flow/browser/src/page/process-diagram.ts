@@ -49,7 +49,7 @@ import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { createMessagePortTransport, sendByMethodName } from '@hydranium/protocol';
+import { createMessagePortTransport, type Logger, sendByMethodName } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -105,7 +105,12 @@ const noContextMenuModule = new ContainerModule(bind => {
  * as the data head's line, so the three heads read as three answers about one
  * store rather than as three unrelated widgets.
  */
-export async function mountProcessDiagram(glspPort: MessagePort, sourceUri: string, onReport: (report: string) => void): Promise<string> {
+export async function mountProcessDiagram(
+   glspPort: MessagePort,
+   sourceUri: string,
+   onReport: (report: string) => void,
+   logger: Logger
+): Promise<string> {
    // No `connection.listen()` here: `BaseJsonrpcGLSPClient.start` calls it, and
    // a second call throws. Both ends use `createMessagePortTransport`; see it
    // for why.
@@ -114,7 +119,7 @@ export async function mountProcessDiagram(glspPort: MessagePort, sourceUri: stri
    // which this connection's copy rejects unless they go by method name.
    const glspClient = new BaseJsonrpcGLSPClient({
       id: PROCESS_DIAGRAM_ELEMENT_ID,
-      connectionProvider: sendByMethodName(createMessageConnection(transport.reader, transport.writer))
+      connectionProvider: sendByMethodName(createMessageConnection(transport.reader, transport.writer, logger))
    });
 
    const diagramOptions: IDiagramOptions = {

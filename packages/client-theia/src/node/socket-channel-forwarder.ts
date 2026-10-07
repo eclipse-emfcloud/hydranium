@@ -50,6 +50,8 @@ export class SocketChannelForwarder implements Disposable {
    ) {
       const reader = new SocketMessageReader(socket);
       const writer = new SocketMessageWriter(socket);
+      // Never listens, so it handles no message and has nothing to log.
+      // ast-grep-ignore: connection-without-logger
       const connection = createMessageConnection(reader, writer);
       // Nothing here destroys the socket directly. `SocketMessageWriter.dispose()`
       // destroys it itself, which covers both `dispose` and `endSocket`; and

@@ -284,7 +284,7 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
       }
    });
 
-   const connection = createProtocolConnection(child.stdout, child.stdin);
+   const connection = createProtocolConnection(child.stdout, child.stdin, console);
    const diagnostics: PublishDiagnosticsParams[] = [];
    /**
     * Waiters armed by {@link SpawnedServer.nextDiagnostics}, fanned out to from

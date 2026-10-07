@@ -18,6 +18,7 @@ import { Container, ContainerModule, injectable } from 'inversify';
 import { createMessagePortTransport, sendByMethodName, type Logger, type TransferredMessagePort } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import type { IntegratedServer } from '@hydranium/core';
+import { createGlspConnectionLogger } from '../launcher/glsp-connection-logger.js';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
 
@@ -43,7 +44,7 @@ export type { TransferredMessagePort } from '@hydranium/protocol';
 export class HydraniumGlspWorkerServerLauncher extends WorkerServerLauncher {
    protected override createConnection(options: WorkerLaunchOptions): ReturnType<WorkerServerLauncher['createConnection']> {
       const transport = createMessagePortTransport(options.context as unknown as TransferredMessagePort);
-      return sendByMethodName(createMessageConnection(transport.reader, transport.writer));
+      return sendByMethodName(createMessageConnection(transport.reader, transport.writer, createGlspConnectionLogger(this.logger)));
    }
 }
 

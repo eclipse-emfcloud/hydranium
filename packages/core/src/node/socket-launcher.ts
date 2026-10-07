@@ -39,9 +39,10 @@ export interface SocketServerOptions {
     */
    readonly host?: string;
    /**
-    * Optional logger. If omitted, the launcher runs silently — the
-    * adopter is expected to surface lifecycle events through their own
-    * logging in {@link OnClientConnection} if needed.
+    * Optional logger for lifecycle lines and each connection's protocol
+    * faults. If omitted, the launcher runs silently — the adopter is expected
+    * to surface lifecycle events through their own logging in
+    * {@link OnClientConnection} if needed.
     */
    readonly logger?: Logger;
    /** Tag included in lifecycle log lines. Default `"SocketServer"`. */
@@ -115,7 +116,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
    const activeConnections: Array<{ connection: MessageConnection; adopterDisposable: Disposable }> = [];
 
    const netServer = net.createServer(socket => {
-      const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
+      const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket), logger?.with(tag));
       const adopterDisposable = onClientConnection(connection);
       const entry = { connection, adopterDisposable };
       activeConnections.push(entry);

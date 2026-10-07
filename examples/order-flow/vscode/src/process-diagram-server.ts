@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import { SocketGlspVscodeServer } from '@eclipse-glsp/vscode-integration';
-import { sendByMethodName } from '@hydranium/protocol';
+import { sendByMethodName, type Logger } from '@hydranium/protocol';
+import * as net from 'node:net';
+import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 
 /** What {@link OrderFlowGlspVscodeServer} needs beyond the GLSP client identity. */
 export interface OrderFlowGlspVscodeServerOptions {
@@ -20,6 +22,8 @@ export interface OrderFlowGlspVscodeServerOptions {
     * activation.
     */
    readonly findPort: () => Promise<number>;
+   /** Where the connection to the head logs its protocol faults. */
+   readonly logger: Logger;
 }
 
 /**
@@ -47,6 +51,7 @@ export interface OrderFlowGlspVscodeServerOptions {
  */
 export class OrderFlowGlspVscodeServer extends SocketGlspVscodeServer {
    protected readonly findPort: () => Promise<number>;
+   protected readonly logger: Logger;
 
    constructor(options: OrderFlowGlspVscodeServerOptions) {
       super({
@@ -55,6 +60,7 @@ export class OrderFlowGlspVscodeServer extends SocketGlspVscodeServer {
          connectionOptions: { port: 0 }
       });
       this.findPort = options.findPort;
+      this.logger = options.logger;
    }
 
    protected override async createConnection(): ReturnType<SocketGlspVscodeServer['createConnection']> {
@@ -63,8 +69,12 @@ export class OrderFlowGlspVscodeServer extends SocketGlspVscodeServer {
       // binds `127.0.0.1` by default, so on a dual-stack machine where `localhost`
       // resolves to `::1` first the dial fails as ECONNREFUSED with nothing in the
       // message naming the address family as the cause.
-      // The connection comes from GLSP's VS Code integration's copy of `vscode-jsonrpc`,
-      // and GLSP's client sends typed messages built by `@eclipse-glsp/protocol`'s copy.
-      return sendByMethodName(this.createSocketConnection({ port, host: '127.0.0.1' }));
+      // Built here rather than by the base's `createSocketConnection`, which
+      // passes no logger. GLSP's client sends typed messages built by
+      // `@eclipse-glsp/protocol`'s copy of `vscode-jsonrpc`, so they go by name.
+      const socket = new net.Socket();
+      const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket), this.logger);
+      socket.connect({ port, host: '127.0.0.1' });
+      return sendByMethodName(connection);
    }
 }

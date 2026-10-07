@@ -45,7 +45,14 @@ import {
 } from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { DataConnectionWithEvents, renderFrameworkMessage, resolve, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import {
+   ConsoleLogger,
+   DataConnectionWithEvents,
+   renderFrameworkMessage,
+   resolve,
+   type DataPort,
+   type ResolvedMessage
+} from '@hydranium/protocol';
 
 /**
  * The label of this webview's session on the data head. `createSession` mints
@@ -110,7 +117,11 @@ function main(): void {
       messenger.sendNotification(ORDER_FLOW_PANEL_REPORT_ERROR, HOST_EXTENSION, { reported });
    };
 
-   const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), reportError);
+   const port = new WebviewDataPort(
+      createWebviewSideChannel(messenger, HOST_EXTENSION),
+      reportError,
+      new ConsoleLogger().with('data head')
+   );
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
    const session = connection.createSession(PROPERTIES_WEBVIEW_SESSION_LABEL);
    const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);

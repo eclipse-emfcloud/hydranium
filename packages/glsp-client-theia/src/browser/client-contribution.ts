@@ -240,7 +240,7 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
          false
       );
       const channel = await request.promise;
-      const connection = createChannelConnection(channel);
+      const connection = createChannelConnection(channel, this.logger);
       this.toDispose.push(Disposable.create(() => this.disposeChannel(connection, channel)));
       return connection;
    }

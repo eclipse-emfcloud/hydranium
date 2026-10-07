@@ -41,9 +41,10 @@ import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { IntegratedServer } from '@hydranium/core';
 import { createMessagePortTransport, sendByMethodName, type TransferredMessagePort } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { makeMessagePortPair, type MessagePortPair } from '@hydranium/protocol/testing/node';
 import { HydraniumGlspWorkerServerLauncher, startGlspServerInWorker } from '../src/browser/index.js';
-import { makeCapturingGlspLogger, type CapturingGlspLogger } from '../src/testing/index.js';
+import { makeCapturingGlspLogger, makeNoopGlspLogger, type CapturingGlspLogger } from '../src/testing/index.js';
 
 /**
  * The global `postMessage` the launcher calls, and what it was handed.
@@ -209,6 +210,16 @@ describe('startGlspServerInWorker', () => {
       expect(capturing.lines.map(line => line.message).join('\n')).toContain('GLSP server worker connection established');
    });
 
+   it("logs the connection's protocol faults through the adopter logger", async () => {
+      startHeadAndConnect();
+
+      ports.port1.postMessage({ jsonrpc: '2.0', id: null, result: null });
+
+      const fault = 'Received response message without id. No further error information provided.';
+      await waitFor(() => capturing.lines.some(line => line.message === fault));
+      expect(capturing.lines).toContainEqual({ level: 'error', message: fault, params: [] });
+   });
+
    it('stops when the client disposes its connection', async () => {
       const connection = startHeadAndConnect();
       await connection.sendRequest(JsonrpcGLSPClient.InitializeRequest, {
@@ -265,6 +276,11 @@ describe('startGlspServerInWorker', () => {
     *  protocol resolves, over the connection this launcher builds from another. */
    it("sends a message typed by GLSP's copy of vscode-jsonrpc over the launcher's connection", async () => {
       class ConnectingLauncher extends HydraniumGlspWorkerServerLauncher {
+         constructor() {
+            super();
+            this.logger = makeNoopGlspLogger();
+         }
+
          connect(context: TransferredMessagePort): GlspConnection {
             return this.createConnection({ context } as unknown as WorkerLaunchOptions);
          }

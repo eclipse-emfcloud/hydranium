@@ -100,6 +100,7 @@ export abstract class ChannelDataPort implements DataPort {
       if (!this.handle) {
          this.handle = openChannelConnection(this.connectionProvider, this.servicePath, {
             whenReady: whenWorkspaceOpen(this.workspaceService),
+            logger: this.logger,
             reconnect: this.reconnectOnConnectionLoss
          });
          // A relaunched server binds new ephemeral ports; the handle re-opens

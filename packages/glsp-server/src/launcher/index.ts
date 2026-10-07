@@ -13,10 +13,10 @@ export * from './abstract-hydranium-glsp-diagram-module.js';
 // rather than upstream's — the server-container override discards a subclass of
 // `DefaultGLSPServer`.
 export * from './hydranium-glsp-server.js';
+export * from './glsp-connection-logger.js';
 // The socket bringup lives in `@hydranium/glsp-server/node` and the worker
 // bringup in `@hydranium/glsp-server/browser`, not here: each pulls the
 // upstream build for its platform, which the portable `.` entry must stay free
-// of. `glsp-framework-overrides.js` and `glsp-server-overrides.js` are
-// deliberately NOT re-exported — they are the bindings those two bringups share,
-// reached by relative import, and an adopter composing a container by hand wants
-// the launcher rather than its internals.
+// of. The container overrides those two bringups share stay unexported, reached
+// by relative import: an adopter composing a container by hand wants the
+// launcher rather than its internals.

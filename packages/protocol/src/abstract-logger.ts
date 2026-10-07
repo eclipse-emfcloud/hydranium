@@ -46,6 +46,14 @@ export abstract class AbstractLogger implements Logger {
       return Format.timestamp(new Date(this.clock().now()));
    }
 
+   /**
+    * The `[Label - HH:MM:SS.mmm] [component]` prefix every sink starts a line
+    * with. The label is padded to the widest, so timestamps line up across sinks.
+    */
+   protected formatLinePrefix(label: string): string {
+      return `[${label.padEnd(5)} - ${this.timestamp()}]${this.component ? ` [${this.component}]` : ''}`;
+   }
+
    error(message?: string, ...args: unknown[]): this {
       this.send('error', message, args);
       return this;

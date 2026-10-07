@@ -20,6 +20,7 @@ import { Deferred, sendByMethodName, type Logger } from '@hydranium/protocol';
 import type * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '@hydranium/core';
+import { createGlspConnectionLogger } from '../launcher/glsp-connection-logger.js';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
 import type { LspConnectionLike } from '@hydranium/core/node';
@@ -33,7 +34,9 @@ import type { LspConnectionLike } from '@hydranium/core/node';
 @injectable()
 export class HydraniumGlspSocketServerLauncher extends SocketServerLauncher {
    protected override createConnection(socket: net.Socket): ReturnType<SocketServerLauncher['createConnection']> {
-      return sendByMethodName(createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket), console));
+      return sendByMethodName(
+         createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket), createGlspConnectionLogger(this.logger))
+      );
    }
 }
 

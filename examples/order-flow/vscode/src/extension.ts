@@ -23,6 +23,7 @@ import { OrderFlowPropertiesPanel } from './properties-panel';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE, OrderFlowProcessDiagramEditorProvider } from './process-diagram-editor';
 import { OrderFlowGlspVscodeServer } from './process-diagram-server';
 import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
+import { ConsoleLogger } from '@hydranium/protocol';
 // The MODULE, not a barrel: this package is a VS Code extension with no public
 // API surface of its own, so the servers extension is consumed by path.
 import { startOrderFlowLanguageClient } from '@hydranium/example-order-flow-vscode-servers/out/language-client';
@@ -57,7 +58,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
    const glspServer = new OrderFlowGlspVscodeServer({
       clientId: 'order-flow-glsp',
       clientName: 'Order Flow',
-      findPort: () => awaitPort(running, ORDER_FLOW_PORT_COMMANDS.glsp)
+      findPort: () => awaitPort(running, ORDER_FLOW_PORT_COMMANDS.glsp),
+      logger: new ConsoleLogger().with('GLSP head')
    });
    const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
    context.subscriptions.push(glspServer, glspConnector);

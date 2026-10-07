@@ -9,9 +9,10 @@
 
 import * as net from 'node:net';
 import { JsonrpcGLSPClient, type InitializeParameters, type InitializeResult } from '@eclipse-glsp/protocol';
-import { ServerModule, SocketServerLauncher } from '@eclipse-glsp/server/node.js';
+import { type Logger as GlspLogger, ServerModule, SocketServerLauncher } from '@eclipse-glsp/server/node.js';
 import { DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError } from '@hydranium/protocol';
 import { ContainerModule, injectable } from 'inversify';
+import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as JsonrpcCommon from 'vscode-jsonrpc';
 import type * as JsonrpcNode from 'vscode-jsonrpc/node';
@@ -20,11 +21,12 @@ import {
    ParameterStructures,
    SocketMessageReader,
    SocketMessageWriter,
-   type MessageConnection
+   type MessageConnection,
+   type ResponseMessage
 } from 'vscode-jsonrpc/node';
 import { HydraniumGlspServer } from '../src/index.js';
 import { HydraniumGlspSocketServerLauncher, startGlspServer, type StartedGlspServer } from '../src/node/index.js';
-import { makeNoopGlspLogger } from '../src/testing/index.js';
+import { makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 
 /**
  * The framework, `@hydranium/protocol` included, runs on a second module
@@ -63,6 +65,11 @@ type GlspConnection = ReturnType<SocketServerLauncher['createConnection']>;
 
 /** The launcher's connection for one socket, as GLSP's `run` builds it per accepted socket. */
 class ConnectingLauncher extends HydraniumGlspSocketServerLauncher {
+   constructor(logger: GlspLogger) {
+      super();
+      this.logger = logger;
+   }
+
    connect(socket: net.Socket): GlspConnection {
       return this.createConnection(socket);
    }
@@ -78,7 +85,9 @@ describe('HydraniumGlspSocketServerLauncher', () => {
    });
 
    /** A connected socket pair: the head's end over the launcher's connection, the client's over a plain one. */
-   async function connect(): Promise<{ head: GlspConnection; client: MessageConnection }> {
+   async function connect(
+      logger: GlspLogger = makeNoopGlspLogger()
+   ): Promise<{ head: GlspConnection; client: MessageConnection; clientSocket: net.Socket }> {
       const server = net.createServer();
       disposables.push(() => server.close());
       const accepted = new Promise<net.Socket>(resolve => server.once('connection', resolve));
@@ -93,13 +102,13 @@ describe('HydraniumGlspSocketServerLauncher', () => {
          () => clientSocket.destroy(),
          () => headSocket.destroy()
       );
-      const head = new ConnectingLauncher().connect(headSocket);
+      const head = new ConnectingLauncher(logger).connect(headSocket);
       const client = createMessageConnection(new SocketMessageReader(clientSocket), new SocketMessageWriter(clientSocket));
       disposables.push(
          () => head.dispose(),
          () => client.dispose()
       );
-      return { head, client };
+      return { head, client, clientSocket };
    }
 
    it('runs where GLSP builds its message types from another copy of vscode-jsonrpc', () => {
@@ -130,6 +139,19 @@ describe('HydraniumGlspSocketServerLauncher', () => {
          code: DUPLICATE_CLIENT_ID_ERROR_CODE,
          data: { clientId: 'client-1' }
       });
+   });
+
+   it("logs the connection's protocol faults through the launcher's logger", async () => {
+      const { logger, lines } = makeCapturingGlspLogger();
+      const { head, clientSocket } = await connect(logger);
+      head.listen();
+
+      const response: ResponseMessage = { jsonrpc: '2.0', id: null, result: null };
+      await new SocketMessageWriter(clientSocket).write(response);
+
+      const fault = 'Received response message without id. No further error information provided.';
+      await waitFor(() => lines.some(line => line.message === fault));
+      expect(lines).toContainEqual({ level: 'error', message: fault, params: [] });
    });
 });
 

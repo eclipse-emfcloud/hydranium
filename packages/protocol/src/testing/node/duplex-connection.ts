@@ -32,8 +32,9 @@ export function makeDuplexConnectionPair(): DuplexConnectionPair {
    const pair = makeDuplexStreamPair();
    const { clientToServer, serverToClient } = pair;
 
-   const left = createMessageConnection(new StreamMessageReader(serverToClient), new StreamMessageWriter(clientToServer));
-   const right = createMessageConnection(new StreamMessageReader(clientToServer), new StreamMessageWriter(serverToClient));
+   // `console`, so a protocol fault on either end shows in the test's output.
+   const left = createMessageConnection(new StreamMessageReader(serverToClient), new StreamMessageWriter(clientToServer), console);
+   const right = createMessageConnection(new StreamMessageReader(clientToServer), new StreamMessageWriter(serverToClient), console);
 
    left.listen();
    right.listen();
