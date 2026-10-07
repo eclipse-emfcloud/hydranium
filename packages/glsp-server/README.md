@@ -28,8 +28,9 @@ the diagram model is adopter-side, bound per diagram module.
   provides no base handler class.
 - **A submission and dispatch lifecycle that waits for the model.**
   `HydraniumGlspSubmissionHandler` gates submit on the readiness event,
-  `HydraniumGlspServerActionDispatcher` adds timing and direction to dispatch,
-  and `HydraniumGlspComputedBoundsActionHandler` is handshake-aware.
+  `HydraniumGlspServerActionDispatcher` adds timing and direction to dispatch
+  at debug, and `HydraniumGlspComputedBoundsActionHandler` is
+  handshake-aware.
 - **Diagram diagnostics for free.** `HydraniumGlspModelValidator` and
   `diagnosticsToMarkers` project the language server's diagnostics onto GLSP
   markers, so a validation error shows on the diagram and in the text editor from

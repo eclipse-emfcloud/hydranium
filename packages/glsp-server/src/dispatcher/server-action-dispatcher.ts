@@ -9,14 +9,13 @@
 
 import { type Action, DefaultActionDispatcher } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
-import { type Tracer } from '@hydranium/protocol';
-import { type GlspClientLogger } from '../logging/glsp-client-logger.js';
+import { Logger, type Tracer } from '@hydranium/protocol';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 
 /**
- * Server-side action dispatcher with built-in traffic observability:
- * every {@link DefaultActionDispatcher.dispatch} call is wrapped in a
- * {@link Tracer.time} pair that records the dispatch direction
+ * Server-side action dispatcher with built-in traffic observability: while
+ * debug is enabled, every {@link DefaultActionDispatcher.dispatch} call is
+ * wrapped in a {@link Tracer.time} pair that records the dispatch direction
  * (`→ client` vs `→ server`) and timing.
  *
  * **Why this lives in the framework (vs left as an adopter override).**
@@ -30,17 +29,12 @@ import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
  * **Extension points.**
  * - {@link loggedKinds} — if set, filter the log lines (the dispatch
  *   still happens; only the bracketed timing line is suppressed). Default
- *   `undefined` means **every** action's dispatch is timed and logged.
+ *   `undefined` times every action's dispatch while debug is enabled.
  * - {@link summarize} — return a non-empty string to append `[summary]`
  *   to the log line; default returns `''` (no extra bracket).
- *
- * Adopters bind it in a per-diagram module, as the `ActionDispatcher` service.
  */
 @injectable()
 export class HydraniumGlspServerActionDispatcher extends DefaultActionDispatcher {
-   /** Narrowed from `Logger`; DI binds {@link GlspClientLogger}. */
-   declare protected readonly logger: GlspClientLogger;
-
    /** Caller-tagged tracer (auto-componented with this class name, like the logger). */
    @inject(HydraniumTypes.Tracer) protected readonly tracer!: Tracer;
 
@@ -52,14 +46,15 @@ export class HydraniumGlspServerActionDispatcher extends DefaultActionDispatcher
 
    /**
     * Override to enrich the log line with payload-specific detail. Return an
-    * empty string to suppress the bracket. Default returns `''`.
+    * empty string to suppress the bracket. Default returns `''`. Called only
+    * when debug is enabled, so it may serialise the payload.
     */
    protected summarize(_action: Action): string {
       return '';
    }
 
    override dispatch(action: Action): Promise<void> {
-      if (this.loggedKinds && !this.loggedKinds.has(action.kind)) {
+      if (!Logger.isLevelEnabled('debug') || (this.loggedKinds && !this.loggedKinds.has(action.kind))) {
          return super.dispatch(action);
       }
       const direction = this.clientActionForwarder.shouldForwardToClient(action) ? '→ client' : '→ server';
@@ -67,6 +62,6 @@ export class HydraniumGlspServerActionDispatcher extends DefaultActionDispatcher
       const label = summary
          ? `Dispatch action '${action.kind}' ${direction} [${summary}]`
          : `Dispatch action '${action.kind}' ${direction}`;
-      return this.tracer.time(label, () => super.dispatch(action));
+      return this.tracer.time(label, () => super.dispatch(action), 'debug');
    }
 }

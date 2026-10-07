@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   type ActionDispatcher,
    type ActionHandlerConstructor,
    applyBindingTarget,
    type BindingTarget,
@@ -25,6 +26,7 @@ import { injectable, type interfaces } from 'inversify';
 import type { LanguageMetaData } from '@hydranium/langium';
 import { type ServerLanguageServices, type ServerSharedServices, typedMetadata } from '@hydranium/core';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
+import { HydraniumGlspServerActionDispatcher } from '../dispatcher/server-action-dispatcher.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
 import { HydraniumGlspOperationActionHandler } from '../command/hydranium-glsp-operation-action-handler.js';
@@ -41,10 +43,11 @@ import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-
  * whose diagram module already extends an intermediate base of their own and
  * cannot take the framework base class; call it from `configure` after
  * `super.configure(...)` and repeat what the base's own overrides of
- * `configure`, `configureActionHandlers`, `configureClientSessionInitializers`
- * and `bindCommandStack` do. Without the status bindings among them, nothing
- * tells the client why its diagram is read-only; without the operation and
- * undo handlers, operation handlers edit the built root every reader shares.
+ * `configure`, `configureActionHandlers`, `configureClientSessionInitializers`,
+ * `bindActionDispatcher` and `bindCommandStack` do. Without the status
+ * bindings among them, nothing tells the client why its diagram is read-only;
+ * without the operation and undo handlers, operation handlers edit the built
+ * root every reader shares.
  * The base class is the preferred entry point because it makes the
  * declaration non-optional.
  *
@@ -152,6 +155,11 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
    override configureClientSessionInitializers(binding: MultiBinding<ClientSessionInitializer>): void {
       super.configureClientSessionInitializers(binding);
       binding.add({ service: DiagramStatusReporter });
+   }
+
+   /** {@link HydraniumGlspServerActionDispatcher}, so every dispatch is timed once logging is at debug. */
+   protected override bindActionDispatcher(): BindingTarget<ActionDispatcher> {
+      return HydraniumGlspServerActionDispatcher;
    }
 
    /** {@link HydraniumGlspCommandStack}, so the diagram is dirty exactly while a document it has open is. */
