@@ -152,29 +152,38 @@ npm run check:init-scaffold
 
 This installs the packed `@hydranium/cli`, with the framework packages it
 needs packed too, and scaffolds with that binary, the way an adopter's `npx`
-does, in six shapes: standalone with every head, standalone with LSP and data,
-standalone with LSP and GLSP, standalone LSP-only, and two `--monorepo` members,
-each of its own fresh workspace whose root declares an npm that installs
-`vitest` 4.1. The first member, with every head, is scaffolded and installed under the npm the
+does, in seven shapes: standalone with every head, standalone with LSP and data,
+standalone with LSP and GLSP, standalone LSP-only, and three `--monorepo`
+members. The first two each join a fresh workspace whose root declares an npm
+that installs `vitest` 4.1. The first member, with every head, is scaffolded and installed under the npm the
 oldest supported Node bundles, like the standalone shapes, so `init` holds
 `vitest` below 4.1; the second, LSP-only, under the root's npm, so `init` lifts
-the hold. Each shape asserts which `vitest` range `init` emitted. The check
+the hold. The third, LSP-only, joins the root `generator-langium` writes, the
+fixture `init`'s tests use, installed before `init` runs, so another member's
+`langium` 4.4 and LSP packages hold the top of the tree. Each shape asserts
+which `vitest` range `init` emitted, and each member's root gets the
+`workspaces` entry and the pins `init` prints for it. The check
 changes each scaffold's manifest in two ways: it repoints the `@hydranium/*` packages the scaffold
 declares at the packed candidates, and adds the framework peers those need,
 which npm would otherwise fetch from the registry, to the block of the package
 that needs them. It also copies in the smoke script that drives the heads. A
 framework package the shape does not declare and nothing it declares needs must
 not be installed. After each install it asserts one physical copy each of
-`langium` and `vscode-languageserver-protocol` and one 9.x `vscode-jsonrpc` (the
-8.x copies `@eclipse-glsp/*` nest are allowed), then builds the project, runs its
-own tests and drives every head the shape has over `lib/main.js`: LSP, the data
-socket and the GLSP socket. An LSP request for a missing document must reject
-with `-32802`, which it resolves with instead when the protocol splits, and a
-data read of one must resolve with no model. The standalone scaffold
-with every head is then reinstalled with `--omit=dev` and driven again, as a
-deployment would. CI runs it as its own job, because the bookstore consumer
-above is assembled by hand and so cannot show what an adopter's first install
-meets. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the project, as for that smoke.
+`langium` and `vscode-languageserver-protocol`, of `@eclipse-glsp/protocol` in
+the GLSP shapes, and one 9.x `vscode-jsonrpc` (the 8.x copies `@eclipse-glsp/*`
+nest are allowed), counted among the member's dependencies in a workspace,
+then builds the project,
+compiles it again with the oldest TypeScript the adopter requirements state
+(under the scaffold's own `skipLibCheck`, so dependency declarations are not
+checked at that version), runs its own tests and drives every head the shape
+has over `lib/main.js`: LSP, the data socket and the GLSP socket. An LSP
+request for a missing document must reject with `-32802`, which it resolves
+with instead when the protocol splits, and a data read of one must resolve
+with no model. The standalone scaffold with every head is then reinstalled with
+`--omit=dev` and driven again, as a deployment would. CI runs it as its own
+job, because the bookstore consumer above is assembled by hand and so cannot
+show what an adopter's first install meets. `HYDRANIUM_KEEP_PACKED_CONSUMER=1`
+keeps the project, as for that smoke.
 
 ### Published prerelease baseline smoke
 

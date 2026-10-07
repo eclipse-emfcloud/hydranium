@@ -159,8 +159,8 @@ whether the package is publishable, asked on every run because the emission
 declares itself `UNLICENSED` and withholds publication to match, so `--public`
 is a licence decision rather than a packaging one. In a workspace the scaffold
 extends the root tsconfig that carries `compilerOptions`; it never writes
-outside the target directory, so a root `workspaces` entry is printed rather
-than added.
+outside the target directory, so a root `workspaces` entry and the dependency
+pins the root needs are printed rather than added.
 
 You now have a runnable server (`node lib/main.js --stdio` — LSP + data-server
 on one process) and a starter grammar at `src/grammar/my-lang.langium`. Edit

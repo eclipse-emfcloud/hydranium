@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { AbstractAstReflection, type AstMetaData } from '@hydranium/langium';
+import { AbstractAstReflection, type AstMetaData, type AstReflection } from '@hydranium/langium';
 import { CompositeAstReflection } from '../../src/langium/composite-ast-reflection.js';
 
 /** A reflection over a fixed type map, standing in for one `langium-cli` run's output. */
@@ -108,5 +108,37 @@ describe('CompositeAstReflection', () => {
       });
 
       expect(() => new CompositeAstReflection([reflectionOne, extended])).toThrow(/'BaseType'.*'members'/s);
+   });
+
+   it('checks every reflection a composite is built over, naming the one from the other copy', () => {
+      // Another installed copy's base class: a different class object with the fields Langium's base creates.
+      const otherCopy = {
+         AbstractAstReflection: class {
+            readonly types: AstMetaData = {};
+            protected subtypes = {};
+            protected allSubtypes = {};
+         }
+      };
+      class OtherCopyReflection extends otherCopy.AbstractAstReflection {}
+
+      expect(() => new CompositeAstReflection([reflectionOne, new OtherCopyReflection() as unknown as AstReflection])).toThrow(
+         /reflections\[1\] \(OtherCopyReflection\).*second physical copy/s
+      );
+   });
+
+   it('reports a prototype-less reflection carrying the other copy fields rather than failing to name it', () => {
+      const withoutPrototype = Object.assign(Object.create(null), { types: {}, subtypes: {}, allSubtypes: {} }) as AstReflection;
+
+      expect(() => new CompositeAstReflection([reflectionOne, withoutPrototype])).toThrow(
+         /reflections\[1\] \(no constructor\).*second physical copy/s
+      );
+   });
+
+   it('accepts a composite over a reflection with no prototype, naming no reflection until one fails', () => {
+      const withoutPrototype = Object.assign(Object.create(null), {
+         types: { TypeThree: { name: 'TypeThree', properties: {}, superTypes: [] } }
+      }) as AstReflection;
+
+      expect(() => new CompositeAstReflection([reflectionOne, withoutPrototype])).not.toThrow();
    });
 });

@@ -12,6 +12,7 @@ import { type LangiumSharedCoreServices } from '@hydranium/langium';
 import { type LangiumServices, type LangiumSharedServices } from '@hydranium/langium/lsp';
 import type { ServerSharedServicesMinimal } from './shared-services.js';
 import { collectProducibleTypes } from './language-types.js';
+import { assertSingleLangiumCopy } from './single-langium-copy.js';
 import { DefaultAstDocumentManager } from '../documents/ast-document-manager.js';
 import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { DefaultBuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
@@ -352,30 +353,33 @@ export const DEFAULT_EAGER_SERVICES: ReadonlyArray<(services: ServerSharedServic
  * discarded.
  *
  * Bootstrap responsibilities, in order:
- *  1. Hand the shared services to `shared.ServiceRegistry` if it accepts
+ *  1. {@link assertSingleLangiumCopy} — fail fast when the shared
+ *     `AstReflection` is built on a second copy of `langium`, before any
+ *     later check can fail first and name the wrong cause.
+ *  2. Hand the shared services to `shared.ServiceRegistry` if it accepts
  *     them after construction, so Langium's declared-languageId lookup
  *     rung works however the adopter's registry binding was built.
- *  2. {@link assertDistinctFileRouting} — before registration, because
+ *  3. {@link assertDistinctFileRouting} — before registration, because
  *     `register` resolves a routing collision by last-wins and afterwards
  *     the evidence is gone.
- *  3. Register `language` against `shared.ServiceRegistry`, the
+ *  4. Register `language` against `shared.ServiceRegistry`, the
  *     required final step of any Langium DI bootstrap. Done before slot
  *     validation so subclassed registries (typed-accessor extensions)
  *     populate any side state before validation walks construct services
  *     that read from the registry.
- *  4. {@link assertCoreSlotsBound} — fail fast if the consumer's
+ *  5. {@link assertCoreSlotsBound} — fail fast if the consumer's
  *     `inject(...)` composition is missing a `@hydranium/core` module. May
  *     trigger lazy service construction as side effect of walking the
  *     slots; that construction expects a populated `ServiceRegistry`,
  *     hence the order.
- *  5. {@link warnOnUnexpectedBindings} — opt-in (gated by
+ *  6. {@link warnOnUnexpectedBindings} — opt-in (gated by
  *     {@link STRICT_BINDINGS_ENV}); warns when a framework slot is bound
  *     to a non-subclass of its framework base. No-op unless the env is set.
- *  6. {@link assertReflectionCoversLanguages} — catch a clobbered shared
+ *  7. {@link assertReflectionCoversLanguages} — catch a clobbered shared
  *     `AstReflection` before it starts silently answering `isSubtype`
  *     false for a registered language's types. Skipped here, since a lone
  *     language has no sibling that could clobber it.
- *  7. Invoke eager-construction accessors in array order.
+ *  8. Invoke eager-construction accessors in array order.
  *
  * Multi-grammar adopters use {@link bootstrapLangiumLanguages}, which
  * registers every language before validating slots or constructing the
@@ -400,16 +404,20 @@ export function bootstrapLangium<TShared extends LangiumSharedServices & ServerS
  * ORDER across languages is what makes this a distinct function rather
  * than a loop the caller could write:
  *
- *  1. **Every** language is registered against `shared.ServiceRegistry`
- *     first. Slot validation and eager construction both build services
+ *  1. {@link assertSingleLangiumCopy} runs **once**, before anything else,
+ *     since every language shares the one `AstReflection`.
+ *  2. **Every** language is registered against `shared.ServiceRegistry`
+ *     next. Slot validation and eager construction both build services
  *     that read the registry — a per-language
  *     register-then-validate-then-eager loop would run them while later
  *     languages were still missing, so a shared service that walks
  *     `ServiceRegistry.all` (or resolves by extension) would see a
  *     half-populated registry and cache the wrong answer.
- *  2. `assertCoreSlotsBound` / `warnOnUnexpectedBindings` per language —
+ *  3. `assertCoreSlotsBound` / `warnOnUnexpectedBindings` per language —
  *     each language composes its own module chain, so each is checked.
- *  3. Eager accessors run **once**, after all registrations. They take
+ *  4. {@link assertReflectionCoversLanguages} runs **once**, on the one
+ *     shared `AstReflection`.
+ *  5. Eager accessors run **once**, after all registrations. They take
  *     the shared tier, and the framework's eager set is shared-tier only
  *     (`ProjectManager`, `BuildPipelineIntegration`, `LangiumProfiler`,
  *     `CstResidencyService`) — `BuildPipelineIntegration` in particular
@@ -436,6 +444,11 @@ export function bootstrapLangiumLanguages<
             'registered language cannot validate its slots. Pass the language(s) produced by your ' +
             '`inject(...)` composition.'
       );
+   }
+   // First, because a second copy of `langium` can make a later check fail
+   // first and name the wrong cause.
+   if (shared.AstReflection) {
+      assertSingleLangiumCopy(shared.AstReflection);
    }
    // Back-fill the shared services onto a registry that was constructed
    // without them, so Langium's declared-languageId lookup rung works no

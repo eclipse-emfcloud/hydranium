@@ -393,6 +393,33 @@ describe('assertReflectionCoversLanguages', () => {
    });
 });
 
+describe('assertSingleLangiumCopy', () => {
+   /** Shared services whose reflection extends another installed copy's base, which carries the fields Langium's base creates. */
+   function sharedOnOtherCopy(): ReturnType<typeof fullyBoundShared> {
+      class OtherCopyBase {
+         readonly types: AstMetaData = {};
+         protected subtypes = {};
+         protected allSubtypes = {};
+      }
+      const shared = fullyBoundShared();
+      (shared as unknown as { AstReflection: unknown }).AstReflection = new (class extends OtherCopyBase {})();
+      return shared;
+   }
+
+   it('runs from bootstrapLangiumLanguages on the shared reflection', () => {
+      expect(() => bootstrapLangiumLanguages(sharedOnOtherCopy(), [fullyBoundLanguage()], [])).toThrow(/second physical copy/);
+   });
+
+   it('runs before any language is registered or validated, so a later check cannot report the split first', () => {
+      const shared = sharedOnOtherCopy();
+      const unbound = fullyBoundLanguage();
+      delete (unbound as unknown as { references?: unknown }).references;
+
+      expect(() => bootstrapLangiumLanguages(shared, [unbound], [])).toThrow(/second physical copy/);
+      expect(shared.__registerCalls).toEqual([]);
+   });
+});
+
 describe('warnOnUnexpectedBindings', () => {
    function captureLogger(): { shared: LangiumSharedServices & ServerSharedServicesMinimal; warns: string[] } {
       const warns: string[] = [];

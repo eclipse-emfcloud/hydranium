@@ -11,12 +11,14 @@ project stays in lockstep with the version the framework was built against.
 ## Why this package exists
 
 Langium is pinned to **one exact version** here, to guarantee a **single physical copy** across the
-workspace. Re-export is transparent — given one physical install, importing `AstNode` or `URI` from
-`@hydranium/langium` and from `langium` yields the same class object and the same declaration. That
-transparency is exactly what a split install destroys: two copies of Langium mean two `AstNode`
-declarations and two `URI` classes, so `instanceof` and every nominal identity check across them
-silently start returning `false`. Without the pin, single-copy is only a semver-dedup coincidence,
-one minor bump away from breaking.
+workspace. Re-export is transparent — given one physical install, importing `AstUtils` or
+`OperationCancelled` from `@hydranium/langium` and from `langium` yields the same object and the
+same declaration. That transparency is exactly what a split install destroys: two copies of Langium
+mean two sets of declarations, which TypeScript refuses to mix, and two sets of module-level values,
+so one that Langium compares by identity, such as its cancellation signal, is not recognised by the
+other copy. The framework refuses to start a server whose AST reflection is built on a copy other
+than its own. Without the pin, single-copy is only a semver-dedup coincidence, one minor bump away
+from breaking.
 
 For an **adopter**, the reason to route imports here is not runtime identity (that already holds) —
 it is **version coupling**. Langium sits in a chain with `vscode-languageserver`,

@@ -211,7 +211,7 @@ export const INIT_HELP: readonly string[] = [
    '                        compilerOptions, and the scripts address the package by',
    '                        --prefix. Errors when no ancestor declares `workspaces`.',
    '                        Never writes outside the target — the root `workspaces`',
-   '                        entry is printed, not added.',
+   '                        entry and dependency pins are printed, not added.',
    '  --scope <@scope>      npm scope for the package name, e.g. @acme. Not inferred:',
    '                        a root manifest is usually named for the repo, not the',
    '                        scope. The wizard offers the siblings’ scope as a default.',
