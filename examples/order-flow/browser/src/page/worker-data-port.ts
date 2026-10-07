@@ -30,8 +30,8 @@ export class WorkerDataPort implements DataPort {
 
    constructor(
       protected readonly port: MessagePort,
-      /** Where the connection logs its protocol faults. */
-      protected readonly logger: Logger
+      /** Where the connection logs its protocol faults, and what it does on its own. */
+      readonly logger: Logger
    ) {}
 
    /**

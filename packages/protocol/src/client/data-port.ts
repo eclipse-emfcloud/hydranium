@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import type { Event, MessageConnection } from 'vscode-jsonrpc';
+import type { Logger } from '../logger';
 import type { ResolvedMessage } from '../messages/primitives';
 import type { RpcConnectionLifecycle } from './rpc-connection';
 
@@ -76,6 +77,9 @@ export interface DataPort {
     * passing no translation map yields the English.
     */
    reportError(error: unknown, reported: ResolvedMessage): void;
+
+   /** Where a connection over this port logs what it does on its own. Without one it logs nothing. */
+   readonly logger?: Logger;
 
    /**
     * Fires when the host tears the transport down and the current connection

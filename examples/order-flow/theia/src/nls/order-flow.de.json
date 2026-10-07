@@ -16,6 +16,8 @@
       "error-dump-server-state": "Serverzustand konnte nicht ausgegeben werden: {0}"
     },
     "protocol": {
+      "data-connection-session-restore-failed": "Eine Sitzung konnte nach der erneuten Verbindung zum Datenserver nicht wiederhergestellt werden: {detail}",
+      "data-connection-watch-restore-failed": "{uri} konnte nach der erneuten Verbindung zum Datenserver nicht erneut beobachtet werden: {detail}",
       "data-server-connect-failed": "Verbindung zum Datenserver fehlgeschlagen: {detail}",
       "data-server-not-ready": "Der Datenserver war nicht rechtzeitig bereit: {detail}",
       "data-session-answer-without-model": "Der Datenserver hat einen Schreibvorgang für {uri} ohne Modell beantwortet; die Sitzung behandelt diese Antwort als älter als jede Version.",

@@ -43,7 +43,7 @@ export abstract class ChannelDataPort implements DataPort {
    @inject(WorkspaceService) protected readonly workspaceService!: WorkspaceService;
    @inject(MessageService) protected readonly messageService!: MessageService;
    @inject(ConnectionReporter) protected readonly connectionReporter!: ConnectionReporter;
-   @inject(ChannelLogger) protected readonly logger!: ChannelLogger;
+   @inject(ChannelLogger) readonly logger!: ChannelLogger;
 
    /** Frontend service path the backend forwarder for this head is registered under. */
    protected abstract readonly servicePath: string;

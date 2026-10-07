@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Emitter, type Event } from 'vscode-jsonrpc';
+import { Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { FRAMEWORK_CLIENT_IDS } from '../client-ids';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
@@ -20,12 +20,33 @@ import {
    type TransferDocumentUpdatedEvent
 } from '../data';
 import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
+import type { Logger } from '../logger';
+import { defineMessage, describeError, resolve } from '../messages/primitives';
+import { NoopLogger } from '../noop-logger';
 import { randomUuid } from '../random-uuid';
 import type { TransferElement } from '../transfer-element';
 import { DataEvents } from './data-events';
 import type { DataPort } from './data-port';
 import { DataSession, type DataSessionFactory } from './data-session';
-import { RpcConnection, type RpcConnectionLifecycle } from './rpc-connection';
+import { RpcConnection, type RpcConnectionGeneration, type RpcConnectionLifecycle } from './rpc-connection';
+
+/**
+ * A watch {@link DataConnection.watchDocument} keeps could not be sent again to
+ * a connection that became ready after a drop; the next one sends it again.
+ */
+export const DATA_CONNECTION_WATCH_RESTORE_FAILED = defineMessage(
+   'hydranium/protocol/data-connection-watch-restore-failed',
+   'Could not watch {uri} again after reconnecting to the data server: {detail}'
+);
+
+/**
+ * A session's restore threw when its connection came back; the connection
+ * went on restoring the others.
+ */
+export const DATA_CONNECTION_SESSION_RESTORE_FAILED = defineMessage(
+   'hydranium/protocol/data-connection-session-restore-failed',
+   'Could not restore a session after reconnecting to the data server: {detail}'
+);
 
 /** Options for {@link DataConnection}. */
 export interface DataConnectionOptions<
@@ -83,6 +104,8 @@ export type DataConnectionArgs<
  * `clientId`, which identifies a participant rather than a wire, and the server
  * keys its opens and watches per `(uri, clientId)`. Two parties sharing one
  * identity cannot tell each other's writes from their own echoes.
+ * {@link DataConnection.watchDocument} is the exception: it acts as no
+ * participant, under an id no session holds, and opens or writes nothing.
  *
  * Generic over the transfer root so this file names no grammar. An adopter
  * binds the concrete root (or the union of them, for a multi-grammar head) at
@@ -103,16 +126,39 @@ export class DataConnection<
     */
    readonly onDidCreateSession: Event<DataSession<TTransfer, TServer>> = this.createSessionEmitter.event;
    /**
-    * Per URI, the `dirty` the client was last told since a session of this
-    * connection last opened the URI. A restore tells the client its answer
-    * only where it differs, so the client hears changes and nothing else; see
-    * {@link DataSessionHost.restoreDirty}.
+    * Per URI, the `dirty` the client was last told, whether a session of this
+    * connection has it open or a watch follows it. A session's open or close
+    * of the URI forgets it; disposing a watch does not, since a watch knows
+    * only the caller's spelling of the URI, not the server's key. A
+    * session's restore and a watch sent again after a reconnect tell the
+    * client their answer where it differs, a forgotten URI included; see
+    * {@link restoreDirty}.
     */
    protected readonly dirtyStates = new Map<string, boolean>();
    /** Backs each session's {@link DataSessionHost.onDidChangeDirty}. */
    protected readonly dirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
    /** Backs each session's {@link DataSessionHost.onDidUpdateDocument}. */
    protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>>();
+   /**
+    * Per id {@link watchDocument} watches under, the URI it watches, which
+    * {@link generationReady} sends again to every later generation until the
+    * watch's handle is disposed.
+    */
+   protected readonly watches = new Map<string, string>();
+   /** The port's logger, or one that logs nothing. */
+   protected readonly logger: Logger;
+   /** Backs {@link onDidReconnect}. */
+   protected readonly reconnectEmitter = new Emitter<void>();
+   /**
+    * Fires on every reconnect: once a connection becomes ready after an
+    * earlier one was, and its watches have been sent. The server sends no
+    * event for a change made while the connection was down, so a watcher reads
+    * its document again on this; a read it sends now reaches the server after
+    * its watch.
+    */
+   readonly onDidReconnect: Event<void> = this.reconnectEmitter.event;
+   /** Whether a generation was ready before, which makes the next one a reconnect. */
+   protected readyBefore = false;
 
    constructor(port: DataPort, client: TClient, ...rest: DataConnectionArgs<TTransfer, TClient, TServer>) {
       const [options = {}] = rest as [
@@ -128,6 +174,7 @@ export class DataConnection<
       });
       this.sessionFactory =
          options.sessionFactory ?? ((clientId, host, label) => new DataSession<TTransfer, TServer>(clientId, host, label));
+      this.logger = (port.logger ?? new NoopLogger()).for('DataConnection');
    }
 
    /**
@@ -172,11 +219,7 @@ export class DataConnection<
          {
             connected: () => this.connected(),
             reportError: (error, reported) => this.reportError(error, reported),
-            restoreDirty: event => {
-               if (this.dirtyStates.get(event.uri) !== (event.text?.dirty ?? false)) {
-                  this.deliverDirty(event);
-               }
-            },
+            restoreDirty: event => this.restoreDirty(event),
             forgetDirty: uri => this.dirtyStates.delete(uri),
             onDidChangeDirty: this.dirtyChangedEmitter.event,
             onDidUpdateDocument: this.documentUpdatedEmitter.event
@@ -192,6 +235,50 @@ export class DataConnection<
       session.connected().catch(() => undefined);
       this.createSessionEmitter.fire(session);
       return session;
+   }
+
+   /**
+    * Follow `uri` without opening it: its update events reach this
+    * connection's client once this resolves. An open would hold the document
+    * for as long as the caller follows it. The watch runs under an id of its
+    * own, `label` plus `#` plus a random UUID, and needs no session: a session
+    * closing the document would also end its own watch of it. Every later
+    * connection that becomes ready gets the watch again. Disposing the handle
+    * unwatches.
+    */
+   async watchDocument(uri: string, label = 'watch'): Promise<Disposable> {
+      const clientId = `${label}#${randomUuid()}`;
+      const server = await this.connected();
+      // Kept only from here: kept during the wait, a generation that became
+      // ready meanwhile would send the watch a second time.
+      this.watches.set(clientId, uri);
+      try {
+         await server.watchModelDocument({ uri, clientId });
+      } catch (error: unknown) {
+         this.watches.delete(clientId);
+         throw error;
+      }
+      this.logger.debug(`Watch ${uri} as ${clientId}`);
+      return Disposable.create(() => {
+         if (!this.watches.delete(clientId)) {
+            return;
+         }
+         // Without a generation the server dropped the watch with its
+         // connection, and one that drops before it is ready drops it too: the
+         // unwatch follows no drop to a connection opened only for it.
+         const generation = this.generation;
+         if (generation) {
+            (generation.ready ??= this.awaitReady(generation)).then(
+               () => {
+                  if (this.generation === generation) {
+                     this.logger.debug(`Unwatch ${uri} as ${clientId}`);
+                     generation.server.unwatchModelDocument({ uri, clientId }).catch(() => undefined);
+                  }
+               },
+               () => undefined
+            );
+         }
+      });
    }
 
    /**
@@ -233,6 +320,17 @@ export class DataConnection<
       return target as unknown as TClient;
    }
 
+   /**
+    * Hand a dirty state a restore read to the client, unless it is what
+    * {@link dirtyStates} says the client was last told; a URI it holds
+    * nothing for counts as different.
+    */
+   protected restoreDirty(event: TransferDocumentDirtyChangedEvent): void {
+      if (this.dirtyStates.get(event.uri) !== (event.text?.dirty ?? false)) {
+         this.deliverDirty(event);
+      }
+   }
+
    /** Record `event` in {@link dirtyStates} and hand it to the client. */
    protected deliverDirty(event: TransferDocumentDirtyChangedEvent): void {
       this.dirtyStates.set(event.uri, event.text?.dirty ?? false);
@@ -243,9 +341,11 @@ export class DataConnection<
    /**
     * After the transport dropped, reconnect on the next macrotask for the
     * sessions with documents open, so they re-watch and follow their documents
-    * again without waiting for a call of their own; a session with nothing
-    * open restores on its next call. Nothing is scheduled once this connection
-    * is disposed, which drops its generation too.
+    * again without waiting for a call of their own, and connect for what
+    * {@link watchDocument} watches, which {@link generationReady} places
+    * again; a session with nothing open restores on its next call. Nothing is
+    * scheduled once this connection is disposed, which drops its generation
+    * too.
     */
    protected override dropGeneration(): void {
       const dropped = this.generation !== undefined;
@@ -253,10 +353,95 @@ export class DataConnection<
       if (dropped && !this.disposed) {
          setTimeout(() => {
             if (!this.disposed) {
-               this.sessions.forEach(session => session.reconnect());
+               this.reconnectSessions();
+               if (this.watches.size > 0) {
+                  // One generation, not `connected`, which follows a drop to
+                  // the next: that drop's own timer asks again whether
+                  // anything is still kept. A failure is reported by the gate.
+                  const generation = this.currentGeneration();
+                  (generation.ready ??= this.awaitReady(generation)).catch(() => undefined);
+               }
             }
          }, 0);
       }
+   }
+
+   /**
+    * Call `reconnect()` on every session, reporting a throw instead of letting
+    * one session's restore stop the others and the watches after them, and,
+    * inside the readiness gate, fail the whole generation.
+    */
+   protected reconnectSessions(): void {
+      for (const session of this.sessions) {
+         try {
+            session.reconnect();
+         } catch (error: unknown) {
+            // Reported, so it reaches the user on a port without a logger;
+            // logged too, since only the log names the session.
+            this.reportError(error, resolve(DATA_CONNECTION_SESSION_RESTORE_FAILED, { detail: describeError(error) }));
+            this.logger.error(`Could not restore session ${session.clientId}: ${describeError(error)}`);
+         }
+      }
+   }
+
+   /**
+    * Restore what the server lost with an earlier generation, whichever
+    * request brought this one up: the documents of sessions that have some
+    * open, and every watch {@link watchDocument} keeps.
+    */
+   protected override generationReady(generation: RpcConnectionGeneration<TServer>): void {
+      super.generationReady(generation);
+      this.reconnectSessions();
+      this.watches.forEach((uri, clientId) => this.watchAgain(generation, clientId, uri));
+      if (this.readyBefore) {
+         this.reconnectEmitter.fire(undefined);
+      }
+      this.readyBefore = true;
+   }
+
+   /**
+    * Send the watch of `uri` under `clientId` to `generation`, which has just
+    * passed its readiness gate. Sent at once rather than after a wait, so no
+    * drop can come between choosing the generation and sending. A failure is
+    * reported, since no caller waits on it, only while the watch is kept and
+    * `generation` is still current: otherwise the next generation sends it
+    * again.
+    *
+    * Once the watch is in place, the document's dirty state is read and goes
+    * through {@link restoreDirty}, as a session's restore does: a flip while
+    * the connection was down reached no one.
+    */
+   protected watchAgain(generation: RpcConnectionGeneration<TServer>, clientId: string, uri: string): void {
+      generation.server.watchModelDocument({ uri, clientId }).then(
+         () => {
+            if (!this.watches.has(clientId)) {
+               return;
+            }
+            this.logger.debug(`Watch ${uri} again as ${clientId}`);
+            generation.server.getModelDocument({ uri }).then(
+               current => {
+                  if (current.text && this.watches.has(clientId)) {
+                     try {
+                        this.restoreDirty({ uri: current.uri, text: current.text });
+                     } catch {
+                        // The client's listener failed, not the watch, which stays kept.
+                     }
+                  }
+               },
+               () => undefined
+            );
+         },
+         (error: unknown) => {
+            if (!this.watches.has(clientId)) {
+               return;
+            }
+            if (this.generation !== generation) {
+               this.logger.debug(`Watch of ${uri} as ${clientId} cut short by a lost connection; the next one sends it again`);
+               return;
+            }
+            this.reportError(error, resolve(DATA_CONNECTION_WATCH_RESTORE_FAILED, { uri, detail: describeError(error) }));
+         }
+      );
    }
 
    /**
@@ -270,7 +455,9 @@ export class DataConnection<
       }
       // For a factory's session whose `detach` does not fire.
       this.sessions.clear();
+      this.watches.clear();
       this.createSessionEmitter.dispose();
+      this.reconnectEmitter.dispose();
       this.dirtyChangedEmitter.dispose();
       this.documentUpdatedEmitter.dispose();
       super.dispose();

@@ -229,6 +229,8 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
             return;
          }
          await generation.server.waitForReady();
+         // Before `onReady`, so a failing restore reports a failure alone.
+         this.generationReady(generation);
          this.lifecycle.onReady?.();
       } catch (error: unknown) {
          // A dropped generation's request fails with its transport, which says
@@ -245,6 +247,17 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
          this.port.reportError(error, resolve(DATA_SERVER_NOT_READY, { detail: describeError(error) }));
          throw error;
       }
+   }
+
+   /**
+    * Called once `generation` has passed its readiness gate, whichever request
+    * brought it up. A generation can replace one that failed at readiness
+    * without {@link dropGeneration}, so this, not a drop, is where state kept
+    * on the server is put back. It runs inside the readiness gate, so a throw
+    * from an override fails the generation as a refused gate would.
+    */
+   protected generationReady(_generation: RpcConnectionGeneration<TServer>): void {
+      // Nothing to put back at this layer.
    }
 
    /**

@@ -133,6 +133,31 @@ describe('RpcConnection lifecycle', () => {
       }
    });
 
+   it('reports only a failure when restoring a ready generation throws', async () => {
+      const calls: string[] = [];
+      const pair = makeDuplexConnectionPair();
+      serveGeneration(pair.left, 'generation-1');
+      const port = makeFakeDataPort({ connect: () => pair.right });
+      class RestoreRefusedConnection extends ProbeRpcConnection<TestServer, RecordingClient> {
+         protected override generationReady(): void {
+            throw new Error('restore refused');
+         }
+      }
+      const rpc = new RestoreRefusedConnection(port, new RecordingClient(), {
+         methodNamespace: WIRE_PREFIX,
+         clientMethods: CLIENT_METHODS,
+         lifecycle: { onReady: () => calls.push('ready'), onFailed: () => calls.push('failed') }
+      });
+      try {
+         await expect(rpc.connected()).rejects.toThrow(/restore refused/);
+         expect(calls).toEqual(['failed']);
+      } finally {
+         rpc.dispose();
+         pair.dispose();
+         port.dispose();
+      }
+   });
+
    it('calls a lifecycle passed both ways once', async () => {
       let connecting = 0;
       const lifecycle: RpcConnectionLifecycle = { onConnecting: () => connecting++ };

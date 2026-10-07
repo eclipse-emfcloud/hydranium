@@ -460,13 +460,10 @@ export class DataServer<
    /** This connection's {@link DataServerUriWatchRecord} per canonical URI; see there for when a record lives. */
    protected readonly uriWatchRecords = new Map<string, DataServerUriWatchRecord>();
    /**
-    * The client sessions this connection registered, by client id. A document
-    * request carrying one of these ids acts as that session; one carrying any
-    * other id fails.
-    *
-    * Entries stay after {@link dispose} has ended their sessions, so a request
-    * still running from before the connection closed reaches the ended handle
-    * and fails with the session's own error.
+    * The live client sessions this connection registered, by client id. A
+    * document request carrying one of these ids acts as that session; one
+    * carrying any other id fails. A session leaves once it ends, so a
+    * connection that registers many over its life does not accumulate them.
     */
    protected readonly clientSessions = new Map<string, ClientSession<AstNode, AstDiagnostic, TTransfer>>();
    /**
@@ -602,16 +599,22 @@ export class DataServer<
       }
       const session = this.modelService.createSession(args.label, args.clientId, { resumeToken: args.resumeToken });
       this.clientSessions.set(args.clientId, session);
-      // A client registering again on another connection ends this session
-      // there, and its watches here would otherwise outlive it.
-      session.onDidDispose(() => this.dropWatches(args.clientId));
+      // A session also ends without closeSession, as when a client registers
+      // again on another connection, and its watches and entry here would
+      // otherwise outlive it.
+      session.onDidDispose(cause => {
+         // A session class may report its end late, once a replacement holds
+         // the id here; the replacement's entry and watches stay.
+         if (this.clientSessions.get(args.clientId) !== session) {
+            return;
+         }
+         this.dropWatches(args.clientId);
+         this.clientSessions.delete(args.clientId);
+         this.tracer.debug(`Forget session ${args.clientId}: it ended as ${cause}`);
+      });
    }
 
-   /**
-    * End a session this connection registered. The ended handle stays in
-    * {@link clientSessions}, as it does after {@link dispose}, so a request for
-    * the id still arriving fails with the ended session's own error.
-    */
+   /** End a session this connection registered. */
    async closeSession(args: CloseSessionArgs): Promise<void> {
       const session = this.clientSessions.get(args.clientId);
       if (session) {
@@ -668,7 +671,7 @@ export class DataServer<
    protected requireSession(clientId: string): ClientSession<AstNode, AstDiagnostic, TTransfer> {
       const session = this.clientSessions.get(clientId);
       if (!session) {
-         throw new SessionClosedError(clientId, 'The client session was never registered on this connection.');
+         throw new SessionClosedError(clientId, 'The client session is not registered on this connection.');
       }
       return session;
    }

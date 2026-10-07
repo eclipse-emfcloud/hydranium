@@ -26,6 +26,7 @@
 export * from './primitives';
 
 export { DOCUMENT_NOT_OPEN, DUPLICATE_CLIENT_ID, SESSION_CLOSED, STALE_BASE_VERSION_UPDATE } from '../errors';
+export { DATA_CONNECTION_SESSION_RESTORE_FAILED, DATA_CONNECTION_WATCH_RESTORE_FAILED } from '../client/data-connection';
 export { DATA_SERVER_CONNECT_FAILED, DATA_SERVER_NOT_READY } from '../client/rpc-connection';
 export { DATA_SESSION_ANSWER_WITHOUT_MODEL, DATA_SESSION_RESTORE_FAILED, DATA_SESSION_UNSAVED_LOST } from '../client/data-session';
 export {
