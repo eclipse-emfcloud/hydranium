@@ -19,6 +19,7 @@ import {
    isConflictError,
    isSessionClosedError,
    LatencyCollector,
+   type Project,
    ReferenceSource,
    resolvedFromResponseError,
    type ReferenceCandidate,
@@ -1635,6 +1636,31 @@ describe('DataServer', () => {
             expect(result).toEqual({ doubled: 42 });
          } finally {
             pair.dispose();
+         }
+      });
+
+      it('sends a notification beyond DataClientProtocol through a narrowed clientProxy', async () => {
+         interface CountingClient extends DataClientProtocol<FakeRoot, FakeDiagnostic> {
+            onElementsCounted(event: { count: number }): void;
+         }
+         class CountingDataServer extends TestDataServer {
+            declare protected readonly clientProxy: CountingClient;
+
+            announceCount(count: number): void {
+               this.clientProxy.onElementsCounted({ count });
+            }
+         }
+         const harness = makeDataServerHarness<CountingDataServer, FakeRoot, FakeDiagnostic, Project, CountingClient>({
+            server: channel => new CountingDataServer(channel, buildBundle().services),
+            additionalClientMethods: ['onElementsCounted']
+         });
+         try {
+            harness.server.announceCount(2);
+            await waitFor(() => harness.additionalNotifications.onElementsCounted.length === 1);
+
+            expect(harness.additionalNotifications.onElementsCounted).toEqual([{ count: 2 }]);
+         } finally {
+            harness.dispose();
          }
       });
 

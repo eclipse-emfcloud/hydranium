@@ -20,6 +20,8 @@ import type { MessageConnection } from 'vscode-jsonrpc';
 import type { DataClientProtocol } from '../../src/data/data-server-protocol';
 import type { ProjectsChangedEvent, TransferDocumentUpdatedEvent } from '../../src/data/events';
 import { defineMessage, describeError, resolve } from '../../src/messages/primitives';
+import type { Project } from '../../src/project';
+import type { TransferDiagnostic } from '../../src/transfer-diagnostic';
 import type { TransferElement } from '../../src/transfer-element';
 import { makeCapturingDataClient, makeFakeDataPort } from '../../src/testing/data-doubles';
 
@@ -29,6 +31,19 @@ const PROBE_FAILED = defineMessage('test/probe-failed', 'The probe failed: {deta
 /** A neutral transfer root; nothing here parses or serialises it. */
 interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
+}
+
+/** A client protocol with a notification of its own beside the framework's. */
+interface CountingClient extends DataClientProtocol<ProbeElement> {
+   onElementsCounted(event: { count: number }): void;
+}
+
+/** Members the proxy would bind as requests, beside a real notification. */
+interface SignallingClient extends CountingClient {
+   ready(): void;
+   onboard(args: { id: string }): Promise<void>;
+   on1(args: { id: string }): Promise<void>;
+   onDidOpenConnection(event: { id: string }): void;
 }
 
 /** A stand-in connection — the doubles never call a method on it. */
@@ -181,5 +196,52 @@ describe('makeCapturingDataClient', () => {
       expect(capturing.updates).toEqual([]);
       // The channels that were NOT overridden keep recording.
       expect(capturing.saves).toHaveLength(1);
+   });
+
+   it('records an additional client method in its own entry', () => {
+      const capturing = makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, CountingClient>({}, ['onElementsCounted']);
+
+      capturing.client.onElementsCounted({ count: 2 });
+      capturing.client.onDocumentSaved(updateEvent('file:///a.x', 'client-a'));
+
+      expect(capturing.additionalNotifications.onElementsCounted).toEqual([{ count: 2 }]);
+      expect(capturing.saves).toHaveLength(1);
+   });
+
+   it('lets an override REPLACE an additional client method, leaving its entry empty', () => {
+      const seen: number[] = [];
+      const capturing = makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, CountingClient>(
+         { onElementsCounted: event => seen.push(event.count) },
+         ['onElementsCounted']
+      );
+
+      capturing.client.onElementsCounted({ count: 3 });
+
+      expect(seen).toEqual([3]);
+      expect(capturing.additionalNotifications.onElementsCounted).toEqual([]);
+   });
+
+   it('leaves an additional client method off the client unless it is listed', () => {
+      const capturing = makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, CountingClient>();
+
+      expect('onElementsCounted' in capturing.client).toBe(false);
+   });
+
+   it('takes only notification names as additional client methods', () => {
+      makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, SignallingClient>({}, ['onElementsCounted']);
+      // @ts-expect-error `ready` is not `on` plus a capital, so the proxy binds it as a request
+      makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, SignallingClient>({}, ['ready']);
+      // @ts-expect-error `onboard` has no capital after `on`, so it is a request too
+      makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, SignallingClient>({}, ['onboard']);
+      // @ts-expect-error a digit after `on` is not a capital either
+      makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, SignallingClient>({}, ['on1']);
+      // @ts-expect-error the proxy answers its lifecycle names with its own events
+      makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, SignallingClient>({}, ['onDidOpenConnection']);
+   });
+
+   it('throws for an override of an additional client method that is not listed', () => {
+      expect(() =>
+         makeCapturingDataClient<ProbeElement, TransferDiagnostic, Project, CountingClient>({ onElementsCounted: () => undefined })
+      ).toThrow(/onElementsCounted/);
    });
 });
