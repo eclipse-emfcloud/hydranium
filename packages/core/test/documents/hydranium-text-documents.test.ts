@@ -436,10 +436,12 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
          client: { text: string; version: number };
          deliverEchoes: () => void;
          holdNextReply: () => () => void;
+         failNextReply: () => void;
       } {
          const client = { text: 'a\nb\nc\n', version: 1 };
          const echoes: Array<{ version: number; edits: TextEdit[] }> = [];
          let heldReply: Promise<void> | undefined;
+         let failReply = false;
          const { docs, recorded, logger } = makeDocs({
             workspace: {
                applyEdit: async params => {
@@ -457,6 +459,10 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
                   const reply = heldReply;
                   heldReply = undefined;
                   await reply;
+                  if (failReply) {
+                     failReply = false;
+                     throw new Error('connection lost');
+                  }
                   return { applied: true };
                }
             }
@@ -478,8 +484,12 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
             heldReply = new Promise<void>(resolve => (release = resolve));
             return release;
          };
+         // The next push applies, and its reply is lost.
+         const failNextReply = (): void => {
+            failReply = true;
+         };
          openInLanguageClient(docs, client.text);
-         return { docs, recorded, logger, client, deliverEchoes, holdNextReply };
+         return { docs, recorded, logger, client, deliverEchoes, holdNextReply, failNextReply };
       }
 
       it('is addressed at the version the applied push moved the client to', async () => {
@@ -521,17 +531,23 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
          expect(docs.get(URI)?.getText()).toBe('A\nB\nC\nd\n');
       });
 
-      it('is addressed at the declared version after a full replace that changed nothing', async () => {
-         const { docs, recorded, client } = makeEchoingClient();
-         // No baseline, so the push is a full replace; the client already holds its text.
-         docs.invalidateLanguageClientText(URI);
-         await docs.applyEditToLanguageClient(URI, client.text);
+      it('is addressed at the version a late echo declares after a full replace that changed nothing', async () => {
+         const { docs, recorded, client, deliverEchoes, failNextReply } = makeEchoingClient();
+         // Applied, but the reply is lost, so the store drops the diff baseline.
+         failNextReply();
+         await expect(docs.applyEditToLanguageClient(URI, 'a\nB\nc\n')).rejects.toThrow(/connection lost/);
+         // Synced before the echo: a full replace of text the client already holds.
+         await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         deliverEchoes();
 
-         const next = await docs.applyEditToLanguageClient(URI, 'a\nB\nc\n');
+         const next = await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
 
-         const identifier = (recorded[1].params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument;
-         expect(identifier.version).toBe(1);
+         const versions = recorded.map(
+            push => (push.params.edit.documentChanges![0] as { textDocument: { version: number | null } }).textDocument.version
+         );
+         expect(versions).toEqual([1, null, 2]);
          expect(next).toEqual({ applied: true });
+         expect(client.text).toBe('a\nB\nC\n');
       });
 
       it('is addressed at the reopened buffer, not a version pushed before the close', async () => {
@@ -1197,8 +1213,8 @@ describe('HydraniumTextDocuments language-client attach baseline', () => {
    });
 
    it('does not match the opened text against a client buffer that has since moved', async () => {
-      // The opened snapshot must not outlive the client's own edits: once Monaco has
-      // typed, text equal to what it opened with is an edit it still needs.
+      // What the client opened with must not outlive its own edits: once Monaco
+      // has typed, text equal to what it opened with is an edit it still needs.
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: false }) } });
       docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'x\n' } }, 'glsp-client');
       openInLanguageClient(docs, 'x\n');
@@ -1214,8 +1230,8 @@ describe('HydraniumTextDocuments language-client attach baseline', () => {
    it('still sends a full replace when the language client attaches holding different text', async () => {
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
       docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: 'server\n' } }, 'glsp-client');
-      // Monaco attaches with the stale disk text, which the opened baseline must
-      // NOT be trusted to diff against — only to compare for equality.
+      // Monaco attaches with the stale disk text. It is what the client was last
+      // heard to hold, so it is compared for equality only, never diffed against.
       openInLanguageClient(docs, 'disk\n');
       await docs.applyEditToLanguageClient(URI, 'server\n');
       expect(recorded).toHaveLength(1);
@@ -1770,13 +1786,12 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
    });
 
    it('adopts the reconstruction when the client typed before the push landed', async () => {
-      // The client's change is keyed to the pre-push baseline but produces text
-      // we never pushed — a keystroke that overtook the `applyEdit`. The
-      // reconstruction is what the client actually holds, and it is
-      // authoritative: the synced document mirrors an OPEN client's buffer, so
+      // The client's change is keyed to the text it was last heard to hold,
+      // but produces text we never pushed — a keystroke that overtook the
+      // `applyEdit`. The reconstruction is what the client actually holds, and
+      // it is authoritative: the synced document mirrors an OPEN client's buffer, so
       // it cannot claim a push the client has not applied. The push itself is
-      // then refused by the client's own version gate, which invalidates the
-      // shadow and makes the next sync a position-independent full replace.
+      // then refused by the client's own version gate.
       const { docs, fires } = await authorAndPush(ONE_NODE, TWO_NODES);
 
       docs.notifyDidChangeTextDocument(
@@ -1895,64 +1910,6 @@ describe('HydraniumTextDocuments incremental echo after an attach', () => {
       expect(docs.get(URI)?.getText()).toBe(ON_DISK.replace('node A at 10, 10', 'node A at 10, 77'));
       expect(docs.version(URI)).toBe(2);
       expect(fires).toEqual([LANGUAGE_CLIENT_ID]);
-   });
-});
-
-describe('HydraniumTextDocuments change with no known client buffer', () => {
-   const ORIGINAL = 'diagram Flow {\n   node A at 10, 10\n}\n';
-   const AUTHORED = 'diagram Flow {\n   node A at 10, 99\n}\n';
-
-   /**
-    * Drive a push the client REFUSES, then the full-replace recovery.
-    *
-    * The rejection is what makes the client's buffer unknowable: it drops both
-    * the tracked text and the opened snapshot, and the recovery push is
-    * therefore sent with no record of what it lands on.
-    */
-   async function pushAfterRejection(): Promise<{ docs: HydraniumTextDocuments<TextDocument>; fires: string[] }> {
-      let attempts = 0;
-      const { docs } = makeDocs({ workspace: { applyEdit: async () => ({ applied: attempts++ > 0 }) } });
-      openInLanguageClient(docs, ORIGINAL);
-      docs.applyContentChange(URI, AUTHORED, 'glsp-client');
-      // Refused, so the shadow is invalidated and the retry is a full replace
-      // with nothing recorded about the buffer it reaches.
-      await docs.applyEditToLanguageClient(URI, AUTHORED);
-      await docs.applyEditToLanguageClient(URI, AUTHORED);
-      const fires: string[] = [];
-      docs.onDidChangeContent(event => fires.push(event.clientId));
-      return { docs, fires };
-   }
-
-   it('drops a ranged change rather than reconstructing it against the pushed text', async () => {
-      const { docs, fires } = await pushAfterRejection();
-
-      // Keyed to the buffer the client held, which this store no longer knows.
-      // Reconstructed against the pushed text instead, these ranges splice it.
-      docs.notifyDidChangeTextDocument(
-         {
-            textDocument: { uri: URI, version: 3 },
-            contentChanges: [{ range: Range.create(1, 14, 1, 16), text: '99' }]
-         },
-         LANGUAGE_CLIENT_ID
-      );
-
-      expect(docs.get(URI)?.getText()).toBe(AUTHORED);
-      expect(docs.version(URI)).toBe(2);
-      expect(fires).toHaveLength(0);
-   });
-
-   it('still classifies a full-text change, which any baseline reconstructs alike', async () => {
-      // The non-regression guard, and it stays GREEN under the control below —
-      // which is what says the drop is scoped to changes carrying ranges.
-      const { docs, fires } = await pushAfterRejection();
-
-      docs.notifyDidChangeTextDocument(
-         { textDocument: { uri: URI, version: 3 }, contentChanges: [{ text: AUTHORED }] },
-         LANGUAGE_CLIENT_ID
-      );
-
-      expect(docs.get(URI)?.getText()).toBe(AUTHORED);
-      expect(fires).toHaveLength(0);
    });
 });
 

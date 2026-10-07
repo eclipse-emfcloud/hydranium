@@ -25,6 +25,7 @@ import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type Works
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
+import { LANGUAGE_CLIENT_ID } from '../../../src/documents/client-ids.js';
 import { DocumentNotOpenError, DuplicateClientIdError } from '../../../src/documents/client-session-errors.js';
 import { type ClientSession } from '../../../src/langium/model-service/client-session.js';
 import { DefaultModelService, type ModelService } from '../../../src/langium/model-service/model-service.js';
@@ -1184,11 +1185,12 @@ describe('ModelService LSP-client sync', () => {
     * while the line-keyed diff was in flight, so applying it would splice the
     * file. Dropping the push there would leave the editor showing text the server
     * has superseded, with no guaranteed later settle to correct it — a
-    * content-identical echo mints no rebuild. The rejection invalidates the
-    * shadow, so the re-push is a full replace, which lands on any buffer.
+    * content-identical echo mints no rebuild. After a rejection the re-push is a
+    * full replace, which lands on any buffer.
     */
    it('re-pushes once when the language client rejects the versioned diff', async () => {
       const bundle = buildSyncBundle({ open: true });
+      bundle.textDocuments.seedOpen(URI_A, 'name:b', 'form-client');
       let calls = 0;
       bundle.textDocuments.setApplyEditHandler(() => ({ applied: ++calls > 1 }));
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
@@ -1198,12 +1200,31 @@ describe('ModelService LSP-client sync', () => {
 
    it('bounds the re-push at one, so a client that refuses everything does not spin', async () => {
       const bundle = buildSyncBundle({ open: true });
+      bundle.textDocuments.seedOpen(URI_A, 'name:b', 'form-client');
       bundle.textDocuments.setApplyEditHandler(() => ({ applied: false }));
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
       // Absolute count, not a delta: the failure this stands against is an
       // unbounded loop, which any "more than before" assertion also satisfies.
       expect(bundle.textDocuments.appliedEdits).toHaveLength(2);
+   });
+
+   it('drops the re-push when the store no longer holds the rejected text', async () => {
+      // The keystroke that made the client refuse reached the store first and
+      // replaced the text; its own settle syncs it. Re-pushing the rejected text
+      // overwrites the keystroke in the editor until that settle restores it.
+      const bundle = buildSyncBundle({ open: true });
+      bundle.textDocuments.seedOpen(URI_A, 'name:b', 'form-client');
+      bundle.textDocuments.setApplyEditHandler(() => {
+         bundle.textDocuments.notifyDidChangeTextDocument(
+            { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'name:bc' }] },
+            LANGUAGE_CLIENT_ID
+         );
+         return { applied: false };
+      });
+      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
+      await drainSync();
+      expect(bundle.textDocuments.appliedEdits.map(edit => edit.text)).toEqual(['name:b']);
    });
 
    it('drops the re-push when a newer settle already superseded the rejected text', async () => {

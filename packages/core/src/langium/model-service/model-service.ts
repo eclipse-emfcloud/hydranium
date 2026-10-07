@@ -1084,17 +1084,19 @@ export class DefaultModelService<
          const text = this.pendingSync.get(uri)!;
          this.pendingSync.delete(uri);
          try {
-            let result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
-            if (result?.applied === false && !this.pendingSync.has(uri)) {
+            const textDocuments = this.services.workspace.TextDocuments;
+            let result = await textDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
+            if (result?.applied === false && !this.pendingSync.has(uri) && textDocuments.get(uri)?.getText() === text) {
                // The push is addressed at the client's last known version, so a
                // rejection normally means the client's buffer moved while the
                // line-keyed diff was in flight — exactly the case where applying it
                // would splice the file. Dropping the push there would leave the
                // editor showing text the server has already superseded, with no
                // later settle guaranteed to correct it (a content-identical echo
-               // mints no rebuild). The rejection invalidated the shadow, so the
-               // retry is a full-range replace: position-independent, and therefore
-               // correct against whatever the client now holds.
+               // mints no rebuild). After a rejection the retry is a full-range
+               // replace: position-independent, and therefore correct against
+               // whatever the client now holds. It sends nothing when the client
+               // was last heard to hold the text already.
                //
                // Retried INLINE rather than re-enqueued, and exactly once. Inline
                // because a re-enqueue would have to out-order any settle that lands
@@ -1103,9 +1105,11 @@ export class DefaultModelService<
                // the workspace) must cost one extra RPC rather than spin. The
                // `pendingSync` check skips the retry when a newer settle has already
                // queued — best-effort, since a settle arriving later simply pushes
-               // after this and still wins.
+               // after this and still wins. It is skipped too once the store holds
+               // other text: the keystroke that made the client refuse replaced it,
+               // and re-pushing would overwrite that keystroke in the editor.
                uriLogger.debug(`Re-pushing a full replace after the language client refused applyEdit`);
-               result = await this.services.workspace.TextDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
+               result = await textDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
                if (result?.applied === false) {
                   uriLogger.warn(`Language client rejected the full-replace retry too — client content is stale`);
                }
