@@ -7,15 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindConnectionReporter } from '@hydranium/client-theia/browser';
-import { DataSessionStopContribution } from '@hydranium/data-client-theia/browser';
+import { bindDataConnection } from '@hydranium/data-client-theia/browser';
 import {
    DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
    type TransferElement
 } from '@hydranium/protocol';
-import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { inject, injectable, type interfaces } from '@theia/core/shared/inversify';
 import { OrderFlowTheiaDataPort } from './order-flow-theia-data-port';
 
@@ -60,23 +58,13 @@ export class OrderFlowDataConnection extends DataConnectionWithEvents<OrderFlowT
  * properties panel and the diagnostics commands share them, and either entry
  * may be loaded alone or beside the other.
  *
- * The stop contribution is bound with the connection and tracks it as it is
- * built, so every session the connection starts ends with the page. Bound
- * once, here, because a second binding per entry makes its lookup ambiguous.
+ * `bindDataConnection` has every session the connection starts end with the
+ * page.
  */
 export function bindOrderFlowDataConnection(bind: interfaces.Bind, isBound: interfaces.IsBound): void {
    if (isBound(OrderFlowTheiaDataPort)) {
       return;
    }
-   bindConnectionReporter(bind, isBound);
    bind(OrderFlowTheiaDataPort).toSelf().inSingletonScope();
-   bind(OrderFlowDataConnection)
-      .toSelf()
-      .inSingletonScope()
-      .onActivation((context, connection) => {
-         context.container.get(DataSessionStopContribution).track(connection);
-         return connection;
-      });
-   bind(DataSessionStopContribution).toSelf().inSingletonScope();
-   bind(FrontendApplicationContribution).toService(DataSessionStopContribution);
+   bindDataConnection(bind, isBound, OrderFlowDataConnection);
 }

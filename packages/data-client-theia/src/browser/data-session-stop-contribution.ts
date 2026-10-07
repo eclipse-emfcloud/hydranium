@@ -7,17 +7,17 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { bindConnectionReporter } from '@hydranium/client-theia/browser';
 import type { DataConnection, DataServerProtocol, DataSession, DiagnosticOf, TransferElement } from '@hydranium/protocol';
-// Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
+// Not the `@theia/core/lib/browser` barrel: it touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
-import type { FrontendApplicationContribution, OnWillStopAction } from '@theia/core/lib/browser';
-import { injectable } from '@theia/core/shared/inversify';
+import { FrontendApplicationContribution, type OnWillStopAction } from '@theia/core/lib/browser/frontend-application-contribution';
+import { injectable, type interfaces } from '@theia/core/shared/inversify';
 
 /**
  * Ends a Theia frontend's data sessions with its page, and holds the page
- * while one of them is still saving. Bind it as a
- * `FrontendApplicationContribution` in singleton scope and {@link track} each
- * data connection the frontend binds, once.
+ * while one of them is still saving. {@link bindDataConnection} binds it and
+ * has it {@link track} each data connection bound through it.
  *
  * **Stop.** {@link onStop} disposes every tracked session, which sends its
  * `closeSession`, so the server ends it as closed: each document it was the
@@ -114,4 +114,38 @@ export class DataSessionStopContribution implements FrontendApplicationContribut
          session.dispose();
       }
    }
+}
+
+/**
+ * Bind `connectionClass` in singleton scope, its sessions tracked by the
+ * {@link DataSessionStopContribution}, and bind that contribution and the
+ * `ConnectionReporter` the connection's port injects unless they are bound
+ * already. The binding's `onActivation` is taken; a frontend's own hook on the
+ * connection goes on the container's `onActivation`, which runs after it. A
+ * subclass of the contribution is rebound after this call: one bound before it
+ * is never registered as a frontend contribution, so its stop never runs.
+ * Call it once per connection class: a second call makes the class's lookup
+ * ambiguous.
+ */
+export function bindDataConnection<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>>,
+   TClient extends object
+>(
+   bind: interfaces.Bind,
+   isBound: interfaces.IsBound,
+   connectionClass: interfaces.Newable<DataConnection<TTransfer, TServer, TClient>>
+): void {
+   bind(connectionClass)
+      .toSelf()
+      .inSingletonScope()
+      .onActivation((context, connection) => {
+         context.container.get(DataSessionStopContribution).track(connection);
+         return connection;
+      });
+   if (!isBound(DataSessionStopContribution)) {
+      bind(DataSessionStopContribution).toSelf().inSingletonScope();
+      bind(FrontendApplicationContribution).toService(DataSessionStopContribution);
+   }
+   bindConnectionReporter(bind, isBound);
 }

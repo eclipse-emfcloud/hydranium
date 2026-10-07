@@ -8,15 +8,16 @@
  ********************************************************************************/
 
 import { SystemClock, TIMED_OUT } from '@hydranium/protocol';
-import type { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
 import { ILogger } from '@theia/core/lib/common/logger';
 import URI from '@theia/core/lib/common/uri';
-import { inject, injectable, optional } from '@theia/core/shared/inversify';
+import { inject, injectable, optional, type interfaces } from '@theia/core/shared/inversify';
 import { EditorManager } from '@theia/editor/lib/browser/editor-manager';
 import type { EditorWidget } from '@theia/editor/lib/browser/editor-widget';
 import type { FileResourceVersion } from '@theia/filesystem/lib/browser/file-resource';
 import { FileService, type TextFileContent } from '@theia/filesystem/lib/browser/file-service';
 import { Clock } from '../common/clock';
+import { HydraniumFileService } from './hydranium-file-service';
 
 /**
  * The members of Theia's Monaco editor model {@link EditorDiskSync} reads and
@@ -96,7 +97,7 @@ export function isResyncableEditorDocument(document: object): document is Resync
  * same-size gap included, and so is one whose file cannot be read within
  * {@link readTimeoutMs}, or whose check throws.
  *
- * The adopter binds it as a `FrontendApplicationContribution`.
+ * Bound by {@link bindEditorDiskSync}.
  */
 @injectable()
 export class EditorDiskSync implements FrontendApplicationContribution {
@@ -233,4 +234,20 @@ export class EditorDiskSync implements FrontendApplicationContribution {
       document.resourceVersion = version;
       void document.revert({ soft: true });
    }
+}
+
+/**
+ * Bind {@link EditorDiskSync} as a frontend contribution and rebind Theia's
+ * `FileService` to {@link HydraniumFileService}, unless `EditorDiskSync` is
+ * bound already. No framework module calls this, because the rebind would
+ * replace a frontend's own `FileService` binding. A subclass of the sync is
+ * rebound after this call: one bound before it skips the whole call.
+ */
+export function bindEditorDiskSync(bind: interfaces.Bind, isBound: interfaces.IsBound, rebind: interfaces.Rebind): void {
+   if (isBound(EditorDiskSync)) {
+      return;
+   }
+   bind(EditorDiskSync).toSelf().inSingletonScope();
+   bind(FrontendApplicationContribution).toService(EditorDiskSync);
+   rebind(FileService).to(HydraniumFileService).inSingletonScope();
 }
