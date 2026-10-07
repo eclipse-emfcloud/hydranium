@@ -928,18 +928,18 @@ live grouped in a single `HydraniumTypes` registry object
 
 ```ts
 @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
-bind(HydraniumTypes.DiagramLanguage).toDynamicValue(/* … */).inSingletonScope();
+bind(HydraniumTypes.ConflictResolver).toConstantValue(resolver);
 ```
 
 Grouping decouples **token identity from class name** — `HydraniumTypes.SharedCoreServices`
 can be typed to the `ServerSharedServices` shape without the token name
 and the type name colliding (the bug that motivated the registry). The
 field type is always the real interface/class (`ServerSharedServices`,
-`ServerLanguageServices`, `ConflictResolver`, …), imported directly;
-there is no merged token-and-type alias. Mirrors GLSP's own `TYPES` idiom.
+`ConflictResolver`, …), imported directly; there is no merged
+token-and-type alias. Mirrors GLSP's own `TYPES` idiom.
 
-No PER-LANGUAGE service gets a token of its own — only the language does, via
-`HydraniumTypes.DiagramLanguage`. A component that injected an
+No language and no per-language service gets a token: a diagram's language
+is the one its loaded document routes to. A component that injected an
 `ElementKeyProvider` / `NameProvider` / `ScopeProvider` / `CandidateProvider`
 directly would apply the diagram's grammar to nodes reached through
 references, which live in other documents; `modelState.diagramLanguage` and

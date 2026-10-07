@@ -11,8 +11,7 @@ the diagram model is adopter-side, bound per diagram module.
 - **DI composition against the shared workspace.** `HydraniumGlspAppModule` binds
   the `HydraniumTypes` token registry onto an already-composed
   `ServerSharedServices` tree and exposes a `configureAdditionalBindings` hook;
-  `AbstractHydraniumGlspDiagramModule` and `bindDiagramLanguage` carry the per-diagram
-  half.
+  `AbstractHydraniumGlspDiagramModule` carries the per-diagram half.
 - **Base model state, so an adopter binds a factory rather than a lifecycle:**
   `AbstractHydraniumGlspState`, with the ready-made
   `ReconcilingTransferHydraniumGlspState`, `ReconcilingMultiDocumentGlspState`

@@ -71,8 +71,8 @@ function makeGModelElement(id: string): GModelElement {
  * own prefix. `.dgm` is the diagram's own language, `.other` a foreign one —
  * so a returned key names which language actually answered.
  */
-function createMultiLanguageIndex(declaredLanguageUri?: string): HydraniumGlspIndex {
-   return buildMultiLanguageIndex(declaredLanguageUri).index;
+function createMultiLanguageIndex(): HydraniumGlspIndex {
+   return buildMultiLanguageIndex().index;
 }
 
 /**
@@ -80,7 +80,7 @@ function createMultiLanguageIndex(declaredLanguageUri?: string): HydraniumGlspIn
  * registry's lookup ladder was walked — the cost the `indexSourceRoot` walk
  * must not pay per node.
  */
-function buildMultiLanguageIndex(declaredLanguageUri?: string): { index: HydraniumGlspIndex; ladderWalks: () => number } {
+function buildMultiLanguageIndex(): { index: HydraniumGlspIndex; ladderWalks: () => number } {
    const keyProviderFor = (prefix: string): Pick<ElementKeyProvider, 'getElementKey'> => ({
       getElementKey: (node?: AstNode) => (node ? `${prefix}:${node.$type}` : undefined)
    });
@@ -97,12 +97,6 @@ function buildMultiLanguageIndex(declaredLanguageUri?: string): { index: Hydrani
    const sharedServices = makeNoopSharedServices<ServerSharedServices>({ ServiceRegistry: registry });
    const container = new Container();
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(sharedServices);
-   const declared = declaredLanguageUri ? registry.getServicesFor(declaredLanguageUri) : undefined;
-   if (declared) {
-      // What `bindDiagramLanguage` binds on a real session container: the
-      // services of the grammar the diagram module declared.
-      container.bind(HydraniumTypes.DiagramLanguage).toConstantValue(declared);
-   }
    container.bind(HydraniumGlspIndex).toSelf().inSingletonScope();
    return { index: container.get(HydraniumGlspIndex), ladderWalks: () => walks };
 }
@@ -160,20 +154,9 @@ describe('HydraniumGlspIndex', () => {
          expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('dgm:TestNode');
       });
 
-      it('falls back to the declared language before any source root is indexed', () => {
-         // GLSP builds every operation handler at InitializeClientSession, so a
-         // document-less node can arrive before the first indexSourceRoot. With
-         // nothing to answer, createId mints an unstable fallback_<uuid>.
-         const index = createMultiLanguageIndex('file:///m/declared.other');
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('other:TestNode');
-      });
-
-      it('prefers the routed language over the declared one once indexed', () => {
-         // The captured one is what the document ACTUALLY routes to; the
-         // declared one is the module's claim about it, and the two can drift.
-         const index = createMultiLanguageIndex('file:///m/declared.other');
-         index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.dgm'));
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('dgm:TestNode');
+      it('keys no document-less node before a source root is indexed', () => {
+         const index = createMultiLanguageIndex();
+         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBeUndefined();
       });
    });
 

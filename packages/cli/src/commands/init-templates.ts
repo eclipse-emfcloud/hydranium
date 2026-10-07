@@ -1623,10 +1623,9 @@ function readme(composition: InitComposition): string {
 /**
  * The GLSP files for ONE grammar's diagram.
  *
- * Per grammar rather than per project because a diagram type has exactly one
- * grammar — `AbstractHydraniumGlspDiagramModule.declareLanguage()` returns that
- * grammar's `LanguageMetaData`, and it is bound on the SESSION container so a
- * grammar with no diagram can sit on the same server.
+ * Per grammar rather than per project because the state, storage and GModel
+ * factory are typed over that grammar's model, and a grammar with no diagram
+ * can sit on the same server.
  *
  * The index and the computed-bounds handler are framework classes used
  * unmodified; storage and the submission handler are thin typed subclasses,
@@ -1916,12 +1915,6 @@ export class __GRAMMAR__CreateNodeOperationHandler extends JsonCreateNodeOperati
 
    const module = `// GLSP diagram module for __GRAMMAR__ — the DI wiring of one diagram type.
 //
-// \`declareLanguage\` is the multi-grammar seam: it binds the grammar this diagram
-// edits on the SESSION container, so \`modelState.diagramLanguage\` and the
-// per-language lookups resolve to __LANGUAGE_ID__. That is what stops one
-// diagram type from fighting over a process-wide binding when a project holds
-// several grammars — a grammar with no diagram is registered on the same server.
-//
 // \`configureActionHandlers\` REBINDS rather than adds: GLSP's own
 // \`DiagramModule\` already registers \`ComputedBoundsActionHandler\`, and two
 // handlers for one action would both run.
@@ -1948,13 +1941,11 @@ ${importList(
    true
 )}
 import { ComputedBoundsActionHandler } from '@eclipse-glsp/server';
-import type { LanguageMetaData } from '@hydranium/langium';
 ${importList(
    ['HydraniumGlspComputedBoundsActionHandler', 'AbstractHydraniumGlspDiagramModule', 'HydraniumGlspIndex'],
    '@hydranium/glsp-server',
    columns
 )}
-import { __GRAMMAR__LanguageMetaData } from '../../language-server/generated/module.js';
 import { __GRAMMAR__CreateNodeOperationHandler } from './create-node-operation-handler.js';
 import { __GRAMMAR__DiagramConfiguration } from './diagram-configuration.js';
 import { __GRAMMAR__GModelFactory } from './gmodel-factory.js';
@@ -1965,10 +1956,6 @@ import { ${upper}_DIAGRAM_TYPE } from './types.js';
 
 export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = ${upper}_DIAGRAM_TYPE;
-
-   protected override declareLanguage(): LanguageMetaData {
-      return __GRAMMAR__LanguageMetaData;
-   }
 
    protected override bindModelState(): BindingTarget<ModelState> {
       return { service: __GRAMMAR__GlspState };

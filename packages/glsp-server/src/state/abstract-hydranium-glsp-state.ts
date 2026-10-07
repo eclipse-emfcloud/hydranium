@@ -9,7 +9,7 @@
 
 import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
-import { inject, injectable, optional } from 'inversify';
+import { inject, injectable } from 'inversify';
 import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, URI } from '@hydranium/langium';
 import {
    type ClientSession,
@@ -135,6 +135,13 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    protected _sourceUri!: string;
    /**
+    * The language {@link _sourceUri} routed to at the last capture, or
+    * `undefined` when it routes nowhere. Captured rather than looked up on
+    * each {@link diagramLanguage} read, which a GModel factory may make once
+    * per element, because the lookup parses the URI and walks the registry.
+    */
+   protected _sourceLanguage?: ServerLanguageServices;
+   /**
     * The root the last capture took, which every reader of the document
     * shares. A projection that must see an operation's edits reads
     * {@link sourceRoot}, which is a copy of it during an operation.
@@ -200,6 +207,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     */
    protected captureSourceRoot(uri: string, root: TRoot): void {
       this._sourceUri = uri;
+      this._sourceLanguage = this.sharedServices.ServiceRegistry.getServicesFor(uri);
       this._sourceRoot = root;
       // The root's own version: the registry's current root can be a later
       // build's, and a write based on its version passes the gate over edits
@@ -213,7 +221,6 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       this.set(SOURCE_URI_ARG, uri);
       this._tracer = this.baseTracer.withUri(uri);
       this.tracer.debug(`Captured source root at doc.version=v${this._baseVersion}`);
-      this.checkDeclaredLanguage(uri);
    }
 
    /**
@@ -387,24 +394,20 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * The language services of the grammar this DIAGRAM TYPE edits, as declared
-    * by `AbstractHydraniumGlspDiagramModule.declareLanguage`.
+    * The language services of the diagram document: the language
+    * {@link sourceUri} routed to at the last {@link setSourceRoot}.
     *
-    * **Named for what it is, not for "the language".** Reach for it only when
-    * the thing you are asking about lives in the diagram document itself.
-    * Anything reached *through* a reference is decided by its own document: use
-    * {@link languageServicesFor}. Making that choice explicit at the call site
-    * is the point; a neutral-looking `languageServices` invites the diagram's
-    * grammar to be applied to a foreign node, which is the defect this whole
-    * seam exists to prevent.
+    * `undefined` until a document is loaded, as GLSP builds a session's
+    * handlers at `InitializeClientSession`, before `RequestModelAction`
+    * supplies the URI: read it when called, not at construction.
     *
-    * Injected rather than derived from {@link sourceUri} so it is available
-    * before the first {@link setSourceRoot} — GLSP constructs operation
-    * handlers at `InitializeClientSession`, well before `RequestModelAction`.
-    * `@optional()` so a harness that binds no diagram module still resolves;
-    * `undefined` then means no diagram module declared a grammar.
+    * Reach for it only when the thing you are asking about lives in the
+    * diagram document itself. Anything reached through a reference is decided
+    * by its own document: use {@link languageServicesFor}.
     */
-   @inject(HydraniumTypes.DiagramLanguage) @optional() readonly diagramLanguage?: ServerLanguageServices;
+   get diagramLanguage(): ServerLanguageServices | undefined {
+      return this._sourceLanguage;
+   }
 
    /**
     * The language services owning `target` — an AST node (routed by its
@@ -450,30 +453,6 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /** The `ReferenceCandidateProvider` of the language owning `target`. See {@link nameProviderFor}. */
    candidateProviderFor(target: LanguageTarget | undefined): ReferenceCandidateProvider | undefined {
       return this.languageServicesFor(target)?.references.CandidateProvider;
-   }
-
-   /**
-    * Warn when the loaded document does not route to the grammar this diagram
-    * module declared.
-    *
-    * The declared language is the one fact the module states that the grammar
-    * itself does not, so it is the one that can drift — a diagram type pointed
-    * at the wrong `LanguageMetaData`, or a file extension reassigned. Both
-    * would otherwise surface much later as references resolving against the
-    * wrong scope. Only a warning, not a throw: the document is loaded and
-    * usable either way, and a hard failure here would take out a diagram over
-    * a mismatch that may be intentional in an adopter serving one diagram type
-    * over several grammars.
-    */
-   protected checkDeclaredLanguage(uri: string): void {
-      const declared = this.diagramLanguage?.LanguageMetaData.languageId;
-      if (declared === undefined) {
-         return;
-      }
-      const actual = this.sharedServices.ServiceRegistry.getServicesFor(uri)?.LanguageMetaData.languageId;
-      if (actual !== undefined && actual !== declared) {
-         this.tracer.warn(`Diagram module declares language '${declared}' but this document routes to '${actual}'`);
-      }
    }
 
    /** The observability handle as a plain {@link Logger} (a {@link Tracer} is-a Logger). */

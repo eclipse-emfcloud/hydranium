@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { ServerLanguageServices, ServerSharedServices } from '@hydranium/core';
+import type { ServerSharedServices } from '@hydranium/core';
 import type { ConflictResolver, Tracer } from '@hydranium/protocol';
 import { serviceIdentifier } from '../util/service-identifier.js';
 
@@ -19,37 +19,23 @@ import { serviceIdentifier } from '../util/service-identifier.js';
  * framework hands around via plain constructor arguments.
  *
  * Every token here is a service whose value is **fixed for the container tier
- * that binds it** — process-wide shared services, a per-session conflict
- * policy, the grammar a diagram type edits. That is the whole membership rule,
- * and it is why the registry is short: see below for what deliberately does
- * NOT get a token.
+ * that binds it**: the shared services and the conflict policy for the
+ * process, the tracer for each request. That is the whole membership rule, and
+ * it is why the registry is short: see below for what deliberately does NOT
+ * get a token.
  *
  * Grouped under one object (rather than top-level `Hydranium<Role>` consts)
  * so the token identity is decoupled from the implementation class name.
  * Mirrors GLSP's own `TYPES` registry idiom.
  *
- * Bound by the adopter from their services trees — the app-tier ones directly,
- * the session-tier language by declaring a grammar on the diagram module.
- * Inject with the real service type as the field type.
- *
- * **Split by tier, because GLSP has no language tier.** GLSP's containers are
- * app (per process) -> server (per connection) -> session (per open diagram);
- * Langium's are shared (per process) -> language (per grammar, routed by URI).
- * Only the outermost pair line up. A per-language service therefore CANNOT be
- * bound at the app tier — that container is built before any document exists,
- * so it can only ever hold one grammar's services. The tokens below are split
- * accordingly:
+ * `SharedCoreServices` and `ConflictResolver` are bound by
+ * `HydraniumGlspAppModule`, `Tracer` by the launchers. Inject each with the
+ * real service type as the field type.
  *
  * - **SharedCoreServices** — the framework's Langium-style shared services
  *   tree ({@link ServerSharedServices}); the services-tree root that state /
  *   index classes inject. Bound once at the app tier. Carries
  *   `ServiceRegistry`, which is how everything below reaches a language.
- * - **DiagramLanguage** — the {@link ServerLanguageServices} of the grammar a
- *   diagram type edits, bound at the SESSION tier by
- *   `AbstractHydraniumGlspDiagramModule` from its declared `declareLanguage()`.
- *   Static (a diagram type has one grammar), so it is safe for the eagerly
- *   constructed handlers GLSP builds at `InitializeClientSession`. Read it
- *   through `AbstractHydraniumGlspState.diagramLanguage`.
  * - **ConflictResolver** — the policy the GLSP state consults when a write
  *   (forward-write, undo, redo, save) races a foreign edit.
  *   `HydraniumGlspAppModule` binds it to `options.conflictResolver`
@@ -62,8 +48,14 @@ import { serviceIdentifier } from '../util/service-identifier.js';
  *   component — no manual `for(...)`. The non-injectable recording command,
  *   which can't inject, borrows the state's `tracer` getter instead.
  *
- * **No per-language SERVICE has a token — only the language does.** There is
- * no `ElementKeyProvider`, `NameProvider`, `ScopeProvider` or
+ * **No language and no per-language service has a token, because GLSP has no
+ * language tier.** GLSP's containers are app (per process) -> server (per
+ * connection) -> session (per open diagram); Langium's are shared (per
+ * process) -> language (per grammar, routed by URI). Only the outermost pair
+ * line up. The app container is built before any document exists, and a
+ * session's handlers before its document is loaded, so neither knows the
+ * diagram's language: the one its loaded document routes to. Nor is there an
+ * `ElementKeyProvider`, `NameProvider`, `ScopeProvider` or
  * `CandidateProvider` symbol, because every one of them is keyed by a document
  * that the container cannot know: the target node's, for naming and keying;
  * the one a reference is WRITTEN in, for scope and candidates. A GLSP
@@ -79,14 +71,9 @@ import { serviceIdentifier } from '../util/service-identifier.js';
  * reference written on the canvas, `modelState.languageServicesFor(node)` for
  * anything reached through a reference. `ServiceRegistry.getServicesFor(target)`
  * serves the same purpose where no model state is at hand.
- *
- * The app-tier tokens are bound by `HydraniumGlspAppModule`, the
- * session-tier one by `AbstractHydraniumGlspDiagramModule`. A multi-grammar
- * adopter declares a language per diagram module and needs nothing else.
  */
 export const HydraniumTypes = {
    SharedCoreServices: serviceIdentifier<ServerSharedServices>('HydraniumSharedCoreServices'),
-   DiagramLanguage: serviceIdentifier<ServerLanguageServices>('HydraniumDiagramLanguage'),
    ConflictResolver: serviceIdentifier<ConflictResolver>('HydraniumConflictResolver'),
    Tracer: serviceIdentifier<Tracer>('HydraniumTracer')
 } as const;

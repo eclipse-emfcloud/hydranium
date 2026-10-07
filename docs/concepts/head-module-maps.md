@@ -136,7 +136,7 @@ bound per `DiagramModule` — there is no framework GModel factory.
 
 | folder | subpath | role |
 | --- | --- | --- |
-| `launcher/` | `.` | `HydraniumGlspAppModule` (DI app-module + `configureAdditionalBindings` hook) and `AbstractHydraniumGlspDiagramModule` — the abstract `DiagramModule` base an adopter subclasses to declare which grammar a diagram type edits, plus the `bindDiagramLanguage` binder it applies; the framework-overrides module both bringups share is deliberately not re-exported |
+| `launcher/` | `.` | `HydraniumGlspAppModule` (DI app-module + `configureAdditionalBindings` hook) and `AbstractHydraniumGlspDiagramModule` — the abstract `DiagramModule` base an adopter subclasses per diagram type; the framework-overrides module both bringups share is deliberately not re-exported |
 | `node/` | `./node` | `startGlspServer` (socket launcher, `HydraniumGlspSocketServerLauncher` over GLSP's `SocketServerLauncher`) |
 | `browser/` | `./browser` | `startGlspServerInWorker` (web-worker launcher, `HydraniumGlspWorkerServerLauncher` over GLSP's `WorkerServerLauncher`, on a transferred `MessagePort`) |
 | `state/` | `.` | base state classes (`AbstractHydraniumGlspState`, `Reconciling…`, `FullText…`), `HydraniumGlspIndex`, the `HydraniumTypes` DI token registry |

@@ -23,7 +23,6 @@ import type {
    ToolPaletteItemProvider
 } from '@eclipse-glsp/server';
 import { ComputedBoundsActionHandler } from '@eclipse-glsp/server';
-import type { LanguageMetaData } from '@hydranium/langium';
 import {
    HydraniumGlspComputedBoundsActionHandler,
    AbstractHydraniumGlspDiagramModule,
@@ -39,7 +38,6 @@ import {
 import { OrderFlowCreateTransitionOperationHandler } from './handler/create-transition-operation-handler.js';
 import { OrderFlowDeleteElementOperationHandler } from './handler/delete-element-operation-handler.js';
 import { OrderFlowEdgeCreationChecker } from './order-flow-edge-creation-checker.js';
-import { ProcessLanguageMetaData } from '../language-server/generated/module.js';
 import { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 import { OrderFlowGlspState } from './order-flow-glsp-state.js';
 import { OrderFlowGlspStorage } from './order-flow-glsp-storage.js';
@@ -57,21 +55,9 @@ import { OrderFlowToolPaletteItemProvider } from './order-flow-tool-palette-item
  * is useless or actively misleading without the others, because a hint declaring
  * a capability with no handler produces a palette tool whose operation the server
  * rejects.
- *
- * **`declareLanguage` is the multi-grammar seam.** It binds the grammar this
- * diagram edits on the SESSION container, so `modelState.diagramLanguage` and
- * the `scopeProviderFor` / `candidateProviderFor` lookups resolve to
- * `.process`. In a two-grammar adopter that is what stops a diagram type from
- * fighting over one process-wide binding — `.domain` has no diagram, but it is
- * registered on the same server, so the binding has to be per-session rather
- * than global.
  */
 export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = PROCESS_DIAGRAM_TYPE;
-
-   protected override declareLanguage(): LanguageMetaData {
-      return ProcessLanguageMetaData;
-   }
 
    protected override bindModelState(): BindingTarget<ModelState> {
       return { service: OrderFlowGlspState };

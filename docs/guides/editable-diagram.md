@@ -18,14 +18,12 @@ for host-specific bring-up.
 
 ## Steps
 
-1. Subclass the diagram module and bind the source language, model state,
-   storage, configuration, GModel factory, and submission handler. The module
-   is where the diagram declares which grammar it edits.
+1. Subclass the diagram module and bind the model state, storage,
+   configuration, GModel factory, and submission handler. The module declares
+   no grammar: a session uses the language its loaded document routes to.
 
 <!-- snippet-preamble
 import type { BindingTarget, DiagramConfiguration, GModelFactory, ModelState, ModelSubmissionHandler, SourceModelStorage } from '@eclipse-glsp/server';
-import type { LanguageMetaData } from '@hydranium/langium';
-declare const AppLanguageMetaData: LanguageMetaData;
 declare const AppModelState: BindingTarget<ModelState>;
 declare const AppModelStorage: BindingTarget<SourceModelStorage>;
 declare const AppDiagramConfiguration: BindingTarget<DiagramConfiguration>;
@@ -38,10 +36,6 @@ import { AbstractHydraniumGlspDiagramModule } from '@hydranium/glsp-server';
 
 export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = 'app-diagram';
-
-   protected override declareLanguage(): LanguageMetaData {
-      return AppLanguageMetaData;
-   }
 
    protected override bindModelState(): BindingTarget<ModelState> {
       return AppModelState;
@@ -154,10 +148,8 @@ class AppCreateNodeOperationHandler extends JsonCreateNodeOperationHandler {
 import type { InstanceMultiBinding, OperationHandlerConstructor } from '@eclipse-glsp/server';
 import { AbstractHydraniumGlspDiagramModule } from '@hydranium/glsp-server';
 import type { BindingTarget, DiagramConfiguration, GModelFactory, ModelState, ModelSubmissionHandler, SourceModelStorage } from '@eclipse-glsp/server';
-import type { LanguageMetaData } from '@hydranium/langium';
 declare abstract class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType: string;
-   protected declareLanguage(): LanguageMetaData;
    protected bindModelState(): BindingTarget<ModelState>;
    protected bindSourceModelStorage(): BindingTarget<SourceModelStorage>;
    protected bindDiagramConfiguration(): BindingTarget<DiagramConfiguration>;
