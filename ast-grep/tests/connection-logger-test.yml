@@ -1,0 +1,11 @@
+id: connection-without-logger
+valid:
+  - 'const connection = createMessageConnection(reader, writer, logger);'
+  - 'const connection = createProtocolConnection(reader, writer, logger);'
+  - 'const connection = createMessageConnection(reader, writer, logger, options);'
+  - 'const connection = createChannelConnection(channel, logger);'
+invalid:
+  - 'const connection = createMessageConnection(reader, writer);'
+  - 'const connection = createProtocolConnection(input, output);'
+  - 'const connection = createChannelConnection(channel);'
+  - 'const connection = this.createSocketConnection({ port, host });'

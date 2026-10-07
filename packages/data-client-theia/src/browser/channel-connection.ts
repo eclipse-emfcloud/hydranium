@@ -104,7 +104,7 @@ class ChannelMessageWriter extends AbstractMessageWriter implements MessageWrite
  * Mirrors `@eclipse-glsp/theia-integration`'s `createChannelConnection`, but
  * lives here so the data-server head carries no GLSP dependency.
  */
-export function createChannelConnection(channel: Channel, logger?: Logger): MessageConnection {
+export function createChannelConnection(channel: Channel, logger: Logger): MessageConnection {
    const reader = new ChannelMessageReader(channel);
    const writer = new ChannelMessageWriter(channel);
    return createMessageConnection(reader, writer, logger);
@@ -120,8 +120,8 @@ export interface OpenChannelConnectionOptions {
     * publishes the port) exists.
     */
    whenReady?: Promise<void>;
-   /** Optional `vscode-jsonrpc` logger threaded into the connection. */
-   logger?: Logger;
+   /** Where the connection logs its protocol faults; without one they leave no trace. */
+   logger: Logger;
    /**
     * Re-establish the connection whenever the live one is lost, by RE-OPENING
     * the channel on `path` — not merely by rebuilding over a channel Theia hands
@@ -269,7 +269,7 @@ export interface ChannelConnectionHandle {
 export function openChannelConnection(
    connectionProvider: ServiceConnectionProvider,
    path: string,
-   options: OpenChannelConnectionOptions = {}
+   options: OpenChannelConnectionOptions
 ): ChannelConnectionHandle {
    const reconnect = options.reconnect ?? true;
    const reconnectDelays = options.reconnectDelays ?? DEFAULT_RECONNECT_DELAYS;

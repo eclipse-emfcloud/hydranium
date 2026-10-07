@@ -15,6 +15,7 @@
 // every production bundle that imports the root.
 
 export * from './abstract-logger';
+export * from './console-logger';
 export * from './client';
 export * from './client-ids';
 export * from './clock';

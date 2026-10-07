@@ -56,6 +56,7 @@ import {
    UnregistrationRequest
 } from 'vscode-languageserver-protocol';
 import {
+   ConsoleLogger,
    createMessagePortTransport,
    DataConnectionWithEvents,
    type DataServerDiagnosticsProtocol,
@@ -64,6 +65,7 @@ import {
    formatLatencyReport,
    type LatencyReport,
    type Locale,
+   type Logger,
    type TransferDocument
 } from '@hydranium/protocol';
 import {
@@ -444,7 +446,7 @@ interface WorkerChannels {
  * Spawn the worker and hand each head its own channel. The worker keeps `port2`
  * of each pair; the page keeps `port1`.
  */
-function bootstrapWorker(): WorkerChannels {
+function bootstrapWorker(logger: Logger): WorkerChannels {
    const worker = new Worker(WORKER_URL);
    // Without this the page's only symptom for a worker that failed to load, or
    // threw on its first line, is a request that never settles — the same
@@ -493,7 +495,7 @@ function bootstrapWorker(): WorkerChannels {
    // Both ends use `createMessagePortTransport`; see it for why.
    const lspTransport = createMessagePortTransport(lsp.port1);
    return {
-      lsp: createMessageConnection(lspTransport.reader, lspTransport.writer),
+      lsp: createMessageConnection(lspTransport.reader, lspTransport.writer, logger),
       dataPort: data.port1,
       glspPort: glsp.port1,
       workspace,
@@ -532,8 +534,8 @@ const PAGE_SESSION_LABEL = 'order-flow-browser-page';
  * parties sharing one `clientId` read each other's writes as their own echoes
  * and ignore them.
  */
-function openDataHead(dataPort: MessagePort): DataHead {
-   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(new WorkerDataPort(dataPort));
+function openDataHead(dataPort: MessagePort, logger: Logger): DataHead {
+   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(new WorkerDataPort(dataPort, logger));
    return { connection, session: connection.createSession(PAGE_SESSION_LABEL) };
 }
 
@@ -834,8 +836,10 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // a dead control rather than as a value not yet in.
    const reportDetail = new ReportDetail();
    const log = new LogPanel();
+   // The page's own end of each head's connection logs to the browser console.
+   const pageLogger = new ConsoleLogger();
    setStatus('starting worker…');
-   const channels = bootstrapWorker();
+   const channels = bootstrapWorker(pageLogger.with('LSP head'));
    const connection = channels.lsp;
 
    connection.onError(([error]) => setStatus(`connection error: ${error.message}`));
@@ -1003,7 +1007,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
       }
    }, DIAGNOSTICS_DEADLINE_MS);
 
-   const dataHead = openDataHead(channels.dataPort);
+   const dataHead = openDataHead(channels.dataPort, pageLogger.with('data head'));
    await watchThroughDataHead(dataHead);
 
    // Enabled here, after the data head has answered once: the save goes through
@@ -1044,7 +1048,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
       // The callback keeps the line current as elements are created and deleted;
       // the resolved value is the first reading. A report written once would go
       // stale on the first palette gesture, beside a layout report that does not.
-      setGlspReport(await mountProcessDiagram(channels.glspPort, GLSP_HEAD_DOCUMENT, setGlspReport));
+      setGlspReport(await mountProcessDiagram(channels.glspPort, GLSP_HEAD_DOCUMENT, setGlspReport, pageLogger.with('GLSP head')));
       // AFTER the mount, and the ordering is the whole of it: a listener put on
       // this element before the diagram takes it over never fires — measured,
       // the same registration moved above this line stops working.

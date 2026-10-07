@@ -13,6 +13,8 @@ import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
+import { NoopLogger } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { createChannelConnection, openChannelConnection } from '../src/browser/channel-connection';
 
 /** Flush pending microtasks/timers so the helper's async `start()` runs. */
@@ -86,8 +88,8 @@ function makeChannelPipe(): { left: ForwardingChannel; right: ForwardingChannel 
 describe('createChannelConnection', () => {
    it('round-trips a request to a handler on the other channel end', async () => {
       const pipe = makeChannelPipe();
-      const serverConnection = createChannelConnection(pipe.left);
-      const clientConnection = createChannelConnection(pipe.right);
+      const serverConnection = createChannelConnection(pipe.left, new NoopLogger());
+      const clientConnection = createChannelConnection(pipe.right, new NoopLogger());
       serverConnection.onRequest('echo', (params: { value: string }) => ({ echoed: params.value }));
       serverConnection.listen();
       clientConnection.listen();
@@ -101,8 +103,8 @@ describe('createChannelConnection', () => {
 
    it('delivers a notification to the other channel end', async () => {
       const pipe = makeChannelPipe();
-      const serverConnection = createChannelConnection(pipe.left);
-      const clientConnection = createChannelConnection(pipe.right);
+      const serverConnection = createChannelConnection(pipe.left, new NoopLogger());
+      const clientConnection = createChannelConnection(pipe.right, new NoopLogger());
       const received = new Promise<{ value: string }>(resolve => {
          clientConnection.onNotification('ping', (params: { value: string }) => resolve(params));
       });
@@ -139,7 +141,7 @@ describe('openChannelConnection', () => {
       const whenReady = new Promise<void>(resolve => {
          release = resolve;
       });
-      openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { whenReady });
+      openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { whenReady, logger: new NoopLogger() });
       await flush();
       expect(provider.listenCalls).toBe(0);
 
@@ -155,7 +157,7 @@ describe('openChannelConnection', () => {
       // promise `listen` neither awaits nor reports, so the loser's consumer
       // hangs with a clean log.
       const provider = new FakeConnectionProvider();
-      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path');
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { logger: new NoopLogger() });
       await flush();
 
       expect(provider.lastReconnectArg).toBe(false);
@@ -164,7 +166,7 @@ describe('openChannelConnection', () => {
 
    it('ignores an unsolicited second channel', async () => {
       const provider = new FakeConnectionProvider();
-      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path');
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { logger: new NoopLogger() });
       await flush();
 
       const pipe = makeChannelPipe();
@@ -179,13 +181,33 @@ describe('openChannelConnection', () => {
       const received = new Promise<{ value: string }>(resolve => {
          connection.onNotification('ping', (params: { value: string }) => resolve(params));
       });
-      const peer = createChannelConnection(pipe.right);
+      const peer = createChannelConnection(pipe.right, new NoopLogger());
       peer.listen();
       peer.sendNotification('ping', { value: 'ok' });
 
       expect(await received).toEqual({ value: 'ok' });
       handle.dispose();
       peer.dispose();
+   });
+
+   it("logs a protocol fault on the handle's connection through its logger", async () => {
+      const provider = new FakeConnectionProvider();
+      const errors: string[] = [];
+      const record = (message: string): void => void errors.push(message);
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: { error: record, warn: record, info: record, log: record }
+      });
+      await flush();
+      const pipe = makeChannelPipe();
+      provider.handler!('test-path', pipe.left);
+      await handle.current;
+
+      const message = pipe.right.getWriteBuffer();
+      message.writeBytes(new TextEncoder().encode(JSON.stringify({ jsonrpc: '2.0', id: null, result: null })));
+      message.commit();
+
+      await waitFor(() => errors.includes('Received response message without id. No further error information provided.'));
+      handle.dispose();
    });
 
    it('builds exactly one connection for two channels arriving in the same turn', async () => {
@@ -197,7 +219,7 @@ describe('openChannelConnection', () => {
       // `createChannelConnection` subscribes to `channel.onMessage`, so counting
       // subscriptions per channel counts connections built for it.
       const provider = new FakeConnectionProvider();
-      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path');
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { logger: new NoopLogger() });
       await flush();
 
       const subscribed: number[] = [];
@@ -229,6 +251,7 @@ describe('openChannelConnection', () => {
    it('does nothing on a close while reconnect is off', async () => {
       const provider = new FakeConnectionProvider();
       const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
          reconnect: false,
          reconnectDelays: FAST_RECONNECT
       });
@@ -265,6 +288,7 @@ describe('openChannelConnection', () => {
    it('re-opens the channel when the live one closes, and works over the replacement', async () => {
       const provider = new FakeConnectionProvider();
       const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
          reconnectDelays: FAST_RECONNECT
       });
       await flush();
@@ -293,7 +317,7 @@ describe('openChannelConnection', () => {
       const received = new Promise<{ value: string }>(resolve => {
          secondConnection.onNotification('ping', (params: { value: string }) => resolve(params));
       });
-      const peer = createChannelConnection(second.right);
+      const peer = createChannelConnection(second.right, new NoopLogger());
       peer.listen();
       peer.sendNotification('ping', { value: 'second' });
 
@@ -311,12 +335,13 @@ describe('openChannelConnection', () => {
       // consumer's side, from the bug this whole path fixes.
       const provider = new FakeConnectionProvider();
       const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
          reconnectDelays: FAST_RECONNECT
       });
       await flush();
 
       const first = makeChannelPipe();
-      const firstPeer = createChannelConnection(first.right);
+      const firstPeer = createChannelConnection(first.right, new NoopLogger());
       firstPeer.onRequest('which', () => 'first');
       firstPeer.listen();
       provider.handler!('test-path', first.left);
@@ -332,7 +357,7 @@ describe('openChannelConnection', () => {
       await nextListen(provider);
 
       const second = makeChannelPipe();
-      const secondPeer = createChannelConnection(second.right);
+      const secondPeer = createChannelConnection(second.right, new NoopLogger());
       secondPeer.onRequest('which', () => 'second');
       secondPeer.listen();
       provider.handler!('test-path', second.left);
@@ -350,12 +375,13 @@ describe('openChannelConnection', () => {
       // in-flight request unsettled for the life of the page.
       const provider = new FakeConnectionProvider();
       const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
          reconnectDelays: FAST_RECONNECT
       });
       await flush();
 
       const pipe = makeChannelPipe();
-      const peer = createChannelConnection(pipe.right);
+      const peer = createChannelConnection(pipe.right, new NoopLogger());
       // Never answers, so the request is genuinely in flight at close time.
       peer.onRequest('hang', () => new Promise(() => undefined));
       peer.listen();
@@ -374,6 +400,7 @@ describe('openChannelConnection', () => {
    it('stops re-opening once disposed', async () => {
       const provider = new FakeConnectionProvider();
       const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
          reconnectDelays: FAST_RECONNECT
       });
       await flush();
@@ -396,7 +423,10 @@ describe('openChannelConnection', () => {
 
    it('ignores a channel handed over after dispose', async () => {
       const provider = new FakeConnectionProvider();
-      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', { reconnect: true });
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         reconnect: true,
+         logger: new NoopLogger()
+      });
       await flush();
       provider.handler!('test-path', makeChannelPipe().left);
       const firstConnection = await handle.current;

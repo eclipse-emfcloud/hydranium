@@ -292,7 +292,8 @@ The pieces a new adopter discovers from the example:
   `DATA_CLIENT_PROTOCOL_METHODS`).
 - **Transport**: vscode-jsonrpc `MessageConnection` is the only wire
   abstraction — `makeDuplexConnectionPair` (testing-only) or
-  `createMessageConnection(reader, writer)` for stdio / sockets in production.
+  `createMessageConnection(reader, writer, logger)` for stdio / sockets in
+  production.
 
 ### Production-shaped versions
 

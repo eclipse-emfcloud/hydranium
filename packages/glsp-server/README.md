@@ -71,7 +71,9 @@ when it starts. A replacement extends `HydraniumGlspSocketServerLauncher` or
 `HydraniumGlspWorkerServerLauncher`: GLSP's own launchers build their
 connection from GLSP's copy, so framework errors lose their code, and GLSP's
 typed messages throw `Unknown parameter structure auto` where its packages
-nest separate copies.
+nest separate copies. A replacement that overrides `createConnection` passes
+`createGlspConnectionLogger(this.logger)` as the connection's logger, as the
+framework's launchers do, or the connection's faults leave no trace.
 
 ## Exports
 

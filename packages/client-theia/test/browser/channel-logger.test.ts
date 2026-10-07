@@ -53,13 +53,13 @@ describe('ChannelLogger', () => {
       logger.info('hello');
       const lines = channels.channels.get('MyChannel')?.lines ?? [];
       expect(lines).toHaveLength(1);
-      expect(lines[0]).toMatch(/^\[Info\s+- \d{2}:\d{2}:\d{2}\.\d{3}] hello$/);
+      expect(lines[0]).toMatch(/^\[Info {2}- \d{2}:\d{2}:\d{2}\.\d{3}] hello$/);
    });
 
    it('formats the component segment when set via options', () => {
       const logger = makeLogger(channels, { channelName: 'Ch', component: 'MyClass' });
       logger.warn('uh oh');
-      expect(channels.channels.get('Ch')?.lines[0]).toMatch(/^\[Warn\s+- \d{2}:\d{2}:\d{2}\.\d{3}] \[MyClass] uh oh$/);
+      expect(channels.channels.get('Ch')?.lines[0]).toMatch(/^\[Warn {2}- \d{2}:\d{2}:\d{2}\.\d{3}] \[MyClass] uh oh$/);
    });
 
    it('derive() returns a free instance pinning the same channelName', () => {

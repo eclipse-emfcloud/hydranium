@@ -26,6 +26,7 @@ const restoreLoad = vi.hoisted(() => {
 });
 
 import { SPAWNED_SERVER_HOOK_TIMEOUT_MS, startSpawnedServer, type SpawnedServer } from '@hydranium/core/testing/node';
+import { NoopLogger } from '@hydranium/protocol';
 import type { Module } from 'node:module';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -47,12 +48,13 @@ describe('OrderFlowGlspVscodeServer', () => {
       restoreLoad();
    }, SPAWNED_SERVER_HOOK_TIMEOUT_MS);
 
-   it("initialises the order-flow GLSP head over the connection GLSP's VS Code integration creates", async () => {
+   it('initialises the order-flow GLSP head over the connection the server builds', async () => {
       const spawned = head!;
       glspServer = new OrderFlowGlspVscodeServer({
          clientId: 'order-flow-vscode-test',
          clientName: 'Order Flow',
-         findPort: () => spawned.port(ORDER_FLOW_PORT_COMMANDS.glsp)
+         findPort: () => spawned.port(ORDER_FLOW_PORT_COMMANDS.glsp),
+         logger: new NoopLogger()
       });
       await glspServer.start();
 

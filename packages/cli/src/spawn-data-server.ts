@@ -15,7 +15,14 @@ import {
    type DataServerProtocol
 } from '@hydranium/protocol/data';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
+import {
+   StreamMessageReader,
+   StreamMessageWriter,
+   createMessageConnection,
+   type Logger as ConnectionLogger,
+   type MessageConnection
+} from 'vscode-jsonrpc/node';
+import { STDERR_CONNECTION_LOGGER } from './stderr-connection-logger.js';
 
 /**
  * Options for {@link spawnDataServer}. `command` is the binary or script
@@ -49,6 +56,11 @@ export interface SpawnDataServerOptions {
     * scripted use; set to `'pipe'` to capture for assertion in tests.
     */
    readonly stderr?: 'inherit' | 'ignore' | 'pipe';
+   /**
+    * Where the connection to the child logs its protocol faults, such as a
+    * response that matches no request. Default: this process's stderr.
+    */
+   readonly logger?: ConnectionLogger;
 }
 
 /**
@@ -143,7 +155,7 @@ export function spawnDataServer<TTransfer extends TransferElement, TDiagnostic e
 
    const reader = new StreamMessageReader(child.stdout);
    const writer = new StreamMessageWriter(child.stdin);
-   const connection = createMessageConnection(reader, writer);
+   const connection = createMessageConnection(reader, writer, options.logger ?? STDERR_CONNECTION_LOGGER);
    // Consume transport error / close so a child that dies mid-stream (its stdout
    // closing, a write landing on a torn-down stdin) is observed here rather than
    // escaping as an unhandled error — the death is reported via `whenTerminated`.

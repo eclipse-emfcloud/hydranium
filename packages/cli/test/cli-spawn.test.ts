@@ -19,12 +19,14 @@
  * turbo pipeline orders `build` before `test`.
  */
 
-import { describe, expect, it } from 'vitest';
+import { Deferred } from '@hydranium/protocol';
+import { describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProjects } from '../src/commands/projects.js';
 import { runQuery } from '../src/commands/query.js';
 import { runSave } from '../src/commands/save.js';
+import { spawnDataServer } from '../src/spawn-data-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -121,5 +123,49 @@ describe('CLI subprocess hardening', () => {
             write: () => undefined
          })
       ).rejects.toThrow(/exited before the request completed/);
+   });
+});
+
+describe('spawnDataServer connection logging', () => {
+   const FAULT = 'Received response message without id. No further error information provided.';
+
+   /**
+    * Resolves once `FAULT` is logged. Awaited rather than polled: a child takes
+    * seconds to start on a loaded runner, and only the test timeout bounds it.
+    */
+   function awaitFault(): { onLine: (message: string) => void; logged: Promise<void> } {
+      const logged = new Deferred<void>();
+      const onLine = (message: string): void => {
+         if (message === FAULT) {
+            logged.resolve();
+         }
+      };
+      return { onLine, logged: logged.promise };
+   }
+
+   it("logs the connection's protocol faults through the given logger", async () => {
+      const { onLine, logged } = awaitFault();
+      const handle = spawnDataServer({
+         command: 'node',
+         args: [FIXTURE_PATH, '--send-response-without-id'],
+         logger: { error: onLine, warn: onLine, info: onLine, log: onLine }
+      });
+      try {
+         await logged;
+      } finally {
+         await handle.shutdown();
+      }
+   });
+
+   it('logs them to stderr when no logger is given, leaving stdout to the command', async () => {
+      const { onLine, logged } = awaitFault();
+      const toStderr = vi.spyOn(console, 'error').mockImplementation(onLine);
+      const handle = spawnDataServer({ command: 'node', args: [FIXTURE_PATH, '--send-response-without-id'] });
+      try {
+         await logged;
+      } finally {
+         await handle.shutdown();
+         toStderr.mockRestore();
+      }
    });
 });

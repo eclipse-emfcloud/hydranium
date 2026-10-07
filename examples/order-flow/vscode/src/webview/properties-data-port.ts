@@ -22,7 +22,7 @@
  * wire-up.
  */
 
-import { createPostMessageTransport, type PostMessageChannel, type ResolvedMessage } from '@hydranium/protocol';
+import { createPostMessageTransport, type Logger, type PostMessageChannel, type ResolvedMessage } from '@hydranium/protocol';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 
@@ -39,7 +39,9 @@ export class WebviewDataPort {
 
    constructor(
       protected readonly channel: PostMessageChannel,
-      protected readonly report: (error: unknown, reported: ResolvedMessage) => void
+      protected readonly report: (error: unknown, reported: ResolvedMessage) => void,
+      /** Where the connection logs its protocol faults. */
+      protected readonly logger: Logger
    ) {}
 
    /**
@@ -52,7 +54,7 @@ export class WebviewDataPort {
     */
    async connect(): Promise<MessageConnection> {
       const transport = createPostMessageTransport(this.channel);
-      const connection = createMessageConnection(transport.reader, transport.writer);
+      const connection = createMessageConnection(transport.reader, transport.writer, this.logger);
       connection.onDispose(() => transport.dispose());
       connection.listen();
       return connection;

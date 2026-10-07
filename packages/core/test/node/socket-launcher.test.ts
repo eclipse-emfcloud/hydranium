@@ -9,9 +9,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { Disposable } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import * as net from 'node:net';
-import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
+import { createMessageConnection, SocketMessageReader, SocketMessageWriter, type ResponseMessage } from 'vscode-jsonrpc/node';
 import { publishPortOnLspConnection, startSocketServer } from '../../src/node/socket-launcher.js';
+import { makeAttributingLogger } from '../../src/testing/index.js';
 
 /**
  * Dial `host:port` and report how it settled: `'connected'`, or the errno the
@@ -140,6 +142,25 @@ describe('startSocketServer', () => {
       await expect(handle.started).rejects.toMatchObject({ code: 'EADDRINUSE' });
 
       blocker.close();
+   });
+
+   it("logs the connection's protocol faults through the logger, under the head's tag", async () => {
+      const { logger, lines } = makeAttributingLogger();
+      const handle = startSocketServer({ port: 0, logger, logTag: 'TestServer' }, () => Disposable.EMPTY);
+      await handle.started;
+      const socket = net.connect({ port: handle.port!, host: '127.0.0.1' });
+      try {
+         const response: ResponseMessage = { jsonrpc: '2.0', id: null, result: null };
+         await new SocketMessageWriter(socket).write(response);
+
+         const fault = 'Received response message without id. No further error information provided.';
+         await waitFor(() => lines.some(line => line.message === fault));
+         expect(lines).toContainEqual({ component: 'TestServer', level: 'error', message: fault });
+      } finally {
+         socket.destroy();
+         handle.close();
+         await handle.stopped;
+      }
    });
 });
 

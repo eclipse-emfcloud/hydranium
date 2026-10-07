@@ -392,7 +392,11 @@ export function makeLspServerConnection(): LspServerConnection {
    );
 
    // Client side mirrors the directions: reads serverToClient, writes clientToServer.
-   const client = createProtocolConnection(new StreamMessageReader(pair.serverToClient), new StreamMessageWriter(pair.clientToServer));
+   const client = createProtocolConnection(
+      new StreamMessageReader(pair.serverToClient),
+      new StreamMessageWriter(pair.clientToServer),
+      console
+   );
    client.listen();
 
    const diagnostics: PublishDiagnosticsParams[] = [];

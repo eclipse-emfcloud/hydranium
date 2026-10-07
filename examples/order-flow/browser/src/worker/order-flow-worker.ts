@@ -148,7 +148,7 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
 function startDataHead(port: MessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
    // Both ends use `createMessagePortTransport`; see it for why.
    const transport = createMessagePortTransport(port);
-   const connection = createMessageConnection(transport.reader, transport.writer);
+   const connection = createMessageConnection(transport.reader, transport.writer, shared.Logger.with('ModelServer'));
    new DataServer<OrderFlowTransferRoot>(connection, shared, { latency });
    connection.listen();
 }

@@ -187,9 +187,7 @@ export class LspLogger extends AbstractLogger implements Logger {
    }
 
    protected emit(level: LogLevel, label: string, message: string, args: readonly unknown[]): void {
-      const component = this.component ? ` [${this.component}]` : '';
-      // Pad to the widest label (5 chars — 'Error'/'Debug'/'Trace') so timestamps line up.
-      const prefix = `[${label.padEnd(5)} - ${this.timestamp()}]${component}`;
+      const prefix = this.formatLinePrefix(label);
       const combined = args.length === 0 ? message : `${message} ${args.map(formatLogArg).join(' ')}`;
       const formatted = `${prefix} ${combined}`;
       const connection = this.services.lsp.Connection;

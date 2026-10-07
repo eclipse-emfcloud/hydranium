@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { createMessagePortTransport, renderFrameworkMessage, type DataPort, type ResolvedMessage } from '@hydranium/protocol';
+import { createMessagePortTransport, renderFrameworkMessage, type DataPort, type Logger, type ResolvedMessage } from '@hydranium/protocol';
 import { createMessageConnection, Emitter, type MessageConnection } from 'vscode-jsonrpc/browser';
 
 /**
@@ -28,7 +28,11 @@ export class WorkerDataPort implements DataPort {
    readonly onDispose = this.disposeEmitter.event;
    protected disposed = false;
 
-   constructor(protected readonly port: MessagePort) {}
+   constructor(
+      protected readonly port: MessagePort,
+      /** Where the connection logs its protocol faults. */
+      protected readonly logger: Logger
+   ) {}
 
    /**
     * The transport is the port the worker was already handed at bootstrap, so
@@ -49,7 +53,7 @@ export class WorkerDataPort implements DataPort {
          return Promise.reject(new Error('WorkerDataPort: the port is disposed, and the data head behind it has ended'));
       }
       const transport = createMessagePortTransport(this.port);
-      const connection = createMessageConnection(transport.reader, transport.writer);
+      const connection = createMessageConnection(transport.reader, transport.writer, this.logger);
       connection.listen();
       return Promise.resolve(connection);
    }

@@ -29,10 +29,11 @@ export interface StdioServerOptions {
     */
    readonly workspace?: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>;
    /**
-    * Optional logger for lifecycle lines. Omitted means silent — note that a
-    * logger writing to **stdout** would corrupt this head's protocol stream, so
-    * anything passed here must sink elsewhere. The framework's own `LspLogger`
-    * writes to stderr when no LSP connection is bound, which is correct here.
+    * Optional logger for lifecycle lines and the connection's protocol
+    * faults. Omitted means silent — note that a logger writing to **stdout**
+    * would corrupt this head's protocol stream, so anything passed here must
+    * sink elsewhere. The framework's own `LspLogger` writes to stderr when no
+    * LSP connection is bound, which is correct here.
     */
    readonly logger?: Logger;
    /** Tag included in lifecycle log lines. Default `"StdioServer"`. */
@@ -100,7 +101,8 @@ export function startStdioServer(
 
    const connection = createMessageConnection(
       new StreamMessageReader(options.input ?? process.stdin),
-      new StreamMessageWriter(options.output ?? process.stdout)
+      new StreamMessageWriter(options.output ?? process.stdout),
+      logger?.with(tag)
    );
    const adopterDisposable = onConnection(connection);
 

@@ -12,6 +12,7 @@
  * the one the page transfers to the worker.
  */
 
+import { NoopLogger } from '@hydranium/protocol';
 import { makeMessagePortPair } from '@hydranium/protocol/testing/node';
 import { describe, expect, it } from 'vitest';
 import { WorkerDataPort } from '../src/page/worker-data-port.js';
@@ -21,7 +22,7 @@ describe('WorkerDataPort', () => {
       const ports = makeMessagePortPair();
       try {
          // A Node port standing in for the browser one the page holds.
-         const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort);
+         const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
          dataPort.dispose();
 
          await expect(dataPort.connect()).rejects.toThrow('disposed');

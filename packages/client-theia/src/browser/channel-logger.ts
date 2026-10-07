@@ -66,10 +66,8 @@ export class ChannelLogger extends AbstractLogger {
    }
 
    protected emit(_level: LogLevel, label: string, message: string, args: readonly unknown[]): void {
-      const componentSegment = this.component ? ` [${this.component}]` : '';
       const formattedArgs = args.length > 0 ? ' ' + args.map(stringifyArg).join(' ') : '';
-      // Pad to match the server's 5-char label width so timestamps align across sources.
-      this.channel.appendLine(`[${label.padEnd(5)} - ${this.timestamp()}]${componentSegment} ${message}${formattedArgs}`);
+      this.channel.appendLine(`${this.formatLinePrefix(label)} ${message}${formattedArgs}`);
    }
 
    /**

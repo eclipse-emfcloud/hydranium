@@ -20,10 +20,12 @@
  * thing a spawned-subprocess test cannot see and an in-memory one can.
  */
 
-import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
+import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type ResponseMessage } from 'vscode-jsonrpc/node';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
+import { waitFor } from '@hydranium/protocol/testing';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
+import { makeAttributingLogger } from '../../src/testing/index.js';
 import { makeNoopSharedServices } from '../../src/testing/make-noop-shared-services.js';
 import { startStdioServer, type StartedStdioServer } from '../../src/node/stdio-launcher.js';
 
@@ -164,5 +166,25 @@ describe('startStdioServer', () => {
       // A half-live head is worse than a dead one: it would answer against an
       // empty registry, so a failed startup must tear the connection down.
       await expect(harness.server.stopped).resolves.toBeUndefined();
+   });
+
+   it("logs the connection's protocol faults through the logger, under the head's tag", async () => {
+      const { logger, lines } = makeAttributingLogger();
+      const toServer = new PassThrough();
+      const server = startStdioServer(
+         { shared: makeStubShared(async () => undefined), logger, logTag: 'TestServer', input: toServer, output: new PassThrough() },
+         () => ({ dispose: () => undefined })
+      );
+      try {
+         await server.started;
+         const response: ResponseMessage = { jsonrpc: '2.0', id: null, result: null };
+         await new StreamMessageWriter(toServer).write(response);
+
+         const fault = 'Received response message without id. No further error information provided.';
+         await waitFor(() => lines.some(line => line.message === fault));
+         expect(lines).toContainEqual({ component: 'TestServer', level: 'error', message: fault });
+      } finally {
+         server.close();
+      }
    });
 });
