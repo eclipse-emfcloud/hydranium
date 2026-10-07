@@ -10,7 +10,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { asMutable, Disposable, Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
-import { type AstNode, DocumentState, isOperationCancelled, type LangiumDocument } from '@hydranium/langium';
+import {
+   AbstractAstReflection,
+   type AstMetaData,
+   type AstNode,
+   DocumentState,
+   isOperationCancelled,
+   type LangiumDocument
+} from '@hydranium/langium';
 import type { ApplyWorkspaceEditParams, CancellationToken, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
@@ -71,6 +78,18 @@ function makeCancelToken(): { token: CancellationToken; cancel: () => void } {
 // stand-in suffices.
 class FakeTextDocuments {}
 
+/** `TypeOne` and `TypeTwo` are subtypes of the abstract `BaseType`; `UnknownType` is not listed. */
+class FixedReflection extends AbstractAstReflection {
+   override readonly types: AstMetaData = {
+      Root: { name: 'Root', properties: {}, superTypes: [] },
+      Foo: { name: 'Foo', properties: {}, superTypes: [] },
+      Bar: { name: 'Bar', properties: {}, superTypes: [] },
+      BaseType: { name: 'BaseType', properties: {}, superTypes: [] },
+      TypeOne: { name: 'TypeOne', properties: {}, superTypes: ['BaseType'] },
+      TypeTwo: { name: 'TypeTwo', properties: {}, superTypes: ['BaseType'] }
+   };
+}
+
 /**
  * Per-language services for IntegrityService tests: the shared workspace slots
  * the service reads (TextDocuments / FileSystemProvider / WorkspaceManager) over
@@ -83,6 +102,7 @@ function makeIntegrityServices(overrides: NoopLanguageServicesOverrides = {}): S
    const { workspace, ...sharedRest } = shared ?? {};
    return makeNoopLanguageServices({
       shared: {
+         AstReflection: new FixedReflection(),
          ...sharedRest,
          workspace: {
             TextDocuments: new FakeTextDocuments(),
@@ -277,13 +297,108 @@ describe('IntegrityService — contribution group consumption', () => {
    });
 });
 
+class ExactMatchService extends DefaultIntegrityService<FakeNode> {
+   protected override nodeTypesFor(rule: IntegrityRule): Iterable<string> {
+      return [rule.nodeType];
+   }
+}
+
+describe('IntegrityService — node type matching', () => {
+   async function enforcedIds(service: DefaultIntegrityService<FakeNode>, nodeType: string): Promise<string[]> {
+      const ids: string[] = [];
+      registerRule(service, {
+         nodeType,
+         onEnforce: node => {
+            ids.push(node.id ?? '');
+            return false;
+         }
+      });
+      const document = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [
+         makeFakeAstNode<FakeNode>({ $type: 'TypeOne', id: 'one' }),
+         makeFakeAstNode<FakeNode>({ $type: 'TypeTwo', id: 'two' }),
+         makeFakeAstNode<FakeNode>({ $type: 'UnknownType', id: 'unknown' })
+      ]);
+      await service.enforceIntegrity(document, DocumentState.Parsed);
+      return ids;
+   }
+
+   it('runs a rule keyed on an abstract type on every node of a subtype', async () => {
+      await expect(enforcedIds(makeService(), 'BaseType')).resolves.toEqual(['one', 'two']);
+   });
+
+   it('runs a rule keyed on a concrete type once per node of that type', async () => {
+      await expect(enforcedIds(makeService(), 'TypeOne')).resolves.toEqual(['one']);
+   });
+
+   it('runs a rule keyed on a type the reflection does not know on nodes of exactly that type', async () => {
+      await expect(enforcedIds(makeService(), 'UnknownType')).resolves.toEqual(['unknown']);
+   });
+
+   it('warns at registration about a rule keyed on a type the reflection does not know, and only that rule', () => {
+      const { tracer, lines } = makeCapturingTracer();
+      const service = new DefaultIntegrityService<FakeNode>(makeIntegrityServices({ shared: { Tracer: tracer } }));
+
+      service.register({ id: 'known', nodeType: 'BaseType', phase: DocumentState.Parsed, enforce: () => false });
+      service.register({ id: 'unknown', nodeType: 'UnknownType', phase: DocumentState.Parsed, enforce: () => false });
+
+      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("'unknown'");
+      expect(warnings[0]).toContain("'UnknownType'");
+   });
+
+   it('lets a subclass narrow the match to the exact type through nodeTypesFor', async () => {
+      await expect(enforcedIds(new ExactMatchService(makeIntegrityServices()), 'BaseType')).resolves.toEqual([]);
+   });
+
+   it.each([
+      { basePriority: 1, ownPriority: 2, expected: ['base', 'own'] },
+      { basePriority: 2, ownPriority: 1, expected: ['own', 'base'] }
+   ])(
+      'runs a supertype rule and a subtype rule on one node in priority order: $expected',
+      async ({ basePriority, ownPriority, expected }) => {
+         const service = makeService();
+         const order: string[] = [];
+         const record = (id: string): boolean => {
+            order.push(id);
+            return false;
+         };
+         service.register({
+            id: 'base',
+            nodeType: 'BaseType',
+            phase: DocumentState.Parsed,
+            priority: basePriority,
+            enforce: () => record('base')
+         });
+         service.register({
+            id: 'own',
+            nodeType: 'TypeOne',
+            phase: DocumentState.Parsed,
+            priority: ownPriority,
+            enforce: () => record('own')
+         });
+         const document = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [makeFakeAstNode<FakeNode>({ $type: 'TypeOne' })]);
+
+         await service.enforceIntegrity(document, DocumentState.Parsed);
+
+         expect(order).toEqual(expected);
+      }
+   );
+});
+
 /**
  * Probe subclass exposing the protected {@link DefaultIntegrityService.getPhaseBucket}
  * so the phase-bucket cache and priority ordering can be asserted directly.
  */
 class ProbeService extends DefaultIntegrityService<FakeNode> {
-   bucket(phase: DocumentState): readonly IntegrityRule[] {
+   bucket(phase: DocumentState): ReadonlyMap<string, readonly IntegrityRule[]> {
       return this.getPhaseBucket(phase);
+   }
+
+   bucketIds(phase: DocumentState, nodeType: string): string[] | undefined {
+      return this.bucket(phase)
+         .get(nodeType)
+         ?.map(rule => rule.id);
    }
 }
 
@@ -297,11 +412,12 @@ describe('IntegrityService phase buckets', () => {
       service.register({ id: 'keep', nodeType: 'Foo', phase: DocumentState.Parsed, enforce: () => false });
       service.register({ id: 'drop', nodeType: 'Bar', phase: DocumentState.Parsed, enforce: () => false });
       // Prime the cache so we exercise the unregister-driven invalidation path.
-      expect(service.bucket(DocumentState.Parsed).map(rule => rule.id)).toEqual(['keep', 'drop']);
+      expect(service.bucketIds(DocumentState.Parsed, 'Bar')).toEqual(['drop']);
 
       service.unregister('drop');
 
-      expect(service.bucket(DocumentState.Parsed).map(rule => rule.id)).toEqual(['keep']);
+      expect(service.bucketIds(DocumentState.Parsed, 'Bar')).toBeUndefined();
+      expect(service.bucketIds(DocumentState.Parsed, 'Foo')).toEqual(['keep']);
    });
 
    it('orders rules in a phase bucket by priority ascending, then registration order for ties', () => {
@@ -312,7 +428,7 @@ describe('IntegrityService phase buckets', () => {
       // Tie at priority 2 with `b`: registration order keeps `b` before `c`.
       service.register({ id: 'c', nodeType: 'Foo', phase: DocumentState.Parsed, priority: 2, enforce: () => false });
 
-      expect(service.bucket(DocumentState.Parsed).map(rule => rule.id)).toEqual(['a', 'b', 'c']);
+      expect(service.bucketIds(DocumentState.Parsed, 'Foo')).toEqual(['a', 'b', 'c']);
    });
 });
 
@@ -1115,12 +1231,12 @@ describe('IntegrityService.formatNode', () => {
 /**
  * Pins the phase-bucket cache-identity guard
  * (`if (this.phaseBucketsFor !== current)`). Repeated `getPhaseBucket` calls
- * without an intervening registry mutation must return the SAME cached array
+ * without an intervening registry mutation must return the SAME cached map
  * reference — an `if (true)` mutant rebuilds the buckets on every call,
- * yielding a fresh array each time.
+ * yielding a fresh map each time.
  */
 describe('IntegrityService phase-bucket cache identity', () => {
-   it('returns the same array reference across calls when the registry is unchanged', () => {
+   it('returns the same map reference across calls when the registry is unchanged', () => {
       const service = makeProbeService();
       service.register({ id: 'a', nodeType: 'Foo', phase: DocumentState.Parsed, enforce: () => false });
 
@@ -1130,7 +1246,7 @@ describe('IntegrityService phase-bucket cache identity', () => {
       expect(second).toBe(first);
    });
 
-   it('returns a new array reference after a registry mutation invalidates the cache', () => {
+   it('returns a new map reference after a registry mutation invalidates the cache', () => {
       const service = makeProbeService();
       service.register({ id: 'a', nodeType: 'Foo', phase: DocumentState.Parsed, enforce: () => false });
       const first = service.bucket(DocumentState.Parsed);

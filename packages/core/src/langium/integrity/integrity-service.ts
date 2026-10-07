@@ -137,15 +137,16 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    protected ruleLoggers = new Map<string, Logger>();
 
    /**
-    * Rules bucketed by the phase they target, preserving the registry's
-    * priority order within each bucket. Rebuilt lazily on the first
-    * `enforceIntegrity` call after a registry mutation — staleness is detected
-    * via reference identity of the registry's cached array (see
-    * {@link Registry.all}). Filtering the rule list per call would instead
-    * allocate one transient array per document per phase, which a workspace
-    * whose documents all settle at the same phase pays on every build.
+    * Rules bucketed by the phase they target, then by each `$type` from
+    * {@link nodeTypesFor}, preserving the registry's priority order within
+    * each bucket. Rebuilt lazily on the first `enforceIntegrity` call after a
+    * registry mutation — staleness is detected via reference identity of the
+    * registry's cached array (see {@link Registry.all}). Filtering the rule
+    * list per call would instead allocate one transient array per document per
+    * phase, which a workspace whose documents all settle at the same phase pays
+    * on every build.
     */
-   protected phaseBuckets = new Map<DocumentState, readonly IntegrityRule[]>();
+   protected phaseBuckets = new Map<DocumentState, ReadonlyMap<string, readonly IntegrityRule[]>>();
    protected phaseBucketsFor: readonly IntegrityRule[] | undefined;
 
    /** Controls how corrections are persisted for closed files. See {@link IntegritySyncMode}. */
@@ -234,6 +235,14 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          );
       }
       const disposable = this.rules.register(rule);
+      // No parsed node carries a type the reflection does not know, so such a
+      // rule never runs. A warning, not a throw: a test reflection may omit the type.
+      if (!this.services.shared.AstReflection.getAllTypes().includes(rule.nodeType)) {
+         this.tracer.warn(
+            `Integrity rule '${this.formatRule(rule)}' is keyed on node type '${rule.nodeType}', ` +
+               'which the AST reflection does not know, so no parsed node matches it.'
+         );
+      }
       this.ruleLoggers.set(rule.id, this.tracer.sub(IntegrityPhase.toString(rule.phase)).sub(rule.label ?? rule.id));
       return {
          dispose: () => {
@@ -285,26 +294,24 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          return false;
       }
       let changed = false;
-      const rulesForPhase = this.getPhaseBucket(phase);
-      if (rulesForPhase.length === 0) {
+      const rulesByType = this.getPhaseBucket(phase);
+      if (rulesByType.size === 0) {
          return false;
       }
       const relativeUri = this.services.shared.workspace.WorkspaceManager.wsRelativePath(document.uri);
       for (const node of AstUtils.streamAst(document.parseResult.value)) {
-         for (const rule of rulesForPhase) {
-            if (node.$type === rule.nodeType) {
-               const ruleLogger = this.ruleLoggers.get(rule.id)!.with(relativeUri);
-               // Scope per rule so the session aggregates self-time by rule id across all
-               // nodes; off the profiling path `session` is undefined and we call directly.
-               const enforced = session
-                  ? session.scope(rule.id, () => rule.enforce(node, document, ruleLogger))
-                  : rule.enforce(node, document, ruleLogger);
-               const mutated = isPromiseLike(enforced) ? await enforced : enforced;
-               if (mutated) {
-                  ruleLogger.trace(`[${relativeUri}] Mutated ${this.formatNode(node)}`);
-               }
-               changed = mutated || changed;
+         for (const rule of rulesByType.get(node.$type) ?? NO_RULES) {
+            const ruleLogger = this.ruleLoggers.get(rule.id)!.with(relativeUri);
+            // Scope per rule so the session aggregates self-time by rule id across all
+            // nodes; off the profiling path `session` is undefined and we call directly.
+            const enforced = session
+               ? session.scope(rule.id, () => rule.enforce(node, document, ruleLogger))
+               : rule.enforce(node, document, ruleLogger);
+            const mutated = isPromiseLike(enforced) ? await enforced : enforced;
+            if (mutated) {
+               ruleLogger.trace(`[${relativeUri}] Mutated ${this.formatNode(node)}`);
             }
+            changed = mutated || changed;
          }
          if (cancelToken !== undefined) {
             try {
@@ -597,17 +604,37 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       return label ? `${node.$type}('${label}')` : node.$type;
    }
 
-   protected getPhaseBucket(phase: DocumentState): readonly IntegrityRule[] {
+   /**
+    * The `$type`s `rule` runs on. Defaults to its `nodeType` and every subtype,
+    * as Langium's validation registry does: no node carries an abstract or union
+    * type as its `$type`, so an exact match never runs a rule keyed on one.
+    * Read only when the phase buckets rebuild after a registration change, so an
+    * override must not depend on anything else.
+    */
+   protected nodeTypesFor(rule: IntegrityRule): Iterable<string> {
+      // A type the reflection does not know still matches itself.
+      return [rule.nodeType, ...this.services.shared.AstReflection.getAllSubTypes(rule.nodeType)];
+   }
+
+   protected getPhaseBucket(phase: DocumentState): ReadonlyMap<string, readonly IntegrityRule[]> {
       const current = this.rules.all();
       if (this.phaseBucketsFor !== current) {
-         const next = new Map<DocumentState, IntegrityRule[]>();
+         const next = new Map<DocumentState, Map<string, IntegrityRule[]>>();
          for (const rule of current) {
             let bucket = next.get(rule.phase);
             if (!bucket) {
-               bucket = [];
+               bucket = new Map();
                next.set(rule.phase, bucket);
             }
-            bucket.push(rule);
+            // Deduplicated, or a rule runs twice on a node of its own type.
+            for (const nodeType of new Set(this.nodeTypesFor(rule))) {
+               let rules = bucket.get(nodeType);
+               if (!rules) {
+                  rules = [];
+                  bucket.set(nodeType, rules);
+               }
+               rules.push(rule);
+            }
          }
          this.phaseBuckets = next;
          this.phaseBucketsFor = current;
@@ -616,5 +643,6 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    }
 }
 
-/** Shared empty result so `getPhaseBucket` doesn't allocate per call on the cold path. */
-const EMPTY_PHASE_BUCKET: readonly IntegrityRule[] = Object.freeze([]);
+// Shared empty results so neither the cold path nor a node no rule matches allocates.
+const EMPTY_PHASE_BUCKET: ReadonlyMap<string, readonly IntegrityRule[]> = new Map();
+const NO_RULES: readonly IntegrityRule[] = Object.freeze([]);
