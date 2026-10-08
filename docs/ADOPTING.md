@@ -35,7 +35,6 @@ Two examples, for two different questions:
 - [The four document layers](concepts/document-layers.md): what the user
   typed, what Langium built from it, what in-process consumers get, and what
   crosses the wire.
-- [Hosting a head in a browser](concepts/browser-hosting.md).
 
 ## Guides
 
@@ -48,6 +47,11 @@ Two examples, for two different questions:
 - [Connect a data client](guides/connect-a-data-client.md) that opens, edits
   and saves models over the data head.
 - [Compose a server by hand](guides/compose-a-server.md) without `init`.
+- [Host in Theia](guides/host-in-theia.md): text, forms and diagrams in a
+  Theia application.
+- [Host in a browser](guides/host-in-a-browser.md): every head in a web
+  worker, with no backend. To host in VS Code, start from the
+  [order-flow VS Code extension](../examples/order-flow/vscode/README.md).
 
 ## Reference
 

@@ -156,7 +156,7 @@ const SNIPPET_TARGETS = [
    // `@hydranium/glsp-server/browser`, and only a package that declares the
    // dependency should be able to reach it. The fence's own preamble supplies
    // the transferred port, which has no name under this gate's DOM-free lib.
-   { readme: 'docs/concepts/browser-hosting.md', host: 'examples/order-flow/browser' },
+   { readme: 'docs/guides/host-in-a-browser.md', host: 'examples/order-flow/browser' },
    {
       readme: 'docs/concepts/document-layers.md',
       host: 'examples/order-flow/server',
