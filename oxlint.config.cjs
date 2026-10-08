@@ -218,17 +218,9 @@ const policyOverrides = [
    // Chokepoint ban: Langium is consumed via @hydranium/langium, never
    // directly. packages/langium is the chokepoint and is exempt.
    //
-   // ADOPTERS ARE COVERED TOO (Martin's call, 2026-08-27). Soft enforcement was
-   // tried first — "adopters import langium directly if they wish" — and the
-   // examples in the tree disagreed with each other about what that meant, which
-   // is the signal that the choice does not belong to the adopter. The reason to
-   // enforce it is VERSION COUPLING, not runtime
-   // identity: `langium` sits in an atomic chain with vscode-languageserver /
-   // -protocol / -jsonrpc (see the //langium note in the root package.json), and
-   // an adopter importing it directly owns that pin itself and can drift out of
-   // lockstep. Going through the chokepoint makes the framework own it. The
-   // chokepoint is also where a Langium rename would be defensively patched, so
-   // direct importers get no shield.
+   // examples/ is covered too, for version coupling: `langium` moves in lockstep
+   // with vscode-languageserver / -protocol / -jsonrpc (see //langium in the
+   // root package.json), and a direct importer owns that pin and can drift.
    //
    // GENERATED CODE IS EXEMPT AND MUST BE: langium-cli emits `generated/ast.ts`,
    // `grammar.ts` and `module.ts` with direct `langium` imports, and regenerates

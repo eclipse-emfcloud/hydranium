@@ -64,7 +64,7 @@ export interface OpenModelArgs extends TransferClientArgs {
 }
 
 /** Close a previously-opened document for the client. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- close names its own args; it adds no field to the base
 export interface CloseModelArgs extends TransferClientArgs {}
 
 // ---------------------------------------------------------------------------

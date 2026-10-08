@@ -66,7 +66,7 @@ export interface TransferUpdateDocumentArgs<TTransfer> {
 }
 
 /** Update a document the session `clientId` has open, then persist it to disk. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- save names its own args; it adds no field to update's
 export interface TransferSaveDocumentArgs<TTransfer> extends TransferUpdateDocumentArgs<TTransfer> {}
 
 /** Persist the text the server holds for a document the session `clientId` has open, without writing a model. */

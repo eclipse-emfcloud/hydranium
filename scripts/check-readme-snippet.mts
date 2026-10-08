@@ -88,23 +88,6 @@ const SNIPPET_TARGETS = [
       readme: 'packages/protocol/src/rpc/README.md',
       host: 'packages/protocol'
    },
-   {
-      readme: 'docs/contributing/conventions.md',
-      host: 'examples/order-flow/server',
-      // Illustrative stand-ins the prose names but never defines. Real
-      // framework symbols are imported by the fences themselves, so that a
-      // rename still breaks the gate; only the invented ones live here.
-      preamble: [
-         "import type { ServerSharedServices } from '@hydranium/core';",
-         // The prose is loose about which tree `services` names, so the
-         // stand-in satisfies both the shared-tree and the `.shared` spellings.
-         'declare const services: ServerSharedServices & { readonly shared: ServerSharedServices };',
-         'declare function makeTestServices(config: {',
-         '   languages: readonly { languageId: string; fileExtensions: string[]; producedTypes: string[] }[];',
-         '}): MyServices;',
-         'declare class MyServices {}'
-      ].join('\n')
-   },
    // Every fence here is a skip, so nothing compiles — the entry exists because
    // discovery requires one, and it will start earning its keep the moment a
    // compilable fence is added.

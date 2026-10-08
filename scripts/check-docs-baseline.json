@@ -2,15 +2,6 @@
   "SECURITY.md": {
     "version": 1
   },
-  "docs/CONTRIBUTING.md": {
-    "version": 4
-  },
-  "docs/contributing/conventions.md": {
-    "date": 2,
-    "history": 1,
-    "line-reference": 2,
-    "version": 1
-  },
   "docs/contributing/perf-baseline.md": {
     "version": 1
   },
