@@ -19,713 +19,284 @@ opens and edits over its connection under the reserved id `language-client`.
 
 ## Starting a session
 
-`ModelService.createSession(label?, clientId?, options?)` is synchronous. The
-id defaults to the label, a `#` and a random UUID, such as `form#3f2b…`;
-without a label the label is `session`. A fixed id is taken as given, and
-`options.resumeToken` takes over a live session under it (see
+An id is unique in the process while its session is live. `createSession`
+refuses, with `DuplicateClientIdError`, an id another live session holds or one
+a client that is not a session has documents open under, and refuses, with
+`ReservedClientIdError`, the ids in `RESERVED_CLIENT_IDS`, which the framework
+keeps for its own participants. Opens are keyed by id, so two holders of one id
+would share their opens, and either one's close would close the other's
+documents. An ended session's id is free again; a reserved id never is. The one
+way to take a live id is its resume token (see
 [Over the data head](#over-the-data-head)).
 
-An id is unique in the process while its session is live. `createSession` throws
-`DuplicateClientIdError` for an id that is live anywhere in the process: one
-another live session holds, or one a client that is not a session has documents
-open under. Once a session has ended its id is free again. It throws
-`ReservedClientIdError` for an id in `RESERVED_CLIENT_IDS`, which the framework
-keeps for its own participants and which never frees up.
-
-`ModelService.getSession(id)` returns the live session started under `id`, and
-`undefined` once it has ended, so a request handler or a server subclass can act
-as the caller whose id arrived with the request.
-
-To use a session class of your own, bind a `ClientSessionFactory` on
-`model.ClientSessionFactory` whose `create(clientId, label)` returns it.
-`createSession` registers the id and checks it before it calls the factory, so a
-factory cannot skip either. The framework's `DefaultClientSessionFactory` takes
-the `slowUpdateWarnMs` option: when it is set, a session's `update` that takes
-at least that many milliseconds logs a warn line. A factory that builds its
-sessions without that threshold loses the warn line, so a session class of your
-own keeps it by subclassing `DefaultClientSessionFactory` and building the
-session as `new MySession(this.services, { ...this.options, clientId, label })`,
-the `ClientSessionOptions` the default passes. A session logs under the
-factory's `logName`, `ClientSession` when none is set, with its client id in a
-bracket of its own.
-
-`DefaultClientSession` opens and writes itself: each member hands its work to a
-protected method (`registerOpen`, `createDocument`, `updateDocument`,
-`updateDocuments`, `saveDocument`, `persistDocument`, `closeDocument`), and a
-session class of your own overrides one of them to change how its sessions open
-or write. `save` writes through `updateDocument`, so an override of it applies
-to saves too. Every write to disk a session makes goes through
-`persistDocument`: a `save`, a `persist`, and a diagram's save, whichever head
-asked. Override it to act on each of them. A save and a diagram's save reach it
-with `baseVersion` `'any'`: a save's update already checked the version and
-moved past it, and a diagram's save persists the store, which already holds
-every client's writes. An override that awaits before calling the base lets a
-diagram save take its documents' texts at different moments, and a diagram that
-ends during the await fails the documents not yet taken with
-`DocumentNotOpenError`. An override that writes the text somewhere else instead
-of calling the base announces the save itself, through
-`TextDocuments.notifyDidSaveTextDocument` with the text it wrote: the store's
-disk baseline, and with it the document's dirty state, follows that
-announcement, as does every save listener. Writes no session makes do not reach
-it: an editor's own save, and an integrity repair written straight to disk. The
-open check and the `baseVersion` gate are the session's own `assertOpen` and
-`assertBaseVersion`. Turning a model into text (`modelToText`) and `rebuild`
-live on the `ModelService` bound on `model.ModelService`, which the session
-writes through.
+Every disk write a session makes goes through `DefaultClientSession`'s
+protected `persistDocument`: a `save`, a `persist`, and a diagram's save,
+whichever head asked; an editor's own save and an integrity repair written
+straight to disk do not. An override that awaits before calling the base lets a
+diagram save take its documents' texts at different moments, and a diagram
+that ends during the await fails the documents not yet taken with
+`DocumentNotOpenError`. An override that writes the text elsewhere instead of
+calling the base announces the save itself, through
+`TextDocuments.notifyDidSaveTextDocument` with the text it wrote: the disk
+baseline, and with it the dirty state, follows that announcement.
 
 ## Open and close
 
-A session has a URI open once, with no reference count. Opening a URI it already
-has open changes nothing, and one `close` ends the open however many times it
-was opened. Two participants that each need a document open use two sessions.
-
-`close` takes effect at once. Closing a URI the session does not have open does
-nothing.
-
-`options` is an object of fields your own open path reads, kept for that open
-until it closes. It is stored per session and URI, so two sessions opening one
-document keep their own; a repeat open keeps the options of the first, and so
-does a second open issued while the first is still under way, which joins it.
-Read them back with the session's `openOptions(uri)`. To type them,
-pass the type when starting the session:
-`createSession<{ mode: string }>('form')`.
+A session has a URI open once, without reference counting: a repeat open
+changes nothing and keeps the first open's options, and one `close` ends it, so
+two participants that each need a document open use two sessions.
 
 ## Writes need an open
 
-A session's `update` and `save` never open a document. They fail with
-`DocumentNotOpenError`, which carries the `uri` and the `clientId`, unless the
-session has the URI open at the moment the text is applied. The check and the
-apply are one synchronous step, so a write either lands while the document is
-open or fails: a session that sends an update and then closes the document
-before the update applies gets `DocumentNotOpenError` for the update, and the
-document is not reopened behind it.
-
-The `baseVersion` gate works as it does for any write, and a stale write still fails
-with `ConflictError`. It is checked again in the step that applies the text, so
-of two writes based on one version, the second fails. An integrity repair of an
-open document is a new version authored by `integrity`: a write based on the
-version before the repair fails, and `isOwnEcho` is false for the update that
-carries the repair.
+`update`, `save` and `persist` never open a document. Each fails with
+`DocumentNotOpenError` unless the session has the URI open in the synchronous
+step that applies or takes the text, and the `baseVersion` gate, which fails
+with `ConflictError`, runs in that same step. A check an await separates from
+the apply lets a write land on a document the session closed meanwhile, and
+two writes based on one version both apply. So a write either lands while the
+document is open or fails, and a document is never reopened behind a write.
 
 A write answers with the document once it is validated, in whichever build
-carried the write. When another write cancels the write's own build, the answer
-waits for the build that takes over, which costs the validation of the
-documents that build carries. That build's update event names the writer, so a
-client that drops its own echo gets the diagnostics from the answer. With
-`updateBuildOptions.validation` off, no build reaches `Validated`, and a write
-answers at `IntegrityService.SettledState`. A document that a `shouldValidate`
-override skips answers once the build has indexed its references, without
-diagnostics.
+carried it: its update event names the writer, so a client that drops its own
+echo gets the diagnostics only from the answer. The first event for a version
+is `changed` and names its author; a later one is `rebuilt` and names
+`UNKNOWN_CLIENT_ID`, since a rebuild caused by a referenced document is news to
+every client. `AstDocumentManager.attributeUpdate` decides this for every head,
+and `TransferDocumentUpdateReason` names the cases that fall back.
 
-An update event's `sourceClientId` names the client whose write it echoes, so
-`isOwnEcho` is true only for this session's own writes. The first event the
-server raises for a version, whether or not a client watched it, is `changed`
-and names the version's author, whichever build carried it. A later event for
-the same version is `rebuilt` and names
-`UNKNOWN_CLIENT_ID`: a document rebuilt because something it references changed
-is news to every client, the one that opened or last wrote it included.
-`AstDocumentManager.attributeUpdate` decides this for every head; the data head
-names `DOCUMENT_RELEASE_CLIENT_ID` instead for the build that follows a
-document's release, unless that build carries a write made since a client
-opened the document again. The rule needs rebuilds that validate: see
-`TransferDocumentUpdateReason` for the cases that fall back.
-
-A save persists the document's current text, which includes unsaved edits other
-participants have made to it: there is one shared text per document. The save
-checks the open once more when it takes that text, after the rebuild: a session
-that closes the document while it is being built gets `DocumentNotOpenError`,
-and nothing is written. Once the text is taken, the write completes even if the
-session closes the document or ends.
-
-A persist writes that shared text as it is, without a model of its own, so
-another participant's edits keep their formatting. It checks the open and
-`baseVersion` in the step that takes the text: text that moved on past the
-named version fails with `ConflictError`, and `'any'` persists whatever is
-there. The saved event names the persisting session, also when another
-participant wrote the text.
-
-A save answers with the document and, in `persisted.version`, the version of
-the text it wrote. The document's model can be older or newer than that text,
-since writes land between the build and the take, so a client that marks a
-version saved takes `persisted.version`. A session's persist answers with that
-version alone, once the text is on disk, and waits for no build, so a build
-given up after the write cannot fail it. The data head's persist request
-waits for the document's build after the write and answers as a save does, so
-that request can still fail with the text already on disk.
+There is one shared text per document. A save writes the session's model and
+then persists the shared text, other participants' unsaved edits included; a
+persist writes that text as it is, so their formatting survives. Once the text
+is taken, the write completes even if the session closes the document or ends.
+Writes land between a save's build and its take, so a client that marks a
+version saved takes `persisted.version`, not the answered model's. The data
+head's persist request waits for the build after the write, so it can fail
+with the text already on disk.
 
 ## `updateAll`
 
-`updateAll({ updates })` writes several documents in one step. Every document is
-serialised first; then the open check and the `baseVersion` gate run for every
-document and every text applies, in one synchronous step. A `ConflictError` or
-`DocumentNotOpenError` for any document of the set is thrown before any text
-applies, so a set never ends half-written. It resolves to the rebuilt
-documents in the order given, and refuses a set that names one document twice.
-
-The step relies on `AstDocumentManager.update` applying its text before its
-first await, as the framework's does. An override that awaits before applying
-lets another write land between two documents of the set.
-
-## Errors on the wire
-
-The session errors are defined in `@hydranium/protocol`
-(`packages/protocol/src/errors.ts`), so a frontend can name them without the
-server tier, and `@hydranium/core` re-exports them. Like `ConflictError`, each
-is a JSON-RPC `ResponseError` with its own code and its fields in `data`, since
-only the code, message and data cross the wire. `createRpcProxy` revives a
-rejection carrying one of these codes into its class, through
-`reviveProtocolError`, so a client calling through it reads the getters; each
-error's `is…` guard also matches a rejection that reached the client by another
-path. All but `ReservedClientIdError` carry a message identity, so the data
-server renders their sentence in the reader's locale where the adopter supplied
-a catalogue.
+`updateAll` is all or none: every model is serialised first, then every open
+check and gate runs and every text applies in one synchronous step. That relies
+on `AstDocumentManager.update` applying its text before its first await; an
+override that awaits first lets another write land inside the set.
 
 ## Over the data head
 
-A data-server connection registers sessions with `createSession({ clientId,
-label })`, which fails with the `ReservedClientIdError` code for a reserved id
-and with the `DuplicateClientIdError` code for an id live anywhere in the
-server process. The one exception to the second is `resumeToken`: a
-registration carrying the token an earlier registration of the same id carried
-ends that session, as its connection closing would, and registers the id
-afresh. It lets a client whose connection dropped register again before the
-server has noticed the drop. The token guards against colliding with that
-session; it is not a secret, since the wire carries no authentication, and a
-takeover ends the old session even when its connection is still alive. In
-process, `ModelService.createSession(label, clientId, { resumeToken })` does
-the same, and the old session's `onDidDispose` tells its holder.
+A data-server connection registers sessions with `createSession`, refused for a
+reserved id and for one live anywhere in the server process. The exception is
+`resumeToken`: a registration carrying the token an earlier registration of the
+same id carried ends that session, as its connection closing would, and
+registers the id afresh, so a client whose connection dropped can register
+again before the server has noticed the drop. The token guards against
+colliding with that session; it is not a secret, since the wire carries no
+authentication, and a takeover ends the old session even when its connection
+is still alive. `ModelService.createSession` takes the same token in process.
 
-The session belongs to the connection: a request carrying its id acts as that
-session, so its `updateModelDocument` and `saveModelDocument` write only what
-it has open and open nothing. `openModelDocument` opens for the session,
-keeping the request's `options` as the open's options; a session's open takes
-no `languageId`, `version` or `text` seed: it reads the file, or joins the text
-another client already has open.
-`closeModelDocument` closes the session's open and its watch.
-
-`createModelDocument({ uri, clientId, text })` and
-`updateModelDocuments({ clientId, updates })` exist for sessions only; they are
-`create` and `updateAll` over the wire, and fail with the `SessionClosedError`
-code, and a message saying so, for an id not registered on the connection.
-
-`closeSession({ clientId })` ends the session: it closes everything the session
-has open, drops its watches on the connection, and frees the id. When the
-connection closes, every session it registered ends the same way, as lost
-rather than closed, which lets the documents it was the last to have open wait
-out the release grace (see [Last close and release](#last-close-and-release));
-so does a session another connection takes over with its resume token. Either
-way a later request under the id from that connection fails rather than
-opening anything, until the connection registers the id again.
-
-Every document request acts as a session, and one carrying an id not registered
-on the connection fails with the `SessionClosedError` code. A head that serves
-the data protocol therefore implements sessions; the conformance kit seeds its
-fixtures through them. Watching needs no session.
+The session belongs to the connection. Every document request acts as the
+session its client id names, and an id not registered on that connection fails
+with the `SessionClosedError` code rather than opening anything, so a head that
+serves the data protocol implements sessions. Watching needs no session.
+`closeSession` ends a session as closed; the connection closing, or a takeover,
+ends it as lost, which lets each document it was the last to hold wait out the
+release grace (see [Last close and release](#last-close-and-release)).
 
 ## `DataSession`
 
-On the client, `DataConnection.createSession(label?, clientId?)` returns a
-`DataSession`, the client side of such a session. Pass a label here too. It is
-synchronous: the id defaults to the label, a `#` and a random UUID, the
-registration is sent at once, and every call of the session waits for it. When
-the server refuses the registration, every call of the session rejects with its
-error. A fixed id is taken as given; an id in `FRAMEWORK_CLIENT_IDS` is refused
-at once with a `ReservedClientIdError`, and an id another live session on the
-connection holds with a `DuplicateClientIdError`. `isReservedClientIdError` and
-`isDuplicateClientIdError` recognise these and the server's refusals alike.
+`DataSession` is the client side of such a session. `closeDocument` and
+`dispose` first wait for its calls in flight, up to `settleBeforeCloseMs`, so a
+save sent just before a close reaches the server first; a client without it
+that closes without awaiting its save gets the `DocumentNotOpenError` code.
+A participant that only follows a document uses `connection.watchDocument`,
+since an open would hold the document for as long as it follows.
 
-`openDocument` opens and then watches, and `closeDocument` closes the document
-and its watch. `closeDocument` and `dispose` first wait for the session's calls
-still in flight on the document, or on any document for `dispose`, up to
-`settleBeforeCloseMs`, so a save sent just before a close reaches the server
-first; `whenSavesSettled()` waits the same way for the saves in flight. A client that
-registers a session without `DataSession` and sends a close without awaiting
-its save gets the `DocumentNotOpenError` code for the save.
+After a reconnect the connection registers each session again under its id and
+resume token, and the session re-opens, re-watches, and puts back what it wrote
+since each document's last save. It decides by text, not version: a revert
+moves the version on and a restarted server numbers versions afresh, so a
+version never tells whether the server still holds a write. Every document the
+data head sends that it holds carries a `text.hash` of the text alone. For each
+document written since its last save, the session keeps the hash its first
+unsaved write was based on, and its last write with that write's answer. After
+the re-open:
 
-After `dispose()` every call of the session rejects with `SessionClosedError`,
-the error the server answers a call on an ended session with, so a caller
-handles both alike. Its sentence names no client id, and it carries the
-message identity `SESSION_CLOSED`. `onDidDispose` fires as soon as the session
-rejects calls, before its end reaches the server; by then the connection has
-let go of the session, so a listener may start one under the same id on that
-connection. The server still holds the id until the old session's close
-arrives, and refuses the new session's registration before then. When the
-connection itself is disposed, it detaches its sessions instead, which sends
-nothing: the server ends every session of a connection it sees close.
-
-A participant that only follows a document, such as an outline that re-reads
-on every rebuild, need not open it, which would hold the document for as long
-as it follows. `connection.watchDocument(uri, label?)` watches the document
-under an id of its own, the label, a `#` and a random UUID, with no session,
-and resolves once the watch is in place to a handle whose `dispose()`
-unwatches. The update events reach the connection's client as for any watch.
-A session cannot do the same for a document it also opens: closing the
-document ends the session's watch of it too. A change made while the
-connection was down sends no event once the watch is back, so
-`connection.onDidReconnect` fires when a later connection is ready and the
-watches have been sent to it again, and a watcher reads its document again
-then.
-
-When the connection drops, the connection registers every session with
-documents open again at once, under the same id and with the resume token the
-session has kept since it was created, so the server ends the old session if
-it has not noticed the drop yet. A session with nothing open registers again
-on its next call. The session then re-opens and re-watches every document it
-had open, and writes again what it wrote since a document's last save where
-the re-open lost it. The connection also watches again what `watchDocument`
-watches, tells the client a watched document's dirty state where it changed,
-and reports a watch it cannot place again with the message
-`DATA_CONNECTION_WATCH_RESTORE_FAILED`. A session whose restore throws is
-reported with `DATA_CONNECTION_SESSION_RESTORE_FAILED`, and the connection
-restores the others. When the reconnect fails, both wait for the next
-connection that becomes ready, whichever request brings it up, rather than for
-a call of their own: a watcher makes none.
-
-It decides by text, not by version: a revert moves a document's version on,
-and a restarted server numbers versions afresh. Every document the data head
-sends that it holds carries a `text` block whose `hash` is of the text alone,
-equal for equal text. For
-each document it wrote since its last save, the session keeps the hash of the
-text its first such write was based on, its last write, and that write's
-answer. After the re-open and the re-watch:
-
-- A document that holds the last write, because the server kept it through
-  the release grace or no one changed it, needs nothing.
-- A document back at the text the first unsaved write was based on, because
-  the server reverted it to disk after the grace or restarted, is written
-  again: the last written model, based on the re-opened model's version. It is an
-  ordinary write, so an edit that lands between the re-open and the write
-  makes it conflict.
-- Any other document was changed by another client while the connection was
-  down, and nothing is written.
+- A document that holds the last write needs nothing.
+- A document back at the text the first unsaved write was based on, reverted
+  after the grace or by a restart, gets the last write again, based on the
+  re-opened version. It is an ordinary write, so an edit that lands between
+  the re-open and the write makes it conflict.
+- Any other document was changed by another client, and nothing is written.
 
 Documents last written by one `updateDocuments` are written again by one, and
-only when every one of them can be. The session reports the documents it
-cannot put back once, through the connection's error sink, with the message
-`DATA_SESSION_UNSAVED_LOST`: those another client changed, the rest of their
-set, and those whose write conflicted, which is not retried. It forgets their
-unsaved edits; they stay open. A document closed while the restore runs is
-left out.
-
-A write's base is known when its `baseVersion` is the `text.version` one of the
-session's own calls was answered with, or the one a read of the document still
-answers; the session reads the document once, for a document's first unsaved
-write, when it needs to. A write based on `'any'` has no base, so after a
-revert or a restart it is reported rather than written again. A server that
-sends no `text` gets no write either, and a document counts as keeping the
-write there only at the version the write was answered with.
-
-The session drops what it keeps of a document on its own save, on a close,
-when the server tells its connection that the document turned clean, as
-another client's save makes it, and when another client writes over the
-document while the connection holds: an update event of reason `changed` that
-names another client and text other than the session's write. Its own echo,
-an integrity repair its write's answer already holds, and a rebuild leave the
-record. A write another client supersedes before it is answered needs nothing:
-the answer names the other client's text. So the report covers only what the
-drop cost. The server sends both events only for a document someone watches,
-so a document the session writes without watching it can still be reported
-lost after another client saved or wrote it. Two writes of one
-document in flight at once may answer out of order, so the session ignores
-an answer numbered below the one it keeps. It also ignores a write's answer
-numbered at or below its last save of the document: the server applied that
-write before the save, which persisted it.
-
-A document that cannot be re-opened is reported with the message
-`DATA_SESSION_RESTORE_FAILED`, and forgotten, and nothing of its set is
-written again. A write that fails for another reason than a conflict, such as
-the connection dropping again, is reported with the same message, and the
-session keeps its unsaved edits, so the next restore decides again.
-
-The session tells the client each document's dirty state after any write it
-sent, so a document written again does not flash clean first.
-
-To hand out a subclass of `DataSession`, pass `sessionFactory` in the
-connection's options.
+only when every one of them can be. No caller waits on a restore, so it reports
+rather than throws or retries. What cannot be put back, a conflicting write
+included, is reported once through the connection's error sink
+(`DATA_SESSION_UNSAVED_LOST`) and forgotten, since a retry would overwrite
+another client's edit. A document that cannot be re-opened is reported with
+`DATA_SESSION_RESTORE_FAILED` and forgotten, and nothing of its set is written
+again; a write that fails for another reason is reported the same way but kept,
+so the next restore decides again. A write based on `'any'` has no base, so it
+is reported rather than written again. The session drops a document's record
+on its own save, a close, the document turning clean, and another client
+writing over it while the connection holds, so the report covers only what the
+drop cost.
 
 ### In Theia
 
-A Theia frontend binds each data connection with `bindDataConnection` from
-`@hydranium/data-client-theia/browser`, which has a
-`DataSessionStopContribution` track it: the contribution takes in the sessions
-the connection has and every one it starts. When the page stops, it disposes
-every tracked session, so the server ends them as closed, and each
-document one of them was the last to hold is released at once; otherwise the
-server sees the page go only when its connection does, which Theia may hold open
-for its reconnect timeout, and then ends them as lost. A session with a call
-still in flight at the stop sends its close only after that call, too late for a
-page going away, so it too ends as lost. While a tracked session has a save in
-flight, it vetoes the stop: Electron waits for the saves, and a browser shows
-its leave-page prompt. The Theia backend's forwarders send what the frontend
-wrote before its channel closed, so a close sent as the page goes normally
-arrives. The close is best effort all the same: under load the page's last
-frames can be lost on the way, and the server then ends the sessions as lost.
+`bindDataConnection` has `DataSessionStopContribution` dispose every session
+when the page stops, so the server ends them as closed and releases their
+documents at once, rather than ending them as lost when Theia finally drops the
+connection. A session with a call in flight at the stop closes too late, and
+the page's last frames can be lost under load, so the close is best effort.
+The adopter's side is in
+[Connect a data client](../../guides/connect-a-data-client.md#in-theia).
 
 ## Over the GLSP head
 
 Each GLSP client session is one client session. `HydraniumGlspStorage`
-registers the GLSP client id as its id when the diagram loads, taking the id
-as given, and hands the session to the diagram's state as `modelSession`.
-GLSP's placeholder client, `TEMPORARY_CLIENT_ID`, which exists only to
-enumerate action kinds, registers nothing.
+registers the GLSP client id as its id when the diagram loads and hands the
+session to the diagram's state as `modelSession`; GLSP's placeholder client,
+`TEMPORARY_CLIENT_ID`, registers nothing. The diagram opens its source document
+and each document of its write set through the session, and ending the storage
+ends the session, which closes everything it has open. A document that leaves
+the write set stays open until the next save, which saves and then closes it,
+so leaving never reverts the diagram's unsaved edits to it.
 
-Hydranium's Theia diagram manager gives a diagram the same client id across a
-reload and a reconnect of its window, and its load carries the window's resume
-token in the `RequestModelAction` option `RESUME_TOKEN_ARG`. A reloaded or
-reconnected diagram usually loads before the server has noticed the old
-connection close; its token takes the old session over, ending it as lost, so
-the diagram reopens on its unsaved text. When the GLSP server shuts down, which
-is how a closing connection reaches it, its diagrams' sessions end as lost too,
-including when the client stopped on purpose.
+Hydranium's Theia diagram manager keeps a diagram's client id across a reload
+and a reconnect of its window, and the load carries the window's resume token
+(`RESUME_TOKEN_ARG`), so a reloaded diagram takes the old session over, ending
+it as lost, and reopens on its unsaved text. The window claims its id and token
+as its frontend starts and hands them on only as it leaves, so a duplicated tab
+resumes nothing of the original's. The adopter's side is in
+[Host in Theia](../../guides/host-in-theia.md#unsaved-diagrams-and-reloads).
 
-The window's id and token come from the `WindowSessionService`, whose default
-keeps them in `sessionStorage`. A page claims them as its frontend starts,
-before any diagram opens, and hands them on only as it leaves: a reload takes
-them up, while a duplicated tab, which copies `sessionStorage` from a page
-still open, draws its own and resumes nothing of the original's. A page
-restored from the back-forward cache takes the mark back, so a tab duplicated
-after it draws its own as well.
+A load without a token whose id is held waits up to `sessionWaitMs` for the
+holder to end; a load whose token does not match is not kept waiting. When the
+id is still held, the diagram does not load (`DIAGRAM_SESSION_REFUSED`). Taking
+the id without the token would end another participant's session, and working
+beside it would share its opens, so its close would close the diagram's
+documents too.
 
-Whether a reload has anything to resume depends on where the server runs;
-[Host in Theia](../../guides/host-in-theia.md#unsaved-diagrams-and-reloads)
-says when. Where the server is new after a reload, the handover is inert.
+`ReconcilingMultiDocumentGlspState` writes the changed documents of the write
+set in one `updateAll`, so a conflict on any of them leaves every one as it
+was, and the conflict resolver handles the set as a whole; a conflict whose
+refetch is unavailable fails rather than forcing the write. Session writes open
+nothing, so the state opens each document through `openForWrite` first, and
+every state refuses to write without a session.
 
-A load that sends no token and finds its id held waits up to `sessionWaitMs`
-for the holder to end, which covers a client that reconnects
-under its old id without resuming. A load whose token does not match is not
-kept waiting. When the id is still held, the diagram does not load: the client
-gets a rejection naming the id, and the user a message saying the diagram's
-identifier is in use (`DIAGRAM_SESSION_REFUSED`, code
-`hydranium/glsp-server/diagram-session-refused`). A save before
-the diagram has loaded fails the same way. Taking the id over without the token
-would end the other participant's session, and working without one would share
-its opens, so its close would close the diagram's documents too.
-
-The diagram opens its source document through the session when it loads, and
-every document of its write set (`trackSecondaryDocument`) as the document
-joins. A document that leaves the write set stays open until the diagram's next
-save, which saves it and then closes it, so leaving never reverts the diagram's
-unsaved edits to it. Disposing the storage, when the GLSP client session ends,
-the diagram's client detaches or the storage finds its GLSP session gone, ends
-the session, which closes everything it has open.
-
-`ReconcilingMultiDocumentGlspState` writes the documents of the write set that
-changed in one `updateAll` on the session, so a conflict on any of them leaves
-every one as it was. Each is gated: the source document on the `baseVersion` the
-operation read the model at, each other document on `secondaryBaseVersion`, by
-default the version it had when the source root was last read. Override
-`secondaryBaseVersion` to return `'any'` to force a document's writes. A
-conflict on any document goes to the state's conflict resolver for the whole
-set, and a merged retry is gated on the versions its refetch read. A conflict
-whose refetch is unavailable fails the write with its `ConflictError` rather
-than forcing it. A write based on `'any'` forces every document. Before writing,
-the state opens each document of the set through `openForWrite`; a state whose
-write set can name a document that does not exist yet overrides it to create the
-document through `createSecondaryDocument`, since the session's writes open
-nothing. The single-document states write through the session's `update`. Every
-state refuses to write without a session, so a write after the diagram ended
-fails.
-
-A save persists the text of every document the session has open: the source
-document, the write set, and the documents that left the write set since the
-last save. Each goes through the session's `persist` at `'any'`, since the
-store already holds every client's writes. A document only another client has
-open is not saved. Every save takes its text in one step, so a GLSP client
-session that ends during the save closes nothing before its text is taken,
-unless the session class's `persistDocument` awaits before calling the base.
-
-A write to a document outside the write set goes through the session's
-`withOpen`, based on the version `ModelService.snapshot` returned when the
-element was read. A new file goes through `create`:
-
-<!-- snippet-preamble
-import type { AbstractHydraniumGlspState } from '@hydranium/glsp-server';
-import type { AstNode } from '@hydranium/langium';
-import type { ModelVersion } from '@hydranium/protocol';
-declare const state: AbstractHydraniumGlspState<AstNode>;
-declare const uri: string;
-declare const model: string;
-declare const baseVersion: ModelVersion;
--->
-
-```ts
-const session = state.modelSession;
-if (session) {
-   await session.withOpen(uri, () => session.update({ uri, model, baseVersion }));
-}
-```
+A diagram save persists every document the session has open at `'any'`, since
+the store already holds every client's writes; a document only another client
+has open is not saved. Each save takes its texts in one step, which an
+awaiting `persistDocument` override breaks (see
+[Starting a session](#starting-a-session)).
 
 ## Disk writes
 
 Every disk access of a file the framework makes on the server goes through one
-queue per file, whichever session, head or service makes it. Each save takes
-its text when it is called and writes in the order it was called, so the file
-ends with the newest saved text. Files do not wait for one another, and updates
+queue per file, `FileSystemTaskQueue`, whichever session, head or service makes
+it. Each save takes its text when it is called and writes in the order it was
+called, so the file ends with the newest saved text; two writes that bypass the
+queue can land in either order. Files do not wait for one another, and updates
 do not wait for the queue. A build waits only for its own repair write, which
 queues behind earlier saves of that file.
 
-Code of your own that writes a file the framework also saves runs its write
-through `FileSystemTaskQueue.enqueue`, the shared service at
-`workspace.FileSystemTaskQueue`, to stay in that order. The task must not await
-a build, a save, another queued task or an open of a document no client has
-open, for the same file: what it waits for queues behind it, and the file's
-queue stops for good.
+Code that writes a file the framework also saves runs its write through
+`FileSystemTaskQueue.enqueue`. The task must not await a build, a save,
+another queued task, or an open of a document no client has open, for the same
+file: what it waits for queues behind it, and the file's queue stops for good.
 
-With `coalesceSaves` set in `AstDocumentManagerOptions`, a save still waiting
-behind another is skipped when a newer save of the same file queues behind it.
-The skipped save announces nothing and takes the newer save's outcome: it
-resolves when that one lands, and rejects with its error when it fails. The
-framework binds the manager without options, so turning this on means binding
-`AstDocumentManager` to a `DefaultAstDocumentManager` constructed with them.
+With `coalesceSaves`, a save still waiting behind another is skipped when a
+newer save of the same file queues behind it; it announces nothing and takes
+the newer save's outcome.
 
 ## Editor saves
 
-An editor behind the LSP head writes the file itself; the server hears of the
-save through `willSaveWaitUntil` before the write and `didSave` after it, and
-advertises both. The editor's save joins the file's disk queue:
+An editor behind the LSP head writes the file itself, and the server joins
+that save to the file's disk queue: the answer to `willSaveWaitUntil` waits for
+the server's writes already queued, so the editor writes after them, and server
+writes queued after the editor's save wait for its `didSave`, so they land
+after the editor's write. `willSaveGateMs` caps each wait, and the answer never
+fails, since VS Code stops asking for the rest of the session after repeated
+timed-out or failed answers.
 
-- The answer to `willSaveWaitUntil`, which carries no edits, waits for the
-  server's writes of the file already queued, so the editor writes after them.
-- From the moment the queue reaches the editor's save, a server write of the
-  file queued behind it waits for the editor's `didSave`, so it lands after
-  the editor's write.
-
-Each wait is capped by `willSaveGateMs` in
-`HydraniumDocumentUpdateHandlerOptions`, whose default stays under VS Code's
-own timeout for the answer. An answer whose cap runs out is logged at warn
-level. A `didSave` that does not come within the cap is logged at debug level
-only, since an editor sends none for a save it cancels or that changed nothing.
-The answer never fails: VS Code stops asking for the rest of the session once
-four answers, over all documents, timed out or failed; Theia waits without a
-limit. Langium drops the request's cancellation, so an answer the editor
-stopped waiting for still waits out its cap.
-
-`didSave` fires `TextDocuments.onDidSaveInLanguageClient` for every editor
-save, which releases the hold. The store then reads the file back through its
-disk queue, after any server write queued behind the hold. Only when it holds
-the document's current text does the store fire `onDidSave` under
-`language-client`, as any save does under its client's id, and the data head
-broadcasts it as a save. The editor saves its own buffer, which lags the store
-while another client's edit is on its way to it; the file, not the editor,
-tells whether the shared document is on disk, and a check of the file needs no
-saved text from the client. When the file differs, or cannot be read, the save
-reached disk only and no `onDidSave` fires. A file changed again between the
-editor's write and the read also counts as differing.
+On `didSave` the store reads the file back through its disk queue and fires
+`onDidSave` under `language-client` only when the file holds the document's
+current text. The editor saves its own buffer, which lags the store while
+another client's edit is on its way to it; the file, not the editor, tells
+whether the shared document is on disk.
 
 ## Dirty state
 
-For each document a client has open, the text store keeps the text the server
-last knew the file to hold, and `TextDocuments.isDirty(uri)` answers whether
-the document's text differs from it. That text moves only where the server
-reads or writes the file:
-
-- a first open takes the text it opened with: the file for a session, the
-  buffer for an editor. `create`, and any open given its text, has no file, so
-  such a document is dirty until its first save, and a document opened on
-  content the integrity service staged is dirty too;
-- a server save takes the text it wrote, or found the file already holding;
-- an editor save takes the file the store reads back, whether or not it holds
-  the document's text;
-- a watched-file change the server did not write takes the file, read through
-  its disk queue, and no file when it cannot be read;
-- an integrity repair written to a file some client holds takes the repair.
+`TextDocuments.isDirty(uri)` answers whether a document's text differs from its
+disk baseline, the text the server last knew the file to hold. The baseline
+moves only where the server reads or writes the file: a first open, a server
+save, an editor save (the file as read back), a watched-file change the server
+did not write, and an integrity repair written to a file some client holds. A
+document from `create`, or opened on content the integrity service staged, is
+therefore dirty from the start. Code that writes a file itself records it with
+`setDiskBaseline`, or announces the save through `notifyDidSaveTextDocument`.
 
 A released document is not dirty. A dirty one announces the change once the
-`DocumentReleaseHandler`'s promise settles: with the text the build then holds,
-or without `text` when the build removed the document, failed, or was skipped,
-before it parsed the file, because the connection or the workspace went away.
-The default handler settles once its revert, or the build it requests when the
-revert stopped short, has parsed the file or removed the document. A first open
-before that announces it instead, when it opens clean.
-`TextDocuments.onDidChangeDirty` fires on each change of the answer, and
-`setDiskBaseline(uri, text)` records a write your own code made; a save your
-code announces through `notifyDidSaveTextDocument` with its text moves the
-baseline too.
+`DocumentReleaseHandler`'s promise settles, so the announcement carries the
+text the build then holds, or none when the build removed the document, failed,
+or was skipped because the connection or the workspace went away.
 
-Over the data head, every transfer document the head sends that it holds
-carries the current answer as `text.dirty`, and a watcher is sent
-`onDocumentDirtyChanged({ uri, text })` on each change;
-`DataEvents.onDidChangeDocumentDirty` fans it out. Its `text` is the
-`TextState` of the text the answer was decided on, absent when the document
-no longer exists or the build after its release failed. A flip for an edit is
-sent when the text changes, before the build that follows, so its `text.version`
-can be ahead of the `model.version` a client holds; [Comparing the two
-versions](../../concepts/document-layers.md#comparing-the-two-versions) says what a client
-does then. After a reconnect, a `DataSession` reads each document it
-restores once its watch is in place, and tells the connection's client the
-answer that read's `text` carries where it differs from the last one the
-client was told since its open, so a flip while the connection was down
-reaches it.
+Over the data head, a flip for an edit is sent to watchers when the text
+changes, before the build that follows, so its `text.version` can be ahead of
+the `model.version` a client holds; see
+[Comparing the two versions](../../concepts/document-layers.md#comparing-the-two-versions).
+After a reconnect, a `DataSession` reads each restored document once its watch
+is in place and any write is sent again, so a flip while the connection was
+down reaches its client and a document written again does not flash clean
+first. A diagram's dirty state is the same answer over every document its
+session has open. An editor keeps a dirty flag of its own, since LSP has none
+to send it.
 
-A diagram's dirty state is the same answer over every document the diagram's
-session has open, read by `HydraniumGlspCommandStack`, and its storage sends
-the client each change, so one the diagram did not make reaches it too. While
-a save of the diagram's own is awaited, the storage sends nothing: GLSP's save
-handler sends the state once the save is done, reason `save`, and GLSP's own
-saveable waits for that answer. An editor keeps a dirty flag of its own, since
-LSP has none to send it.
-
-In Theia, call `bindEditorDiskSync` from `@hydranium/client-theia/browser`,
-which binds `EditorDiskSync` and `HydraniumFileService`. A server save of a
-document an editor shows unsaved writes the editor's text, and Theia keeps the
-editor dirty; its next save applies the editor's pending edits to that file a
-second time, since its check that the file is unchanged passes when the size is.
-Before each save of an editor, `EditorDiskSync` reads the file, and when it
-holds the text the editor held as the save began, drops the edits pending then
-and has the save expect the file's version. The save goes on and writes only
-what changed after that point, such as a save participant's trim of trailing
-whitespace, onto the file. Save All relies on that check: it saves a diagram and
-an editor on the same file one after the other, faster than the file watcher
-reports the diagram's write. A file that cannot be read within its
-`readTimeoutMs` leaves the save to Theia as it is. A watched change to the editor's text marks it clean
-too, once any save of it in flight has finished.
-
-`HydraniumFileService`, which the same call puts in place of Theia's
-`FileService`, refuses an editor's incremental save once the file's mtime is
-past the one the editor read, whatever the size, and the editor then writes its
-whole text, through Theia's own check. That covers the save `EditorDiskSync`
-leaves alone because the file holds neither the editor's text nor the text it
-read.
+`EditorDiskSync` exists because a server save breaks Theia's incremental save.
+A server save of a document an editor shows unsaved writes the editor's text,
+and Theia keeps the editor dirty; its next save applies the pending edits to
+that file a second time, since its check that the file is unchanged passes
+when the size is. Before each editor save, `EditorDiskSync` reads the file and,
+when it holds the editor's text, drops the pending edits, so the save writes
+only what changed after. `HydraniumFileService` covers the save it leaves
+alone, where the file holds neither the editor's text nor the text it read: it
+refuses an incremental save once the file's mtime is past the one the editor
+read, and the editor writes its whole text. `bindEditorDiskSync` binds both.
 
 ## Last close and release
 
 A close belongs to one client: it ends that client's open of the document, and
 another client's open is untouched. A release belongs to the text store: it
 drops the shared text it has owned since the first open, once no client holds
-the document. Usually the two happen together, at the last close. They come
-apart when a client loses its connection:
+the document. The two coincide at the last close, unless that close came from
+a lost connection: a data connection that closed, a GLSP connection that closed
+under a diagram, or a session a reconnecting client took over with its resume
+token. Then the release waits out `releaseGraceMs`, and meanwhile the document
+is open for no client and `TextDocuments.isReleaseDeferred(uri)` answers
+`true`.
 
-1. A client closes the document. While another client has it open, nothing
-   else happens.
-2. At the last close, the store releases the document at once, unless that
-   close came from a lost connection. Then the release waits out the release
-   grace (below): the lost client opening it again within its grace keeps the
-   unsaved text and nothing is released; any other client opening it releases
-   it first and then opens it as a first open; the grace running out, or the
-   document being deleted, releases it.
-3. At the release, the store drops the document's text, keeping only its
-   version sequence, fires `onDidReleaseDocument`, and then hands it to the
-   `DocumentReleaseHandler` slot. A document released dirty is announced clean
-   once the promise the handler returned settles, that is once the build holds
-   what it keeps (see [Dirty state](#dirty-state)).
+Only the lost client may reclaim the text, and only within the grace of its own
+loss: an open under its id in that time cancels the release. An open under any
+other id, a reloaded page's new session or an editor attaching over the LSP
+head included, releases the document first and then opens it as a first open
+does; so does an open under a lost id whose own grace has run out. Otherwise a
+client would inherit unsaved text written after it was lost. A `create` of the
+URI is refused while the document waits, and the integrity service treats it
+as open, so none of its unsaved text reaches disk. A close the client makes
+itself, `closeSession`, and a session's `dispose()` release at once, whatever
+the grace.
 
-The default `DocumentReleaseHandler` rebuilds a released document from the file
-system provider, or removes it, for every head and for a server with no
-language server at all. The unsaved edits of its last client are discarded with
-it. Whether to rebuild or remove is read from the file after its disk queue has
-drained, so a save issued before the close is not reverted past. The revert runs
-under the workspace write lock, which checks again that no client holds the
-document: a client that opens or re-creates the file meanwhile keeps its text,
-and no revert follows.
-
-The bound `FileSystemProvider` decides by `exists`, for a URI of any scheme: a
-document it can serve survives its last close, rebuilt from the provider's text,
-as a model file of a workspace on the in-memory or persistent provider is,
-whatever its scheme. Any other is removed from the workspace, such as an
-editor's `untitled:` buffer or a `file:` document created and never saved. A
-`virtual:` document, built under `virtualUri`, survives, since the framework
-serves that scheme from the index, whatever provider the host passes as
-`context.fileSystemProvider`; an edited one therefore keeps its edit after the
-close, and keeping it read-only is the client's job. A change the LSP head still
-has debounced for the document is dropped: the revert rebuilds or removes the
-document, and the text a `virtual:` document is rebuilt from already holds that
-change.
-
-The bound provider is a `FileSystemProviderRegistry` that dispatches by
-scheme: the framework registers a provider for `virtual:` in the shared
-`fileSystemProviders` group, every scheme with no entry there goes to the
-registry's `host`, the provider from `context.fileSystemProvider`, and its
-TSDoc says how a scheme gets a provider of its own. The workspace manager
-warns once at startup when no provider serves a seeded document, since it
-would leave the workspace at its last close; a host that drops such
-documents on purpose passes `warnUnservedDocuments: false`. The adopter's
-view is in
-[Customizing services](../../concepts/customizing-services.md#serving-documents-from-another-filesystem).
-
-`TextDocuments.onDidReleaseDocument` fires when a document is released,
-before the `DocumentReleaseHandler` is handed it, so its listeners act before
-any build the handler runs.
-
-`releaseGraceMs` in `HydraniumTextDocumentsOptions` defers the release of a
-document whose last close came from a lost connection: a data connection that
-closed, a GLSP connection that closed under a diagram, or a session a
-reconnecting client took over with its resume token.
-The store keeps the document, and its unsaved text, for that long. A client
-lost from the document may reclaim that text only within the grace of its own
-loss: an open under its id in that time, such as a session a reconnecting
-client registers again or takes over with its resume token, cancels the release.
-An open under any other id, a reloaded page's new session or an editor
-attaching over the LSP head included, releases the document first and then
-opens it as a first open does: a session reads the file, and an editor keeps
-the text it opened with. So does an open under a lost id whose own grace has
-run out, though a later loss keeps the document waiting: that client would
-otherwise inherit unsaved text written after it was lost. A `create` of the URI
-is refused while the document waits. It is open for no client meanwhile, and
-`TextDocuments.isReleaseDeferred(uri)` answers `true`; the integrity service
-treats it as open, so none of its unsaved text reaches disk. A close the
-client makes itself, `closeSession`, and a session's `dispose()` release the
-document at once, whatever the grace. With `0` the document is released at
-once as well, in the close itself rather than on a timer.
-
-<!-- snippet-preamble
-import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/core';
--->
-
-```ts
-const sharedModule = {
-   workspace: {
-      TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs: 0 })
-   }
-};
-```
-
-## `withOpen`
-
-`withOpen(uri, fn)` opens `uri`, runs `fn`, and closes `uri` once `fn` has
-returned or thrown. The close undoes only the open `withOpen` made: a URI the
-session already had open, or was still opening through another call, stays open
-afterwards. It suits a one-shot write to a document the session does not
-otherwise work on:
-
-<!-- snippet-preamble
-import type { ClientSession } from '@hydranium/core';
-import type { AstNode } from '@hydranium/langium';
-import type { ModelVersion } from '@hydranium/protocol';
-declare const session: ClientSession<AstNode>;
-declare const uri: string;
-declare const model: string;
-declare const baseVersion: ModelVersion;
--->
-
-```ts
-await session.withOpen(uri, () => session.save({ uri, model, baseVersion }));
-```
-
-## `create`
-
-`create(uri, text)` fails when a file exists at `uri`, when the URI waits out
-the release grace, or when any client, the session itself included, has the URI
-open, including a client whose open lands while the create is under way: of
-two creates of one URI, at most one succeeds. Otherwise it opens a document
-holding `text` for the session. The document exists in memory only; it reaches
-disk with the first `save`.
-
-## Ending a session
-
-`dispose()` closes every document the session has open, each through the
-ordinary close, and frees the id, all before it returns. A second `dispose()`
-does nothing. `dispose('lost')` ends the session as its connection going away
-does, so each document it was the last to have open waits out the release
-grace. Every other member throws `SessionClosedError` from then on,
-synchronously, before returning a promise.
-
-An `open` or `create` still in flight when the session ends is rejected with
-`SessionClosedError`, and leaves nothing open. The exception is an id taken
-again meanwhile: opens are keyed by id, so the new session under that id keeps
-the open and releases it when it ends.
-
-`TextDocuments.onDidCloseSession` fires once a session has ended, after its
-opens have closed.
+At the release the store drops the document's text, keeping only its version
+sequence, and fires `onDidReleaseDocument` before it hands the document to the
+`DocumentReleaseHandler`, so listeners act before any build the handler runs.
+The default handler rebuilds the document from the file-system provider, or
+removes it, discarding its last client's unsaved edits. It reads the file once
+the file's disk queue has drained, so a save issued before the close is not
+reverted past, and reverts under the workspace write lock, which checks again
+that no client holds the document. The provider's `exists` decides, for any
+scheme: an `untitled:` buffer or a `file:` document never saved is removed,
+while a `virtual:` document, served from the index, survives with its edits,
+so keeping it read-only is the client's job. How the provider dispatches by
+scheme is in [Service placement](service-placement.md).
 
 ## Deletion
 
@@ -763,12 +334,6 @@ The limits an adopter meets are in
 [Status and limitations](../../adopting/status.md#unsaved-edits-are-kept-only-so-far).
 These concern the editor-save gate and the disk baseline:
 
-- An editor save whose wait runs past `willSaveGateMs`, or whose `didSave`
-  comes later than that, can land before or after a server write of the same
-  file. The cap that ran out is logged.
-- VS Code stops sending `willSaveWaitUntil` for the session after four failed
-  or timed-out answers; the editor's saves then no longer wait for the
-  server's writes. The default `willSaveGateMs` stays under its timeout.
 - A server write of a file queued before the editor's save always lands
   first, so the editor then saves over a file newer than its buffer, which VS
   Code reports as a newer file on disk and Theia as out of sync. The gate only

@@ -30,9 +30,6 @@ One head has a third spelling. `@hydranium/glsp-server/browser` is the mirror of
 its `/node` twin, because GLSP's launcher, app module and readiness signal all
 differ per platform. `.` stays free of both so it resolves under either
 platform, and the lint config bans naming either from neutral code.
-`startGlspServerInWorker` returns an `IntegratedServer` without `port`: the
-socket variant's one extra member is the one thing a worker head has no answer
-for.
 
 ## The one bare `'path'` import
 
@@ -56,11 +53,11 @@ page against `lib.dom`, which is the adopter's project rather than
 
 Upstream declares `WorkerLaunchOptions.context` as `Worker`, narrower than the
 `MessagePort | Worker | DedicatedWorkerGlobalScope` its own reader accepts, so
-the framework casts structurally on the way through. The cast is redundant
-today and kept on purpose: `Worker` does not resolve under the framework's
-`lib` either, so `skipLibCheck` degrades the option, and the assignment would
-compile without the cast, which would be type-checking by accident rather than
-by contract.
+the framework casts structurally on the way through. The cast is redundant and
+kept on purpose: `Worker` does not resolve under the framework's `lib` either,
+so `skipLibCheck` degrades the option, and the assignment would compile
+without the cast, which would be type-checking by accident rather than by
+contract.
 
 A port reports no close: Chromium has no `close` event on `MessagePort`,
 Firefox and WebKit have not committed to one, and
@@ -104,17 +101,17 @@ markers among the content.
 ## What "gated neutral" does and does not promise
 
 `check:neutral` bundles each gated entry for the browser and fails on a
-`node:*` import. Third-party dependencies are externalised, which is right, since
-an unrelated package's Node code must not decide our verdict, but it means
-nothing reads inside them. So the gate resolves `@hydranium/*` rather than
+`node:*` import. Third-party dependencies are externalised, which is right,
+since an unrelated package's Node code must not decide our verdict, but it
+means nothing reads inside them. So the gate resolves `@hydranium/*` rather than
 externalising it, which catches a portable entry reaching a sibling's `/node`
 subpath, and classifies every externalised specifier by name as well, which
 catches a package's `/node` subpath and a builtin spelled without its prefix,
 with one importer-keyed exemption for the bare `'path'` above.
 
-Both are regression-only, so the gate self-tests: three canary fixtures must be
-rejected on every run, and it reports itself blind if one survives. A clean run
-is then evidence rather than an absence.
+Both are regression-only, so the gate self-tests: one canary fixture per
+detection path must be rejected on every run, and the gate reports itself
+blind if one survives. A clean run is then evidence rather than an absence.
 
 An adopter's own browser bundle is still the stricter check. It covers the
 whole composition, and a gate that scopes itself to one package, or that stops

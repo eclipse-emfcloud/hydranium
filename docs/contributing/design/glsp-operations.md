@@ -27,12 +27,11 @@ node for such lookups, while the handler keeps editing the copy.
 
 `modelState.referenceTo(target, source)` builds a reference whose `ref` stays
 the copy node, which an identity comparison later in the same operation needs.
-By default its `$refText` is the `ReferenceBuilder`'s answer for the built
-target and the source's nearest built container, so a target renamed in the
-same operation is named as built, and a target created in it is named without a
-project. With `{ tier: 'own' }` it is the target's own name, read off the copy.
-The builder called on a copy node directly loses the projects and the target's
-language.
+Unless asked for the target's own name, its `$refText` is named against the
+built target and the source's nearest built container: a target renamed in the
+same operation is named as built, and a target created in it is named without
+a project. The `ReferenceBuilder` called on a copy node directly loses the
+projects and the target's language.
 
 ## What runs again on undo and redo
 
