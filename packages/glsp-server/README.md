@@ -92,7 +92,7 @@ gated as browser-neutral in CI (`scripts/check-neutral-bundles.mts`), which
 depends on `.` naming only the bare `@eclipse-glsp/server` specifier: a slip back
 to a `/node` subpath in the portable tree fails that gate. `./browser` is
 browser-only rather than neutral — no portability is claimed for it. What the
-gate does and does not promise is [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+gate does and does not promise is [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
 Resolve the subpaths with [a resolver that reads
 `exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
 `"Node"` (node10) reaches none of them.
@@ -108,7 +108,7 @@ edits a working copy of the source root, written back to the shared document
 once when the operation completes, after which the GModel is re-derived and
 every listener on that document is notified. The worker bringup and its two bundler
 accommodations are in
-[`docs/concepts/browser-hosting.md`](../../docs/concepts/browser-hosting.md); the
+[Host in a browser](../../docs/guides/host-in-a-browser.md); the
 framework/adopter seams are in [Adopting Hydranium](../../docs/ADOPTING.md).
 The Theia-side client wiring lives in `@hydranium/glsp-client-theia`.
 

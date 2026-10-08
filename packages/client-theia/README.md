@@ -133,7 +133,7 @@ Resolve the subpaths with [a resolver that reads
 `"Node"` (node10) reaches none of them. "Gated" means the
 entry is enforced browser-neutral by the repository's neutral-bundle check: it
 must bundle for the browser with no `node:*` import, including transitive ones —
-and [what "gated neutral" does and does not promise](../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+and [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
 `./node` is deliberately not gated — that tier is where Node-only code belongs.
 
 ## Status

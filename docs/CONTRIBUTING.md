@@ -24,6 +24,9 @@ The design behind what the adopter pages under
 - [**Build pipeline**](contributing/design/build-pipeline.md) — how build-time
   work is wired into Langium's document build, and why integrity and adopter
   passes share one priority space.
+- [**Browser hosting**](contributing/design/browser-hosting.md) — why the
+  packages split into portable and Node-only entries, and what the neutrality
+  gate does and does not promise.
 - [**Scope and candidate services**](contributing/design/scope-services.md) —
   how reference handling is split between scope resolution and the candidate
   pipeline, and why.

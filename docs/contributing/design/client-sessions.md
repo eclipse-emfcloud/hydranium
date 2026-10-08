@@ -384,19 +384,11 @@ before any diagram opens, and hands them on only as it leaves: a reload takes
 them up, while a duplicated tab, which copies `sessionStorage` from a page
 still open, draws its own and resumes nothing of the original's. A page
 restored from the back-forward cache takes the mark back, so a tab duplicated
-after it draws its own as well. An adopter with its own notion of a window
-rebinds `WindowSessionService`.
+after it draws its own as well.
 
-Whether a reload has anything to resume depends on where the server runs. A
-server that outlives the page or serves several pages, such as one process in
-the Theia backend for every window or a standalone socket server, still holds
-the reloaded diagram's session, and the handover lets the new page take it
-over. A server started per frontend does not: Theia gives every page load a new
-frontend id, and so a new plugin host, so a server the plugin host runs (as in
-the order-flow example) is a new process after a reload, and the old one ends
-with its unsaved text once `frontendConnectionTimeout` passes. There only a
-reconnect within that timeout keeps the server, and the stable id and token
-then resume the diagram; the handover is inert.
+Whether a reload has anything to resume depends on where the server runs;
+[Host in Theia](../../guides/host-in-theia.md#unsaved-diagrams-and-reloads)
+says when. Where the server is new after a reload, the handover is inert.
 
 A load that sends no token and finds its id held waits up to `sessionWaitMs`
 for the holder to end, which covers a client that reconnects

@@ -15,7 +15,7 @@ package and nothing is hidden by one.
 What the package is *for* is the harder one behind it: what a host has to do
 that a shell was doing for it. Five things, each with the failure
 it produces when skipped, all recorded here and in
-[`docs/concepts/browser-hosting.md`](../../../docs/concepts/browser-hosting.md):
+[Host in a browser](../../../docs/guides/host-in-a-browser.md):
 size the elements sprotty and Monaco render into, hand each head its own port,
 ask for the validating build workspace initialization does not do, answer
 `workspace/applyEdit`, and — since nothing else will — write the files, because
@@ -245,7 +245,7 @@ Two things this settled by measurement, both of which the design left open:
   aligned with this buffer, so suppressing it here would break the next outbound
   diff. `vscode-languageclient` echoes incrementally too, so this is the
   ordinary contract rather than a quirk of a hand-written client — see
-  [browser hosting](../../../docs/concepts/browser-hosting.md#two-obligations-on-a-host-that-accepts-workspaceapplyedit).
+  [Host in a browser](../../../docs/guides/host-in-a-browser.md).
 
 **Put the caret inside `Order.status` and press Ctrl+Space.** That line —
 `task Pay writes Order.status = PAID` — is three references, each scoped by the
@@ -545,7 +545,7 @@ page is told the result.
 
 The framework-level version of what this package learned —
 what a browser host must accommodate, and why — is
-[`docs/concepts/browser-hosting.md`](../../../docs/concepts/browser-hosting.md).
+[Host in a browser](../../../docs/guides/host-in-a-browser.md).
 
 ## What to know before changing it
 
@@ -586,4 +586,4 @@ what a browser host must accommodate, and why — is
 
 The bundle is also a neutrality gate in its own right, covering this example's
 real composition rather than the framework's entries alone — see
-[browser hosting](../../../docs/concepts/browser-hosting.md#a-note-on-what-gated-neutral-does-and-does-not-promise).
+[browser hosting](../../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
