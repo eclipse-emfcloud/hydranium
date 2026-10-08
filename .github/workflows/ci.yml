@@ -51,9 +51,72 @@ defaults:
     shell: bash
 
 jobs:
+  # A pull request that changes only prose skips what prose cannot affect: the
+  # e2e shards, the init scaffold, and the Windows and macOS gates. The Ubuntu
+  # leg still builds and runs the gate tail, where every docs check lives.
+  #
+  # Only an explicit `full=false` skips anything. The required checks are this
+  # workflow's `build & test` legs and `e2e`, and GitHub counts a skipped job
+  # as passed, so a failed or missing verdict must read as a full run rather
+  # than as permission to skip.
+  #
+  # Only a pull request is classified. A push to main is the only signal that
+  # commit will get, so it is never narrowed, and the skipped job's empty
+  # verdict runs everything.
+  changes:
+    name: CI scope
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Classify the change
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          full() {
+            echo "full=true" >> "$GITHUB_OUTPUT"
+            echo "full=true — $1"
+            printf '### CI scope\n- verdict: `full` — %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+            full "the pull request's range ($BASE_SHA...$HEAD_SHA) does not resolve"
+            exit 0
+          fi
+          # The base's classifier, so a pull request cannot widen the prose list to cover itself.
+          if ! git show "$BASE_SHA:scripts/ci-changed.mts" > "$RUNNER_TEMP/ci-changed.mts" 2>/dev/null; then
+            full "the base commit has no classifier"
+            exit 0
+          fi
+          # Without renames, so a file moved out of a fixture tree still lists its old path. Captured
+          # whole first, so a diff that dies partway cannot hand the classifier a partial list.
+          if ! changed=$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA"); then
+            full "git diff failed"
+            exit 0
+          fi
+          printf '%s\n' "$changed" | node "$RUNNER_TEMP/ci-changed.mts"
+
   build:
     name: build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: changes
+    # Not cancelled rather than succeeded, so a failed or skipped classifier
+    # still gates, in full.
+    if: ${{ !cancelled() }}
     # A backstop, not a target. Windows runs the same gate appreciably slower
     # than Linux, so a ceiling tuned to Linux would cancel a healthy Windows run
     # and report it as a failure of the change under test.
@@ -109,13 +172,24 @@ jobs:
       # Empty is what turbo reads as unset, so a push and a pull request keep
       # its default and only a dispatch that fills the input caps anything.
       TURBO_CONCURRENCY: ${{ inputs.turbo_concurrency }}
+      # `'true'` only when the scope job answered `full=false`; a failed or
+      # missing verdict leaves it `'false'`, and the leg runs in full.
+      PROSE_ONLY: ${{ needs.changes.outputs.full == 'false' }}
+      # A prose-only Windows or macOS leg runs no step, and reports passing.
+      PROSE_ONLY_LEG: ${{ needs.changes.outputs.full == 'false' && matrix.os != 'ubuntu-22.04' }}
 
     steps:
+      - name: Prose-only change
+        if: env.PROSE_ONLY_LEG == 'true'
+        run: |
+          echo "- ${{ matrix.os }}: skipped, the change is prose only" >> "$GITHUB_STEP_SUMMARY"
+
       # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one is
       # a standing grant to run whatever it is later moved to. The trailing
       # comment carries the human-readable release, without which a reviewer
       # cannot tell an intended bump from a substitution.
       - name: Checkout
+        if: env.PROSE_ONLY_LEG != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history, because a gate that resolves commit SHAs cited in
@@ -260,7 +334,7 @@ jobs:
       # cheaper version of it.
       - name: Restore node_modules
         id: node-modules-cache
-        if: ${{ !inputs.skip_node_modules_cache }}
+        if: ${{ env.PROSE_ONLY_LEG != 'true' && !inputs.skip_node_modules_cache }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # `examples/*/*/node_modules`, two deep: every example is
@@ -296,6 +370,7 @@ jobs:
       # dropping the input outright, trades a slower install on exactly the
       # runs that change dependencies for a saving only hits can collect.
       - name: Setup Node
+        if: env.PROSE_ONLY_LEG != 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
@@ -325,6 +400,7 @@ jobs:
       # the cap raises the ceiling, matches it, or lowers it. Either figure alone
       # invites the reader to assume one of the three.
       - name: Record the effective build knobs
+        if: env.PROSE_ONLY_LEG != 'true'
         run: |
           {
             echo "### Build knobs (${{ matrix.os }})"
@@ -348,6 +424,7 @@ jobs:
       # free to widen it back below the floor. Both otherwise surface much later
       # as an unrelated error.
       - name: Pin the toolchain
+        if: env.PROSE_ONLY_LEG != 'true'
         run: |
           pinned=$(node -e "
             const { packageManager } = require('./package.json');
@@ -389,7 +466,7 @@ jobs:
       # and read as a cache that simply never helps.
       - name: Check the restored tree is usable
         id: restored
-        if: steps.node-modules-cache.outputs.cache-hit == 'true'
+        if: env.PROSE_ONLY_LEG != 'true' && steps.node-modules-cache.outputs.cache-hit == 'true'
         run: |
           # The verdict is the EXIT STATUS, inside an `if`, so that the step
           # cannot fail the job under this shell's `-e` and so that a node that
@@ -419,7 +496,7 @@ jobs:
       # that race costs the install minutes. Headers already in place end it.
       - name: Restore node-gyp headers
         id: node-gyp-headers
-        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true'
+        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/node-gyp/Cache
@@ -428,18 +505,18 @@ jobs:
       # After the toolchain pin, which is what puts npm, and the node-gyp it
       # bundles, under `npm root -g`.
       - name: Install node-gyp headers
-        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
+        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
         run: node "$(npm root -g)/npm/node_modules/node-gyp/bin/node-gyp.js" install
 
       - name: Save node-gyp headers
-        if: matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
+        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'windows-2025' && steps.restored.outputs.usable != 'true' && steps.node-gyp-headers.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/node-gyp/Cache
           key: ${{ steps.node-gyp-headers.outputs.cache-primary-key }}
 
       - name: Install dependencies
-        if: steps.restored.outputs.usable != 'true'
+        if: env.PROSE_ONLY_LEG != 'true' && steps.restored.outputs.usable != 'true'
         run: npm ci --no-fund --no-audit
 
       # Saved here rather than from a post-step, so what lands under the key is
@@ -462,7 +539,7 @@ jobs:
       # key is immutable once written — the summary line above is what reports
       # it, and changing the lockfile is what retires it.
       - name: Save node_modules
-        if: ${{ success() && !inputs.skip_node_modules_cache && steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        if: ${{ success() && env.PROSE_ONLY_LEG != 'true' && !inputs.skip_node_modules_cache && steps.node-modules-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -476,6 +553,7 @@ jobs:
       # distinguishable at a glance, and so the gate's own turbo clause reuses
       # this build from the local cache rather than repeating it.
       - name: Build
+        if: env.PROSE_ONLY_LEG != 'true'
         run: npm run build:all
 
       # The gate that decides the job. It runs from the repository root and
@@ -493,15 +571,26 @@ jobs:
       # platform-sensitive subset. Naming windows instead would read as an
       # exemption for one image and would leave a third entry running a gate
       # nobody chose for it.
+      #
+      # `run:` stays directly under the name, `if:` after it: the release check
+      # above reads the gate command as the line right after `- name: Full gate`.
       - name: Full gate
         run: npm run ${{ matrix.os == 'ubuntu-22.04' && 'check' || 'check:platform' }}
+        if: env.PROSE_ONLY != 'true'
+
+      # A prose-only change on the Ubuntu leg: the gate tail, which holds every
+      # docs check, without the tests and lint prose cannot affect.
+      - name: Prose gate
+        if: env.PROSE_ONLY == 'true' && env.PROSE_ONLY_LEG != 'true'
+        run: node scripts/run-gate.mts check:rest
 
       # The one piece of this that a reader sees without downloading anything:
       # the artefact below is a zip, and GitHub renders no JUnit of its own. It
       # is a REPORTER, so it never fails the job — `always()` and it swallows
-      # nothing but its own parsing.
+      # nothing but its own parsing. A prose-only run writes no report, so it
+      # skips this and the upload rather than warn about the missing files.
       - name: Summarize test results
-        if: always()
+        if: ${{ always() && env.PROSE_ONLY != 'true' }}
         run: node scripts/summarize-test-results.mts
 
       # `always()`, because a report is worth most for the run that FAILED, and
@@ -509,7 +598,7 @@ jobs:
       # read. The JUnit files carry a per-case duration, which is what turns
       # "which test is nearest the timeout" from a guess into a query.
       - name: Upload test reports
-        if: always()
+        if: ${{ always() && env.PROSE_ONLY != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-reports-${{ matrix.os }}
@@ -560,11 +649,12 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    # Skippable ONLY from a dispatch, where the input exists: repeating a run to
-    # measure the gate should not also repeat four minutes this job shares
-    # nothing with. On a push or a pull request the input is empty and the job
-    # runs, so no ordinary run can lose e2e coverage.
-    if: ${{ inputs.skip_e2e != true }}
+    # Skipped in two cases. A dispatch can set `skip_e2e`, because repeating a
+    # run to measure the gate should not also repeat four minutes this job
+    # shares nothing with. A pull request skips it on a prose-only verdict. A
+    # push always runs it.
+    needs: changes
+    if: ${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}
 
     env:
       NODE_OPTIONS: --report-on-fatalerror
@@ -694,9 +784,9 @@ jobs:
       - name: Every shard passed
         run: |
           # A matrix `needs` result is already the aggregate: `success` only
-          # when every entry succeeded. `skipped` is a PASS, because the shards
-          # carry the `skip_e2e` condition and a dispatch that deliberately
-          # skipped them must not report a failure here.
+          # when every entry succeeded. `skipped` is a PASS, because a dispatch
+          # with `skip_e2e` and a prose-only pull request skip the shards
+          # deliberately and must not report a failure here.
           result='${{ needs.e2e-shard.result }}'
           if [ "$result" != 'success' ] && [ "$result" != 'skipped' ]; then
             echo "The e2e shards reported: $result" >&2
@@ -711,6 +801,8 @@ jobs:
     name: init scaffold
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.full != 'false' }}
 
     env:
       NODE_OPTIONS: --report-on-fatalerror
