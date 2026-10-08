@@ -14,7 +14,7 @@ Langium's `DocumentBuilder` notifies at two granularities, `onDocumentPhase`
 per document and `onBuildPhase` per batch; the framework adds a node-level walk
 on top. `AstExtension` rides the first, `IntegrityRule` and `BuildPhasePass`
 the second. The whole-document cell at a document phase has no registry
-because nothing needs it yet.
+because nothing needs it.
 
 ## Why integrity and inheritance are passes, not extensions
 

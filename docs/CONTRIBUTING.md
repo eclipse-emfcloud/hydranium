@@ -10,6 +10,8 @@ what the version number does and does not promise.
 The design behind what the adopter pages under
 [How it works](ADOPTING.md#how-it-works) describe; read those first.
 
+- [**Principles**](contributing/design/principles.md) — the rules every part
+  of the framework follows, and why.
 - [**Model coordination**](contributing/design/model-coordination.md) — how
   the heads share one document through one text store and one manager.
 - [**Client sessions**](contributing/design/client-sessions.md) — the full

@@ -6,23 +6,15 @@ adopter's view, the tiers and the four seams, is in
 
 ## Two services, one direction
 
-Both live in `core/src/langium/scope/`:
+Both live in `core/src/langium/scope/`. **`HydraniumScopeProvider`** owns
+scope and reference resolution, including the bridge from protocol-level
+sources to Langium's `ReferenceInfo`. **`ReferenceCandidateProvider`** owns
+the candidate pipeline that turns a scope into the candidates dropdowns, GLSP
+action providers and RPC callers show.
 
-- **`HydraniumScopeProvider`** owns scope and reference resolution: it builds
-  the layered scope (`getGlobalScope`), resolves one `ReferenceRequest` to its
-  target (`resolveReference`), and bridges protocol-level sources to Langium's
-  `ReferenceInfo` (`referenceContextToInfo`).
-- **`ReferenceCandidateProvider`** owns the candidate pipeline: it takes the
-  scope, filters, collapses tier siblings, sorts, and produces
-  `ReferenceCandidate` objects for dropdowns, GLSP action providers and RPC
-  callers (`find`, `getCandidateScope`), and resolves a request to its matched
-  candidate (`resolveCandidate`).
-
-The candidate provider depends on the scope provider, never the other way: it
-uses `getScope`, `referenceContextToInfo`, `sortText` and `resolveReference` as
-primitives. `resolveReference` stays on the scope provider with its
-`referenceContextToInfo` dependency, so the two share that bridge without a
-cycle.
+The candidate provider depends on the scope provider, never the other way.
+`resolveReference` stays on the scope provider with the `ReferenceInfo` bridge
+it needs, so both services share that bridge without a cycle.
 
 The LSP head's `HydraniumCompletionProvider` overrides `getReferenceCandidates`
 to return the candidate provider's `getCandidateScope(...)` elements, so the
@@ -40,10 +32,8 @@ adopter seam.
 
 Resolution may contain several tier siblings of one node, so a reference
 resolves whether its text is the short or the qualified form; only completion
-collapses them. The ordering behind the collapse lives in
-`scope/tier-specificity.ts` (`areTierSiblings`, `compareTierSpecificity`,
-`dedupeTierSiblingsStream`): `local` < `project` < `public` < `universal`, with
-an untiered description least specific.
+collapses them, keeping the most specific: `local` before `project` before
+`public` before `universal`, with an untiered description least specific.
 
 ## Vocabulary
 

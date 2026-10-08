@@ -65,10 +65,6 @@ Some of Langium's shared slots, the `lsp.Connection` and `LanguageServer`
 surface, flow through unchanged. Others are narrowed at the _type_ level as well
 as rebound, each marked `/* override */` at its declaration in
 `core/src/langium/module.ts`; grep the marker rather than trusting a list.
-`LangiumDocumentFactory` is rebound to `HydraniumLangiumDocumentFactory` but
-carries no marker: its one added method, `fromStringInLanguage`, is called only
-by `HydraniumLangiumDocuments` through that class's own narrowed field, so
-nothing reaches it through the slot.
 
 ## Head-neutral and head-specific
 
@@ -130,8 +126,8 @@ which the contribution model removes:
   and the scope extension resolving references against what it adds would be
   split across two subclasses, with their shared state threaded between them.
 - **Each registry would have its own registration shape.** One convention
-  covers all four, and the imperative `register(item)` stays as the low-level
-  path for registration at runtime.
+  covers every registry, and the imperative `register(item)` stays as the
+  low-level path for registration at runtime.
 
 Contribution groups are records rather than arrays because Langium's
 `Module.merge` deep-merges records by key, so the framework's contributions and
