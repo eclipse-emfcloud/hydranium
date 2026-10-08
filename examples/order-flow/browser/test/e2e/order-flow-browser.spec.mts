@@ -577,6 +577,39 @@ test.describe('order-flow in a web worker', () => {
    });
 
    /**
+    * The node under the pointer answers an armed edge tool, by the server's
+    * verdict on the pair.
+    *
+    * Read as painted strokes, because the mode classes are GLSP's and the rules
+    * keyed on them are this example's: a rule keyed on state GLSP never sets
+    * leaves every class assertion green and the node unmarked.
+    */
+   test('an armed edge tool marks the node under the pointer accepted or refused', async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.goto('/');
+      await expectFramedDiagram(page);
+      const unmarked = await strokeOf(page, 'PaymentOk');
+
+      await page.locator(`${MOUNT} .tool-button`, { hasText: 'Transition' }).click();
+      await pointAt(page, 'Pay');
+      // The source verdict is a server round trip, and a press before it lands
+      // is refused as a source.
+      await expect(page.locator(GRAPH)).toHaveClass(/\bedge-creation-select-source-mode\b/);
+      await page.mouse.down();
+      await page.mouse.up();
+
+      // `Pay -> PaymentOk` is already declared.
+      await pointAt(page, 'PaymentOk');
+      await expect(page.locator(GRAPH)).toHaveClass(/\bedge-modification-not-allowed-mode\b/);
+      await expect.poll(() => strokeOf(page, 'PaymentOk')).toEqual(REFUSED_STROKE);
+
+      await pointAt(page, 'Ship');
+      await expect(page.locator(GRAPH)).toHaveClass(/\bedge-creation-select-target-mode\b/);
+      await expect.poll(() => strokeOf(page, 'Ship')).toEqual(ACCEPTED_STROKE);
+      expect(await strokeOf(page, 'PaymentOk')).toEqual(unmarked);
+   });
+
+   /**
     * A document that stops parsing takes the canvas read-only, and the canvas
     * says so.
     *
@@ -2330,6 +2363,34 @@ async function expectFramedDiagram(page: Page): Promise<void> {
 /** One rendered flow node, by the id the server's index assigns it. */
 function nodeLocator(name: string): (page: Page) => Locator {
    return page => page.locator(`${GRAPH} [id="order-flow-process-diagram_${name}"]`);
+}
+
+/** A flow node's painted outline. */
+interface NodeStroke {
+   readonly colour: string;
+   readonly width: string;
+   readonly dash: string;
+}
+
+/** Light `--order-flow-focus-border` #0757ba. */
+const ACCEPTED_STROKE: NodeStroke = { colour: 'rgb(7, 87, 186)', width: '3px', dash: 'none' };
+
+/** Light `--order-flow-invalid` #cf222e. */
+const REFUSED_STROKE: NodeStroke = { colour: 'rgb(207, 34, 46)', width: '2px', dash: '4px, 3px' };
+
+async function strokeOf(page: Page, name: string): Promise<NodeStroke> {
+   return nodeLocator(name)(page)
+      .locator('> .sprotty-node')
+      .evaluate(shape => {
+         const style = getComputedStyle(shape);
+         return { colour: style.stroke, width: style.strokeWidth, dash: style.strokeDasharray };
+      });
+}
+
+/** Move the pointer onto a flow node's centre, which is its label and not its shape. */
+async function pointAt(page: Page, name: string): Promise<void> {
+   const box = await boundingBoxOf(nodeLocator(name)(page));
+   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
 }
 
 async function boundingBoxOf(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {

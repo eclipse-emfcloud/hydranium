@@ -209,14 +209,18 @@
  * edge takes the focus affordance, and the one that will not is struck through
  * in the theme's error colour. Both are scoped to the mode class, so neither
  * leaks into ordinary hovering.
+ *
+ * Keyed off `:hover` rather than sprotty's `.mouseover`, which GLSP withholds
+ * while the edge tool is armed, so a `.mouseover` spelling matches nothing. The
+ * hover is the node's group, not the shape: the pointer is usually over a
+ * label, a sibling of the shape rather than a child of it.
  */
-.sprotty .edge-creation-select-target-mode .sprotty-node.mouseover,
-.sprotty .edge-reconnect-select-target-mode .sprotty-node.mouseover {
+.sprotty .edge-creation-select-target-mode :hover > .sprotty-node {
    stroke: var(--order-flow-focus-border);
    stroke-width: 3;
 }
 
-.sprotty .edge-modification-not-allowed-mode .sprotty-node.mouseover {
+.sprotty .edge-modification-not-allowed-mode :hover > .sprotty-node {
    stroke: var(--order-flow-invalid);
    stroke-width: 2;
    /* Dashed as well as coloured: colour alone is the one channel some readers do

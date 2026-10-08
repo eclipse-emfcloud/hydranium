@@ -18,6 +18,9 @@
       "dependsOn": ["^build"],
       "inputs": [
         "src/**/*",
+        // Read by no package's own build, but bundled by dependents: without it a
+        // stylesheet edit leaves their hashes unchanged and replays stale output.
+        "style/**/*",
         "package.json",
         "tsconfig.json",
         "tsconfig.test.json",
