@@ -34,25 +34,11 @@ is unproven: three protocol heads already run on one shared workspace.
 
 ### The framework ships no translations
 
-The server renders every diagnostic, RPC error and message value it sends
-through its `MessageRenderer`, in the locale the client declared at
-`initialize`, and the framework ships no catalogue for it. To translate, bind a
-subclass of `DefaultMessageRenderer` that overrides `translationsFor(locale)`
-to return a catalogue keyed by message code; `examples/order-flow` does this in
-one small class and a JSON file.
-
-The framework's own messages are enumerable: `core`, `protocol`, `data-server`
-and `glsp-server` each export a `./messages` subpath whose `collectMessages()`
-returns every message with its code and English text, and
-`@hydranium/protocol/testing` carries an audit that finds catalogue keys naming
-no real code.
-
-Two limits remain. **Not every user-facing string carries a code**: a string
-the server sends other than as a diagnostic, an RPC error or a message value is
-English whatever the locale. And **client-side
-text is the host's**: command labels and widget text localize through the
-host's own mechanism, which is why the browser example ships a page catalogue
-of its own while its diagnostics arrive translated from the server.
+Every message is English until you supply a catalogue; the server then renders
+diagnostics and messages in each client's locale.
+[Translate your language](../guides/translate-your-language.md) shows how, and
+what stays English: a string sent without a code, and client text the host
+translates itself.
 
 ### Data-head updates are whole-document
 

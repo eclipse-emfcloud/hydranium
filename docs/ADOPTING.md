@@ -38,20 +38,34 @@ Two examples, for two different questions:
 
 ## Guides
 
+### Build your language
+
 - [Add a validation check](guides/add-validation-check.md) for a
   language-owned invariant.
+- [Ship a standard library](guides/ship-a-standard-library.md) of built-ins
+  every model can reference.
+- [Translate your language](guides/translate-your-language.md) into your
+  users' languages.
+- [Test your language](guides/test-your-language.md), from a parse to a whole
+  head.
+
+### Work with the heads
+
 - [Add a data-server method](guides/data-server-method.md) that exposes a typed
   operation on the data head.
 - [Make a diagram editable](guides/editable-diagram.md) by connecting GLSP
   operations to the shared model.
 - [Connect a data client](guides/connect-a-data-client.md) that opens, edits
   and saves models over the data head.
-- [Compose a server by hand](guides/compose-a-server.md) without `init`.
+
+### Host and compose
+
 - [Host in Theia](guides/host-in-theia.md): text, forms and diagrams in a
   Theia application.
 - [Host in a browser](guides/host-in-a-browser.md): every head in a web
   worker, with no backend. To host in VS Code, start from the
   [order-flow VS Code extension](../examples/order-flow/vscode/README.md).
+- [Compose a server by hand](guides/compose-a-server.md) without `init`.
 
 ## Reference
 

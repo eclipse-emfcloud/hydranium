@@ -196,6 +196,14 @@ const SNIPPET_TARGETS = [
    {
       readme: 'docs/guides/connect-a-data-client.md',
       host: 'examples/order-flow/server'
+   },
+   {
+      readme: 'docs/guides/ship-a-standard-library.md',
+      host: 'examples/order-flow/server'
+   },
+   {
+      readme: 'docs/guides/translate-your-language.md',
+      host: 'examples/order-flow/server'
    }
 ];
 
