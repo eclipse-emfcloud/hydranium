@@ -84,8 +84,8 @@ reentrancy check, both of which the neutral tree can only declare.
 
 A server composes one shared services tree per process and one language module
 per grammar, then hands that tree to whichever heads it wants to run. The
-worked, compiling version of that composition is in the
-[repository README](../../README.md#compose-a-server--minimal-example); the
+worked, compiling version of that composition is the compose-a-server guide in
+[Adopting Hydranium](../../docs/ADOPTING.md); the
 layering behind it is described in
 [`docs/concepts/architecture.md`](../../docs/concepts/architecture.md), and
 [`docs/concepts/head-module-maps.md`](../../docs/concepts/head-module-maps.md) is

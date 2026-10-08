@@ -1,12 +1,27 @@
 # Contributing to Hydranium
 
-Thanks for your interest. The project is in **alpha** and the API is not yet
-stable — expect breaking changes between releases. The version number does not
-say so: the release line starts at 1.0.0, because a 0.x line cannot take a
-minor bump under this repository's peer topology, and the alpha signal is
-carried by the prerelease suffix instead, `1.0.0-next.<n>`.
-[Stability and versioning](docs/adopting/status.md#stability-and-versioning) has
-the reasoning and the consequences.
+Thanks for your interest. The project is in **alpha**: the API is not yet
+stable, so expect breaking changes between releases.
+[Stability and versioning](adopting/status.md#stability-and-versioning) says
+what the version number does and does not promise.
+
+## Developer documentation
+
+- [**Conventions**](contributing/conventions.md) — the rules code, comments,
+  messages and docs follow, and which of them a gate enforces.
+- [**Testing**](contributing/testing.md) — the test layers, which one a change
+  needs, and the commands.
+- [**Releasing**](contributing/releasing.md) — how every merge to `main`
+  becomes a prerelease, and how the first stable release is cut.
+- [**Troubleshooting the repository**](contributing/troubleshooting.md) —
+  failures that only happen while building or testing this repo.
+- [**Performance baseline**](contributing/perf-baseline.md) — how to take a
+  measurement that is comparable with an earlier one.
+- How the framework is built:
+  [document layers](concepts/document-layers.md),
+  [shared vs per-language DI scope](concepts/shared-vs-language-di-scope.md),
+  [head module maps](concepts/head-module-maps.md) and
+  [build-pipeline registries](concepts/build-pipeline-registries.md).
 
 ## Reporting issues
 
@@ -19,12 +34,12 @@ trying to build is often more useful than a patch against a seam that is about
 to change.
 
 **Security vulnerabilities do not go here.** They follow the Eclipse Foundation
-coordinated-disclosure process — see [`SECURITY.md`](SECURITY.md).
+coordinated-disclosure process — see [`SECURITY.md`](../SECURITY.md).
 
 ## Code of conduct
 
 This project follows the
-[Eclipse Community Code of Conduct](CODE_OF_CONDUCT.md).
+[Eclipse Community Code of Conduct](../CODE_OF_CONDUCT.md).
 
 ## Development setup
 
@@ -72,6 +87,37 @@ That is why the publish guards are `prepack` and not `prepare` (see the
 made and never on install, so it cannot break an install it has no business
 touching. Check any new install-time lifecycle script against it.
 
+## Repository layout
+
+```
+hydranium/
+├── packages/                   # @hydranium/* packages
+├── examples/                   # bookstore and order-flow
+├── docs/                       # adopter and developer documentation
+├── scripts/                    # repository gates and the license-header tool
+├── internal/                   # tracked, and excluded from the published tree
+└── .github/workflows/          # CI
+```
+
+`internal/` holds the work log, the design plans and the maintainer-only
+tooling. It is in git, so a clone has it, and it is excluded by directory from
+the tree a release is cut from, so nothing under it is part of the published
+surface or of any package tarball.
+
+## Development loop
+
+```bash
+npm run build:all      # framework and every example app via turbo
+npm run watch:all      # one tsc -b -w daemon for the framework graph
+npm run dev:order-flow # framework watch plus the order-flow example's watches
+```
+
+Then, in a second terminal, start the order-flow Theia application:
+
+```bash
+npm --prefix examples/order-flow/theia-app run start
+```
+
 ## Linting
 
 Run `npm run lint` to run Oxlint across the workspace. Oxlint runs native
@@ -111,7 +157,7 @@ line, the run did not finish and its exit code is the only thing that knows.
 `npm run check` runs the full gate (above) across every package — run it before
 opening a PR. For the layered test strategy, the
 per-package / single-file commands, the Playwright UI e2e, and the on-demand
-mutation and perf audits, see [`docs/contributing/testing.md`](docs/contributing/testing.md).
+mutation and perf audits, see [Testing](contributing/testing.md).
 
 ## Code style
 

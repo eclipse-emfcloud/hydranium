@@ -233,5 +233,5 @@ Directions, in rough priority order. None of these is a dated commitment.
 ## Getting involved
 
 Bug reports, questions and pull requests are welcome —
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md) says how, and why a question is often
+[Contributing](../CONTRIBUTING.md) says how, and why a question is often
 worth more than a patch while the surface is still moving.

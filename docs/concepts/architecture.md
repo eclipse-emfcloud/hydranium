@@ -28,7 +28,7 @@ without pulling in Langium.
 ## One workspace, many heads
 
 A single Langium services tree is built once per language and shared by every
-head (see the composition example in the [README](../../README.md#compose-a-server--minimal-example)).
+head (see [Compose a server by hand](../guides/compose-a-server.md)).
 Each head is an adapter from a client protocol onto that tree. Three are
 provided out of the box:
 

@@ -27,6 +27,9 @@
     .spawn  { stroke: #9aa3b0; stroke-width: 1.5; fill: none; stroke-dasharray: 4 3; }
   </style>
 
+  <!-- A page background of its own, so the dark labels stay readable on a dark theme. -->
+  <rect width="1040" height="746" rx="12" fill="#ffffff"/>
+
   <!-- ===================== Theia / VS Code application ===================== -->
   <g id="application">
     <title>Theia / VS Code application</title>
