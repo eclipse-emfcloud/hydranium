@@ -42,7 +42,7 @@
  *   diagnostics` and its siblings. These are measurements read against
  *   `hydranium-cli validate` from a Node process, which prints English; a
  *   translated count cannot be compared with the oracle it exists to be
- *   compared with. The README quotes them, too.
+ *   compared with.
  *
  * The diagnostics in the problems list are a different case and need nothing
  * here: they are rendered SERVER-side, from the locale declared at `initialize`,

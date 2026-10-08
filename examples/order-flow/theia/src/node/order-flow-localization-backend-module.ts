@@ -20,7 +20,8 @@ import germanCatalogue from '../nls/order-flow.de.json';
  * carries a stable `hydranium/<unscoped-package>/<name>` code beside its English
  * text, and the side that knows the reading user's language renders it. Since
  * that side differs per message, so do the catalogues — and their key sets are
- * disjoint, which a test in this package asserts:
+ * disjoint but for the one message both sides raise, which a test in this
+ * package asserts:
  *
  * - **Here** are the strings this frontend renders: the host-bound ones
  *   (`hydranium/client-theia/*`) that Theia resolves through `nls.localize`, and
@@ -39,15 +40,14 @@ import germanCatalogue from '../nls/order-flow.de.json';
  * (`order-flow/*`) sit under their own namespace; `hydranium/` is reserved for
  * the framework.
  *
- * # The catalogue is deliberately PARTIAL
+ * # What the catalogues cover
  *
- * Only some codes are translated, and that is the demonstration rather than an
- * oversight: a code the map does not carry falls back to its English default, so
- * an adopter can translate as much or as little as they like and adopt the
- * mechanism without a catalogue at all. Running this example in German therefore
- * shows German palette entries beside English ones, which is exactly what a
- * half-finished translation looks like — and it proves the fallback path, the
- * one an adopter most needs to trust.
+ * Together, this catalogue and the server's translate every code the framework
+ * and this example declare, which a test in this package asserts. Theia's own
+ * strings stay English: this file is not a Theia language pack. A code a
+ * catalogue does not carry falls back to its English default, so an adopter can
+ * translate as much or as little as they like, and adopt the mechanism without
+ * a catalogue at all.
  *
  * # Trying it
  *

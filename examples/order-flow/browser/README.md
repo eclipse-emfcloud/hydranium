@@ -1,43 +1,14 @@
 # `@hydranium/example-order-flow-browser`
 
-The order-flow language server running **entirely in a web worker** — no Node
-runtime, no backend process, no socket.
+The order-flow language running entirely in a web page. The LSP, data and GLSP
+heads share one web worker and one Langium store, with no Node runtime and no
+backend. A plain page drives them over three `MessagePort`s and gives them a
+GLSP diagram, three Monaco editors, a navigable workspace and a server log.
 
-**This is the reference browser deployment — the one to copy.** All three heads
-share one worker and one Langium store; a plain page drives them over three
-`MessagePort`s and gives them a GLSP diagram, three Monaco editors, a navigable
-workspace and a theme.
-There is no shell, no extension host and no build step a host framework performs
-on your behalf, so everything a browser host has to supply is visible in this
-package and nothing is hidden by one.
-
-"Can a head run in a browser at all" is the easy question, and it is settled.
-What the package is *for* is the harder one behind it: what a host has to do
-that a shell was doing for it. Five things, each with the failure
-it produces when skipped, all recorded here and in
-[Host in a browser](../../../docs/guides/host-in-a-browser.md):
-size the elements sprotty and Monaco render into, hand each head its own port,
-ask for the validating build workspace initialization does not do, answer
-`workspace/applyEdit`, and — since nothing else will — write the files, because
-LSP puts the file write on the client and a page is a client with no disk.
-
-The three bundles, because a page whose subject is what its bundle contains
-should state it: **11.7 MB** for the page, **3.2 MB** for the head worker,
-**625 kB** for Monaco's editor worker — about **15.5 MB** in total, of which
-Monaco is roughly 8 MB. Read those as a measurement rather than a fact about
-your build: taken unminified against `monaco-editor-core` 0.56, and no gate
-asserts them, so a dependency bump moves them without anything here noticing.
-Nothing is minified or split, deliberately: a worker-hosted language server
-can only be debugged in devtools.
-
-**Just under a megabyte of the page bundle is the price of Monaco's German**,
-and only a seventh of it is the German. Loading a locale bundle before Monaco
-means loading Monaco through a dynamic `import()` — see `src/page/order-flow-page.ts`
-for why — and esbuild then wraps every module reachable only from that import in
-a lazy initializer. Measured: 10.8 MB before, 11.0 MB with the catalogue reached
-by a static import, 11.7 MB with the deferral that makes it work. The wrappers
-are the 700 kB. Worth stating because the obvious reading of the jump is that a
-translation table costs a megabyte, and it does not.
+No shell does a host's work here, so everything a browser host has to supply
+is in this package. For the steps themselves, read the guide
+[Host in a browser](../../../docs/guides/host-in-a-browser.md); this README
+shows you where each piece lives and how to see it work.
 
 ## Running it
 
@@ -46,380 +17,83 @@ npm --prefix examples/order-flow/browser run build
 npm --prefix examples/order-flow/browser start   # http://localhost:3002/
 ```
 
-Or from VS Code, **Start Order Flow Browser Page (:3002)** — it builds, runs the
-static server as the debuggee, and opens Chrome against it once the server prints
-its URL. Breakpoints in the page read as written; the three heads run in a web
-worker, which appears as its own target in the call-stack view.
+From VS Code, **Start Order Flow Browser Page (:3002)** builds, serves and
+opens Chrome. The heads run in a web worker, which appears as its own target in
+the call-stack view. The bundles are not minified unless you pass `--minify` to
+`esbuild.mjs`, so the worker stays debuggable in devtools.
 
-**One language switch moves the whole page, server messages included** — the
-globe in the title bar, or `http://localhost:3002/?locale=de` directly. It
-covers two halves that work by completely different mechanisms, and seeing them
-move together is the point:
+## Try it
 
-- **The server's messages.** The page declares the language in LSP `initialize`,
-  the server hands it to `OrderFlowMessageRenderer`, and the diagnostics in the
-  problems list and the labels on the tool palette come back translated. Try it
-  on `orders/audit-leak.domain`'s unresolved reference: that sentence is
-  **Langium's**, not this example's, and it arrives in German because the
-  framework claims it as `hydranium/core/unresolved-reference` and the server
-  renders before publishing. Then type a character no token can start with —
-  `§` — into `fulfillment.process`: that one is **chevrotain's**, a dependency
-  further out still, claimed as `hydranium/core/unexpected-character` with the offending
-  character carried as a parameter. It is the first message a user of a new
-  language meets, and before the identity existed no adopter catalogue could
-  reach it. Then type a character that lexes perfectly well but belongs nowhere —
-  a bare `a` between two tasks — and the PARSER is what objects instead. All four
-  of its sentences are claimed, the two Langium words
-  (`hydranium/core/unexpected-token`, `hydranium/core/trailing-input`) and the
-  two it leaves to chevrotain (`hydranium/core/no-viable-alternative`,
-  `hydranium/core/missing-iteration`). The last two carry chevrotain's generated
-  list of candidate token sequences as a single parameter, so a catalogue
-  translates the sentence around it and the list itself arrives intact — token
-  names are grammar vocabulary and are no more translatable than `'}'` is.
-- **The page's own chrome.** The panel titles, buttons, hints and tooltips, from
-  a catalogue in `src/page/nls/`. A plain document has no host to resolve
-  `nls.localize` against, so this is one more seam a browser host implements
-  itself — like the filesystem and the transport. The English stays in
-  `index.html` and the catalogue is a partial overlay keyed by `data-nls`
-  attributes, so a missing key degrades to English rather than to nothing.
-- **The properties panel's own sentences.** Shared client code with no markup on
-  this page, so these are message codes rather than `data-nls` keys — but the
-  page renders them, so they sit in the same catalogue. A host passes the form a
-  renderer; one that passes none takes the English.
-- **Monaco's own menus.** Right-click in an editor: `Ausschneiden`, `Kopieren`,
-  `Befehlspalette`. That German is `monaco-editor-core`'s, shipped in the
-  package as one of thirteen locale bundles, and it costs no catalogue at all —
-  what it costs is an ORDERING, because Monaco resolves its menu titles when its
-  modules are evaluated rather than when a menu opens. `src/page/order-flow-page.ts`
-  exists for that one reason and explains it.
+- **Switch the language** with the globe in the title bar, or open
+  `http://localhost:3002/?locale=de`. The page chrome, the server's diagnostics,
+  the tool palette and Monaco's own context menu move together. The unresolved
+  reference in `orders/audit-leak.domain` is Langium's sentence, claimed as
+  `hydranium/core/unresolved-reference`. Type `§` into `fulfillment.process` for
+  chevrotain's lexer error, `hydranium/core/unexpected-character`. Type a bare
+  `a` between two tasks and the parser objects instead; its four sentences are
+  `hydranium/core/unexpected-token`, `hydranium/core/trailing-input`,
+  `hydranium/core/no-viable-alternative` and `hydranium/core/missing-iteration`.
+- **Complete along a reference chain.** Put the caret inside `Order.status` on
+  `task Pay writes Order.status = PAID` and press Ctrl+Space: the fields
+  offered are `Order`'s, and the literals after `=` are `OrderStatus`'s. Hover
+  any of the three names to see its declaration. Ask at an existing reference:
+  completion at a truncated `writes Order.` hangs, as the server's
+  [`lsp-harness.integration.test.ts`](../server/test/lsp-harness.integration.test.ts)
+  records.
+- **Jump across grammars.** Ctrl+click `Order` in
+  `process Fulfillment for Order`, and the lookup editor opens
+  `orders/orders.domain` at `entity Order`.
+- **See occurrence marks.** Leave the caret in `= PAID`. The server marks one
+  occurrence, where Monaco's textual matcher would also mark `OrderStatus.PAID`
+  in the comment above.
+- **Drag `Cancel`.** It has no entry in `orders/fulfillment.layout`, so the drag
+  creates one, and you watch it arrive in the `.layout` editor as a
+  `workspace/applyEdit`. Ctrl+Z in that editor undoes the drag.
+- **Edit in the properties panel.** It follows editor focus and runs on its own
+  data-head session. Change `name` and the `.process` text rewrites.
+- **Save and reload.** Press *Save workspace*, or Ctrl+S for the focused
+  document, and reload: the edit is still there. Without the save it is not.
+  *Reset workspace* returns to the committed fixtures.
+- **Open *Latency* in the status strip.** The worker builds one
+  `LatencyCollector` and passes it to both the `DataServer` and the LSP
+  connection, so LSP and data-head methods appear in one report.
 
-`Order Flow` is not translated, because a product name is not i18n. Neither are
-the status-bar reports: they are measurements read against `hydranium-cli
-validate` from Node, which prints English, and a translated count cannot be
-compared with the oracle it exists to be compared with.
+## Where things are
 
-**The switch writes the URL, and it reloads.** The URL keeps the state
-addressable — you can send someone the link, and the e2e tier names a language by
-navigating — where `navigator.language` would allow neither. It also remembers
-the choice, but the URL is what *carries* it: the store is only consulted when
-the URL says nothing. The reload is the *server* half's requirement, not the chrome's: the
-language reaches the server once, at `initialize`, and the worker holds that
-connection for its lifetime, so changing it live would mean tearing down all
-three heads and the store they share. One switch drives both, so it moves at the
-pace of the half that cannot change in place — which also means you never get
-German chrome around English diagnostics.
+| Concern | Files |
+| --- | --- |
+| The worker: all three heads, the filesystem, the validating build, latency | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
+| The bootstrap that hands each head its own port, shared by both ends | [src/head-channels.ts](src/head-channels.ts) |
+| Persistence in IndexedDB | [src/workspace/indexeddb-file-system-store.ts](src/workspace/indexeddb-file-system-store.ts) |
+| The bare `'path'` alias for the browser bundle | [src/workspace/posix-path-shim.ts](src/workspace/posix-path-shim.ts), [esbuild.mjs](esbuild.mjs) |
+| The workspace seed | [scripts/generate-workspace-seed.mts](scripts/generate-workspace-seed.mts), [src/generated/workspace-seed.ts](src/generated/workspace-seed.ts) |
+| The static server | [scripts/serve.mts](scripts/serve.mts) |
+| Page entry: Monaco's locale, loaded before Monaco | [src/page/order-flow-page.ts](src/page/order-flow-page.ts), [monaco-editor-core-nls.d.ts](src/page/monaco-editor-core-nls.d.ts) |
+| Page wiring: the three channels, save, dialogs, theme switch | [src/page/workbench.ts](src/page/workbench.ts) |
+| DOM lookups and the element builder | [src/page/dom.ts](src/page/dom.ts) |
+| Monaco's LSP client and editor themes | [src/page/monaco-lsp-adapter.ts](src/page/monaco-lsp-adapter.ts) |
+| Monaco's editor worker | [src/page/monaco-editor-worker.ts](src/page/monaco-editor-worker.ts), [monaco-editor-core-worker.d.ts](src/page/monaco-editor-core-worker.d.ts) |
+| The pinned editor pair and the lookup editor | [src/page/editor-area.ts](src/page/editor-area.ts) |
+| The diagram mount | [src/page/process-diagram.ts](src/page/process-diagram.ts) |
+| Touch drags on the diagram | [src/page/touch-input.ts](src/page/touch-input.ts) |
+| The data-head port | [src/page/worker-data-port.ts](src/page/worker-data-port.ts) |
+| The properties panel | [src/page/properties-panel.ts](src/page/properties-panel.ts) |
+| The workspace list and problems list | [src/page/workspace-panel.ts](src/page/workspace-panel.ts) |
+| The server log, its level and the message trace | [src/page/log-panel.ts](src/page/log-panel.ts), [src/page/log-controls.ts](src/page/log-controls.ts) |
+| The status strip | [src/page/report-detail.ts](src/page/report-detail.ts) |
+| The build stamp | [src/page/build-stamp.ts](src/page/build-stamp.ts) |
+| Resizable areas | [src/page/splitters.ts](src/page/splitters.ts) |
+| The narrow-viewport layout | [src/page/responsive.ts](src/page/responsive.ts) |
+| Page translations | [src/page/page-nls.ts](src/page/page-nls.ts), [src/page/nls/](src/page/nls/) |
+| Remembered language and colour scheme | [src/page/preferences.ts](src/page/preferences.ts) |
+| Markup, English text, styles and colour roles | [index.html](index.html) |
+| End-to-end tests | [test/e2e/](test/e2e/), [playwright.config.mts](playwright.config.mts) |
 
-Any unknown tag falls back to English on both halves, which is the same
-pass-through an adopter with no entry for a code gets.
+The diagram definition is not in this package. It is
+[`@hydranium/example-order-flow-client`](../client/README.md)'s, mounted
+verbatim, the same module the Theia and VS Code shells load.
 
-**A visit with no tag at all falls back to what the last one chose**, in
-`localStorage` — and a tag that is PRESENT always wins, so a link still names a
-language for whoever opens it whatever their own store holds. The distinction
-that makes this work is between a tag that is absent and one that is empty:
-`?locale=` is the URL the switch lands on when you choose English, so it has to
-mean English rather than "ask the store", or choosing English would bring back
-the language you just left. English is therefore *stored*, as the empty string,
-rather than left unstored.
-
-The page starts the worker, hands each head its own `MessageChannel`, sends LSP
-`initialize` for a workspace it never had on disk, and reports along the bottom:
-the diagnostics the LSP head publishes, one document read back through the data
-head, a `.process` diagram rendered by the GLSP head, the current contents of
-`orders/fulfillment.layout` — which changes when you drag a node — and where the
-workspace itself came from, seed or storage.
-
-**The strip carries LABELS, not values.** Every value here is long — the layout
-report names each positioned node, the storage one each restored file — and six
-of them across the foot of the window either wrap to a second row or lose
-whichever category is last. So each label is a button: clicking one opens its
-value above the strip, and hovering shows the same text as a tooltip. Clicking
-the same label, clicking anywhere else, or pressing `Escape` closes it, and only
-one is open at a time. A label is dimmed until its category has reported, so the
-heads coming up is visible without opening anything.
-
-The strip also leads with the **build stamp**, where a deploy has filled one in.
-It names what is running, the labels after it name what the heads are doing now,
-and a rule separates the categories a head *publishes* from the ones the page
-derives.
-
-The last category, **Latency**, is the one that is read rather than published:
-it asks the data head for `DataServerDiagnosticsProtocol.getLatency`, which
-reports per-method count, p50/p99 and max. It is not polled — `getLatency` is
-itself a timed call, so a refresh on a timer would put its own calls into the
-window it reports on.
-
-**One collector covers both heads**, which is the part worth looking at: the
-worker builds a single `LatencyCollector`, passes it to the `DataServer` as its
-`latency` option and to the LSP connection through `lspLatencyOptions`, so a
-single report interleaves `textDocument/semanticTokens/full` with
-`data-server/openModelDocument` and the two are comparable. It turns that
-collector on where a Node host would read `HYDRANIUM_LATENCY` from the
-environment, there being no environment to read here, and sizes it as a ring
-buffer rather than taking the `keep-all` default: a page is left open, so
-retention has to be bounded.
-
-Below the diagram, `orders/fulfillment.process` and `orders/fulfillment.layout`
-open in two Monaco editors over the same LSP channel: type an error and the
-squiggle comes from the server, and the highlighting is the server's semantic
-tokens rather than a client-side grammar. The comments are coloured from the
-server too, which is not where a comment colour normally comes from: there is no
-TextMate or Monarch grammar anywhere in this page, so the framework's token
-provider walks the comment leaves of the CST — everything else it emits comes
-from the AST, which a comment never reaches.
-
-**That pair is PINNED and a third editor is not.** Every claim this page makes is
-about a relationship between two documents — a drag rewriting one and not the
-other, a rename reaching both, a save writing one of the two that are open — and
-none of them is observable with a single document on screen. So the pair stays
-under the diagram it is a view of, and the workspace list on the left drives a
-separate lookup editor beside it. The list marks the two states differently: a pin
-for the pair, the accent bar for the selection.
-
-**Under the list is a properties panel, and it follows the EDITOR FOCUS rather
-than the list above it** — which the panel head says, because sitting under a
-list it would otherwise read as a detail view of the selected row. The field
-data is what decides it: a `.domain` root carries no top-level string property,
-so a panel bound to the selection opens empty on this workspace and stays that
-way, while the two roots that do have editable fields are exactly the pair
-pinned beside the diagram.
-
-**It is also the page's SECOND data-head participant.** It takes its own
-`DataSession` off the one connection rather than
-a connection of its own, so the server holds a separate `(uri, clientId)` hold
-and watch for it and each participant reads its own writes back as echoes. Edit
-`name` there and the `.process` text rewrites; edit `subject` to a name nothing
-declares and the write is accepted and comes back as a diagnostic, because the
-transfer form of a cross-reference is its text and the server has nothing to
-reject.
-
-**`Ctrl+S` saves what you are in**, and everything when you are in neither an
-editor nor the panel — which is what the toolbar button has always done. Until
-now a save could only ever write the whole workspace; the shortcut is where the
-per-document one arrived. Monaco neither binds nor swallows that chord, so one
-document-level listener serves all three cases, and the `preventDefault` on it
-is the only reason the browser's own Save-Page dialog stays shut.
-
-**Two outstanding states, marked apart on purpose.** A field you have typed in
-but not committed shows `*` beside its label and a `Press Enter to apply` note:
-the server has not been told. An editor whose buffer has moved since it was last
-saved shows `●` beside its title: storage has not been told. They are never the
-same condition — typing in an editor reaches the server immediately, and
-committing a field makes its document unsaved — so one mark for both would blur
-the two ends of the pipeline this page exists to show apart.
-
-**It follows editor FOCUS rather than the workspace list, which is a
-consequence of the grammars rather than a preference.** A `DomainModel` root has
-no top-level string property at all, so a panel bound to the selection editor
-would open on `orders.domain` and show nothing to edit; the only root that does
-have editable fields — `ProcessModel` — is one of the two documents pinned under
-the diagram, which the selection editor will not load because one document in
-two editors splits the cursor between them. Click into a
-`.domain` and the panel says so rather than going blank.
-
-**Drag a node and watch the `.layout` editor, not just the report line.** That is
-`workspace/applyEdit` arriving — the diagram→text direction, and the one thing on
-this page that makes it a client of a framework seam no other host has exercised.
-The framework mirrors a server-side write to whichever client holds the document
-open, as a *minimal* edit computed against a shadow of that client's buffer; the
-page applies it through `pushEditOperations`, so Ctrl+Z in the editor reverses a
-diagram drag.
-
-Two things this settled by measurement, both of which the design left open:
-
-- **The framework does not gate the request on a client capability.** It goes out
-  on every server-side write to an open document, whatever the client declared —
-  so a client that sends `didOpen` and has no `applyEdit` handler answers
-  `MethodNotFound`, the framework logs it over `window/logMessage`, and a page
-  with no handler for *that* loses the whole inbound direction in silence — a
-  state a page reaches by adding editors and stopping there.
-- **The echo does not loop, and the page deliberately does not suppress it.**
-  Applying the edit makes Monaco emit a `didChange`, and one drag costs exactly
-  one inbound request with no push after it, so nothing ping-pongs. That echo
-  carries *incremental* ranges addressing the text as it stood before the push,
-  and the server reconciles them against the text the editor was last heard to
-  hold, which a push does not move, so an echo is recognised and consumed rather
-  than re-applied.
-
-  Echo incrementally, exactly as a conforming client does, and work around
-  nothing. The echo is what keeps the server's shadow and per-client version
-  aligned with this buffer, so suppressing it here would break the next outbound
-  diff. `vscode-languageclient` echoes incrementally too, so this is the
-  ordinary contract rather than a quirk of a hand-written client — see
-  [Host in a browser](../../../docs/guides/host-in-a-browser.md).
-
-**Put the caret inside `Order.status` and press Ctrl+Space.** That line —
-`task Pay writes Order.status = PAID` — is three references, each scoped by the
-previous one: the field list is `Order`'s and no one else's, and the literal list
-is `OrderStatus`'s because that is what `status` is typed as. Completion is the
-only thing on this page that shows the *candidate set* rather than the result, so
-it is where the three-level scope provider becomes visible. Hovering any of the
-three names renders the declaration it resolves to, which for `Order` lives in a
-different grammar and a file the page never opened.
-
-**Ctrl+click `Order` on the line above it** — `process Fulfillment for Order` —
-and the selection editor opens `orders/orders.domain` with the caret on `entity
-Order`. The reference is in a `.process` document and the declaration is in a
-`.domain` one, so the jump crosses a *grammar* boundary and not only a file
-boundary: two of the three order-flow languages cannot reach each other any other
-way, and a single-grammar example cannot show this at all, because there the
-target is always the language the click was in.
-
-**Leave the caret on a name** and its declaration and every use in that document
-are marked. That one is document-scoped by the protocol, so unlike the jump above
-it says nothing across grammars — it answers what a name does in the file you are
-reading. It is worth knowing that Monaco would do *something* here regardless: it
-registers a textual whole-word matcher for every language, which also marks the
-name where a comment merely spells it. Putting the caret in `= PAID` shows the
-difference — one mark from the server, two from textual matching, because the
-comment block above says `OrderStatus.PAID`.
-
-Registering the LSP definition provider is only half of it, and the missing half
-is silent. Monaco's standalone editor service looks the target up on the editor
-that was clicked in, finds a different model, and returns — no message, no
-marker, nothing on the console, which is indistinguishable from a server that
-resolved no reference. The page supplies the other half through
-`monaco.editor.registerEditorOpener`, which routes the target to the same
-selection editor the problems list opens a document in. A host with a workbench
-behind it does this for you; this page is where you can see what it costs when
-nothing does.
-
-One caveat, and it is the server's rather than the page's: **asking at a
-truncated reference (`writes Order.` and then Ctrl+Space) makes the request
-hang** — the document never reaches a state the completion handler answers at.
-Ask at an existing reference. `examples/order-flow/server`'s
-`lsp-harness.integration.test.ts` records the same thing.
-
-Drag `Cancel` to see the interesting case: the fixture gives it no layout entry,
-so moving it *creates* one. It is also the only node whose position nobody chose
-— a flow node with no entry is left to client layout and lands at the origin,
-which is the normal state for anything added in text — so the seeded entries
-deliberately start clear of that corner, and `Cancel` reads as the gateway's `no`
-branch leaving the main line rather than as a shape dropped on another one.
-
-The rest of the model is placed left to right by rank, with the gateway's two
-exits splitting vertically, which is what makes the diamond worth drawing: each
-branch leaves a different face of it. The page **frames** the model in its pane
-on load rather than leaving it anchored top-left, so the layout can be a
-statement about the flow instead of about what happens to fit in a pane of one
-particular width.
-
-**Light and dark come from one switch**, and the page has three things to move
-where a shell would have none: its own chrome, the `--order-flow-*` colour roles
-the diagram is painted from, and Monaco's theme. Only the last is not CSS. The
-roles are the interesting part — the diagram module needs no change, because
-`@hydranium/example-order-flow-client`'s stylesheet paints from a role
-vocabulary a host fills in, exactly as
-`examples/order-flow/vscode/src/webview/diagram.css` binds it to `--vscode-*`.
-This page supplies only the **light** half and lets the shared stylesheet's dark
-defaults stand, so the fallback path is on the normal route rather than untested.
-The page chrome reads the same roles, which is what makes one switch enough.
-
-**The scheme resolves down one chain: `?theme=`, then what you last chose, then
-`prefers-color-scheme`.** Only the switch writes the store — seeding does not, so
-a reader who never touches the control keeps following their OS instead of being
-pinned to whatever it happened to say on a first visit. `?theme=` is *read* and
-never written, which is the opposite of `?locale=`: a language reloads, so a
-parameter is the only way that choice survives the reload, where a scheme changes
-in place and rewriting the address bar for it would be noise. The parameter still
-exists for the one tier that has no other way to ask — a link that pins a scheme,
-and an e2e case that names one.
-
-Both preferences sit in `localStorage`, where the workspace sits in `IndexedDB`,
-and the split is by what the value *is*: a workspace edit is your work and losing
-it is data loss, so that store reports its failures, while a scheme is a
-convenience the environment can answer for, so a browser that denies storage here
-falls through to `prefers-color-scheme` and says nothing. Both are scoped to the
-origin *and* the browser profile, so two readers of one deployment never see each
-other's choice.
-
-**Press *save workspace* and reload.** The edit is still there — and *without*
-the save it is not, which is the same bargain a Node host offers: an edit lives in
-the server's in-memory text document until something persists it. Writes mirror
-into `IndexedDB` behind
-[`PersistentFileSystemProvider`](../../../packages/core/src/langium/workspace/persistent-file-system-provider.ts),
-and the next load restores them before the heads start; *reset workspace* drops
-them and returns to the committed fixtures, which a page that can save a
-document that no longer parses genuinely needs.
-
-**Three things here can lose work, and each asks in proportion to what it
-costs.** *Reset workspace* always asks: it discards the store itself, which is
-destructive whatever the editors hold and which nothing on the page can undo.
-Switching language asks only when a document is unsaved, because the reload is
-what costs — and it offers *save and switch*, since saving is what the reader
-wanted rather than a choice between losing the work and staying put. A plain
-reload or tab close is caught by the browser's own guard, on the same condition.
-A confirmation on every one of these is one a reader learns to dismiss without
-reading, which is how a confirmation stops being one.
-
-They are `<dialog>` rather than `confirm`, and that is worth copying: a native
-dialog traps focus, closes on `Escape` and can be painted from the page's own
-roles, where browser chrome cannot — and `confirm` is auto-dismissed by test
-drivers, so a guarded destructive action silently would not happen and the
-failure would look nothing like its cause.
-
-Four things this arrangement is worth reading for, because each one is a decision
-a host has to make and none of them is obvious:
-
-- **The store holds the delta, not the workspace.** Only what was written lands
-  in it, laid over the generated seed on load — so editing a fixture in the
-  repository still reaches a reader who once pressed save, and the database stays
-  a few kilobytes. A deletion is therefore stored as a *marker* rather than as an
-  absence — dropping the entry for a seeded file would return it to its seeded
-  content on the next load, which is a delete that undoes itself. Nothing on this
-  page deletes files, so the marker path is framework-side only for now.
-- **The save goes through the DATA head, not through `didSave`.** LSP puts the
-  file write on the client: `textDocument/didSave` tells the server a save
-  happened and the framework answers it by firing `onDidSave` — it writes
-  nothing. A shell does the writing; this page cannot, so it asks the worker to,
-  with `saveModelDocument`. Sending `didSave` would persist nothing at all,
-  silently.
-- **The editors take their text from the worker, not from the generated seed.**
-  Once anything is stored the two differ, and `didOpen` is authoritative — so an
-  editor opened on the committed bytes would overwrite the restored document in
-  the server's text store and undo the reload, with both sides parsing and the
-  diagnostics agreeing. The worker sends the workspace it actually came up on,
-  once the heads are live.
-- **Only dirty documents are saved.** Both editors are open; a diagram drag
-  changes one. Saving the other would pin its current bytes in storage, where
-  they win over the seed forever — so a later fixture edit would never reach
-  anyone who had pressed save.
-
-Storage is origin-scoped and the browser may evict it, which presents as a first
-visit — a state the provider is correct in. A store that *fails* is not
-swallowed: the save reports it, because a page that claims to have saved and then
-loses the workspace is worse than one that says it could not.
-
-**The dock has the server's log**, which is what a Theia or VS Code shell gives
-a language server for free as an output channel and a plain page has to build.
-One panel covers all three heads: the framework's logger routes through the
-shared services' LSP connection, so a data-head read and a GLSP write arrive on
-the same `window/logMessage` channel as the LSP head's own lines — you can watch
-`WorkspaceManager`, `HydraniumGlspServer` and `TextDocuments` interleave on one
-timeline.
-
-It is not decoration. Before it existed, everything the server logged went
-nowhere, and that is precisely how the whole inbound direction of the sync stayed
-broken and invisible: the framework reported the failure at `error`, over this
-channel, to a page that was not listening.
-
-**Nothing on this page is collapsed by default**, and that is a consequence of
-the layout rather than a preference. As `<details>` in a footer the log and the
-problems list would take their height from the editors, so either one open
-shrinks the document a diagram write appends to below the thing it exists to
-show. As their own resizable track they cost the editors nothing, and a reader
-who wants the height back drags a divider instead of hunting for a disclosure
-triangle. Every area of the page is resizable that way, and *reset layout*
-restores the defaults.
-
-**Each editor opens scrolled to its declaration, not to line 1.** Every fixture
-in this workspace opens with a comment block written for a reader of the
-repository, and `fulfillment.layout`'s stands between the top and the `layout`
-block a diagram drag rewrites — so an editor left at the top would show nothing
-but prose and a drag would appear to change nothing. The line is derived (the
-first that is neither blank nor `//`), so editing a fixture header cannot leave
-the page scrolled into the middle of a comment.
-
-## Reading the result
+## Checking results
 
 The oracle is the same workspace validated from Node:
 
@@ -429,15 +103,11 @@ npx hydranium-cli validate --services ./examples/order-flow/server/lib/services.
 
 Both should report the same documents and the same diagnostics, at the same
 positions. A shorter list in the browser means documents the workspace walk
-never reached — the failure this seeding arrangement is most likely to produce,
-and the reason the comparison is worth making rather than eyeballing the page
-for plausibility.
+never reached. The diagram's oracle is the same diagram in
+[`theia-app`](../theia-app/README.md): same document and client module, with a
+shell and a backend instead of a page and a worker.
 
-The diagram's oracle is the same diagram in `examples/order-flow/theia-app`:
-same document, same client module, a shell and a backend instead of a page and a
-worker. `orders/fulfillment.process` has five flow nodes and four connections.
-
-Or let the e2e tier read the result for you:
+Or let the e2e tier check for you:
 
 ```bash
 npm --prefix examples/order-flow/browser run test:e2e:install   # once
@@ -445,37 +115,16 @@ npm --prefix examples/order-flow/browser run build
 npm --prefix examples/order-flow/browser run test:e2e
 ```
 
-It asserts all three heads against those counts, that the graph fills its mount
-(see below), that a drag and a palette create reach the `.layout` document, that
-the drag also reaches the `.layout` *editor*, and that the console is **silent** —
-the console is this host's only log, so a warning nobody needs is what teaches a
-reader to skim the one place real failures appear.
+It asserts all three heads against the oracles' document, diagnostic, node and
+edge counts, and that the console stays silent. It asserts that a drag and a
+palette create reach the `.layout` document, read back through the data head
+rather than from the rendered diagram, since sprotty draws a dragged node at
+the drop point whether or not the write landed. Further Playwright projects
+cover touch, a narrow viewport and a phone. A browser run leaves
+`examples/order-flow/workspace` untouched, so `git status` should be clean
+afterwards.
 
-**Editing is asserted against the layout DOCUMENT, not against the diagram.**
-sprotty draws a dragged node at the drop point whether or not the operation ever
-reached the source model, so the render would pass against a server that dropped
-the write. The page reads the file back through the data head instead — a
-different head than the one that wrote, over the same Langium store.
-
-An edit does not touch `examples/order-flow/workspace`. A diagram operation goes
-through the diagram's client session, which rewrites the in-memory text document and
-rebuilds; only an explicit save reaches the (seeded, in-memory) filesystem. So
-`git status` after a browser run should be clean, and a change there would be a
-real finding.
-
-Deliberately not wired to `test`, so `npm run check` needs no browser binary —
-the same posture as the Theia app's tier. The worker head's *launch* surface is
-covered inside `check` and headless, by
-`packages/glsp-server/test/start-glsp-server-in-worker.test.ts`; what only this
-tier can cover is a GLSP model reaching a rendered view.
-
-**A diagram will not load in a hidden tab.** sprotty renders on
-`requestAnimationFrame`, and the dispatch that starts the load only resolves
-once a frame has rendered — so a minimised or occluded window produces a page
-stuck on `loading…` with a clean console and nothing on the wire. It presents as
-flakiness in the code and is not.
-
-## What is here, and what is not
+## What it covers
 
 | | |
 | --- | --- |
@@ -483,107 +132,27 @@ flakiness in the code and is not.
 | Data head | ✅ on its own channel, same worker, same Langium store |
 | GLSP head | ✅ on a third channel, via `@hydranium/glsp-server/browser` |
 | Diagram editing | ✅ a drag and a palette create, both read back through the data head |
-| Text editors | ✅ three Monaco editors over the same LSP channel — diagnostics as markers, highlighting from semantic tokens, completion, hover, go-to-definition and occurrence highlighting |
-| Go to definition | ✅ Ctrl+click a reference and the editor opens the document that declares it, across a grammar boundary; the cross-document half is the page's own `registerEditorOpener`, which Monaco's standalone service does not do |
-| Occurrence highlighting | ✅ the caret on a name marks its declaration and every use *in that document*, from the server rather than from Monaco's built-in textual matcher — so a name merely spelled in a comment is not an occurrence |
-| Workspace navigation | ✅ every seeded document with its diagnostic count, and a problems list that opens a document at the line |
-| Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models, so a drag moves the `.layout` editor |
-| Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme; `?theme=`, then the last choice, then `prefers-color-scheme` |
-| Localization | ✅ one switch over the page's own chrome *and* the server's diagnostics and palette; the URL carries it and outranks the remembered choice, and the reload is the server half's requirement |
-| Server log | ✅ a dock panel over `window/logMessage`, carrying all three heads on one channel, filterable |
-| Resizable layout | ✅ pointer-event dividers on every area, no UI framework — the shape GLSP's own `workflow-standalone` example uses |
-| Touch input | ✅ a node drag under a finger, which the diagram client does not offer on its own: it binds mouse events, and a browser synthesizes those for a tap and not for a drag |
-| Narrow viewport | ✅ one scrolling column below 900px, so the canvas and the two documents it is a view of stay in one frame; each editor is shielded until tapped, because Monaco keeps a vertical touch drag |
-| Workspace persistence | ✅ a save mirrors into `IndexedDB` and the next load restores it, seed as the baseline; *reset* drops it |
-| Creating / deleting / renaming files | ❌ the filesystem takes all three and a deletion is durable, the page has no UI to ask for any of them |
+| Text editors | ✅ three Monaco editors over the LSP channel: diagnostics, semantic highlighting, completion, hover, go-to-definition, occurrence highlighting |
+| Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models |
+| Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme |
+| Localization | ✅ one switch over the page chrome, the server's diagnostics and palette, and Monaco's menus |
+| Server log | ✅ a dock panel over `window/logMessage`, all three heads on one channel |
+| Resizable layout | ✅ pointer-event dividers on every area, no UI framework |
+| Touch input | ✅ a node drag under a finger |
+| Narrow viewport | ✅ one scrolling column; each editor is shielded until tapped |
+| Workspace persistence | ✅ a save mirrors into IndexedDB and the next load restores it |
+| Creating, deleting, renaming files | ❌ the filesystem supports all three; the page has no UI for them |
 
-**Monaco, hand-glued — not `monaco-languageclient`.** The whole LSP client is
-`src/page/monaco-lsp-adapter.ts`, over the *same* `MessagePort` the diagnostics
-report uses. `monaco-languageclient` would drag in the
-`@codingame/monaco-vscode-*` shim stack, which destroys the one property that
-makes this bundle worth having: at `platform: 'browser'` esbuild refuses a
-`node:*` builtin rather than shimming it, so the bundle is a stricter neutrality
-gate than `check:neutral`. A package whose subject is what its bundle contains
-should not shim half of VS Code inside it.
+## Pitfalls
 
-**`monaco-editor-core`, not `monaco-editor`.** The wrapper package is core plus
-eighty bundled language definitions, and a page whose entire subject is that its
-language comes from a *server* should ship none of them. Core's entry carries
-every editor contribution and no grammars. It costs two files: one assembles the
-worker entry the wrapper would have shipped, and one declares it.
-
-**Highlighting comes from the server, so there is no second grammar.** No Monarch
-or TextMate definition accompanies the three languages — `OrderFlowSemanticTokenProvider`
-is one `$type`-keyed map over all three, and the page feeds Monaco from it. One
-definition of the language, so there is nothing to drift.
-
-Two things that bite here, both of which look like the server having failed:
-
-- **A standalone-Monaco theme rule's `token` is matched against the semantic
-  token TYPE NAME**, not against a TextMate scope the way VS Code's
-  `semanticTokenScopes` works. A theme written the VS Code way loads without
-  complaint, Monaco still splits each line into one span per token, and every
-  span resolves to the default foreground.
-- **Monaco 0.56 drives its editor with the EditContext API**, so the
-  `textarea.inputarea` that every older automation recipe names does not exist.
-  Drive it by clicking a rendered `.view-line`.
-
-**The diagram definition is not in this package.** It is
-`@hydranium/example-order-flow-client`'s, mounted verbatim — the same module the
-Theia and VS Code shells load. What a browser host contributes is the transport,
-GLSP's standalone modules, a light colour-role set, and two load-bearing CSS
-rules; see `src/page/process-diagram.ts` and the `<style>` block in `index.html`,
-both of which say why each piece is load-bearing.
-
-**The workspace SEED is committed, and regenerated by every build.**
-`scripts/generate-workspace-seed.mts` bakes `examples/order-flow/workspace` into a
-module, and `build` runs it before anything compiles, so the models this host
-opens cannot drift from the ones the VS Code and Theia hosts open. It is
-the baseline rather than the content: what the heads come up on is the seed with
-whatever storage holds laid over it, which is why only the worker reads it and the
-page is told the result.
-
-The framework-level version of what this package learned —
-what a browser host must accommodate, and why — is
-[Host in a browser](../../../docs/guides/host-in-a-browser.md).
-
-## What to know before changing it
-
-- **No head may bind the worker global.** Each gets a `MessagePort` transferred
-  at bootstrap. `src/head-channels.ts` explains why — briefly, GLSP's launcher
-  posts a non-JSON-RPC startup string through the global `postMessage` no matter
-  how it is configured, and two readers on one global receive each other's
-  traffic. Both halves are now observed rather than anticipated: with three
-  heads live it is the only protocol traffic on the global, and each port carries
-  only its own protocol. What the global does carry besides it is this package's
-  own host protocol — bootstrap, the workspace the heads came up on, a
-  persistence reset, failure reports — and that line is the one to hold.
-- **Workspace initialization does not validate.** Langium builds it with
-  validation off, so a client that connects and waits sees a healthy server
-  reporting nothing at all. Asking for the trailing validating build is the
-  host's job; `src/worker/order-flow-worker.ts` does it and says why.
-- **A `MessagePort` reports no close.** All three ports therefore go through
-  `createMessagePortTransport` at both ends: disposing a connection posts a
-  close signal, and the head at the other end tears down as it does when a
-  socket closes, ending the page's sessions. The language client has no
-  session, so on the LSP port's close the worker closes its documents through
-  `closeLanguageClientDocuments`. A page or a worker that dies still ends
-  nothing, because the port cannot say so. Here that costs nothing, since the
-  worker dies with the page, and the page never disposes a connection, so the
-  signal is wiring for a host that does. Because disposing any connection
-  over the port ends the head, `WorkerDataPort` hands every connection
-  generation the same connection: a fresh one per generation would leave the
-  one a failed readiness check used still reading the port, with no way to
-  dispose it that keeps the head alive. A disposed `WorkerDataPort` refuses to
-  connect again, because the worker's end of its port stays closed.
-- **Nothing asynchronous may sit between the LSP reader and `listen`.** The
-  stored workspace is restored *before* the connection is constructed, and that
-  is not tidiness: `createMessagePortTransport` starts its port as it is built
-  but drops every message until `startLanguageServer` calls `listen`, so
-  an `initialize` that arrives during an intervening `await` is dropped — no
-  error, no reply, a page that waits forever. `persistentFileSystem` is
-  asynchronous for exactly this reason, so the wait happens where it is safe.
-
-The bundle is also a neutrality gate in its own right, covering this example's
-real composition rather than the framework's entries alone — see
-[browser hosting](../../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
+- **A standalone-Monaco theme rule's `token` matches the semantic token type
+  name**, not a TextMate scope as VS Code's `semanticTokenScopes` does. A theme
+  written the VS Code way loads without complaint, and every token renders in
+  the default foreground.
+- **Monaco drives its editor with the EditContext API**, so there is no
+  `textarea.inputarea` for automation to type into. Click a rendered
+  `.view-line` instead.
+- **The workspace seed is committed and regenerated by every build** from
+  `examples/order-flow/workspace`. That directory is not an npm workspace, so
+  [turbo.json](turbo.json) lists it as an input; without it, a workspace edit
+  replays a stale cached bundle.

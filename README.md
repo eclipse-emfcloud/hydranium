@@ -75,16 +75,20 @@ This scaffolds a language server with a starter grammar and a diagram.
 ## Where to go next
 
 - **Building a modeling language?** Start with
-  [Adopting Hydranium](docs/ADOPTING.md): getting started, the examples, guides
-  and reference.
+  [Adopting Hydranium](docs/ADOPTING.md): getting started, guides and
+  reference. Two examples to read beside it:
+  [bookstore](examples/bookstore/README.md), exactly what `init` scaffolds, and
+  [order-flow](examples/order-flow/README.md), the complete application behind
+  the live demo.
 - **Working on Hydranium itself?** Start with
   [Contributing](docs/CONTRIBUTING.md): setup, conventions, testing and
   releasing.
 
 ## Status
 
-Alpha. The API still changes between releases, and every merge to `main`
-publishes a prerelease to npm. [Status and limitations](docs/adopting/status.md)
+Alpha. The API still changes between releases, and every merge to `main` that
+can change a published package publishes a prerelease to npm.
+[Status and limitations](docs/adopting/status.md)
 says what that means for you and what is known to be missing.
 
 ## License

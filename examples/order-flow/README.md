@@ -1,20 +1,11 @@
-# order-flow — the example the framework gates on
+# order-flow
 
-Order fulfillment, modelled in **three grammars** and served to **four hosts**
-off one language server: a Theia app, a VS Code extension, a plain browser page,
-and the bare server on stdio. All three heads — LSP, the typed data server, and
-GLSP — run over one shared Langium workspace.
-
-**This is where a framework claim gets proved, and the grammar count is the
-reason.** A single-grammar head cannot tell "reflects the head" apart from
-"reflects the only language it has", and a cross-grammar reference chain exists
-in no one language — so the assertions that matter can be made here and nowhere
-else in this repository.
-
-[`examples/bookstore`](../bookstore/README.md) is the deliberate opposite: a
-single-grammar on-ramp that gates nothing and stays comparable, file by file,
-with what `hydranium-cli init` scaffolds. Coverage belongs here. Nothing belongs
-there that `init` does not already emit.
+The complete application behind the
+[live demo](https://eclipse-emfcloud.github.io/hydranium/). Order fulfillment
+is modelled in three grammars and served by all three heads (LSP, the typed
+data server and GLSP) over one shared Langium workspace. The same server runs
+in a Theia app, a VS Code extension and a plain browser page. Look things up
+here when you build your own application.
 
 **Everything here must be fit to copy.** Adopters look things up in this
 example and copy from it, and `hydranium-cli init` derives its templates from
@@ -23,70 +14,47 @@ built-ins in the language's own syntax and load them with
 `LangiumDocumentFactory.fromString`, never as an AST built by hand past the
 generated types, and test every branch of an API a suite claims to cover.
 
-## The packages
-
-One directory, one package per host. The npm names are flat
-(`@hydranium/example-order-flow-*`), so a package name is not a path — and
-`workspace/` is a fixture tree, **not** an npm workspace.
-
-| Directory                                     | What it is                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`server/`](server/README.md)                 | the three grammars, the adopter services and all three heads. **Start here.**                          |
-| [`client/`](client/README.md)                 | the host-agnostic web client: one diagram definition and one properties model, mounted by every shell  |
-| [`theia/`](theia/README.md)                   | the Theia extension — diagram, properties view, diagnostics commands                                   |
-| [`theia-app/`](theia-app/README.md)           | the Theia browser application, and the host of the Playwright e2e suite                                |
-| [`vscode/`](vscode/README.md)                 | the VS Code extension — two webviews and the extension-host wiring behind them                         |
-| [`vscode-servers/`](vscode-servers/README.md) | server hosting with no UI, shared by the VS Code shell and sideloaded by the Theia app                 |
-| [`browser/`](browser/README.md)               | all three heads in one web worker: no Node, no backend process, no socket                              |
-| [`workspace/`](workspace/README.md)           | the sample models every host opens                                                                     |
-
-## Which one do I read first
-
-- **Building a language** — `server/`. It is the only package that touches
-  grammars, scoping, validation and serialization, and its README also records
-  which files came from `hydranium-cli init` and which are hand-written.
-- **Building a host** — `client/` first (what is host-neutral), then whichever
-  shell is closest to yours. `theia/` is the short one, because the framework
-  ships Theia client packages; `vscode/` is the long one, because it does not.
-- **Wondering what a head can do with no shell at all** — `browser/`.
+For what `hydranium-cli init` scaffolds, see
+[bookstore](../bookstore/README.md), and read it beside your own scaffold.
 
 ## The three grammars
 
-| Extension  | Language id          | What it holds                                                                                       |
-| ---------- | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `.domain`  | `order-flow-domain`  | entities, value types, enumerations, typed fields — structural, so text is the better editor         |
-| `.process` | `order-flow-process` | tasks, gateways, transitions over a domain entity — behavioural, so a graph is the better editor     |
-| `.layout`  | `order-flow-layout`  | node bounds for one process, in its own file — purely additive, a `.process` with no `.layout` works |
+| Extension | Language id | What it holds |
+| --- | --- | --- |
+| `.domain` | `order-flow-domain` | entities, value types, enumerations, typed fields |
+| `.process` | `order-flow-process` | tasks, gateways and transitions over a domain entity |
+| `.layout` | `order-flow-layout` | node bounds for one process, optional, in its own file |
 
-References point one way down the chain: `.layout` depends on `.process`
-depends on `.domain`, never the reverse.
+References point one way: `.layout` depends on `.process`, which depends on
+`.domain`. There is no `.diagram` grammar. A diagram is a `.process` document
+rendered by the GLSP head, positioned by its sibling `.layout` file.
+[server/README.md](server/README.md) explains the grammars and the
+cross-grammar reference chain they exist for.
 
-**There is no `.diagram` grammar.** A diagram here is a `.process` document
-rendered by the GLSP head, with its positions in the sibling `.layout` file.
+## Where to look
 
-The single line the whole example exists for lives in `.process`:
+| Concern | Where | Guide |
+| --- | --- | --- |
+| Grammars | [server/src/grammar/](server/src/grammar/) | |
+| Language composition | [order-flow-module.ts](server/src/language-server/order-flow-module.ts), [services.ts](server/src/services.ts) | [Compose a server by hand](../../docs/guides/compose-a-server.md) |
+| Scoping | [process-scope-provider.ts](server/src/language-server/process-scope-provider.ts), [layout-scope-provider.ts](server/src/language-server/layout-scope-provider.ts), [order-flow-scope-computation.ts](server/src/language-server/order-flow-scope-computation.ts) | [Customizing names, scope and visibility](../../docs/concepts/customizing-names-and-scope.md) |
+| Validation | [process-validation.ts](server/src/language-server/process-validation.ts), [layout-validation.ts](server/src/language-server/layout-validation.ts) | [Add a validation check](../../docs/guides/add-validation-check.md) |
+| Serialization | [domain-serializer.ts](server/src/language-server/domain-serializer.ts), [process-serializer.ts](server/src/language-server/process-serializer.ts), [layout-serializer.ts](server/src/language-server/layout-serializer.ts) | |
+| Built-in types | [order-flow-stdlib.ts](server/src/language-server/order-flow-stdlib.ts) | [Ship a standard library](../../docs/guides/ship-a-standard-library.md) |
+| Diagram, server side | [server/src/glsp/](server/src/glsp/), operation handlers in [server/src/glsp/handler/](server/src/glsp/handler/) | [Make a diagram editable](../../docs/guides/editable-diagram.md) |
+| Diagram, client side | [client/src/diagram/](client/src/diagram/) | |
+| Properties view | [client/src/data/](client/src/data/), [client/src/properties/](client/src/properties/), [theia/src/browser/order-flow-properties-widget.ts](theia/src/browser/order-flow-properties-widget.ts) | [Connect a data client](../../docs/guides/connect-a-data-client.md) |
+| Theia host | [theia/](theia/README.md), [theia-app/](theia-app/README.md) | [Host in Theia](../../docs/guides/host-in-theia.md) |
+| VS Code host | [vscode/](vscode/README.md), [vscode-servers/](vscode-servers/README.md) | |
+| Browser host, no backend | [browser/](browser/README.md) | [Host in a browser](../../docs/guides/host-in-a-browser.md) |
+| Translations | [theia/src/nls/order-flow.de.json](theia/src/nls/order-flow.de.json), [server/src/nls/order-flow.de.json](server/src/nls/order-flow.de.json) | [Translate your language](../../docs/guides/translate-your-language.md) |
+| Unit tests | each package's `test/` | [Test your language](../../docs/guides/test-your-language.md) |
+| End-to-end tests | [theia-app/test/e2e/](theia-app/test/e2e/), [browser/test/e2e/](browser/test/e2e/) | |
+| Sample models | [workspace/](workspace/README.md) | |
 
-```text
-task Pay writes Order.status = PAID
-```
-
-Three cross-references, each scoped by the previous one — an entity, then a
-field of _that_ entity, then a literal of the enumeration _that field_ is typed
-with. `server/README.md` carries the rest.
-
-## The fixture workspace is edited in place
-
-`workspace/` is a checked-in test fixture, and two of the ways to run this
-example open it **directly**: the Theia app's `npm start` passes `../workspace`
-to `theia start`, and the VS Code F5 launch opens the same folder. Anything you
-type — or write from a properties panel, which reserializes the whole document —
-changes the seed other suites copy.
-
-Nothing warns you, because the suites still pass: they copy the file you
-changed. So run `git status examples/order-flow/workspace` after any manual
-session, and `git checkout --` what you did not mean to keep. The Playwright
-suites are exempt (they copy the tree into a temp directory first), and so is
-the browser page (it seeds an in-memory filesystem and persists to `IndexedDB`).
+Each directory is one npm package, named `@hydranium/example-order-flow-*`.
+`workspace/` is a fixture tree, not an npm workspace. Each package's README
+covers its own e2e commands and launch configurations.
 
 ## Running it
 
@@ -102,25 +70,20 @@ npm --prefix examples/order-flow/browser start     # http://localhost:3002
 npm --prefix examples/order-flow/vscode run build:all   # then F5 in VS Code
 
 npm --prefix examples/order-flow/server run build
-npm --prefix examples/order-flow/server start      # the LSP head alone, on stdio
+npm --prefix examples/order-flow/server start      # LSP on stdio, data and GLSP heads on sockets
 ```
 
-Each package's own README has the detail, including the e2e commands and the
-launch-configuration names.
+## The fixture workspace is edited in place
 
-## What `npm run check` covers here, and what it does not
+`workspace/` is a checked-in test fixture, and two ways to run this example
+open it directly: the Theia app's `npm start` passes `../workspace` to
+`theia start`, and the VS Code F5 launch opens the same folder. Anything you
+type there changes the seed other suites copy. So does a write from a
+properties panel, which reserializes the whole document.
 
-- Every package's vitest suite runs under `turbo run test`, so it is in
-  `check`.
-- **Neither Playwright tier is.** `theia-app` has no `test` script, and
-  `browser`'s runs only its vitest suite, deliberately, so a full `check` needs
-  no browser binary. `theia-app`
-  still typechecks its specs through `typecheck:test`, which turbo does run.
-- `check:host-load` requires the VS Code extension's built `main` in bare Node
-  with `vscode` stubbed; `check:webview-csp` scans its two webview bundles;
-  `check:init-provenance` re-derives `server/` from the `init` invocation its
-  README documents.
-
-The framework-level maps this example is an instance of are
-[`docs/concepts/how-it-works.md`](../../docs/concepts/how-it-works.md) and
-[`docs/contributing/testing.md`](../../docs/contributing/testing.md).
+Nothing warns you, because the suites still pass: they copy the file you
+changed. Run `git status examples/order-flow/workspace` after any manual
+session, and `git checkout --` what you did not mean to keep. The Playwright
+suites are safe, because they copy the tree into a temp directory first. So is
+the browser page, which seeds an in-memory filesystem and persists to
+`IndexedDB`.

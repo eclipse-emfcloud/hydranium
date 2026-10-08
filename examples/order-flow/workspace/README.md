@@ -1,20 +1,11 @@
 # order-flow sample workspace
 
-The models `examples/order-flow/server` is exercised against. Two projects,
-three grammars, one deliberately broken file.
+The models every order-flow host opens and the test suites copy. Two
+projects, three grammars, one deliberately broken file.
 
-> **This directory is a TEST FIXTURE, and two launches edit it in place.**
-> `Run Order Flow VS Code Extension — order-flow-workspace` and the Theia app's
-> `npm start` both open this folder, so anything you type there — or write from the
-> properties panel, which reserializes the whole document — changes the seed
-> every suite copies with `makeScratchWorkspace`. Nothing warns you: the tests
-> still pass their own scratch copy, they just copy the file you changed. A
-> panel write to `returns.process` once turned into two failing GLSP
-> conformance tests that looked like a regression in GLSP.
->
-> **`git status examples/order-flow/workspace` after any launch**, and
-> `git checkout --` what you did not mean to keep. Deliberate fixture changes
-> are fine; unnoticed ones are what cost time.
+> This directory is a test fixture that two launches edit in place. See
+> [The fixture workspace is edited in place](../README.md#the-fixture-workspace-is-edited-in-place)
+> before you open it.
 
 ```
 commerce-core/          shared library project
@@ -28,11 +19,11 @@ orders/                 consuming project (requires commerce-core)
    audit-leak.domain    DELIBERATELY BROKEN — references AuditStamp
 ```
 
-A project is a **folder**, declared by whichever `.domain` file in it carries
-a `project` header. `requires` becomes `Project.dependencies`, which the
+A project is a folder, declared by whichever `.domain` file in it carries a
+`project` header. `requires` becomes `Project.dependencies`, which the
 framework's project-scope filter walks to decide what crosses the boundary.
 
-These are observable here rather than merely asserted:
+What you can observe here:
 
 - **Cross-project resolution.** `Order.total: Money` reaches `commerce-core`
   because `Money` is `public` and `orders` requires that project.
@@ -40,36 +31,18 @@ These are observable here rather than merely asserted:
   which is not `public`. It must stay unresolved, and completion in `orders`
   must not offer it.
 - **Cross-grammar resolution.** `fulfillment.process` reaches `Order`,
-  `Order.status` and `OrderStatus.PAID` — a chain where each reference's
+  `Order.status` and `OrderStatus.PAID`, a chain where each reference's
   candidate set depends on the previous one having resolved.
 - **Layout as a separate, optional document.** `fulfillment.layout` positions
-  `fulfillment.process`'s nodes from its own file, scoped to that process
-  rather than to every flow node in the workspace; `returns.process` has none,
-  which is what shows layout is additive rather than required.
-
-## The layout document
-
-`fulfillment.layout` is the one fixture whose shape is a framework
-demonstration rather than a modelling choice, so the reasoning lives here
-rather than in a header the editors have to scroll past.
-
-**Its references cross a document boundary, and that is the point.** A
-`[FlowNode:ID]` reference resolves through the global index, so unnarrowed, an
-entry here could bind to a same-named task in an unrelated process and still
-look correct. `OrderFlowLayoutScopeProvider` restricts the candidates to the
-nodes of the process the header names.
-
-**It is what `repositionable` and `resizable` are backed by.** Dragging a node
-in a diagram rewrites an entry here, and creating one from the canvas writes
-both files in a single operation, semantics first.
-
-**The coordinates are chosen rather than arbitrary.** They run left to right by
-rank — `Pay`, the gateway, then its two exits — and the gateway's branches
-split vertically: `yes` continues down and right to `Pick` and `Ship`, `no`
-leaves up and left. Each branch therefore leaves a different face of the
-diamond, which is what gives `DiamondAnchor` something to be right about.
-`Cancel` carries no entry at all and so lands at the origin, which is the state
-of anything added in text and the reason the entries start well clear of it.
+  the nodes of `fulfillment.process`. `OrderFlowLayoutScopeProvider` scopes
+  its entries to the same-named `.process` file, so an entry cannot bind to a
+  same-named node of another process. `returns.process` has no layout, which
+  shows layout is additive. Dragging a node rewrites an entry; creating one
+  from the canvas writes both files in one operation, the process first.
+- **Chosen coordinates.** Nodes run left to right by rank, and the gateway's
+  two branches split vertically, so each leaves a different face of the
+  diamond. `Cancel` has no entry and lands at the origin, so the other entries
+  start clear of it.
 
 Run the CLI against it:
 
