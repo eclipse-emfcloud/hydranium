@@ -1,101 +1,29 @@
 # `@hydranium/glsp-client-theia`
 
-Theia client primitives for the hydranium **GLSP head** — the companion of
-`@hydranium/glsp-server` in the
-[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework.
-
-It sits between `@eclipse-glsp/theia-integration` and an adopter's diagram: the
-module composition, the instrumented dispatcher and bounds updater, the loading
-overlay, the marker-propagation switch, and the backend socket bridge. Install it
-if you are mounting a hydranium GLSP diagram in a Theia application.
+The Theia integration for the
+[Hydranium](https://github.com/eclipse-emfcloud/hydranium) GLSP head, the
+companion of `@hydranium/glsp-server`. Install it to mount a Hydranium diagram
+in a Theia application. It builds on `@eclipse-glsp/theia-integration` and
+`@hydranium/client-theia`.
 
 ## What it gives you
 
-- **`AbstractHydraniumGlspTheiaFrontendModule`** — a `GLSPTheiaFrontendModule`
-  subclass that absorbs the overrides every adopter otherwise writes verbatim.
-  You declare `diagramLanguage`, `diagramConfiguration` and `diagramManager`;
-  optionally set `logLevelPreference` (the base then binds the log-threshold
-  contribution for you) and override `bindClientContribution()` — returning
-  `SkipClientContribution` for a secondary diagram type that shares a server with
-  a primary one.
-- **`createGlspClientTheiaModule(context, options)`** — the standard per-diagram
-  bindings, all unconditional: the cross-head `ChannelLogger`,
-  `HydraniumGlspActionDispatcher`, `HydraniumDiagramLoader`,
-  `HydraniumHiddenBoundsUpdater`, `HydraniumGlspMessageService`, and
-  `HydraniumStatusOverlay`, which keeps GLSP's status overlay on the page after
-  sprotty's first render replaces the diagram's base div. Each
-  replaces a GLSP default with a strict superset of its behaviour, so a head that
-  wants the original rebinds that one token back.
-- **Loading feedback that cannot silently vanish.** `HydraniumDiagramLoader`
-  catches every load failure — the dispatcher-init, connect and first
-  `RequestModelAction` steps upstream leaves unwrapped — routes it to the Output
-  channel, and reports it as an error `StatusAction`. It publishes a terminal
-  `DiagramLoadOutcome`, which `HydraniumGlspDiagramWidget` keys its opaque canvas
-  overlay on (`DIAGRAM_LOADING_CLASS`, `DIAGRAM_LOADING_FAILED_CLASS`).
-  `HydraniumGlspMessageService` then drops the now-redundant "Model loading in
-  progress" toast (`MODEL_LOADING_PROGRESS_TITLE`) and forwards every other
-  progress report untouched.
-- **Instrumentation.** `HydraniumGlspActionDispatcher` logs action traffic into
-  the shared Output channel and pairs requests with responses — by id, or by kind
-  for the GLSP flow actions that carry none (`HYDRANIUM_DEFAULT_LOGGED_KINDS`,
-  `HYDRANIUM_DEFAULT_KIND_PAIRS`, extensible via
-  `HydraniumGlspActionDispatcherOptions`). `HydraniumHiddenBoundsUpdater` emits
-  one trace line per bounds request with the measured element count and the raw
-  `getBBox` cost — the client-side phase that scales with rendered elements
-  rather than model size.
-- **`AbstractHydraniumGlspDiagramConfiguration`** with
-  `propagateMarkersToProblemsView` — set it `false` for a head whose co-resident
-  LSP already publishes the same diagnostics, and the per-diagram container binds
-  `NoOpExternalMarkerManager` instead: markers still decorate the diagram, but
-  Theia's Problems view stops double-listing them.
-- **`AbstractHydraniumGlspDiagramManager`** derives the language-correlated
-  getters from one descriptor plus a label, and `reopen` replaces a diagram
-  with a fresh widget in the same tab position, as the Retry of a failed load
-  does. It reopens every diagram when their client is lost, and a failed one
-  when a client starts. A diagram's client id is the same for the same widget
-  in the same window, so a diagram reopened after its client is lost, or
-  reloaded with its page, takes its old session over with the window's resume
-  token and keeps its unsaved text.
-- **`WindowSessionService`** — the window's id and resume token, claimed as
-  the frontend starts. The default keeps them in `sessionStorage` and hands
-  them on only as the page leaves, so a reload resumes and a duplicated tab
-  draws its own. Rebind it for a different notion of a window.
-- **`HydraniumGlspClientContribution`** — for a server that starts late: it
-  defers `start` until a workspace is open, fails a start that takes longer than
-  `startupTimeoutMs` (30 s by default), and starts a fresh client after a failed
-  start or a lost connection, after a delay that grows while clients keep
-  failing, reporting each attempt through `client-theia`'s
-  `ConnectionReporter`. `onDidStartClient` and `onDidLoseClient` announce each
-  client, and each start and loss is logged to the application-scope
-  `ChannelLogger` an adopter binds with `bindChannelLogger`. Its client is
-  `HydraniumGlspClient`, which ends a session without the server once the
-  connection is gone.
-- **`HydraniumGlspSaveable`** — the diagram widget's saveable. Each save is a
-  `RequestSaveModelAction` the server answers: the save resolves on its own
-  response, and rejects on its own rejection or after 10 s rather than GLSP's
-  2 s. It stays dirty while a save is pending, so Theia's exit check still
-  counts it. The server answers through
-  `HydraniumGlspRequestSaveModelActionHandler`, which
-  `AbstractHydraniumGlspDiagramModule` registers; against a server that does
-  not advertise the request, the saveable behaves as GLSP's does. The dirty
-  flag follows the server, so an edit whose dirty state has not arrived when
-  Save All runs is not saved. Under the `fire-and-forget` `SaveDeliveryPolicy`
-  the server answers before the disk write finishes, and answers a failed
-  write as saved.
-- **Backend (`./node`)** — `GlspServerConnectionHandler` (the socket bridge,
-  over `@hydranium/client-theia`'s `SocketChannelForwarder`) and
-  `createGlspConnectionContainerModule(handler)` for the frontend-scoped module
-  boilerplate.
+- A diagram mounted from one subclass of
+  `AbstractHydraniumGlspTheiaFrontendModule`.
+- Load failures shown on the diagram with a Retry, and logged to the Output
+  channel beside the diagram's action traffic.
+- A client that waits for a workspace, and starts again after a failed start
+  or a lost connection.
+- Unsaved diagram changes kept across a reload or a reconnect, while the server
+  stays the same.
+- Problems listed once when the LSP head reports them too.
+- The backend handler that relays the channel to the GLSP server's socket.
 
 ## Install
 
 ```bash
 npm install @hydranium/glsp-client-theia
 ```
-
-You must already have a Theia application wired for GLSP — `@eclipse-glsp/client`
-and `@eclipse-glsp/theia-integration` are peers, not bundled — and a running
-hydranium GLSP server. The declared peer dependencies are:
 
 | Peer                              | Range         |
 | --------------------------------- | ------------- |
@@ -112,58 +40,54 @@ hydranium GLSP server. The declared peer dependencies are:
 
 ## Wiring
 
-This package declares no `theiaExtensions` — it is a library your own Theia
-extension builds on. That extension declares the entries; a diagram is one
-frontend/backend pair:
+This package declares no `theiaExtensions`; your own Theia extension declares
+them, one frontend and backend pair per diagram.
 
-- the **frontend** entry points at a module that
-  `export default new MyDiagramModule()`, where `MyDiagramModule` extends
-  `AbstractHydraniumGlspTheiaFrontendModule`. Your `DiagramConfiguration`
-  subclass calls `createGlspClientTheiaModule` in its container initialisation,
-  passing the `channelLogger` name. One of the extension's frontend modules
-  also calls `bindEditorDiskSync` from `@hydranium/client-theia`, since a
-  diagram save writes a file an editor can have open;
-- the **backend** entry is typically
-  `export default createGlspConnectionContainerModule(MyHandler)`, where
-  `MyHandler` extends `GlspServerConnectionHandler`. The handler's
-  `languageContributionId` decides the per-language service path Theia routes
-  frontend connections to.
+- The frontend entry exports `new MyDiagramModule()`, where `MyDiagramModule`
+  extends `AbstractHydraniumGlspTheiaFrontendModule` and names the diagram's
+  language, configuration and manager. Return a subclass of
+  `HydraniumGlspClientContribution` from its `bindClientContribution()`, and
+  set its `logLevelPreference` to have it bind the log level preference.
+- Your diagram configuration extends
+  `AbstractHydraniumGlspDiagramConfiguration` and calls
+  `createGlspClientTheiaModule` from its `configureContainer`, not from the
+  frontend module: called earlier, GLSP's own bindings silently replace its
+  rebinds. Set `propagateMarkersToProblemsView` to `false` when the LSP head
+  already reports the same problems.
+- One frontend module calls `bindEditorDiskSync` from
+  `@hydranium/client-theia`, since a diagram save writes a file an editor can
+  have open.
+- The backend entry exports `createGlspConnectionContainerModule(MyHandler)`,
+  where `MyHandler` extends `GlspServerConnectionHandler`.
 
-**The `style/` directory needs no action from you.** It holds one stylesheet,
-`diagram-loading.css`, for the widget's loading overlay, and the widget module
-imports it itself — precisely so an adopter cannot ship an unstyled `div` in
-normal flow by forgetting it. It is listed in `files` because it must be present
-in the published tarball for that import to resolve; your bundler needs a CSS
-loader, which a Theia application's webpack configuration already has. Colours
-come from `--theia-*` theme variables, and every rule is overridable from a
-stylesheet loaded afterwards.
+The widget imports its own stylesheet, so your bundler needs a CSS loader,
+which a Theia application has.
+
+For the whole setup, see *Host in Theia* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Entry points
 
-| Subpath     | Holds                                                                                                                                                                                                            | Environment                      |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `.`         | Re-exports `./browser` — the larger of the two tiers and safe to load anywhere.                                                                                                                                  | browser-neutral (gated)          |
-| `./browser` | The frontend module bases, `createGlspClientTheiaModule`, the dispatcher, loader, widget and its saveable, bounds updater, message service, diagram manager and configuration bases, `NoOpExternalMarkerManager` | browser / Theia frontend (gated) |
-| `./node`    | `GlspServerConnectionHandler`, `createGlspConnectionContainerModule`                                                                                                                                             | Node / Theia backend             |
-| `./testing` | `makeBindRecorder`, the GLSP-module-specific Inversify double (the cross-head doubles live in `@hydranium/client-theia/testing`)                                                                                 | browser-neutral (gated)          |
+| Subpath                       | Use it for                                           | Runs in         |
+| ----------------------------- | ---------------------------------------------------- | --------------- |
+| `.`                           | The same as `./browser`                              | Theia frontend  |
+| `./browser`                   | The frontend module, configuration and manager bases | Theia frontend  |
+| `./node`                      | The connection handler and its backend module        | Theia backend   |
+| `./testing`                   | A binding recorder for testing your modules          | browser-neutral |
+| `./style/diagram-loading.css` | The loading overlay's stylesheet, imported for you   | browser         |
 
-Resolve the subpaths with [a resolver that reads
-`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them. "Gated" means the
-repository's neutral-bundle check enforces that the entry bundles for the
-browser with no `node:*` import, transitive ones included; `./node` is
-deliberately outside that gate. Also worth reading: [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
-The API is not stable and may change without a deprecation cycle. See
-[Adopting Hydranium](../../docs/ADOPTING.md) for the GLSP head's place among
-the heads, and the [repository README](../../README.md)
-for current status and known limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
-`MIT` — see this package's [`LICENSE`](./LICENSE). Third-party notices for the
-runtime dependency closure are collected in the repository
-[`NOTICE.md`](../../NOTICE.md).
+`MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.

@@ -1,55 +1,21 @@
 # `@hydranium/data-server`
 
-The typed JSON-RPC data head of [hydranium](../../README.md): it exposes the live
-Langium AST to non-LSP clients — form editors, tree views, code generators — as
-an adopter-defined transfer model over a `vscode-jsonrpc` `MessageConnection`.
-Installed by the server process that already composes
-[`@hydranium/core`](../core); a client needs only
-[`@hydranium/protocol`](../protocol).
+The data head of [Hydranium](https://github.com/eclipse-emfcloud/hydranium): it
+serves your model over JSON-RPC to clients other than a text editor, such as
+forms, tree views and code generators. Install it in the server that composes
+`@hydranium/core`; a client talks to it through `@hydranium/protocol`.
 
 ## What it gives you
 
-- **One class, `DataServer`.** `new DataServer(connection, services, options)`
-  self-wires: a single `createRpcProxy` call registers the inbound
-  `DataServerProtocol` handlers and builds the outbound `DataClientProtocol`
-  proxy on the same wire. It contributes no shared-tier DI bindings — it reads
-  exclusively from `ServerSharedServices`, so there is no shared module to
-  compose.
-- **A document lifecycle over the shared workspace:** `openModelDocument`,
-  `getModelDocument`, `updateModelDocument`, `saveModelDocument`,
-  `persistModelDocument`, `closeModelDocument`, `watchModelDocument` / `unwatchModelDocument`, and
-  `waitForReady` for clients that must not race workspace initialisation.
-- **Client sessions per connection:** `createSession` registers a participant,
-  whose requests then write only what it has open; `createModelDocument` and
-  the all-or-none `updateModelDocuments` serve sessions only; `closeSession`, or
-  the connection closing, ends a session and closes everything it has open. See
-  [Connect a data client](../../docs/guides/connect-a-data-client.md).
-- **Push notifications instead of polling:** `onDocumentUpdated` when a
-  subscribed document reaches the configured build phase
-  (`DataServerOptions.subscriptionPhase`, `DocumentState.Validated` by default),
-  `onDocumentSaved` on a separate channel, `onDocumentDirtyChanged` when a
-  subscribed document starts or stops differing from its file (every document
-  the head sends that it holds also carries its `text` block: version, hash
-  and current `dirty`), `onDocumentDeleted` (a deleted document has no built
-  state to carry, and the build-phase path never runs for one),
-  `onDocumentsBuilt` once per build for the documents nobody watches — chiefly
-  those rebuilt as a cascade, which no filesystem watcher can see because their
-  own files did not change — and `onProjectsChanged` from the project registry.
-- **Projects as first-class:** `getProjects` and `getProjectForUri`, answered from
-  the framework's `ProjectManager`.
-- **An opt-in reference/naming slice** — `findReferenceCandidates`,
-  `resolveReference`, `findNextName` — implemented here but deliberately outside
-  the `DataServerProtocol` composition, so a pure data consumer does not pay for
-  it. Compose `ReferenceServerProtocol` onto the connection explicitly.
-- **A diagnostics seam,** `DataServerDiagnosticsProvider`, with the Node
-  implementation `nodeDataServerDiagnostics()` behind `./node` so the portable
-  entry keeps bundling for a browser.
-
-The projection itself is not this package's: it delegates to `TransferEncoder`
-and `ModelService` from `@hydranium/core`, so there is no second in-memory model
-to keep in sync.
-
-For the adopter extension path, see [Add a data-server method](../../docs/guides/data-server-method.md). It covers the typed subclass, `additionalMethods`, shared namespace, and client proxy as one wire contract.
+- Typed reads, updates and saves of documents in the shared workspace, as your
+  transfer model. An edit from a data client reaches the other heads.
+- Notifications when a document is rebuilt, saved or deleted, so a client
+  never polls.
+- Your own methods on the same connection, through a `DataServer` subclass and
+  its `additionalMethods` option.
+- An optional reference and naming slice: pass
+  `REFERENCE_SERVER_PROTOCOL_METHODS` from `@hydranium/protocol/data` in
+  `additionalMethods`.
 
 ## Install
 
@@ -57,50 +23,49 @@ For the adopter extension path, see [Add a data-server method](../../docs/guides
 npm install @hydranium/data-server
 ```
 
-This package bundles no runtime dependencies. Its peers must be present:
-`@hydranium/core`, `@hydranium/protocol`, `@hydranium/langium`, `vscode-jsonrpc`
-and `vscode-languageserver-textdocument`. You must already have a composed
-hydranium shared services tree and a `MessageConnection` — the socket and stdio
-launchers live in `@hydranium/core/node`, not here.
+| Peer                                 | Range         |
+| ------------------------------------ | ------------- |
+| `@hydranium/core`                    | `^1.0.0-next` |
+| `@hydranium/langium`                 | `^1.0.0-next` |
+| `@hydranium/protocol`                | `^1.0.0-next` |
+| `vscode-jsonrpc`                     | `^9.0.0`      |
+| `vscode-languageserver-textdocument` | `^1.0.12`     |
 
-## Exports
+## Wiring
 
-| subpath     | holds                                                                                                          | platform                          |
-| ----------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `.`         | `DataServer` and its option types, plus the `DataServerDiagnosticsProvider` seam — the whole production surface. | browser-neutral                   |
-| `./node`    | `nodeDataServerDiagnostics()`, the runtime-backed half of the diagnostics seam.                                 | Node-only                         |
-| `./messages`| Every user-facing message the package raises, by code — what a translation catalogue keys on.                   | browser-neutral                   |
-| `./testing` | `makeDataServerHarness` — a real server driven in-process over a duplex connection pair.                        | Node-only (`vscode-jsonrpc/node`) |
+The head adds no services module: it reads the shared services you composed
+with `@hydranium/core`.
 
-`.` is gated as browser-neutral in CI (`scripts/check-neutral-bundles.mts`). It
-stays that way through a `browser` field in `package.json` that swaps the
-diagnostics default for a browser twin, so a bundler never follows the
-`@hydranium/core/node` import a Node host resolves — see [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
-Resolve the subpaths with [a resolver that reads
-`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them.
+1. Start a launcher from `@hydranium/core/node`: `startSocketServer` beside the
+   LSP head, with `publishPortOnLspConnection` to tell the client its port, or
+   `startStdioServer` for a data head alone.
+2. In its connection callback, create `new DataServer(connection, shared)`. It
+   cleans up when the connection closes.
 
-## Getting oriented
+See *Add a data-server method* and *Connect a data client* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
-Construct the head after the shared services tree exists and keep the returned
-instance for `dispose`; it registers its handlers on the connection you pass and
-subscribes to the document builder, the text-document store and the project
-manager for its push notifications. The typed contract a client codes against —
-`DataServerProtocol`, `DataClientProtocol`, the drift-proof method-name lists and
-the port constants — lives in `@hydranium/protocol/data`, and the generic
-`createRpcProxy` / `bindRpcMethods` machinery in `@hydranium/protocol`. The four
-distinct meanings of "document" this head sits between are worth reading first:
-[`docs/concepts/document-layers.md`](../../docs/concepts/document-layers.md). See
-also [Adopting Hydranium](../../docs/ADOPTING.md).
+## Entry points
+
+| Subpath      | Use it for                                                 | Runs in         |
+| ------------ | ---------------------------------------------------------- | --------------- |
+| `.`          | `DataServer`, its options, and the diagnostics seam        | browser-neutral |
+| `./node`     | The Node implementation of the diagnostics seam            | Node-only       |
+| `./messages` | The codes of the messages this package raises              | browser-neutral |
+| `./testing`  | A harness that drives a real data head in-process          | Node-only       |
+
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
-The API is not stable and may change without a deprecation cycle. See the
-[repository README](../../README.md) for the current status and known
-limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
-`MIT` — see this package's [`LICENSE`](./LICENSE). Third-party notices for the
-repository are recorded in [`NOTICE.md`](../../NOTICE.md).
+`MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.

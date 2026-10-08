@@ -1,47 +1,22 @@
 # `@hydranium/conformance`
 
-The protocol conformance kit — a TCK — for the
-[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework.
-
-A TCK is a test suite you do not write: the framework ships the checks, and **you run them against
-your own server** to prove it actually speaks each head's protocol. You supply two things — a way to
-stand a server up (`connect`) and per-language fixtures (a valid and an invalid model) — and the kit
-emits one test per check in your own test runner, alongside your own suites.
-
-Install it if you are building a Hydranium head and want a protocol contract you did not have to
-author, and that keeps checking you as the framework moves.
+The protocol conformance kit of the
+[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework. You
+install it as a dev dependency to check that your server speaks each head's
+protocol: you supply a way to start the server and a few models, and the kit
+adds one test per check to your own test runner.
 
 ## What it gives you
 
-- **Per-head batteries**, one subpath each: `/data`, `/lsp` and `/glsp`. Importing one never pulls
-  another head's protocol types in, so an LSP-only adopter takes no data-head surface.
-- **Driver ports rather than adapters.** Each slice names a minimal port — `DataConformanceDriver`,
-  `LspConformanceDriver`, `GlspConformanceDriver<TAction>` — spelled in `@hydranium/protocol` types,
-  plain coordinates and tiny structural minima. The framework's own harnesses
-  (`DataServerHarness`, `LspHarness`, `GlspHarness`) satisfy them **structurally, with no adapter**,
-  and so can a hand-rolled driver.
-- **Runner-agnostic core.** `ConformanceCheck`, `ConformanceRunner` and `emitConformanceSuite` name
-  no test runner and assert with `node:assert/strict`; the thin `/vitest` and `/jest` adapters bind
-  `describe` / `it` / `it.skip` / `afterAll`.
-- **Skips that are visible, not silent.** A check whose optional fixture input is absent is emitted
-  as a named `it.skip`, and every suite prints a ran-vs-skipped summary (`formatSummary`), so a
-  half-wired adopter reads as _skipped_ rather than as a green run.
-- **A false-green guard in the fixture type.** `LanguageFixture` requires **both** a `valid` and an
-  `invalid` model, so an "invalid" model that in fact parses clean fails the diagnostics checks
-  instead of passing vacuously.
-- **Server-side rendering, opt-in.** Supply `renderedDiagnostic: { locale, expected,
-  absentWithLocale }` on a fixture and the `/lsp` battery declares that locale at `initialize`,
-  then asserts the fragment appears — and, from `absentWithLocale`, that the untranslated fragment
-  DISAPPEARS with the locale and is present without it. It is opt-in because the framework ships no
-  catalogue and selects no locale, so a server that renders nothing is correct; and it is a PAIR
-  because "the message contains X" alone passes for a server whose English contains X. Omit
-  `absentWithLocale` and the control reports skipped rather than being quietly dropped.
-- **Client sessions, on the data head.** The `/data` battery opens and writes every document as a
-  client session and holds the head to how sessions behave: a session writes and saves only what it
-  has open, ids are refused while live or reserved, a write answers with its document's
-  diagnostics, `text.dirty` follows the file, `text.hash` follows the text, and the release after the last close
-  reverts a document to what its save wrote, or drops it when it was never saved. See
-  [client sessions](../../docs/contributing/design/client-sessions.md).
+- A battery of checks per head, data, LSP and GLSP, that you run against your
+  own server rather than write.
+- A driver port per head that the framework's test harnesses already satisfy,
+  so you can pass a harness in, or write a driver of your own.
+- Adapters for vitest and Jest; the checks themselves name no test runner.
+- Skips you can see: a check whose optional input you did not supply shows up
+  skipped with its reason, and each suite prints what ran and what was skipped.
+- A guard against a false green: every language needs an invalid model, so a
+  model that parses clean fails the diagnostics checks.
 
 ## Install
 
@@ -49,71 +24,66 @@ author, and that keeps checking you as the framework moves.
 npm install --save-dev @hydranium/conformance
 ```
 
-`@hydranium/protocol` is a required peer. The two runners are **optional** peers — `vitest` and
-`@jest/globals` — so you install only the one you use, and the core never loads the other. The
-package has no runtime dependencies of its own.
+| Peer                  | Range         |
+| --------------------- | ------------- |
+| `@hydranium/protocol` | `^1.0.0-next` |
+| `@jest/globals`       | `^29.0.0`     |
+| `vitest`              | `^4.0.0`      |
 
-## Subpaths
-
-| Subpath    | Contents                                                    |
-| ---------- | ----------------------------------------------------------- |
-| `.`        | Fixture model + check/runner primitives. No head, no runner. |
-| `./data`   | Data-head driver port + `buildDataChecks`.                   |
-| `./lsp`    | LSP-head driver port + `buildLspChecks`.                     |
-| `./glsp`   | GLSP-head driver port + `buildGlspChecks`.                   |
-| `./vitest` | Vitest adapter: `run{Data,Lsp,Glsp}Conformance`.             |
-| `./jest`   | Jest adapter: the same three entry points.                   |
-
-Resolve the subpaths with [a resolver that reads `exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them.
-The root barrel deliberately re-exports none of the slices.
+`vitest` and `@jest/globals` are optional peers: install the runner you use.
 
 ## Usage
 
-In one test file per head, call the `run*Conformance` function from your runner's adapter subpath —
-`@hydranium/conformance/vitest` or `@hydranium/conformance/jest`. Both adapters also re-export the
-slice types (driver ports, options, fixtures), so a suite needs a single import site.
+Write one test file per head, and call the `run*Conformance` function from
+your runner's adapter, `@hydranium/conformance/vitest` or
+`@hydranium/conformance/jest`. The adapter also exports the driver ports, the
+options and `GlspFixture`; `LanguageFixture` comes from the package root.
 
-Each takes `connect` plus `languages`:
+Each function takes `connect` and `languages`:
 
-- **`connect`** returns a freshly wired driver and is called **once per check**, so checks cannot
-  interfere; the kit disposes the driver afterwards. The data slice wants a server already ready; the
-  LSP slice drives the `initialize` handshake itself, so `connect` must **not** pre-initialise; the
-  GLSP slice drives `start()`. The data slice saves documents beside each fixture's `valid`, so its
-  `connect` should give each check a workspace the kit may write to and throw away.
-- **`languages`** is an array of `LanguageFixture`: `valid` and `invalid` are required and read by
-  every slice; every other field is an opt-in whose checks report **skipped with a named reason**
-  when it is absent, so an opt-out stays distinguishable from lost coverage. Read the current set
-  off the `LanguageFixture` type, which says per field which slice reads it and what supplying it
-  claims — the two that carry the most are `edit` (a replacement text plus an `expect(root)`
-  predicate, because only you know what "the edit landed" means for your grammar) and `dependent`
-  (a document that references `valid`, which is what lets the data slice provoke a cascade; add
-  `breakingEdit`, a text for `valid` that breaks that reference, and the slice also checks who a
-  dependent's update event is credited to). A fixture's `uri` and `text` may be thunks, resolved
-  after `connect`, which is how each check gets pristine input in a workspace `connect` just
-  created.
+- **`connect`** returns a freshly wired driver. The kit calls it once per check
+  and disposes the driver afterwards, so checks cannot interfere. The data
+  slice wants the server ready, and saves documents beside each fixture's
+  `valid`, so give each check a workspace the kit may write to and throw away.
+  The LSP slice drives the `initialize` handshake itself, so `connect` must not
+  initialise. The GLSP slice calls `start()` itself.
+- **`languages`** is an array of `LanguageFixture`. `valid` and `invalid` are
+  required, and every slice reads them. Every other field is opt-in: when you
+  leave it out, its checks report skipped with a named reason. The
+  `LanguageFixture` type says, per field, which slice reads it and what
+  supplying it claims. A fixture's `uri` and `text` may be functions, read
+  after `connect`, so they can point into the workspace `connect` just made.
 
-The GLSP slice is generic over your action type and takes `GlspFixture` per diagram type — the
-fixture builds the native actions and the kit matches responses by `kind`, so no `@eclipse-glsp/*`
-type enters the kit.
+The GLSP slice is generic over your action type and takes a `GlspFixture` per
+diagram type. The fixture builds your native actions, and the kit matches the
+responses by `kind`.
 
-Then run your normal test command:
+For where the kit fits among your other tests, see *Test your language* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
-```bash
-npx vitest run test/data-conformance.integration.test.ts
-```
+## Entry points
 
-The suite prints, per head, how many checks ran and which were skipped and why. For where this sits
-among the framework's test layers, see [`docs/contributing/testing.md`](../../docs/contributing/testing.md).
+| Subpath    | Use it for                                                   | Runs in |
+| ---------- | ------------------------------------------------------------ | ------- |
+| `.`        | `LanguageFixture` and the runner-agnostic check primitives.  | Node    |
+| `./data`   | The data-head checks and driver port.                        | Node    |
+| `./lsp`    | The LSP-head checks and driver port.                         | Node    |
+| `./glsp`   | The GLSP-head checks and driver port.                        | Node    |
+| `./vitest` | Run the checks under vitest.                                 | Node    |
+| `./jest`   | Run the checks under Jest.                                   | Node    |
+
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The check batteries
-are being populated incrementally and the driver ports are not yet stable — a new check can turn a
-passing adopter red by design. See the [repository README](../../README.md) for the current status
-and known limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
 `MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
-[`NOTICE.md`](../../NOTICE.md) for third-party notices.
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.

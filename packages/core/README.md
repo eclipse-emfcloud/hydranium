@@ -1,43 +1,19 @@
 # `@hydranium/core`
 
-The framework runtime of [hydranium](../../README.md): the shared Langium
-workspace an adopter's modeling-language server is built from, plus the LSP
-textual head folded in at the `/lsp` subpath. Every adopter server installs it,
-and so does every other head package (`@hydranium/data-server`,
-`@hydranium/glsp-server`).
+The runtime of [Hydranium](https://github.com/eclipse-emfcloud/hydranium): the
+shared Langium workspace your language server is built from, plus the LSP head.
+Every Hydranium server installs it, and `@hydranium/data-server` and
+`@hydranium/glsp-server` build on it.
 
 ## What it gives you
 
-- **A composable services tree.** `createServerSharedModule` and
-  `createServerLanguageModule` supply the shared- and language-tier DI slots;
-  `bootstrapLangium` registers a language on the shared `ServiceRegistry`,
-  asserts the core slots are bound, and eager-constructs the services that must
-  exist before the first build.
-- **Semantics layered onto the AST** that an adopter would otherwise rewrite per
-  language: tiered scoping (`HydraniumScopeProvider`,
-  `ReferenceCandidateProvider`), qualified naming (`NameProvider`), computed and
-  synthetic properties (`AstExtensionService`), AST-integrity rules
-  (`IntegrityRule`, `IntegrityRuleRegistry`), batch build passes
-  (`BuildPhasePassService`), and a CST-residency memory policy
-  (`CstResidencyService`).
-- **A build pipeline you can hook by phase.** `HydraniumDocumentBuilder` and
-  `BuildPipelineIntegration` dispatch work at Langium `DocumentState` phases,
-  while the project tier (`ProjectManager`) discovers and groups documents.
-- **Multi-client document coordination.** `AstDocumentManager` and
-  `HydraniumTextDocuments` generalise the LSP document lifecycle to several
-  co-editing heads, so an edit made on one surface is observable on the others
-  without a head-to-head synchronisation protocol. A participant works through
-  a `ClientSession` from `ModelService.createSession`, which writes only what it
-  has open; see [how it works](../../docs/concepts/how-it-works.md#documents-sessions-and-saves). Saves
-  go through a `WritableFileSystemProvider`, and `SelfSaveRegistry` keeps the
-  server's own writes from coming back as external changes.
-- **The projection the non-LSP heads build on:** `ModelService` (the in-process
-  workspace facade), `TransferEncoder` (AST → transfer model), and the
-  `Serializer` slot.
-- **The LSP head at `./lsp`:** `startLanguageServer`,
-  `createLspServerSharedModule` / `createLspServerLanguageModule`,
-  `HydraniumCompletionProvider`, `HydraniumDocumentUpdateHandler`, and
-  `AbstractHydraniumSemanticTokenProvider`.
+- One call, `createIntegrationServices`, that composes your language's services
+  with Langium's defaults and the framework's.
+- Scoping, naming, validation and build hooks you extend per language, rather
+  than rewrite.
+- One workspace every head works on: an edit made through one head is seen by
+  the others.
+- The LSP head, and launchers that serve another head over stdio or a socket.
 
 ## Install
 
@@ -45,61 +21,62 @@ and so does every other head package (`@hydranium/data-server`,
 npm install @hydranium/core
 ```
 
-Nothing is bundled for you — the peers must be present in the consuming project:
+| Peer                                 | Range         |
+| ------------------------------------ | ------------- |
+| `@hydranium/langium`                 | `^1.0.0-next` |
+| `@hydranium/protocol`                | `^1.0.0-next` |
+| `@playwright/test`                   | `^1.40.0`     |
+| `vscode-jsonrpc`                     | `^9.0.0`      |
+| `vscode-languageserver`              | `~10.0.1`     |
+| `vscode-languageserver-protocol`     | `~3.18.1`     |
+| `vscode-languageserver-textdocument` | `^1.0.12`     |
+| `vscode-languageserver-types`        | `^3.17.5`     |
 
-- `@hydranium/protocol` (the wire contract) and `@hydranium/langium` (the pinned
-  Langium re-export). Import Langium through `@hydranium/langium` so the whole
-  workspace resolves one physical copy of it.
-- `vscode-jsonrpc`, `vscode-languageserver`, `vscode-languageserver-protocol`,
-  `vscode-languageserver-textdocument`, `vscode-languageserver-types`.
-- `@playwright/test` — optional, and needed only for `./testing/playwright`.
+Import Langium through `@hydranium/langium`, so your project uses the same copy
+as the framework. `@playwright/test` is optional; only `./testing/playwright`
+needs it.
 
-The single bundled runtime dependency is `diff`. You also need a Langium grammar
-and its generated AST already in place; `hydranium-cli init` scaffolds both.
+## Wiring
 
-## Exports
+`hydranium-cli init` scaffolds a starter grammar and all of this wiring.
 
-| subpath               | holds                                                                                                                                                                                                       | platform        |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| `.`                   | The head-neutral framework core: DI modules, AST semantics, build pipeline, model coordination.                                                                                                              | browser-neutral |
-| `./lsp`               | The LSP textual head — `startLanguageServer`, its two DI modules, and the Langium-LSP overrides.                                                                                                             | browser-neutral |
-| `./node`              | Server-only: `DefaultFileSystemProvider` / `NodeFileSystem`, `startStdioServer`, `startSocketServer`, `publishPortOnLspConnection`, and the headless tools `validateWorkspace` / `reflectGrammar` / `lintGrammar`. | Node-only       |
-| `./messages`          | Every user-facing message the package raises, by code — what a translation catalogue keys on.                                                                                                                      | browser-neutral |
-| `./testing`           | Langium-layer doubles plus `makeTestServices` and `makeFakeDocument`.                                                                                                                                        | browser-neutral |
-| `./testing/node`      | Test support that needs a real filesystem, a stream transport or a child process: scratch workspace, golden corpus, `makeLspHarness`, `startSpawnedServer`.                                                  | Node-only       |
-| `./testing/playwright`| Playwright fixtures for end-to-end profiling and server-log capture.                                                                                                                                        | Node-only       |
+1. Compose the services with `createIntegrationServices`, passing
+   `createLspServerSharedModule` and `createLspServerLanguageModule` as the
+   extra modules. Your language module binds a `Serializer`.
+2. Create the LSP connection with `withHydraniumLspFeatures`, and start it with
+   `startLanguageServer` from `./lsp`, not Langium's: it fails the start when
+   the LSP shared module is missing.
+3. Start other heads on the same shared services, with `startSocketServer` and
+   `publishPortOnLspConnection` beside the LSP head, or `startStdioServer`
+   alone.
 
-The browser-neutral entries are gated in CI (`scripts/check-neutral-bundles.mts`
-bundles them for the browser and fails on a `node:*` import, including a
-transitive one) — see [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
-Resolve the subpaths with [a resolver that reads
-`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them.
+See *Compose a server by hand* and *Add a validation check* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
-Importing `./node` has two deliberate side effects at module load: it installs
-the `node:fs`-backed log-file sink and the `node:async_hooks`-backed write-lock
-reentrancy check, both of which the neutral tree can only declare.
+## Entry points
 
-## Getting oriented
+| Subpath                | Use it for                                                                   | Runs in         |
+| ---------------------- | ---------------------------------------------------------------------------- | --------------- |
+| `.`                    | Composing services and extending the language's semantics                    | browser-neutral |
+| `./lsp`                | The LSP head and its modules                                                 | browser-neutral |
+| `./node`               | The Node filesystem, the stdio and socket launchers, the headless tools      | Node-only       |
+| `./messages`           | Validation messages with stable codes, and the codes this package raises     | browser-neutral |
+| `./testing`            | Parsing and service doubles for unit tests                                   | browser-neutral |
+| `./testing/node`       | Scratch workspaces, the LSP harness, a spawned server                        | Node-only       |
+| `./testing/playwright` | Playwright fixtures that capture the server log                              | Node-only       |
 
-A server composes one shared services tree per process and one language module
-per grammar, then hands that tree to whichever heads it wants to run. The
-worked, compiling version of that composition is the compose-a-server guide in
-[Adopting Hydranium](../../docs/ADOPTING.md), which also explains the layering
-behind it. The class-role naming, the `./node`
-boundary and the registration-contribution pattern the services follow are in
-[`docs/contributing/conventions.md`](../../docs/contributing/conventions.md).
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
-The API is not stable and may change without a deprecation cycle. See the
-[repository README](../../README.md) for the current status and known
-limitations.
-
-For task-shaped adoption paths, start with the [validation check guide](../../docs/guides/add-validation-check.md). It shows the validation contribution boundary that this package supplies.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
-`MIT` — see this package's [`LICENSE`](./LICENSE). Third-party notices for the
-repository are recorded in [`NOTICE.md`](../../NOTICE.md).
+`MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.
