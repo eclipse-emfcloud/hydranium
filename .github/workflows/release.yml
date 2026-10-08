@@ -344,6 +344,6 @@ jobs:
       # first stable release `latest` has to track the newest prerelease, and
       # after it `latest` belongs to the stable line. Deriving that from the
       # registry means no one has to remember to change a flag on the day it
-      # stops being true. See docs/contributing/releasing.md.
+      # stops being true.
       - name: Publish
         run: node scripts/release.mts next

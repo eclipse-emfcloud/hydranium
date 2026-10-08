@@ -7,7 +7,7 @@
 id: unlocalized-message-service-text
 language: typescript
 severity: error
-message: User-facing text must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).
+message: User-facing text must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default.
 files:
   - packages/client-theia/src/**/*.ts
   - packages/data-client-theia/src/**/*.ts
@@ -47,7 +47,7 @@ rule:
 id: unlocalized-command-label
 language: typescript
 severity: error
-message: Command labels must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default (see docs/contributing/conventions.md “User-facing messages”).
+message: Command labels must go through nls.localize with an inline hydranium/<package>/<name> key and an inline English default.
 files:
   - packages/client-theia/src/**/*.ts
   - packages/data-client-theia/src/**/*.ts

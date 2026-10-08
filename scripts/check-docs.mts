@@ -10,8 +10,8 @@
 
 /**
  * The documentation gate: relative links and anchors resolve, every page is
- * reachable from an index, and the rot policy in `conventions.md`
- * "Documentation" does not lose ground.
+ * reachable from an index, and versions, dates, measurements, history and line
+ * references do not spread through prose.
  *
  * Rot and unreachable pages are held by a ratchet, not a ban: the baseline
  * records today's count per page and category, a rise fails, and a fall fails
@@ -54,7 +54,11 @@ const ROT_PATTERNS: { category: Exclude<Category, 'unreachable'>; pattern: RegEx
       remedy: `link to ${VERSION_HOME}, or name the manifest field`
    },
    { category: 'date', pattern: /\b(?:19|20)\d{2}-\d{2}(?:-\d{2})?\b/g, remedy: 'drop it; git log holds when' },
-   { category: 'size', pattern: /\b\d+(?:\.\d+)?\s?(?:[kKMGT]i?B|bytes)\b/g, remedy: 'move it to perf-baseline.md with how it was taken' },
+   {
+      category: 'size',
+      pattern: /\b\d+(?:\.\d+)?\s?(?:[kKMGT]i?B|bytes)\b/g,
+      remedy: 'drop it, or record it with how it was taken in the performance baseline'
+   },
    {
       category: 'timing',
       pattern:
@@ -378,5 +382,5 @@ if (!failed) {
    );
    process.exit(0);
 }
-console.error('\nDocs gate failed. The rot policy is in docs/contributing/conventions.md, "Documentation".');
+console.error('\nDocs gate failed.');
 process.exit(1);

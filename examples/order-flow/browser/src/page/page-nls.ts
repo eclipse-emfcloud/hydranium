@@ -32,9 +32,8 @@
  *
  * # What is NOT translated, and why each is a decision
  *
- * - **`Order Flow`** — a product noun. `conventions.md` is explicit that a
- *   product name is not i18n: routing one through a catalogue asks a translator
- *   to render a name.
+ * - **`Order Flow`** — a product noun. A product name is not i18n: routing one
+ *   through a catalogue asks a translator to render a name.
  * - **The status-bar category labels** — they name which head answered, and
  *   several are protocol names that have no translation, so translating the rest
  *   would leave a legend that reads half-converted. Their HINTS are translated,

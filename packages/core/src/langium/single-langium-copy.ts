@@ -9,11 +9,6 @@
 
 import { AbstractAstReflection, type AstReflection } from '@hydranium/langium';
 
-/** The troubleshooting entry listing the causes; its heading is the anchor. */
-const CAUSES_URL =
-   'https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/adopting/troubleshooting.md' +
-   '#startup-rejects-the-ast-reflection-or-a-cancelled-validation-reports-symboloperationcancelled';
-
 /**
  * Fail fast when `reflection` extends `AbstractAstReflection` from a second
  * copy of `langium`, which the files `langium-cli` generates run on: a second
@@ -38,7 +33,10 @@ export function assertSingleLangiumCopy(
             'the one `@hydranium/langium` loads, a second physical copy or one install loaded twice, so the generated ' +
             'code runs on one and the framework on the other. Values Langium compares by identity, such as its ' +
             'cancellation signal, are not recognised across the two. `npm explain langium` lists each installed copy ' +
-            `and what requires it. The causes and their remedies: ${CAUSES_URL}`
+            'and what requires it. If your package resolves another version, declare `langium` at the version ' +
+            '`@hydranium/langium` pins and reinstall from scratch, without the lockfile; in a workspace, declare the ' +
+            'same pins in the root as well. If a test runner or bundler inlines `langium` but not `@hydranium/*`, ' +
+            'load both the same way.'
       );
    }
 }
