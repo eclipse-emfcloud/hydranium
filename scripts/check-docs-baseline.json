@@ -5,16 +5,6 @@
   "docs/CONTRIBUTING.md": {
     "version": 4
   },
-  "docs/adopting/requirements.md": {
-    "history": 1
-  },
-  "docs/adopting/status.md": {
-    "version": 4
-  },
-  "docs/adopting/troubleshooting.md": {
-    "history": 1,
-    "version": 6
-  },
   "docs/concepts/architecture.md": {
     "timing": 1
   },

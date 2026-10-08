@@ -3,12 +3,8 @@
 Failure modes that are hard to diagnose from their symptom, because the message
 names the wrong layer. Each entry starts with what you actually see.
 
-For what the framework *does not do yet* — as opposed to what has gone wrong —
-see [Status, limitations and roadmap](status.md). For failures that only happen
-while building or testing the framework repository itself, see
-[Troubleshooting the repository](../contributing/troubleshooting.md).
-
-<!-- The startup error links to this heading's anchor: change both together. -->
+For what the framework does not do, as opposed to what has gone wrong, see
+[Status and limitations](status.md).
 
 ## Startup rejects the AST reflection, or a cancelled validation reports `Symbol(OperationCancelled)`
 
@@ -38,8 +34,8 @@ npm ls langium --all --parseable
 
 The second lists one path per physical copy. Then find the cause:
 
-- **Your package's `langium` resolves to another version.** A range such as
-  `^4.3.1` can resolve past the version `@hydranium/langium` pins, and npm then
+- **Your package's `langium` resolves to another version.** A caret range can
+  resolve past the version `@hydranium/langium` pins, and npm then
   nests the framework's copy beneath `@hydranium/langium` without a warning.
   Declare `langium` at that exact version, as `init` does, and reinstall from
   scratch. Pins take effect only on a from-scratch install; deleting the lockfile
@@ -178,10 +174,12 @@ connection.
 Wrap every connection you hand GLSP with `sendByMethodName` from
 `@hydranium/protocol`, including the VS Code integration's, by overriding its
 `createConnection`, and send your own messages by method string or over a
-connection wrapped the same way. If your root `overrides` pin `vscode-jsonrpc`
-or `vscode-languageserver-protocol`, or you apply a `vscode-jsonrpc` patch, as
-an earlier version of [Requirements](requirements.md) advised, remove them as
-that page now describes. It also has the detail.
+connection wrapped the same way.
+[Requirements](requirements.md#several-copies-of-vscode-jsonrpc-in-one-install)
+has the detail. Do not pin `vscode-jsonrpc` or `vscode-languageserver-protocol`
+in your root `overrides`: an override of `vscode-jsonrpc` forces GLSP's own copy
+onto a version it cannot start with, and either one conflicts with the versions
+`init` declares.
 
 A GLSP diagram in Theia that never receives a message, with
 `No runtime abstraction layer installed` in the console, is the same split:
@@ -201,11 +199,8 @@ data only when the error comes from the connection's own copy of
 from. The framework's own errors keep their code over the data and GLSP
 connections it builds. The LSP connection is `vscode-languageserver`'s, so an
 LSP handler of yours that throws a `@hydranium/protocol` error keeps its code
-only when the framework shares that copy. Declare `vscode-jsonrpc` at `9.0.0`,
-the version `vscode-languageserver@10.0.1` resolves, as `init` does, until the
-Langium 4.4 upgrade
-([#142](https://github.com/eclipse-emfcloud/hydranium/issues/142)) replaces the
-pin.
+only when the framework shares that copy. Declare `vscode-jsonrpc` at the
+exact version [Requirements](requirements.md) names, as `init` does.
 
 Recognise errors with `isResponseError` and the `is…Error` guards from
 `@hydranium/protocol` instead of `instanceof`, and throw a `ResponseError` from
@@ -214,8 +209,9 @@ the copy that built the connection the handler runs on.
 A `ResponseError` a handler returns, rather than throws, from another copy
 arrives as the request's result. Langium returns its errors, so an LSP request
 for a missing document can resolve with `{"code":-32802}`. Declare
-`vscode-languageserver` at `10.0.1` and `vscode-languageserver-protocol` at
-`3.18.1`, the version it pins, as `init` does, and reinstall from scratch.
+`vscode-languageserver` and `vscode-languageserver-protocol` at the exact
+versions [Requirements](requirements.md) names, as `init` does, and reinstall
+from scratch.
 
 In a workspace, declare these pins in the root's `devDependencies` too, as
 `init --monorepo` prints. Otherwise another member's LSP packages can hold the
@@ -249,11 +245,11 @@ most names in the editor's default foreground.
 This is a known limitation rather than a misconfiguration: Theia's themes have
 no colours for semantic token types. The mechanism, and what a host can do about
 it, are in
-[Status, limitations and roadmap](status.md#semantic-tokens-add-no-colour-in-theia).
+[Status and limitations](status.md#semantic-tokens-add-no-colour-in-theia).
 
 ## Still stuck
 
-Server-side logging is the fastest way to see which hop stalled. Every service
-holds a tracer, the log level is a bindable setting, and a per-test server log
-can be captured and attached to a failing test — the test-support layer is
-described in [Testing](../contributing/testing.md).
+Server-side logging is the fastest way to see which hop stalled: every service
+logs through the server's logger, and its level is a setting you can raise. If
+the log does not show it, ask on the
+[issue tracker](https://github.com/eclipse-emfcloud/hydranium/issues).
