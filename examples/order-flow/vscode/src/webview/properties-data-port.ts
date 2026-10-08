@@ -40,8 +40,8 @@ export class WebviewDataPort {
    constructor(
       protected readonly channel: PostMessageChannel,
       protected readonly report: (error: unknown, reported: ResolvedMessage) => void,
-      /** Where the connection logs its protocol faults. */
-      protected readonly logger: Logger
+      /** Where the connection logs its protocol faults, and what it does on its own. */
+      readonly logger: Logger
    ) {}
 
    /**

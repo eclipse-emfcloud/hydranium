@@ -43,6 +43,7 @@ import type {
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent
 } from '../data/events';
+import type { Logger } from '../logger';
 import type { ResolvedMessage } from '../messages/primitives';
 import type { RpcProxyLifecycle } from '../rpc/create-rpc-proxy';
 import type { Project } from '../project';
@@ -61,6 +62,8 @@ export interface FakeDataPortOptions {
     * which the consumer surfaces through {@link FakeDataPort.reported}.
     */
    connect(): MessageConnection | Promise<MessageConnection>;
+   /** The port's {@link DataPort.logger}. */
+   logger?: Logger;
 }
 
 /** A {@link DataPort} that records what passed through it. */
@@ -105,6 +108,7 @@ export function makeFakeDataPort(options: FakeDataPortOptions): FakeDataPort {
    return {
       connections,
       reported,
+      logger: options.logger,
       onDispose: disposeEmitter.event,
       async connect(): Promise<MessageConnection> {
          const connection = await options.connect();

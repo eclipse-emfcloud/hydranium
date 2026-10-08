@@ -86,7 +86,8 @@ each entry names one frontend/backend module pair:
   - calls `bindDataConnection(bind, isBound, MyConnection)` for the connection
     over it;
   - calls `bindChannelLogger` from `@hydranium/client-theia`, where the port
-    logs the connection failures it leaves to the reporter;
+    logs the connection failures it leaves to the reporter, and the connection
+    over it logs at debug level what it does on its own;
   - calls `bindEditorDiskSync` from `@hydranium/client-theia`, since a data
     server save writes a file an editor can have open;
   - calls `bindHostDiagnostics` for the diagnostics commands;

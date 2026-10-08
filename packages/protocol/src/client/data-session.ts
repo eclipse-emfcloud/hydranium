@@ -222,8 +222,9 @@ export type DataSessionFactory<TTransfer extends TransferElement, TServer extend
  * re-opens and re-watches what it had open, tells the client of their dirty
  * state where it changed, and reports the documents whose unsaved edits did
  * not survive; see {@link restore}. The connection does this at
- * once for a session with documents open, and any session's next call does it
- * too.
+ * once for a session with documents open, and again once any later connection
+ * is ready, so a reconnect that failed is not left to the session's own next
+ * call; any session's next call does it too.
  *
  * Generic over the transfer root so this file names no grammar.
  *
@@ -350,6 +351,9 @@ export class DataSession<
          this.registration = this.register(server, reconnected);
       }
       await this.registration;
+      // And after the registration: a call waiting on it has not reached the
+      // wire, and sent now it would land after the session's close.
+      this.assertLive();
       return server;
    }
 
@@ -635,8 +639,9 @@ export class DataSession<
    /**
     * Register again and restore now, after the connection dropped, instead of
     * on the next call. A no-op for a session with nothing open, which the next
-    * call restores anyway. A failure is left to that next call, which meets it
-    * again.
+    * call restores anyway, and for one already registered on the current
+    * connection. A failure is retried on the connection's next ready
+    * generation; a call before then meets it again.
     */
    reconnect(): void {
       if (!this.disposed && this.openUris.size > 0) {

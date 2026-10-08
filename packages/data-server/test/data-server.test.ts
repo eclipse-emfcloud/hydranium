@@ -19,6 +19,7 @@ import {
    isConflictError,
    isSessionClosedError,
    LatencyCollector,
+   Logger,
    type Project,
    ReferenceSource,
    resolvedFromResponseError,
@@ -49,6 +50,7 @@ import {
    type AstDiagnostic
 } from '@hydranium/core';
 import {
+   makeCapturingLogger,
    makeFakeAstNode,
    makeStubServiceRegistry,
    makeTestServices,
@@ -139,6 +141,17 @@ class FailingSnapshotServer extends TestDataServer {
 class FingerprintProbeServer extends TestDataServer {
    fingerprintOf(root: AstNode, encoded: EncodedTransferDocument<FakeRoot, FakeDiagnostic>): string {
       return this.computeDocumentFingerprint(root, encoded);
+   }
+}
+
+/** Exposes the ids `clientSessions` holds, and who watches a URI. */
+class SessionProbeServer extends TestDataServer {
+   registeredIds(): string[] {
+      return [...this.clientSessions.keys()];
+   }
+
+   watchersOf(uri: string): string[] {
+      return [...(this.uriWatchRecords.get(this.canonicalKey(uri))?.watchers ?? [])];
    }
 }
 
@@ -1543,6 +1556,94 @@ describe('DataServer', () => {
          } finally {
             first.pair.dispose();
             second.pair.dispose();
+         }
+      });
+   });
+
+   describe('an ended session', () => {
+      const probeHarness = (services: ServerSharedServices): DataServerHarness<SessionProbeServer, FakeRoot, FakeDiagnostic> =>
+         makeDataServerHarness<SessionProbeServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new SessionProbeServer(channel, services)
+         });
+
+      it('leaves the connection however it ends, and the leaving is logged', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
+            serialize: (_uri, root) => `name:${root.name}`,
+            logger
+         });
+         const first = probeHarness(bundle.services);
+         const second = probeHarness(bundle.services);
+         const previousLevel = Logger.getLevel();
+         Logger.setLevel('debug');
+         try {
+            await first.proxy.createSession({ clientId: 'closed' });
+            await first.proxy.createSession({ clientId: 'taken-over', resumeToken: 'token' });
+            await first.proxy.createSession({ clientId: 'disposed' });
+
+            await first.proxy.closeSession({ clientId: 'closed' });
+            expect(first.server.registeredIds()).toEqual(['taken-over', 'disposed']);
+            await second.proxy.createSession({ clientId: 'taken-over', resumeToken: 'token' });
+            expect(first.server.registeredIds()).toEqual(['disposed']);
+            first.server.dispose();
+            expect(first.server.registeredIds()).toEqual([]);
+            expect(second.server.registeredIds()).toEqual(['taken-over']);
+
+            expect(lines.filter(line => line.message.startsWith('Forget session'))).toEqual([
+               { level: 'debug', message: 'Forget session closed: it ended as closed' },
+               { level: 'debug', message: 'Forget session taken-over: it ended as lost' },
+               { level: 'debug', message: 'Forget session disposed: it ended as closed' }
+            ]);
+         } finally {
+            Logger.setLevel(previousLevel);
+            first.pair.dispose();
+            second.pair.dispose();
+         }
+      });
+
+      it('keeps a replacement registered when the session it took over reports its end late', async () => {
+         const bundle = buildBundle();
+         const factory = bundle.services.model.ClientSessionFactory;
+         const create = factory.create.bind(factory);
+         vi.spyOn(factory, 'create').mockImplementation((clientId, label) => {
+            const session = create(clientId, label);
+            const onDidDispose = session.onDidDispose;
+            // A session class that tells its listeners on a later turn.
+            const late: typeof onDidDispose = listener => onDidDispose(cause => setTimeout(() => listener(cause), 20));
+            Object.defineProperty(session, 'onDidDispose', { get: () => late });
+            return session;
+         });
+         const { server, proxy, pair } = probeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'resumed', resumeToken: 'token' });
+            await proxy.createSession({ clientId: 'resumed', resumeToken: 'token' });
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'resumed' });
+            await new Promise(resolve => setTimeout(resolve, 40));
+
+            expect(server.registeredIds()).toEqual(['resumed']);
+            expect(server.watchersOf(URI_A)).toEqual(['resumed']);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('fails a later request under its id with the closed-session code and opens nothing', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'ended' });
+            await proxy.closeSession({ clientId: 'ended' });
+
+            const failure = await proxy.openModelDocument({ uri: URI_A, clientId: 'ended' }).then(
+               () => undefined,
+               (error: unknown) => error
+            );
+
+            expect(isSessionClosedError(failure)).toBe(true);
+            expect(bundle.textDocuments.isOpenInClient(URI_A, 'ended')).toBe(false);
+         } finally {
+            pair.dispose();
          }
       });
    });

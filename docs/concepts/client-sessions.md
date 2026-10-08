@@ -233,7 +233,7 @@ another client already has open.
 `createModelDocument({ uri, clientId, text })` and
 `updateModelDocuments({ clientId, updates })` exist for sessions only; they are
 `create` and `updateAll` over the wire, and fail with the `SessionClosedError`
-code, and a message saying so, for an id the connection never registered.
+code, and a message saying so, for an id not registered on the connection.
 
 `closeSession({ clientId })` ends the session: it closes everything the session
 has open, drops its watches on the connection, and frees the id. When the
@@ -244,8 +244,8 @@ so does a session another connection takes over with its resume token. Either
 way a later request under the id from that connection fails rather than
 opening anything, until the connection registers the id again.
 
-Every document request acts as a session, and one carrying an id the connection
-never registered fails with the `SessionClosedError` code. A head that serves
+Every document request acts as a session, and one carrying an id not registered
+on the connection fails with the `SessionClosedError` code. A head that serves
 the data protocol therefore implements sessions; the conformance kit seeds its
 fixtures through them. Watching needs no session.
 
@@ -289,7 +289,7 @@ await form.withOpenDocument({ uri }, opened =>
 | `dispose()` | End the session on the server, which closes everything it has open |
 | `onDidDispose` | Fires once when the session ends, by its `dispose()` or its connection's `dispose()`; a listener subscribed after that is never called, so check `isDisposed` first |
 | `hasSavesInFlight` / `whenSavesSettled()` | Whether a save has not answered yet, and a promise for when the saves in flight now have, up to ten seconds |
-| `reconnect()` | After the connection dropped, register again and restore now rather than on the next call; the connection calls it for every session with documents open |
+| `reconnect()` | After the connection dropped, register again and restore now rather than on the next call; the connection calls it for every session after a drop and whenever a connection becomes ready; it does nothing for a session with nothing open |
 
 `closeDocument` and `dispose` first wait for the session's calls still in
 flight on the document, or on any document for `dispose`, up to ten seconds, so
@@ -308,13 +308,33 @@ arrives, and refuses the new session's registration before then. When the
 connection itself is disposed, it detaches its sessions instead, which sends
 nothing: the server ends every session of a connection it sees close.
 
+A participant that only follows a document, such as an outline that re-reads
+on every rebuild, need not open it, which would hold the document for as long
+as it follows. `connection.watchDocument(uri, label?)` watches the document
+under an id of its own, the label, a `#` and a random UUID, with no session,
+and resolves once the watch is in place to a handle whose `dispose()`
+unwatches. The update events reach the connection's client as for any watch.
+A session cannot do the same for a document it also opens: closing the
+document ends the session's watch of it too. A change made while the
+connection was down sends no event once the watch is back, so
+`connection.onDidReconnect` fires when a later connection is ready and the
+watches have been sent to it again, and a watcher reads its document again
+then.
+
 When the connection drops, the connection registers every session with
 documents open again at once, under the same id and with the resume token the
 session has kept since it was created, so the server ends the old session if
 it has not noticed the drop yet. A session with nothing open registers again
 on its next call. The session then re-opens and re-watches every document it
 had open, and writes again what it wrote since a document's last save where
-the re-open lost it.
+the re-open lost it. The connection also watches again what `watchDocument`
+watches, tells the client a watched document's dirty state where it changed,
+and reports a watch it cannot place again with the message
+`DATA_CONNECTION_WATCH_RESTORE_FAILED`. A session whose restore throws is
+reported with `DATA_CONNECTION_SESSION_RESTORE_FAILED`, and the connection
+restores the others. When the reconnect fails, both wait for the next
+connection that becomes ready, whichever request brings it up, rather than for
+a call of their own: a watcher makes none.
 
 It decides by text, not by version: a revert moves a document's version on,
 and a restarted server numbers versions afresh. Every document the data head

@@ -25,13 +25,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
 import { type Clock, SystemClock } from '../../src/clock';
 import { FRAMEWORK_CLIENT_IDS } from '../../src/client-ids';
-import { DataConnection, DataConnectionWithEvents } from '../../src/client/data-connection';
+import {
+   DATA_CONNECTION_SESSION_RESTORE_FAILED,
+   DATA_CONNECTION_WATCH_RESTORE_FAILED,
+   DataConnection,
+   DataConnectionWithEvents
+} from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
+import { DATA_SERVER_NOT_READY } from '../../src/client/rpc-connection';
 import {
    DATA_SESSION_ANSWER_WITHOUT_MODEL,
    DATA_SESSION_RESTORE_FAILED,
    DATA_SESSION_UNSAVED_LOST,
    DataSession,
+   type DataSessionFactory,
    type DataSessionHost
 } from '../../src/client/data-session';
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol, type TransferDocumentDirtyChangedEvent } from '../../src/data';
@@ -43,6 +50,8 @@ import {
    isSessionClosedError
 } from '../../src/errors';
 import { asModelVersion } from '../../src/model-service/base-version';
+import { type LogLevel, Logger } from '../../src/logger';
+import { NoopLogger } from '../../src/noop-logger';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { makeFakeClock, tick, waitFor } from '../../src/testing';
 import { type FakeDataPort, makeFakeDataPort } from '../../src/testing/data-doubles';
@@ -53,7 +62,18 @@ interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
 }
 
-type Method = 'createSession' | 'closeSession' | 'open' | 'create' | 'watch' | 'close' | 'update' | 'updates' | 'save' | 'persist';
+type Method =
+   | 'createSession'
+   | 'closeSession'
+   | 'open'
+   | 'create'
+   | 'watch'
+   | 'unwatch'
+   | 'close'
+   | 'update'
+   | 'updates'
+   | 'save'
+   | 'persist';
 
 interface ServerCall {
    readonly method: Method;
@@ -100,6 +120,8 @@ function gate(): Gate {
 interface ServerBehaviour {
    /** Held before the readiness gate answers. */
    readyGate?: Promise<void>;
+   /** Runs as a readiness request arrives, before it answers. */
+   beforeReady?: () => void;
    /** Held before an open answers. */
    openGate?: Promise<void>;
    /**
@@ -129,6 +151,8 @@ interface ServerBehaviour {
    dirty?: Map<string, boolean>;
    /** Runs as a watch arrives, before it answers. */
    beforeWatch?: (uri: string) => void;
+   /** Held before a watch answers. */
+   watchGate?: Promise<void>;
    /**
     * Per URI, the text the server holds. Set, every answer carries it as its
     * `text.hash`, and a write replaces it with the written model.
@@ -191,6 +215,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       document(answered(uri), versionOf(uri), behaviour.dirty?.get(uri), behaviour.texts?.get(uri), behaviour.modelVersions?.get(uri));
    const target = {
       waitForReady: async (): Promise<void> => {
+         behaviour.beforeReady?.();
          await behaviour.readyGate;
       },
       createSession: async (args: { clientId: string }): Promise<void> => {
@@ -219,9 +244,13 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       watchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
          record('watch', args);
          behaviour.beforeWatch?.(args.uri);
+         await behaviour.watchGate;
          if (behaviour.failWatch) {
             throw new Error('watch refused');
          }
+      },
+      unwatchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
+         record('unwatch', args);
       },
       closeModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
          record('close', args);
@@ -284,6 +313,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          'getModelDocument',
          'createModelDocument',
          'watchModelDocument',
+         'unwatchModelDocument',
          'closeModelDocument',
          'updateModelDocument',
          'updateModelDocuments',
@@ -316,7 +346,14 @@ interface Harness {
    dispose(): void;
 }
 
-function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new DataEvents<ProbeElement>(), clock?: Clock): Harness {
+function harness(
+   behaviour: ServerBehaviour = {},
+   boundMs?: number,
+   events = new DataEvents<ProbeElement>(),
+   clock?: Clock,
+   logger?: Logger,
+   sessionFactory?: DataSessionFactory<ProbeElement, DataServerProtocol<ProbeElement>>
+): Harness {
    const calls: ServerCall[] = [];
    const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
    const port = makeFakeDataPort({
@@ -325,11 +362,13 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
          pairs.push(pair);
          recordingServer(pair.left, calls, behaviour);
          return pair.right;
-      }
+      },
+      logger
    });
    const connection = new InspectableConnection(port, events, {
       sessionFactory:
-         boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs, clock)
+         sessionFactory ??
+         (boundMs === undefined ? undefined : (clientId, host, label) => new BoundedSession(clientId, host, label, boundMs, clock))
    });
    return {
       connection,
@@ -338,7 +377,10 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
       port,
       dropTransport: () => {
          port.fireDispose();
-         pairs.at(-1)?.dispose();
+         const pair = pairs.at(-1);
+         if (pair) {
+            closeEnds(pair);
+         }
       },
       notifyDirty: (uri, dirty) =>
          pairs
@@ -352,9 +394,19 @@ function harness(behaviour: ServerBehaviour = {}, boundMs?: number, events = new
          }),
       dispose: () => {
          connection.dispose();
-         pairs.forEach(pair => pair.dispose());
+         pairs.forEach(closeEnds);
       }
    };
+}
+
+/**
+ * Dispose both ends of `pair` but leave its streams open: a reply the server
+ * is still writing would fail on a destroyed stream, and vscode-jsonrpc leaves
+ * that rejection unhandled.
+ */
+function closeEnds(pair: ReturnType<typeof makeDuplexConnectionPair>): void {
+   pair.left.dispose();
+   pair.right.dispose();
 }
 
 /** A session with its own in-flight bound, on `clock` if given, handed out through `sessionFactory`. */
@@ -406,7 +458,7 @@ describe('DataConnection lifecycle hooks', () => {
          expect(steps).toEqual(['connecting', 'ready']);
       } finally {
          connection.dispose();
-         pair.dispose();
+         closeEnds(pair);
       }
    });
 
@@ -725,6 +777,26 @@ describe('DataConnection sessions', () => {
          expect(of(calls, 'createSession', 'closeSession')).toEqual([]);
       } finally {
          ready.release();
+         dispose();
+      }
+   });
+
+   it('never sends a call that waited on the registration of a session disposed meanwhile', async () => {
+      const registration = gate();
+      const { connection, calls, dispose } = harness({ createGate: registration.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opening = panel.openDocument({ uri: URI_A });
+         await waitFor(() => of(calls, 'createSession').length > 0);
+
+         panel.dispose();
+         registration.release();
+
+         await expect(opening).rejects.toSatisfy(isSessionClosedError);
+         await waitFor(() => of(calls, 'closeSession').length > 0);
+         expect(of(calls, 'open')).toEqual([]);
+      } finally {
+         registration.release();
          dispose();
       }
    });
@@ -1936,6 +2008,77 @@ describe('DataSession after a dropped connection', () => {
       }
    });
 
+   it('restores every other session and watch, and stays usable, when one session fails to reconnect', async () => {
+      class RefusingSession extends DataSession<ProbeElement> {
+         override reconnect(): void {
+            throw new Error('reconnect refused');
+         }
+      }
+      const { logger, lines } = capturingLogger();
+      const { connection, calls, port, dropTransport, dispose } = harness(
+         {},
+         undefined,
+         undefined,
+         undefined,
+         logger,
+         (clientId, host, label) =>
+            label === 'refusing' ? new RefusingSession(clientId, host, label) : new DataSession<ProbeElement>(clientId, host, label)
+      );
+      try {
+         await connection.createSession('refusing', 'refusing').connected();
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const watch = await connection.watchDocument(URI_B);
+         const before = calls.length;
+
+         dropTransport();
+
+         await waitFor(
+            () =>
+               of(calls.slice(before), 'watch').some(call => call.clientId === 'panel') &&
+               of(calls.slice(before), 'watch').some(call => call.uri === URI_B),
+            { message: 'the other session or the watch never came back' }
+         );
+         await connection.connected();
+         const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+         expect(errors.length).toBeGreaterThan(0);
+         expect(errors.every(message => message.includes('refusing'))).toBe(true);
+         expect(port.reported.length).toBe(errors.length);
+         expect(port.reported.every(report => report.message.code === DATA_CONNECTION_SESSION_RESTORE_FAILED.code)).toBe(true);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+         await panel.connected();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('restores a session with documents open once a later connection is ready, after its reconnect failed at readiness', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const before = calls.length;
+         behaviour.readyGate = refusedReadiness();
+
+         dropTransport();
+         await waitFor(() => port.reported.length > 0, { message: 'the failed reconnect was never reported' });
+         behaviour.readyGate = undefined;
+         await connection.createSession('tree', 'tree').openDocument({ uri: URI_B });
+
+         await waitFor(() => of(calls.slice(before), 'watch').some(call => call.clientId === 'panel'), {
+            message: 'the panel never restored on the healthy connection'
+         });
+         expect(of(calls.slice(before), 'open').filter(call => call.clientId === 'panel')).toEqual([
+            { method: 'open', clientId: 'panel', uri: URI_A }
+         ]);
+         await panel.connected();
+      } finally {
+         dispose();
+      }
+   });
+
    it('sends no session close over the dropped connection when disposed before it restored', async () => {
       const { connection, calls, dropTransport, dispose } = harness();
       try {
@@ -1950,6 +2093,665 @@ describe('DataSession after a dropped connection', () => {
          // connection just to end it again would register nothing to end.
          expect(of(calls, 'closeSession')).toEqual([]);
          expect(of(calls, 'createSession')).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+});
+
+/** A logger whose derived loggers all keep the lines they emit in `lines`. */
+function capturingLogger(): { logger: Logger; lines: { level: LogLevel; message: string }[] } {
+   const lines: { level: LogLevel; message: string }[] = [];
+   class Capturing extends NoopLogger {
+      protected override emit(level: LogLevel, _label: string, message: string): void {
+         lines.push({ level, message });
+      }
+   }
+   return { logger: new Capturing(), lines };
+}
+
+/** A readiness gate that refuses, handled so it is not reported before the server awaits it. */
+function refusedReadiness(): Promise<void> {
+   const refused = Promise.reject(new Error('not ready'));
+   refused.catch(() => undefined);
+   return refused;
+}
+
+describe('DataConnection.onDidReconnect', () => {
+   it('fires once per reconnect, and not for the first connection', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         let fired = 0;
+         connection.onDidReconnect(() => {
+            fired++;
+            // What a watcher does on the event: ask the server again.
+            void connection
+               .connected()
+               .then(server => server.watchModelDocument({ uri: URI_C, clientId: 'reader' }))
+               // Still unanswered when the test disposes the connection.
+               .catch(() => undefined);
+         });
+         await connection.watchDocument(URI_A);
+         expect(fired).toBe(0);
+         const before = calls.length;
+
+         dropTransport();
+         await waitFor(() => of(calls.slice(before), 'watch').some(call => call.uri === URI_C), {
+            message: 'the reconnect never fired'
+         });
+
+         expect(fired).toBe(1);
+         expect(of(calls.slice(before), 'watch').map(call => call.uri)).toEqual([URI_A, URI_C]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('fires once a later connection is ready after a reconnect failed at readiness', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         let fired = 0;
+         connection.onDidReconnect(() => fired++);
+         await connection.watchDocument(URI_A);
+         behaviour.readyGate = refusedReadiness();
+
+         dropTransport();
+         await waitFor(() => port.reported.length > 0, { message: 'the failed reconnect was never reported' });
+         expect(fired).toBe(0);
+         behaviour.readyGate = undefined;
+         await connection.connected();
+
+         expect(fired).toBe(1);
+         await waitFor(() => of(calls, 'watch').length === 2, { message: 'the watch never came back' });
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the connection usable when a listener throws', async () => {
+      const { connection, dropTransport, dispose } = harness();
+      try {
+         await connection.connected();
+         connection.onDidReconnect(() => {
+            throw new Error('listener refused');
+         });
+         const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+         dropTransport();
+         await tick(5);
+
+         await expect(connection.connected()).resolves.toBeDefined();
+         error.mockRestore();
+      } finally {
+         dispose();
+      }
+   });
+});
+
+describe('DataConnection.watchDocument', () => {
+   const watcherOf = (calls: readonly ServerCall[]): string => of(calls, 'watch')[0].clientId;
+
+   it('watches under an id of its own, registering and opening nothing, and unwatches on dispose', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const watch = await connection.watchDocument(URI_A, 'outline');
+
+         const watcher = watcherOf(calls);
+         expect(watcher).toMatch(/^outline#/);
+         expect(calls).toEqual([{ method: 'watch', clientId: watcher, uri: URI_A }]);
+         expect(connection.liveSessions).toEqual([]);
+
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+         expect(of(calls, 'unwatch')).toEqual([{ method: 'unwatch', clientId: watcher, uri: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('rejects when the watch fails, and watches nothing after a drop', async () => {
+      const { connection, calls, dropTransport, dispose } = harness({ failWatch: true });
+      try {
+         await expect(connection.watchDocument(URI_A)).rejects.toThrow(/watch refused/);
+         const before = calls.length;
+
+         dropTransport();
+         await tick(5);
+
+         expect(calls.slice(before)).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('rejects, and sends no watch, when the connection is disposed before it is ready', async () => {
+      const ready = gate();
+      const { connection, calls, port, dispose } = harness({ readyGate: ready.promise });
+      try {
+         const watching = connection.watchDocument(URI_A);
+
+         connection.dispose();
+         ready.release();
+
+         await expect(watching).rejects.toThrow();
+         expect(of(calls, 'watch')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         ready.release();
+         dispose();
+      }
+   });
+
+   it('watches again under the same id after a dropped connection, without a call of its own', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const watcher = watcherOf(calls);
+         const before = calls.length;
+
+         dropTransport();
+
+         await waitFor(() => of(calls.slice(before), 'watch').length === 1, { message: 'the watch never came back' });
+         expect(calls.slice(before)).toEqual([{ method: 'watch', clientId: watcher, uri: URI_A }]);
+         watch.dispose();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('watches nothing again after a drop once disposed, and reports nothing', async () => {
+      const { connection, calls, port, dropTransport, dispose } = harness();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+         const before = calls.length;
+
+         dropTransport();
+         await tick(5);
+
+         expect(calls.slice(before)).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client a watched document turned clean while its connection was down', async () => {
+      const dirty = new Map([[URI_A, true]]);
+      const { connection, events, calls, dropTransport, notifyDirty, dispose } = harness({ dirty });
+      try {
+         const flips: boolean[] = [];
+         events.onDidChangeDocumentDirty(event => flips.push(event.text?.dirty ?? false));
+         const watch = await connection.watchDocument(URI_A);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => connection.toldDirty.get(URI_A) === true, { message: 'the dirty flip never arrived' });
+
+         // Saved by another client while this connection was down.
+         dirty.set(URI_A, false);
+         dropTransport();
+
+         await waitFor(() => connection.toldDirty.get(URI_A) === false, { message: 'the clean state never reached the client' });
+         expect(flips).toEqual([true, false]);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing again after a reconnect for a watched document whose dirty state held', async () => {
+      const { connection, events, calls, dropTransport, notifyDirty, dispose } = harness({ dirty: new Map([[URI_A, true]]) });
+      try {
+         const flips: boolean[] = [];
+         events.onDidChangeDocumentDirty(event => flips.push(event.text?.dirty ?? false));
+         const watch = await connection.watchDocument(URI_A);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1, { message: 'the dirty flip never arrived' });
+
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 2, { message: 'the watch never came back' });
+         await tick(10);
+
+         expect(flips).toEqual([true]);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client a watched document turned clean while its connection was down, after another watch of it was disposed', async () => {
+      const dirty = new Map([[URI_A, true]]);
+      const { connection, events, calls, dropTransport, notifyDirty, dispose } = harness({ dirty });
+      try {
+         const flips: boolean[] = [];
+         events.onDidChangeDocumentDirty(event => flips.push(event.text?.dirty ?? false));
+         const first = await connection.watchDocument(URI_A);
+         const second = await connection.watchDocument(URI_A);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1, { message: 'the dirty flip never arrived' });
+         first.dispose();
+         await waitFor(() => of(calls, 'unwatch').length === 1);
+
+         dirty.set(URI_A, false);
+         dropTransport();
+
+         await waitFor(() => flips.length === 2, { message: 'the clean state never reached the client' });
+         expect(flips).toEqual([true, false]);
+         second.dispose();
+         await waitFor(() => of(calls, 'unwatch').length === 2);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client a watched document turned clean while its connection was down, after a session closed it', async () => {
+      const dirty = new Map([[URI_A, true]]);
+      const { connection, events, calls, dropTransport, notifyDirty, dispose } = harness({ dirty });
+      try {
+         const flips: boolean[] = [];
+         events.onDidChangeDocumentDirty(event => flips.push(event.text?.dirty ?? false));
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const watch = await connection.watchDocument(URI_A);
+         await notifyDirty(URI_A, true);
+         await waitFor(() => flips.length === 1, { message: 'the dirty flip never arrived' });
+         await panel.closeDocument({ uri: URI_A });
+
+         dirty.set(URI_A, false);
+         dropTransport();
+
+         await waitFor(() => flips.length === 2, { message: 'the clean state never reached the client' });
+         expect(flips).toEqual([true, false]);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps a document watched whose dirty state the client throws on', async () => {
+      const events = new DataEvents<ProbeElement>();
+      events.onDocumentDirtyChanged = () => {
+         throw new Error('listener failed');
+      };
+      const { connection, calls, dropTransport, dispose } = harness({ dirty: new Map([[URI_A, true]]) }, undefined, events);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 2);
+         await tick(10);
+
+         // Still kept: the next reconnect watches it once more.
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 3);
+         await tick(10);
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends and logs no unwatch on a connection that dropped before it was ready', async () => {
+      const { logger, lines } = capturingLogger();
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, undefined, undefined, undefined, logger);
+      const previousLevel = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         // Never ready, as in the test above.
+         behaviour.readyGate = new Promise<void>(() => undefined);
+         let asked = false;
+         behaviour.beforeReady = () => {
+            asked = true;
+         };
+         dropTransport();
+         // Its readiness request written, so the drop below destroys no queued write.
+         await waitFor(() => asked, { message: 'the reconnect never asked for readiness' });
+
+         watch.dispose();
+         dropTransport();
+         await tick(10);
+
+         expect(lines.filter(line => line.message.startsWith('Unwatch'))).toEqual([]);
+         expect(of(calls, 'unwatch')).toEqual([]);
+      } finally {
+         Logger.setLevel(previousLevel);
+         dispose();
+      }
+   });
+
+   it('opens no further connection once the last watch is disposed while a reconnect is under way', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         // Never ready: an answer on a pipe the test has dropped would fail
+         // its write, and the drop alone ends the wait on the client side.
+         behaviour.readyGate = new Promise<void>(() => undefined);
+         let asked = false;
+         behaviour.beforeReady = () => {
+            asked = true;
+         };
+         dropTransport();
+         // Its readiness request written, so the drop below destroys no queued write.
+         await waitFor(() => asked, { message: 'the reconnect never asked for readiness' });
+
+         watch.dispose();
+         dropTransport();
+         await tick(10);
+
+         expect(port.connections).toHaveLength(2);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('opens no connection to unwatch a watch disposed while its connection is down', async () => {
+      const { connection, calls, port, dropTransport, dispose } = harness();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const before = calls.length;
+
+         dropTransport();
+         watch.dispose();
+         await tick(5);
+
+         expect(calls.slice(before)).toEqual([]);
+         expect(port.connections).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends no watch for one disposed while its connection comes back, and reports nothing', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      const ready = gate();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const before = calls.length;
+         behaviour.readyGate = ready.promise;
+
+         dropTransport();
+         await tick(5);
+         watch.dispose();
+         ready.release();
+         await connection.connected();
+         await tick(5);
+
+         expect(of(calls.slice(before), 'watch')).toEqual([]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         ready.release();
+         dispose();
+      }
+   });
+
+   it('takes back a watch disposed as its connection becomes ready', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      const ready = gate();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const before = calls.length;
+         behaviour.readyGate = ready.promise;
+         dropTransport();
+         await tick(5);
+
+         const disposing = connection.connected().then(() => watch.dispose());
+         ready.release();
+         await disposing;
+         await waitFor(() => of(calls.slice(before), 'unwatch').length > 0, { message: 'the watch was never taken back' });
+
+         expect(of(calls.slice(before), 'watch', 'unwatch').at(-1)?.method).toBe('unwatch');
+      } finally {
+         ready.release();
+         dispose();
+      }
+   });
+
+   it('rejects, and sends no watch, when the connection is disposed just after it is ready', async () => {
+      const ready = gate();
+      const { connection, calls, dispose } = harness({ readyGate: ready.promise });
+      try {
+         // Waits on the same readiness as the watch, and runs first.
+         const disposing = connection.connected().then(() => connection.dispose());
+         const watching = connection.watchDocument(URI_A);
+         ready.release();
+         await disposing;
+
+         await expect(watching).rejects.toThrow(/disposed/);
+         expect(of(calls, 'watch')).toEqual([]);
+      } finally {
+         ready.release();
+         dispose();
+      }
+   });
+
+   it('rejects a first watch a drop cuts short, and does not watch it again', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         let dropped = false;
+         behaviour.beforeWatch = () => {
+            if (!dropped) {
+               dropped = true;
+               dropTransport();
+            }
+         };
+
+         await expect(connection.watchDocument(URI_A)).rejects.toThrow();
+         await connection.connected();
+         await tick(5);
+
+         expect(of(calls, 'watch')).toHaveLength(1);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a re-watch that fails after its handle was disposed', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      const answer = gate();
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         behaviour.watchGate = answer.promise;
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 2, { message: 'the re-watch never arrived' });
+
+         watch.dispose();
+         behaviour.failWatch = true;
+         answer.release();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+         await tick(5);
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         answer.release();
+         dispose();
+      }
+   });
+
+   it('reports nothing for a re-watch the connection was disposed during', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      const answer = gate();
+      try {
+         await connection.watchDocument(URI_A);
+         behaviour.watchGate = answer.promise;
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 2, { message: 'the re-watch never arrived' });
+
+         connection.dispose();
+         answer.release();
+         await tick(5);
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         answer.release();
+         dispose();
+      }
+   });
+
+   it('reports only the failed readiness for a watch disposed while its connection fails to come back', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const before = calls.length;
+         let refuse!: (error: Error) => void;
+         const refused = new Promise<void>((_resolve, reject) => {
+            refuse = reject;
+         });
+         refused.catch(() => undefined);
+         behaviour.readyGate = refused;
+         dropTransport();
+         await tick(5);
+
+         watch.dispose();
+         refuse(new Error('not ready'));
+         await waitFor(() => port.reported.length > 0, { message: 'the failed reconnect was never reported' });
+         await tick(5);
+
+         expect(port.reported.map(report => report.message.code)).toEqual([DATA_SERVER_NOT_READY.code]);
+         expect(of(calls.slice(before), 'watch', 'unwatch')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('watches again once a later connection is ready, after a reconnect failed at readiness', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const watcher = watcherOf(calls);
+         const before = calls.length;
+         behaviour.readyGate = refusedReadiness();
+
+         dropTransport();
+         await waitFor(() => port.reported.length > 0, { message: 'the failed reconnect was never reported' });
+         behaviour.readyGate = undefined;
+         await connection.createSession('panel', 'panel').openDocument({ uri: URI_B });
+
+         await waitFor(() => of(calls.slice(before), 'watch').some(call => call.uri === URI_A), {
+            message: 'the watch never came back on the healthy connection'
+         });
+         expect(of(calls.slice(before), 'watch').find(call => call.uri === URI_A)).toEqual({
+            method: 'watch',
+            clientId: watcher,
+            uri: URI_A
+         });
+         // Once, by the connection: the watch's own attempt is not reported again.
+         expect(port.reported.map(report => report.message.code)).toEqual([DATA_SERVER_NOT_READY.code]);
+         watch.dispose();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('logs no re-watch for a watch disposed before the re-watch answered', async () => {
+      const { logger, lines } = capturingLogger();
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, undefined, undefined, undefined, logger);
+      const answer = gate();
+      const previousLevel = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const watch = await connection.watchDocument(URI_A, 'outline');
+         const watcher = watcherOf(calls);
+         behaviour.watchGate = answer.promise;
+         dropTransport();
+         await waitFor(() => of(calls, 'watch').length === 2, { message: 'the re-watch never arrived' });
+
+         watch.dispose();
+         answer.release();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+         await tick(5);
+
+         expect(lines.filter(line => line.message.includes(watcher))).toEqual([
+            { level: 'debug', message: `Watch ${URI_A} as ${watcher}` },
+            { level: 'debug', message: `Unwatch ${URI_A} as ${watcher}` }
+         ]);
+      } finally {
+         Logger.setLevel(previousLevel);
+         answer.release();
+         dispose();
+      }
+   });
+
+   it('logs placing a watch, placing it again after a drop, and taking it back', async () => {
+      const { logger, lines } = capturingLogger();
+      const { connection, calls, dropTransport, dispose } = harness({}, undefined, undefined, undefined, logger);
+      const previousLevel = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const watch = await connection.watchDocument(URI_A, 'outline');
+         const watcher = watcherOf(calls);
+         dropTransport();
+         // The line, not the server's receipt: it is logged once the answer is back.
+         await waitFor(() => lines.some(line => line.message === `Watch ${URI_A} again as ${watcher}`), {
+            message: 'the watch never came back'
+         });
+         watch.dispose();
+         await waitFor(() => of(calls, 'unwatch').length > 0);
+
+         expect(lines.filter(line => line.message.includes(watcher))).toEqual([
+            { level: 'debug', message: `Watch ${URI_A} as ${watcher}` },
+            { level: 'debug', message: `Watch ${URI_A} again as ${watcher}` },
+            { level: 'debug', message: `Unwatch ${URI_A} as ${watcher}` }
+         ]);
+      } finally {
+         Logger.setLevel(previousLevel);
+         dispose();
+      }
+   });
+
+   it('reports a watch it could not place again after a drop', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         behaviour.failWatch = true;
+
+         dropTransport();
+
+         await waitFor(() => port.reported.length > 0, { message: 'the failed watch was never reported' });
+         expect(port.reported.map(report => report.message.code)).toEqual([DATA_CONNECTION_WATCH_RESTORE_FAILED.code]);
+         expect(port.reported[0].message.text).toContain(URI_A);
+         watch.dispose();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a re-watch a later drop cut short, and watches again after that drop', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const before = calls.length;
+         let cutShort = false;
+         behaviour.beforeWatch = () => {
+            if (!cutShort) {
+               cutShort = true;
+               dropTransport();
+            }
+         };
+
+         dropTransport();
+
+         await waitFor(() => of(calls.slice(before), 'watch').length === 2, { message: 'the second drop never watched again' });
+         await tick(5);
+         expect(port.reported).toEqual([]);
+         watch.dispose();
       } finally {
          dispose();
       }
@@ -1993,7 +2795,7 @@ describe('DataConnectionWithEvents', () => {
                .catch(() => undefined),
          dispose: () => {
             connection.dispose();
-            pair.dispose();
+            closeEnds(pair);
          }
       };
    }

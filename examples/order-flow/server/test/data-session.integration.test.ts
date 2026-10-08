@@ -18,6 +18,7 @@
 
 import {
    DATA_SESSION_UNSAVED_LOST,
+   DataConnectionWithEvents,
    DataSession,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
@@ -27,7 +28,8 @@ import {
    type TransferElement,
    TransferDocument
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/testing';
+import { makeFakeDataPort, waitFor } from '@hydranium/protocol/testing';
+import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import { DataServer, type DataServerUriWatchRecord } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import {
@@ -428,7 +430,7 @@ describe('data head sessions', () => {
       await expect(proxy.createModelDocument({ uri, clientId: SESSION, text: CLEAN })).rejects.toThrow(/exists/);
       const plain = await rejectionOf(proxy.createModelDocument({ uri: newUri, clientId: 'plain-client', text: CLEAN }));
       expect(isSessionClosedError(plain)).toBe(true);
-      expect(String(plain)).toContain('never registered');
+      expect(String(plain)).toContain('not registered');
       // The sentence can reach an end user, so the id travels in `data` only.
       expect(String(plain)).not.toContain('plain-client');
       expect((plain as { data?: { clientId?: string } }).data?.clientId).toBe('plain-client');
@@ -774,5 +776,48 @@ describe('DataSession re-apply against the real stack', () => {
       expect(probe.server.writes).toEqual([]);
       expect(reported).toEqual([]);
       expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+});
+
+describe('DataConnection.watchDocument against the real stack', () => {
+   it('delivers update events to a watcher that opened nothing, until its handle is disposed', async () => {
+      const { services, uri, connect } = await boot();
+      const pairs: DuplexConnectionPair[] = [];
+      const servers: DataServer<DomainModel>[] = [];
+      const port = makeFakeDataPort({
+         connect: () => {
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            servers.push(new DataServer<DomainModel>(pair.left, services.shared));
+            return pair.right;
+         }
+      });
+      const connection = new DataConnectionWithEvents<DomainModel>(port);
+      const updated: string[] = [];
+      connection.events.onDidUpdateDocument(event => updated.push(event.document.uri));
+      const writer = connect();
+      try {
+         const watch = await connection.watchDocument(uri, 'outline');
+         expect(services.shared.workspace.TextDocuments.get(uri)).toBeUndefined();
+
+         await writer.proxy.createSession({ clientId: SESSION });
+         await writer.proxy.openModelDocument({ uri, clientId: SESSION });
+         await writer.proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: 'any' });
+         await waitFor(() => updated.length > 0, { message: 'the watcher heard no update' });
+
+         watch.dispose();
+         // Answered after the unwatch, which was sent first on the same connection.
+         await (await connection.connected()).getModelDocument({ uri });
+         const heard = updated.length;
+         await writer.proxy.updateModelDocument({ uri, clientId: SESSION, model: CLEAN, baseVersion: 'any' });
+         await (await connection.connected()).getModelDocument({ uri });
+
+         expect(updated.length).toBe(heard);
+      } finally {
+         connection.dispose();
+         servers.forEach(server => server.dispose());
+         pairs.forEach(pair => pair.dispose());
+         port.dispose();
+      }
    });
 });
