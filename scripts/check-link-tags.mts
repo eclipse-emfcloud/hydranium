@@ -46,8 +46,8 @@
  *
  * ## No pointer that rots
  *
- * A comment must stand alone: `conventions.md` bans line references, work-item
- * ids and work-log paths outright, on the measurement that every line
+ * A comment must stand alone: the comment rules ban line references, work-item
+ * ids, work-log paths and docs pages outright, on the measurement that every line
  * reference a 2026 sweep checked already named the wrong thing. None of those
  * shapes has ever been enforceable, because all three occur legitimately in
  * CODE — a stack-trace fixture, an error-message assertion, a memory-tier
@@ -57,13 +57,18 @@
  *
  * {@link POINTER_RULES} is deliberately narrower than the prose ban. Enforced
  * only where a legitimate reading does not exist, so the gate never has to
- * acquire exemptions: a durable concept doc is left alone (a comment may point
- * at one as further reading once it already stands alone), and so are
- * "the guard above", a bare `line 12` and a skill name — the last because its
- * token space is the npm scope and the shipped binary name, so any pattern for
- * it fires on legitimate API prose. {@link isPointerScoped} keeps it off
- * `examples/` for the reason `conventions.md` gives, and off the private script
+ * acquire exemptions: "the guard above", a bare `line 12` and a skill name are
+ * left alone — the last because its token space is the npm scope and the
+ * shipped binary name, so any pattern for it fires on legitimate API prose.
+ * {@link isPointerScoped} keeps the rules off `examples/`, whose comments exist
+ * to be read and copied, except the docs rule, since an adopter's copy cannot
+ * follow a pointer into this repository; and every rule off the private script
  * tree, whose whole subject matter is the ids and paths these rules forbid.
+ *
+ * A docs page is also banned from a shipped string: a message that sends its
+ * reader to a page breaks for every published version once the page moves, so
+ * it states the remedy instead. Strings in scripts are exempt, because the
+ * tooling there operates on the pages it names.
  *
  * ## Both families
  *
@@ -156,23 +161,63 @@ export function linkTagsInLineComments(fileName: string, text: string): { line: 
  * - A work-log reference is matched by BASENAME, so it holds whichever
  *   directory the log is filed under. The directory is the part that moves.
  */
+const DOCS_PAGE_NAMES = listDocsPageNames();
+
+const DOCS_RULE = {
+   id: 'docs-reference',
+   pattern: docsPagePattern(DOCS_PAGE_NAMES),
+   remedy: 'state what the reader needs instead — a pointer into the docs breaks when the page moves',
+   inExamples: true
+};
+
 const POINTER_RULES = [
    {
       id: 'file-line-reference',
       pattern: /\b[A-Za-z0-9_.-]+\.(?:ts|tsx|mts|cts|js|mjs|cjs|json|md|langium):\d+/g,
-      remedy: 'restate what lives there instead — a line reference rots on the next edit'
+      remedy: 'restate what lives there instead — a line reference rots on the next edit',
+      inExamples: false
    },
    {
       id: 'work-item-id',
       pattern: /\bL\d{2,}\b/g,
-      remedy: 'keep the constraint the id was gesturing at and drop the citation'
+      remedy: 'keep the constraint the id was gesturing at and drop the citation',
+      inExamples: false
    },
    {
       id: 'work-log-reference',
       pattern: /\b(?:MIGRATION|open-work|completed-work)\.md\b/g,
-      remedy: 'the work log records what was done; a comment describes what the code does'
-   }
+      remedy: 'the work log records what was done; a comment describes what the code does',
+      inExamples: false
+   },
+   DOCS_RULE
 ];
+
+/**
+ * A `docs/…` path, or the bare basename of a page that lives under `docs/`.
+ * `README.md` is left out: it names a file in every directory, not a page.
+ */
+function docsPagePattern(pageNames: readonly string[]): RegExp {
+   const names = pageNames.filter(name => name !== 'README.md').map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+   const bare = names.length > 0 ? `|\\b(?:${names.join('|')})\\b` : '';
+   return new RegExp(`\\bdocs\\/[\\w./-]+\\.md\\b${bare}`, 'g');
+}
+
+function listDocsPageNames(): string[] {
+   const stdout = execFileSync('git', ['ls-files', '-z', '--', 'docs/*.md'], { cwd: REPO_ROOT, encoding: 'utf-8' });
+   return [
+      ...new Set(
+         stdout
+            .split('\0')
+            .filter(Boolean)
+            .map(path => path.slice(path.lastIndexOf('/') + 1))
+      )
+   ];
+}
+
+/** Source that ships in a package, whose strings reach an adopter's terminal. */
+function isShippedSource(file: string): boolean {
+   return /^packages\/[^/]+\/src\//.test(file);
+}
 
 /**
  * Trees the pointer rules do not reach, as top-level directory NAMES.
@@ -206,12 +251,13 @@ function isPointerScoped(file: string): boolean {
  * load-bearing prose lives.
  */
 export function pointersInComments(fileName: string, text: string): { ruleId: string; remedy: string; line: number; matches: string[] }[] {
-   if (!isPointerScoped(fileName)) return [];
+   if (fileName.split('/')[0] === PRIVATE_TREE) return [];
+   const rules = isPointerScoped(fileName) ? POINTER_RULES : POINTER_RULES.filter(rule => rule.inExamples);
    const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
    const hits = [];
    for (const range of commentRanges(sourceFile, text)) {
       const comment = text.slice(range.pos, range.end);
-      for (const rule of POINTER_RULES) {
+      for (const rule of rules) {
          rule.pattern.lastIndex = 0;
          const matches = [...new Set([...comment.matchAll(rule.pattern)].map(match => match[0]))];
          if (matches.length === 0) continue;
@@ -224,6 +270,23 @@ export function pointersInComments(fileName: string, text: string): { ruleId: st
       }
    }
    return hits.sort((left, right) => left.line - right.line);
+}
+
+/** Docs pointers in the string and template literals of shipped source. */
+export function docsPointersInStrings(fileName: string, text: string): { line: number; matches: string[] }[] {
+   if (!isShippedSource(fileName)) return [];
+   const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+   const hits: { line: number; matches: string[] }[] = [];
+   const walk = (node: ts.Node): void => {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateLiteralToken(node)) {
+         DOCS_RULE.pattern.lastIndex = 0;
+         const matches = [...new Set([...node.text.matchAll(DOCS_RULE.pattern)].map(match => match[0]))];
+         if (matches.length > 0) hits.push({ line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1, matches });
+      }
+      ts.forEachChild(node, walk);
+   };
+   walk(sourceFile);
+   return hits;
 }
 
 /**
@@ -285,14 +348,14 @@ const SELF_TESTS = [
  * expected RULE pinned rather than merely "something fired".
  *
  * These carry more weight than the link family's, because every pointer rule
- * is a LATENT ban: the tree is clean of all three shapes today, so a pattern
- * that matches nothing produces exactly the verdict a working one does. Only a
- * probe that must fire distinguishes them.
+ * is a LATENT ban: the tree is clean of every shape, so a pattern that matches
+ * nothing produces exactly the verdict a working one does. Only a probe that
+ * must fire distinguishes them.
  *
  * The negatives are the measured near misses, each a real shape this repo
  * contains: the memory-tier labels in the heap classifier, the shipped binary
- * name, a port, prose about a file, and a durable concept doc offered as
- * further reading. Flagging any of them would be the gate being wrong.
+ * name, a port, prose about a file, and a README named in passing. Flagging any
+ * of them would be the gate being wrong.
  */
 const POINTER_SELF_TESTS = [
    {
@@ -374,10 +437,58 @@ const POINTER_SELF_TESTS = [
       source: ['/** The manifest declares package.json: 2 gated subpaths. */', 'export const value = 1;'].join('\n')
    },
    {
-      name: 'a durable concept doc offered as further reading is not flagged',
-      rule: null,
+      name: 'a docs path in a comment is flagged',
+      rule: 'docs-reference',
       file: 'packages/core/src/probe.ts',
       source: ['/** The four layers are set out in docs/concepts/document-layers.md. */', 'export const value = 1;'].join('\n')
+   },
+   {
+      name: 'the bare name of a docs page in a comment is flagged',
+      rule: 'docs-reference',
+      file: 'scripts/probe.mts',
+      source: [`// As ${DOCS_PAGE_NAMES.find(name => name !== 'README.md') ?? 'no-docs-page.md'} says.`, 'export const value = 1;'].join(
+         '\n'
+      )
+   },
+   {
+      name: 'a docs path in an example comment is flagged',
+      rule: 'docs-reference',
+      file: `${EXAMPLES_TREE}/order-flow/server/src/probe.ts`,
+      source: ['/** See docs/adopting/requirements.md. */', 'export const value = 1;'].join('\n')
+   },
+   {
+      name: 'a README named in a comment is not a docs page, not flagged',
+      rule: null,
+      file: 'scripts/probe.mts',
+      source: ['// Every package ships a README.md that would render.', 'export const value = 1;'].join('\n')
+   }
+];
+
+/** The string half of the docs rule: shipped strings in both directions, and the tooling that names pages on purpose. */
+const STRING_SELF_TESTS = [
+   {
+      name: 'a repository URL to a docs page in a shipped string is flagged',
+      flagged: true,
+      file: 'packages/core/src/probe.ts',
+      source: "export const help = 'https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/adopting/troubleshooting.md';\n"
+   },
+   {
+      name: 'a docs path in a shipped template literal is flagged',
+      flagged: true,
+      file: 'packages/core/src/probe.ts',
+      source: 'export const help = (cause: string) => `${cause}: see docs/adopting/requirements.md`;\n'
+   },
+   {
+      name: 'a docs path in a script string is tooling, not flagged',
+      flagged: false,
+      file: 'scripts/probe.mts',
+      source: "export const target = 'docs/adopting/requirements.md';\n"
+   },
+   {
+      name: 'a docs path in a test string is not shipped, not flagged',
+      flagged: false,
+      file: 'packages/core/test/probe.test.ts',
+      source: "export const expected = 'docs/adopting/requirements.md';\n"
    }
 ];
 
@@ -401,6 +512,15 @@ function runSelfTests() {
       }
       broken = true;
       console.error(`✗ SELF-TEST FAILED: ${probe.name} — expected ${probe.rule ?? 'nothing'}, got ${fired.join(', ') || 'nothing'}`);
+   }
+   for (const probe of STRING_SELF_TESTS) {
+      const hits = docsPointersInStrings(probe.file, probe.source);
+      if (hits.length > 0 === probe.flagged) {
+         console.log(`✓ self-test: ${probe.name}`);
+         continue;
+      }
+      broken = true;
+      console.error(`✗ SELF-TEST FAILED: ${probe.name} — got ${hits.length} hit(s)`);
    }
    const uncovered = POINTER_RULES.map(rule => rule.id).filter(id => !POINTER_SELF_TESTS.some(probe => probe.rule === id));
    if (uncovered.length > 0) {
@@ -463,6 +583,11 @@ for (const file of sources) {
       offences++;
       console.error(`✗ ${file}:${hit.line}: ${hit.ruleId} in a comment (${hit.matches.join(', ')}) — ${hit.remedy}`);
    }
+   for (const hit of docsPointersInStrings(file, text)) {
+      failed = true;
+      offences++;
+      console.error(`✗ ${file}:${hit.line}: docs-reference in a shipped string (${hit.matches.join(', ')}) — ${DOCS_RULE.remedy}`);
+   }
 }
 
 if (!failed) {
@@ -471,7 +596,9 @@ if (!failed) {
    process.exit(0);
 }
 if (offences > 0) {
-   console.error(`\nComment gate failed: ${offences} comment(s) either render as literal text or point at something that moves.`);
+   console.error(
+      `\nComment gate failed: ${offences} comment(s) or shipped string(s) either render as literal text or point at something that moves.`
+   );
 }
 console.error('(A SELF-TEST failure means the opposite — the gate stopped detecting, so fix the gate.)');
 process.exit(1);

@@ -5,7 +5,7 @@
 id: test-fixture-cast-ast-node-description
 language: typescript
 severity: error
-message: Build AstNodeDescription fixtures with makeFakeDescription from @hydranium/core/testing instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+message: Build AstNodeDescription fixtures with makeFakeDescription from @hydranium/core/testing instead of casting an object literal.
 files:
   - packages/**/test/**/*.ts
 rule:
@@ -20,7 +20,7 @@ rule:
 id: test-fixture-cast-ast-node
 language: typescript
 severity: error
-message: Build AstNode fixtures with makeFakeAstNode from @hydranium/core/testing instead of a `… as unknown as AstNode` double cast (see docs/contributing/conventions.md “Test support”).
+message: Build AstNode fixtures with makeFakeAstNode from @hydranium/core/testing instead of a `… as unknown as AstNode` double cast.
 files:
   - packages/**/test/**/*.ts
 rule:
@@ -39,7 +39,7 @@ rule:
 id: test-fixture-cast-logger
 language: typescript
 severity: error
-message: Build Logger fixtures with makeNoopLogger / makeCapturingLogger from @hydranium/core/testing (or spy a real logger with vi.spyOn) instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+message: Build Logger fixtures with makeNoopLogger / makeCapturingLogger from @hydranium/core/testing (or spy a real logger with vi.spyOn) instead of casting an object literal.
 files:
   - packages/**/test/**/*.ts
 rule:
@@ -54,7 +54,7 @@ rule:
 id: test-fixture-cast-shared-services
 language: typescript
 severity: error
-message: Build a shared-services tree with makeNoopSharedServices from @hydranium/core/testing (overrides are loosely typed for stubs) instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+message: Build a shared-services tree with makeNoopSharedServices from @hydranium/core/testing (overrides are loosely typed for stubs) instead of casting an object literal.
 files:
   - packages/**/test/**/*.ts
 rule:
@@ -69,7 +69,7 @@ rule:
 id: test-fixture-cast-glsp-logger
 language: typescript
 severity: error
-message: Build GLSP logger fixtures with makeNoopGlspLogger / makeCapturingGlspLogger from @hydranium/glsp-server/testing instead of casting an object literal (see docs/contributing/conventions.md “Test support”).
+message: Build GLSP logger fixtures with makeNoopGlspLogger / makeCapturingGlspLogger from @hydranium/glsp-server/testing instead of casting an object literal.
 files:
   - packages/**/test/**/*.ts
 rule:

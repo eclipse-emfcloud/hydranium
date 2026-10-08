@@ -1219,29 +1219,30 @@ ever gone red.
   `e.g.` that restates the declared type. Keep an `e.g.` only when it names the
   single real case the code exists for. Examples belong in `examples/`, where
   they compile and cannot silently drift.
-- **Pointers.** No work-item ids (a live one is still a pointer), no `docs/…`
-  paths, no skill names, no sibling-file locators, no design-doc section
-  numbers. A `{@link Foo}` to a symbol in the same package is not a pointer and
-  is welcome — but make it resolve, or it renders as plain text and offers
-  nothing.
+- **Pointers.** No work-item ids (a live one is still a pointer), no docs pages
+  (a `docs/…` path or a page's bare name), no skill names, no sibling-file
+  locators, no design-doc section numbers. A `{@link Foo}` to a symbol in the
+  same package is not a pointer and is welcome — but make it resolve, or it
+  renders as plain text and offers nothing. A message follows the same rule: an
+  error or gate message says what happened, how to see it and what to do,
+  because a page it sends its reader to can move while the message ships on.
 - **Line numbers.** `L281`, `line 143`, `foo.ts:88`, "the guard above". They rot
   on the next edit with nothing to catch them; every one the sweep checked was
   already stale, several naming a different function than the one they claimed.
   Restate what lives there instead.
 
 **What is gated, and what stays a reading job.** `check:link-tags` enforces
-three of the shapes above inside a comment and nowhere else: a `foo.ts:88` file
-reference, a work-item id at two digits or more, and a work-log basename
-(`MIGRATION.md`, `open-work.md`, `completed-work.md`). It is deliberately
-narrower than the rule it serves. A `line 143`, "the guard above" and a skill
-name are not gated because no pattern separates them from legitimate prose —
-`line 1` is ordinary language-server vocabulary and a skill name shares its
-token space with the npm scope and the shipped binary. A `docs/…` path is not
-gated either, and the one form to leave alone deliberately is a durable
-concept or convention doc offered as further reading by a comment that already
-stands alone; a `docs/…` path whose substance the reader needs is still a
-pointer and still goes. Everything ungated is still the rule — a green gate is
-not a swept file.
+four of the shapes above. Inside a comment: a `foo.ts:88` file reference, a
+work-item id at two digits or more, a work-log basename (`MIGRATION.md`,
+`open-work.md`, `completed-work.md`) and a docs page; inside a string of shipped
+source, a docs page as well. Strings in scripts are exempt, because that
+tooling operates on the pages it names, so a script's own messages stay a
+reading job. It is deliberately narrower than the rule it serves. A `line 143`,
+"the guard above" and a skill name are not gated because no pattern separates
+them from legitimate prose — `line 1` is ordinary language-server vocabulary
+and a skill name shares its token space with the npm scope and the shipped
+binary. Everything ungated is still the rule — a green gate is not a swept
+file.
 - **History.** Describe behaviour, not the session that produced it. No "used
   to", no "no longer", no dates, no branch names, no version stamps.
 - **Inventories and counts.** "Adds two pieces of behaviour", "the four lookup

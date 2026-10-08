@@ -4,7 +4,7 @@
 id: test-fixture-builder-function
 language: typescript
 severity: error
-message: Import the shared makeFake* / makeNoop* / makeCapturing* helpers from @hydranium/core/testing (or @hydranium/glsp-server/testing for the GLSP ones) instead of re-declaring a local fixture builder (see docs/contributing/conventions.md “Test support”).
+message: Import the shared makeFake* / makeNoop* / makeCapturing* helpers from @hydranium/core/testing (or @hydranium/glsp-server/testing for the GLSP ones) instead of re-declaring a local fixture builder.
 files:
   - packages/**/test/**/*.ts
 rule:
@@ -18,7 +18,7 @@ rule:
 id: test-fixture-builder-variable
 language: typescript
 severity: error
-message: Import the shared makeFake* / makeNoop* / makeCapturing* helpers from @hydranium/core/testing (or @hydranium/glsp-server/testing for the GLSP ones) instead of re-declaring a local fixture builder (see docs/contributing/conventions.md “Test support”).
+message: Import the shared makeFake* / makeNoop* / makeCapturing* helpers from @hydranium/core/testing (or @hydranium/glsp-server/testing for the GLSP ones) instead of re-declaring a local fixture builder.
 files:
   - packages/**/test/**/*.ts
 rule:

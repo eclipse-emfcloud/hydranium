@@ -27,11 +27,11 @@ class OwnCopyReflection extends AbstractAstReflection {
 }
 
 describe('assertSingleLangiumCopy', () => {
-   it('throws on a reflection built on another copy of langium, naming it and where its causes are listed', () => {
+   it('throws on a reflection built on another copy of langium, naming it and the remedy for each cause', () => {
       class OtherCopyReflection extends otherCopyBase('AbstractAstReflection') {}
 
       expect(() => assertSingleLangiumCopy(new OtherCopyReflection() as unknown as AstReflection)).toThrow(
-         /OtherCopyReflection.*another instance of `langium`.*a second physical copy or one install loaded twice.*npm explain langium.*troubleshooting\.md#startup-rejects-the-ast-reflection/s
+         /OtherCopyReflection.*another instance of `langium`.*a second physical copy or one install loaded twice.*npm explain langium.*reinstall from scratch.*in a workspace.*load both the same way/s
       );
    });
 
