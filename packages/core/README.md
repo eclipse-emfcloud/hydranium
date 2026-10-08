@@ -28,7 +28,7 @@ and so does every other head package (`@hydranium/data-server`,
   co-editing heads, so an edit made on one surface is observable on the others
   without a head-to-head synchronisation protocol. A participant works through
   a `ClientSession` from `ModelService.createSession`, which writes only what it
-  has open; see [client sessions](../../docs/concepts/client-sessions.md). Saves
+  has open; see [how it works](../../docs/concepts/how-it-works.md#documents-sessions-and-saves). Saves
   go through a `WritableFileSystemProvider`, and `SelfSaveRegistry` keeps the
   server's own writes from coming back as external changes.
 - **The projection the non-LSP heads build on:** `ModelService` (the in-process

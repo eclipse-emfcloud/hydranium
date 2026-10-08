@@ -192,6 +192,25 @@ startGlspServer({
 });
 ```
 
+## A diagram that writes more than one file
+
+Some diagrams keep part of their state in a second file, such as a layout file
+beside the model. Build your state on `ReconcilingMultiDocumentGlspState` and
+name the extra file in an override of `trackWriteSet`, with
+`trackSecondaryDocument(uri)`. The diagram then writes its files together: if
+another client changed any of them since you read it, none is written, and the
+conflict resolver gets the whole set. Saving the diagram saves every file it
+has open.
+
+If the extra file may not exist yet, as on the first drag in a diagram that was
+never laid out, override `openForWrite` and create it there with
+`createSecondaryDocument`: a write never creates a file. The order-flow
+example's `OrderFlowGlspState` does this for its `.layout` file.
+
+Each extra file is checked against the version it had when the diagram last
+read its main file. To write over whatever another client did to it instead,
+override `secondaryBaseVersion` to return `'any'`.
+
 ## How you know it worked
 
 Run the GLSP integration suite:

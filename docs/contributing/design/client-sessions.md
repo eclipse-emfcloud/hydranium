@@ -1,5 +1,11 @@
 # Client sessions
 
+The full contract of a client session, head by head. The adopter's view is in
+[How it works](../../concepts/how-it-works.md#documents-sessions-and-saves) and
+[Connect a data client](../../guides/connect-a-data-client.md); how the store
+and the manager underneath share one document is in
+[Model coordination](model-coordination.md).
+
 A client session is one participant working on documents: a form, a property
 view, a diagram, a script. It is identified by one client id, and that id is at
 once the author label on its writes, the key it recognises its own echoes by,
@@ -13,19 +19,11 @@ opens and edits over its connection under the reserved id `language-client`.
 
 ## Starting a session
 
-<!-- snippet-preamble
-import type { ServerSharedServices } from '@hydranium/core';
-declare const shared: ServerSharedServices;
--->
-
-```ts
-const session = shared.model.ModelService.createSession('form');
-```
-
-`ModelService.createSession(label?, clientId?)` is synchronous. Pass a label
-naming the participant. The id defaults to the label, a `#` and a random UUID,
-such as `form#3f2b…`; without a label the label is `session`. A fixed id is
-taken as given: `createSession('form', 'form-1')`.
+`ModelService.createSession(label?, clientId?, options?)` is synchronous. The
+id defaults to the label, a `#` and a random UUID, such as `form#3f2b…`;
+without a label the label is `session`. A fixed id is taken as given, and
+`options.resumeToken` takes over a live session under it (see
+[Over the data head](#over-the-data-head)).
 
 An id is unique in the process while its session is live. `createSession` throws
 `DuplicateClientIdError` for an id that is live anywhere in the process: one
@@ -74,28 +72,6 @@ open check and the `baseVersion` gate are the session's own `assertOpen` and
 `assertBaseVersion`. Turning a model into text (`modelToText`) and `rebuild`
 live on the `ModelService` bound on `model.ModelService`, which the session
 writes through.
-
-## The handle
-
-| Member | Meaning |
-| --- | --- |
-| `open(uri, options?)` | Open `uri` for this session, reading it from disk unless some client has it open |
-| `openOptions(uri)` | The options this session opened `uri` with |
-| `create(uri, text)` | Create a document with `text` and open it, resolving with the version it took; fails if the file exists, any client, the session included, has the URI open, or the URI waits out the release grace |
-| `update(args)` / `save(args)` | Write, or write and persist; fail with `DocumentNotOpenError` unless this session has the URI open |
-| `persist({ uri, baseVersion })` | Persist the text the store holds, with no update and no serialisation, resolving with the version written; fails as `save` does at the write, and never on a build |
-| `updateAll({ updates })` | Write several documents the session has open, all or none |
-| `close(uri)` | Close this session's open of `uri` |
-| `withOpen(uri, fn)` | Open, run `fn`, and close again when `fn` settles, unless the session already had `uri` open |
-| `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
-| `dispose(cause?)` | End the session: close everything it has open and free its id |
-
-`update` and `save` take `ClientSessionWriteArgs` (`uri`, `model`,
-`baseVersion`), `persist` takes `ClientSessionPersistArgs` (`uri`,
-`baseVersion`), and `updateAll` takes a `ClientSessionUpdateAllArgs` whose
-`updates` lists them: the session supplies its own client id. The data
-protocol's requests carry `clientId`; the data server maps each to a session
-call.
 
 ## Open and close
 
@@ -192,20 +168,17 @@ lets another write land between two documents of the set.
 
 ## Errors on the wire
 
-`SessionClosedError`, `DocumentNotOpenError`, `DuplicateClientIdError` and
-`ReservedClientIdError` are defined in `@hydranium/protocol` and re-exported
-from `@hydranium/core`. Like `ConflictError`, each is a JSON-RPC `ResponseError`
-with its own code (`SESSION_CLOSED_ERROR_CODE`, `DOCUMENT_NOT_OPEN_ERROR_CODE`,
-`DUPLICATE_CLIENT_ID_ERROR_CODE`, `RESERVED_CLIENT_ID_ERROR_CODE`) and its
-fields in `data`, since only the code, message and data cross the wire.
-`createRpcProxy` revives a rejection carrying one of these codes into its class,
-through `reviveProtocolError`, so a client calling through it reads the getters.
-A client still recognises them with `isSessionClosedError`,
-`isDocumentNotOpenError`, `isDuplicateClientIdError` and
-`isReservedClientIdError`, which also match a rejection that reached it by
-another path. All but
-`ReservedClientIdError` carry a message identity, so the data server renders
-their sentence in the reader's locale where the adopter supplied a catalogue.
+The session errors are defined in `@hydranium/protocol`
+(`packages/protocol/src/errors.ts`), so a frontend can name them without the
+server tier, and `@hydranium/core` re-exports them. Like `ConflictError`, each
+is a JSON-RPC `ResponseError` with its own code and its fields in `data`, since
+only the code, message and data cross the wire. `createRpcProxy` revives a
+rejection carrying one of these codes into its class, through
+`reviveProtocolError`, so a client calling through it reads the getters; each
+error's `is…` guard also matches a rejection that reached the client by another
+path. All but `ReservedClientIdError` carry a message identity, so the data
+server renders their sentence in the reader's locale where the adopter supplied
+a catalogue.
 
 ## Over the data head
 
@@ -261,39 +234,11 @@ at once with a `ReservedClientIdError`, and an id another live session on the
 connection holds with a `DuplicateClientIdError`. `isReservedClientIdError` and
 `isDuplicateClientIdError` recognise these and the server's refusals alike.
 
-<!-- snippet-preamble
-import { type TransferElement, TransferDocument } from '@hydranium/protocol';
-import type { DataConnection } from '@hydranium/protocol/client';
-declare const connection: DataConnection<TransferElement>;
-declare const uri: string;
-declare const model: string;
--->
-
-```ts
-const form = connection.createSession('form');
-await form.withOpenDocument({ uri }, opened =>
-   form.saveDocument({ uri, model, baseVersion: TransferDocument.assertLoaded(opened).model.version })
-);
-```
-
-| Member | Meaning |
-| --- | --- |
-| `openDocument(args)` | Open and watch the document, in that order, returning the opened snapshot |
-| `createDocument({ uri, text })` | Create a document open and watched for the session |
-| `updateDocument(args)` / `saveDocument(args)` | Write, or write and persist, a document the session has open |
-| `persistDocument({ uri, baseVersion })` | Persist the text the server holds for a document the session has open |
-| `updateDocuments({ updates })` | Write several documents the session has open, all or none |
-| `closeDocument(args)` | Close the document and its watch |
-| `withOpenDocument(args, fn)` | Open, run `fn` with the snapshot, and close again, unless the session already had the document open |
-| `isOwnEcho(sourceClientId)` | Whether an event's `sourceClientId` is this session's id |
-| `dispose()` | End the session on the server, which closes everything it has open |
-| `onDidDispose` | Fires once when the session ends, by its `dispose()` or its connection's `dispose()`; a listener subscribed after that is never called, so check `isDisposed` first |
-| `hasSavesInFlight` / `whenSavesSettled()` | Whether a save has not answered yet, and a promise for when the saves in flight now have, up to ten seconds |
-| `reconnect()` | After the connection dropped, register again and restore now rather than on the next call; the connection calls it for every session after a drop and whenever a connection becomes ready; it does nothing for a session with nothing open |
-
-`closeDocument` and `dispose` first wait for the session's calls still in
-flight on the document, or on any document for `dispose`, up to ten seconds, so
-a save sent just before a close reaches the server first. A client that
+`openDocument` opens and then watches, and `closeDocument` closes the document
+and its watch. `closeDocument` and `dispose` first wait for the session's calls
+still in flight on the document, or on any document for `dispose`, up to
+`settleBeforeCloseMs`, so a save sent just before a close reaches the server
+first; `whenSavesSettled()` waits the same way for the saves in flight. A client that
 registers a session without `DataSession` and sends a close without awaiting
 its save gets the `DocumentNotOpenError` code for the save.
 
@@ -453,8 +398,8 @@ with its unsaved text once `frontendConnectionTimeout` passes. There only a
 reconnect within that timeout keeps the server, and the stable id and token
 then resume the diagram; the handover is inert.
 
-A load that sends no token and finds its id held waits up to two seconds
-(`sessionWaitMs`) for the holder to end, which covers a client that reconnects
+A load that sends no token and finds its id held waits up to `sessionWaitMs`
+for the holder to end, which covers a client that reconnects
 under its old id without resuming. A load whose token does not match is not
 kept waiting. When the id is still held, the diagram does not load: the client
 gets a rejection naming the id, and the user a message saying the diagram's
@@ -553,11 +498,11 @@ advertises both. The editor's save joins the file's disk queue:
   the editor's write.
 
 Each wait is capped by `willSaveGateMs` in
-`HydraniumDocumentUpdateHandlerOptions`, default 1000 ms. An answer whose cap
-runs out is logged at warn level. A `didSave` that does not come within the cap
-is logged at debug level only, since an editor sends none for a save it
-cancels or that changed nothing. The answer never fails: VS Code gives up on
-an answer after about 1.5 s, and stops asking for the rest of the session once
+`HydraniumDocumentUpdateHandlerOptions`, whose default stays under VS Code's
+own timeout for the answer. An answer whose cap runs out is logged at warn
+level. A `didSave` that does not come within the cap is logged at debug level
+only, since an editor sends none for a save it cancels or that changed nothing.
+The answer never fails: VS Code stops asking for the rest of the session once
 four answers, over all documents, timed out or failed; Theia waits without a
 limit. Langium drops the request's cancellation, so an answer the editor
 stopped waiting for still waits out its cap.
@@ -612,7 +557,7 @@ carries the current answer as `text.dirty`, and a watcher is sent
 no longer exists or the build after its release failed. A flip for an edit is
 sent when the text changes, before the build that follows, so its `text.version`
 can be ahead of the `model.version` a client holds; [Comparing the two
-versions](document-layers.md#comparing-the-two-versions) says what a client
+versions](../../concepts/document-layers.md#comparing-the-two-versions) says what a client
 does then. After a reconnect, a `DataSession` reads each document it
 restores once its watch is in place, and tells the connection's client the
 answer that read's `text` carries where it differs from the last one the
@@ -638,8 +583,8 @@ and has the save expect the file's version. The save goes on and writes only
 what changed after that point, such as a save participant's trim of trailing
 whitespace, onto the file. Save All relies on that check: it saves a diagram and
 an editor on the same file one after the other, faster than the file watcher
-reports the diagram's write. A file that cannot be read within a second leaves
-the save to Theia as it is. A watched change to the editor's text marks it clean
+reports the diagram's write. A file that cannot be read within its
+`readTimeoutMs` leaves the save to Theia as it is. A watched change to the editor's text marks it clean
 too, once any save of it in flight has finished.
 
 `HydraniumFileService`, which the same call puts in place of Theia's
@@ -693,69 +638,10 @@ has debounced for the document is dropped: the revert rebuilds or removes the
 document, and the text a `virtual:` document is rebuilt from already holds that
 change.
 
-The bound provider is a `FileSystemProviderRegistry` that dispatches by scheme:
-the framework registers a provider for `virtual:` in the shared
-`fileSystemProviders` group, and every scheme with no entry there goes to the
-registry's `host`, the provider from `context.fileSystemProvider`. So an
-adopter's own provider answers `exists` and the reads for its own schemes only.
-Another scheme gets a provider of its own in the group, and a document of it
-survives its last close when that provider answers `exists` for it:
-
-<!-- snippet-preamble
-import { InMemoryFileSystemProvider, type ServerSharedServices } from '@hydranium/core';
--->
-
-```ts
-const sharedModule = {
-   fileSystemProviders: {
-      library: (shared: ServerSharedServices) =>
-         new InMemoryFileSystemProvider(shared, { seed: { 'library:/types.domain': 'valuetype Text {}' } })
-   }
-};
-```
-
-The workspace manager warns once at startup when the bound provider cannot
-serve a seeded document, from the `additionalDocuments` group or an override of
-`loadAdditionalDocuments`, whatever its scheme, naming each such scheme and up
-to three of the URIs: each leaves the workspace at its last close. Register a provider for the scheme in the group, under the
-scheme without its colon, or serve it from the host's provider. A host
-that drops such documents on purpose passes `warnUnservedDocuments: false` to
-`HydraniumWorkspaceManager`.
-
-The slot types its host as a plain `WritableFileSystemProvider`. To reach the
-members of its own provider, an adopter replaces the slot's declaration in its
-services type with `WithServiceOverrides`, binds the registry with that host,
-and reads the provider through `host`:
-
-<!-- snippet-preamble
-import {
-   DefaultFileSystemProviderRegistry,
-   type FileSystemProviderRegistry,
-   InMemoryFileSystemProvider,
-   type ServerSharedServices,
-   type WithServiceOverrides
-} from '@hydranium/core';
-import { type DeepPartial, type Module, URI } from '@hydranium/langium';
-declare const shared: MyServices;
--->
-
-```ts
-type MyServices = WithServiceOverrides<
-   ServerSharedServices,
-   { workspace: { FileSystemProvider: FileSystemProviderRegistry<InMemoryFileSystemProvider> } }
->;
-
-const sharedModule: Module<MyServices, DeepPartial<MyServices>> = {
-   workspace: {
-      // Annotated: a module's slots are DeepPartial, so only the return type
-      // checks the host.
-      FileSystemProvider: (services): FileSystemProviderRegistry<InMemoryFileSystemProvider> =>
-         new DefaultFileSystemProviderRegistry(services, { host: new InMemoryFileSystemProvider(services) })
-   }
-};
-
-shared.workspace.FileSystemProvider.host.setFile(URI.parse('memory:///ws/a.domain'), 'entity A {}');
-```
+The bound provider is a `FileSystemProviderRegistry` that dispatches by scheme;
+how an adopter serves a scheme of its own, and the startup warning for seeded
+documents no provider serves, are in
+[Customizing services](../../concepts/customizing-services.md#serving-documents-from-another-filesystem).
 
 `TextDocuments.onDidReleaseDocument` fires when a document is released,
 before the `DocumentReleaseHandler` is handed it, so its listeners act before
@@ -779,9 +665,8 @@ is refused while the document waits. It is open for no client meanwhile, and
 `TextDocuments.isReleaseDeferred(uri)` answers `true`; the integrity service
 treats it as open, so none of its unsaved text reaches disk. A close the
 client makes itself, `closeSession`, and a session's `dispose()` release the
-document at once, whatever the grace. The default is ten seconds; with `0` the
-document is released at once as well, in the close itself rather than on a
-timer.
+document at once, whatever the grace. With `0` the document is released at
+once as well, in the close itself rather than on a timer.
 
 <!-- snippet-preamble
 import { HydraniumTextDocuments, type ServerSharedServices } from '@hydranium/core';
@@ -853,13 +738,6 @@ changes for it. A session that writes the file afterwards gets
 A subclass calling `TextDocuments.delete(uri)` closes every open of the URI, the
 editor's included, before the document is removed.
 
-## Reads need no session
-
-Reads take no session and live on `ModelService`: the phase reads and the waits
-beside them, `snapshot`, `getDocument`, `isOpen` and the `on…` subscriptions.
-[Waiting for a current model](document-layers.md#waiting-for-a-current-model)
-says what each wait does for a missing document or a root behind its text.
-
 ## One LSP connection per server process
 
 The LSP head is one participant with the fixed id `language-client`, which is
@@ -882,44 +760,25 @@ the language client closes last, the document reverts at once. An editor's
 
 ## Known limits
 
-- A browser tab that closes can await no save; `beforeunload` can only prompt.
-- A write in flight when the backend process is killed is lost. The Node file
-  system provider writes a staging file first, so after a crash disk holds the
-  old file or the new one, except for a hard-linked file, which is written in
-  place and can be torn. Nothing calls `fsync`, so a power loss is not covered.
-- A worker `MessagePort` reports no end of its own. Over
-  `createMessagePortTransport` a head learns of a client that disposes its
-  connection, but a page or a worker that dies ends no session. A language
-  server in a worker keeps running when its port's client goes, unlike one on
-  stdio, which exits when its input ends; only the language client's documents
-  are closed.
+The limits an adopter meets are in
+[Status and limitations](../../adopting/status.md#unsaved-edits-are-kept-only-so-far).
+These concern the editor-save gate and the disk baseline:
+
 - An editor save whose wait runs past `willSaveGateMs`, or whose `didSave`
   comes later than that, can land before or after a server write of the same
   file. The cap that ran out is logged.
 - VS Code stops sending `willSaveWaitUntil` for the session after four failed
   or timed-out answers; the editor's saves then no longer wait for the
-  server's writes. The 1000 ms default stays under its timeout.
+  server's writes. The default `willSaveGateMs` stays under its timeout.
 - A server write of a file queued before the editor's save always lands
   first, so the editor then saves over a file newer than its buffer, which VS
   Code reports as a newer file on disk and Theia as out of sync. The gate only
   makes that order certain: the conflict follows whenever the server's write
   lands first.
-- A client that reconnects after the release grace has run out finds its
-  sole-client documents reverted, and other sessions see the revert before
-  the reconnecting session writes its edits again. It reports them lost
-  wherever it cannot tell that its write lands on the text it was based on.
 - The disk baseline moves only when the server reads or writes the file, or a
   watcher reports a change, so it trails a write by another process until the
   watcher's report; a server without an LSP head has no watcher. The integrity
   service reads the file before its repair write for that reason.
-- Every first open by an editor takes its buffer as the file's text, so a
-  buffer it never saved counts as clean. That includes a language-server
-  restart: the language client opens each dirty buffer again, and the diagram
-  and the data clients then show those documents clean while the editor shows
-  them dirty.
-- VS Code keeps an editor dirty when the file changes to the text it shows;
-  its next save writes the same bytes. There is no VS Code counterpart of
-  `EditorDiskSync`.
 - `EditorDiskSync` takes the editor's text as the save calls its will-save
   listeners. Theia runs its save participants one after another, each behind
   an await, and its first one awaits before it edits, so none has changed the
@@ -927,10 +786,3 @@ the language client closes last, the document reverts at once. An editor's
   await makes the save apply every pending edit again, unless
   `HydraniumFileService` is bound, as `bindEditorDiskSync` does, which has the
   save write the whole text, or ask when the file's size changed.
-
-## Logs
-
-Log lines cut a client id eight characters after its last `#`, so a minted
-session id prints as its label, the `#` and the first eight characters of the
-UUID, which is enough to tell sessions apart; an id without `#` prints whole.
-Starting and ending a session also log the full id at trace level.

@@ -91,4 +91,6 @@ LSP head takes part under a reserved id of its own.
   before the shared text is dropped, and a client that reconnects under the
   same id within it finds its unsaved edits.
 
-[Client sessions](client-sessions.md) has the full contract, for each head.
+[Connect a data client](../guides/connect-a-data-client.md) shows a client
+working through a session, and
+[Make a diagram editable](../guides/editable-diagram.md) a diagram.

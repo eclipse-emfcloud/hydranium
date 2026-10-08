@@ -41,7 +41,7 @@ author, and that keeps checking you as the framework moves.
   has open, ids are refused while live or reserved, a write answers with its document's
   diagnostics, `text.dirty` follows the file, `text.hash` follows the text, and the release after the last close
   reverts a document to what its save wrote, or drops it when it was never saved. See
-  [client sessions](../../docs/concepts/client-sessions.md).
+  [client sessions](../../docs/contributing/design/client-sessions.md).
 
 ## Install
 

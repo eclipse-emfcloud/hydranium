@@ -236,6 +236,23 @@ editor's model, and surface `window/logMessage` somewhere a developer will see
 it. A host that only reads documents and never displays them still wants the
 second one.
 
+## A diagram does not open, saying its identifier is in use
+
+The diagram stays empty, and the user sees a message that the diagram's
+identifier is still used by another editor, with `DIAGRAM_SESSION_REFUSED` as
+its code.
+
+Every diagram is a client session under its GLSP client id, and the server
+already has a live session under that id. Usually it is the same diagram from
+before a reload or a reconnect, and the server has not yet noticed its old
+connection close. Hydranium's Theia client resumes such a session with a token
+it keeps per window, so this happens when a client loads the diagram without
+that token, or with another window's id.
+
+**Remedy:** close the diagram and open it again once the old connection has
+gone. A client of your own keeps the client id and resume token stable across
+a reload, as the Theia client's `WindowSessionService` does.
+
 ## Semantic tokens add no colour in Theia
 
 The server's semantic highlighting shows in VS Code but not in Theia, wherever
@@ -250,6 +267,8 @@ it, are in
 ## Still stuck
 
 Server-side logging is the fastest way to see which hop stalled: every service
-logs through the server's logger, and its level is a setting you can raise. If
-the log does not show it, ask on the
+logs through the server's logger, and its level is a setting you can raise. A
+client session shows in it as its label, a `#` and the first eight characters
+of its UUID; starting and ending one logs its full id at trace level. If the log does not show it,
+ask on the
 [issue tracker](https://github.com/eclipse-emfcloud/hydranium/issues).

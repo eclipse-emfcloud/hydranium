@@ -23,7 +23,7 @@ Installed by the server process that already composes
   whose requests then write only what it has open; `createModelDocument` and
   the all-or-none `updateModelDocuments` serve sessions only; `closeSession`, or
   the connection closing, ends a session and closes everything it has open. See
-  [Client sessions](../../docs/concepts/client-sessions.md).
+  [Connect a data client](../../docs/guides/connect-a-data-client.md).
 - **Push notifications instead of polling:** `onDocumentUpdated` when a
   subscribed document reaches the configured build phase
   (`DataServerOptions.subscriptionPhase`, `DocumentState.Validated` by default),

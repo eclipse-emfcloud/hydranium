@@ -115,7 +115,7 @@ The transitions that change the owner are explicit:
   file system provider by the text store, for every head, once its disk queue
   has drained, and a reopen reads the file in that queue, after any save still
   writing. A document the provider cannot serve, of any scheme, is removed
-  from the index instead (see [Last close and release](client-sessions.md#last-close-and-release)).
+  from the index instead (see [Last close and release](../contributing/design/client-sessions.md#last-close-and-release)).
 
 The open-document repair tests in the order-flow example exercise the normal
 and separately constructed paths in both sync modes, for a URI an editor
@@ -392,7 +392,7 @@ Every wait in the table shares these exceptions:
 | `text.version` | `TextVersion` | the data head, from `TextDocuments.textState(uri)`, or from the built document for a text the store never held | when the document is sent | the text the server held as it sent it |
 | `baseVersion` (write field) | `BaseVersion` = `ModelVersion \| 'any'` | the writer | per write | the text the write was authored against; `'any'` writes ungated |
 | `ConflictError.baseVersion` / `.actualVersion` | `ModelVersion` / `TextVersion` | the session's gate | when it refuses a write | the write's base, and the text the gate found instead |
-| Dirty flip `text.version` | `TextVersion` | the text store | when `isDirty` changes; for an edit, before its build | the text the answer was decided on. Absent when the document no longer exists, or after a release whose follow-up build failed (see [Dirty state](client-sessions.md#dirty-state)) |
+| Dirty flip `text.version` | `TextVersion` | the text store | when `isDirty` changes; for an edit, before its build | the text the answer was decided on. Absent when the document no longer exists, or after a release whose follow-up build failed (see [Dirty state](../contributing/design/client-sessions.md#dirty-state)) |
 | GLSP `baseVersion` / `baseVersionOf(uri)` | `ModelVersion` | the GLSP state: the source root's `ModelLedger.versionOf` in `captureSourceRoot`; a secondary document's `ModelLedger.versionOf` of the built root an operation copies it from | when the source root is read; for a secondary document, at `trackSecondaryDocument` (during an operation, the root the operation first reached) and each `captureSourceRoot` | the text the diagram's projection came from; `UNRECORDED_VERSION` for a document with no parsed root, so a write based on it conflicts; a secondary created through `createSecondaryDocument` takes the version the create gave it. A merged retry is gated on its refetch's `VersionedModel.baseVersion`, the store's version read in the tick its text is |
 | `text.hash` | `string` | the text store (once per version), or the data head for a text the store never held | when the document is sent | the text content alone, not its version or dirty state, so equal across a revert and a server restart |
 | `model.hash` | `string` | the data head's fingerprint | when the document is sent | the snapshot sent, never live state: its `root` + `diagnostics` (absent hashes apart from `[]`), or under the `'text-diagnostics'` strategy the text that root was parsed from + `diagnostics`. Never the version |

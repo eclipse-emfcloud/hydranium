@@ -2,7 +2,7 @@
 
 How the heads share one document. The adopter's view is in
 [How it works](../../concepts/how-it-works.md#documents-sessions-and-saves); the
-contract per head is in [Client sessions](../../concepts/client-sessions.md),
+contract per head is in [Client sessions](client-sessions.md),
 and how text, AST and transfer form relate in
 [The four document layers](../../concepts/document-layers.md).
 
