@@ -1282,6 +1282,35 @@ and the vocabulary drifts package by package once it starts.
 Comments in `examples/` follow the opposite pull: that code exists to be read
 and copied, so a worked example there is the point.
 
+## Documentation
+
+A page describes the framework as it is, at a level that survives the next
+commit.
+
+- **One home per fact.** Explain it on one page and link there from the rest.
+- **Versions** appear only in
+  [`docs/adopting/requirements.md`](../adopting/requirements.md), which lists
+  the pins an adopter declares. Elsewhere, link there or name the manifest
+  field.
+- **Defaults stay in code.** Describe the behaviour. If the reader sets the
+  value, name the constant or option inside a code fence the snippet gate
+  compiles, never the number.
+- **Measurements** (sizes, timings, counts) belong in
+  [`perf-baseline.md`](perf-baseline.md) with how they were taken. Elsewhere,
+  say "large" or "several times".
+- **No history.** No dates, no "used to", no migration notes. State the current
+  rule and its reason; the story belongs in the commit.
+- **Every page is reachable** from `README.md` or `docs/README.md`.
+
+Numbers a gate already holds true are exempt: the peer ranges in a package
+README and the README `init` writes for a scaffold.
+
+`check:docs` fails a dead link or anchor outright. Unreachable pages and the
+rot patterns above are held to `scripts/check-docs-baseline.json`, which may
+only fall: a change that removes a hit lowers it with
+`node scripts/check-docs.mts --write`. The patterns cannot see every case, so
+the rules hold where the gate is silent.
+
 ## User-facing messages
 
 **The framework externalizes user-facing strings, ships no catalogue, and
