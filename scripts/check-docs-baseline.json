@@ -1,0 +1,102 @@
+{
+  "CONTRIBUTING.md": {
+    "version": 6
+  },
+  "README.md": {
+    "version": 8
+  },
+  "SECURITY.md": {
+    "version": 1
+  },
+  "docs/README.md": {
+    "version": 1
+  },
+  "docs/adopting/requirements.md": {
+    "history": 1
+  },
+  "docs/adopting/status.md": {
+    "version": 4
+  },
+  "docs/adopting/troubleshooting.md": {
+    "history": 1,
+    "version": 6
+  },
+  "docs/concepts/architecture.md": {
+    "timing": 1
+  },
+  "docs/concepts/client-sessions.md": {
+    "timing": 7
+  },
+  "docs/concepts/document-layers.md": {
+    "date": 1
+  },
+  "docs/contributing/conventions.md": {
+    "date": 2,
+    "history": 1,
+    "line-reference": 2,
+    "version": 1
+  },
+  "docs/contributing/perf-baseline.md": {
+    "version": 1
+  },
+  "docs/contributing/releasing.md": {
+    "date": 1,
+    "version": 13
+  },
+  "docs/contributing/testing.md": {
+    "timing": 2
+  },
+  "examples/bookstore/README.md": {
+    "history": 1
+  },
+  "examples/bookstore/server/README.md": {
+    "unreachable": 1
+  },
+  "examples/bookstore/workspace/README.md": {
+    "unreachable": 1
+  },
+  "examples/order-flow/browser/README.md": {
+    "size": 9
+  },
+  "examples/order-flow/server/README.md": {
+    "version": 3
+  },
+  "examples/order-flow/vscode/README.md": {
+    "timing": 1
+  },
+  "packages/cli/README.md": {
+    "size": 1,
+    "version": 2
+  },
+  "packages/client-theia/README.md": {
+    "timing": 1,
+    "version": 1
+  },
+  "packages/conformance/README.md": {
+    "unreachable": 1,
+    "version": 1
+  },
+  "packages/core/README.md": {
+    "version": 1
+  },
+  "packages/data-client-theia/README.md": {
+    "timing": 1,
+    "unreachable": 1,
+    "version": 1
+  },
+  "packages/data-server/README.md": {
+    "unreachable": 1,
+    "version": 1
+  },
+  "packages/glsp-client-theia/README.md": {
+    "timing": 3,
+    "version": 1
+  },
+  "packages/glsp-server/README.md": {
+    "version": 3
+  },
+  "packages/langium/README.md": {
+    "unreachable": 1,
+    "version": 1
+  }
+}
