@@ -41,6 +41,8 @@ on:
       - 'packages/data-client-theia/**'
       - 'packages/glsp-client-theia/**'
       - '.github/workflows/theia-compat.yml'
+      # A README in those packages changes nothing Theia loads.
+      - '!**/*.md'
   # Split by what can actually change. A released tarball is immutable, so
   # re-running a pinned version nightly re-tests bytes that cannot have
   # moved; only the dist-tags do. `next` therefore runs nightly, and the

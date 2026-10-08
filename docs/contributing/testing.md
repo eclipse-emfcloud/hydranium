@@ -144,7 +144,7 @@ it must fail with `consumer package @hydranium/core is missing or installed
 through a symlink`. This confirms the check reaches the install-shape assertion
 rather than merely completing the consumer smoke.
 
-### Scaffold smoke (every pull request)
+### Scaffold smoke (every pull request that changes more than prose)
 
 ```bash
 npm run check:init-scaffold
@@ -182,8 +182,9 @@ with instead when the protocol splits, and a data read of one must resolve
 with no model. The standalone scaffold with every head is then reinstalled with
 `--omit=dev` and driven again, as a deployment would. CI runs it as its own
 job, because the bookstore consumer above is assembled by hand and so cannot
-show what an adopter's first install meets. `HYDRANIUM_KEEP_PACKED_CONSUMER=1`
-keeps the project, as for that smoke.
+show what an adopter's first install meets. It is skipped, with the e2e shards
+and the Windows and macOS gates, on a pull request that changes only prose.
+`HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the project, as for that smoke.
 
 ### Published prerelease baseline smoke
 
