@@ -16,6 +16,13 @@ single-grammar on-ramp that gates nothing and stays comparable, file by file,
 with what `hydranium-cli init` scaffolds. Coverage belongs here. Nothing belongs
 there that `init` does not already emit.
 
+**Everything here must be fit to copy.** Adopters look things up in this
+example and copy from it, and `hydranium-cli init` derives its templates from
+it, so a shortcut here spreads to every project that does either. Write
+built-ins in the language's own syntax and load them with
+`LangiumDocumentFactory.fromString`, never as an AST built by hand past the
+generated types, and test every branch of an API a suite claims to cover.
+
 ## The packages
 
 One directory, one package per host. The npm names are flat

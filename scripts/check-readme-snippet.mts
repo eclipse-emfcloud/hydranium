@@ -76,7 +76,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  */
 const SNIPPET_TARGETS = [
    {
-      readme: 'README.md',
+      readme: 'docs/guides/compose-a-server.md',
       host: 'examples/order-flow/server',
       rewrites: [{ from: "'./generated/", to: "'../src/language-server/generated/" }]
    },
@@ -216,7 +216,7 @@ const SNIPPET_TARGETS = [
  * would force rewriting history to keep a gate green. They are also excluded
  * from the public tree, so nothing here has to name their location.
  */
-const DISCOVERY_PATHSPECS = ['*README.md', 'docs/adopting/*.md', 'docs/concepts/*.md', 'docs/contributing/*.md'];
+const DISCOVERY_PATHSPECS = ['*README.md', 'docs/*.md', 'docs/adopting/*.md', 'docs/concepts/*.md', 'docs/contributing/*.md'];
 
 const TSC_FLAGS = [
    '--ignoreConfig',

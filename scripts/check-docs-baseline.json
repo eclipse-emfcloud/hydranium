@@ -1,15 +1,9 @@
 {
-  "CONTRIBUTING.md": {
-    "version": 6
-  },
-  "README.md": {
-    "version": 8
-  },
   "SECURITY.md": {
     "version": 1
   },
-  "docs/README.md": {
-    "version": 1
+  "docs/CONTRIBUTING.md": {
+    "version": 4
   },
   "docs/adopting/requirements.md": {
     "history": 1
@@ -73,7 +67,6 @@
     "version": 1
   },
   "packages/conformance/README.md": {
-    "unreachable": 1,
     "version": 1
   },
   "packages/core/README.md": {
@@ -81,11 +74,9 @@
   },
   "packages/data-client-theia/README.md": {
     "timing": 1,
-    "unreachable": 1,
     "version": 1
   },
   "packages/data-server/README.md": {
-    "unreachable": 1,
     "version": 1
   },
   "packages/glsp-client-theia/README.md": {
@@ -96,7 +87,6 @@
     "version": 3
   },
   "packages/langium/README.md": {
-    "unreachable": 1,
     "version": 1
   }
 }
