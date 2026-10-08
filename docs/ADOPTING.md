@@ -34,15 +34,13 @@ Two examples, for two different questions:
 
 ## How it works
 
-- [Architecture](concepts/architecture.md): the heads, the one shared
-  workspace, and how a model moves between them.
-- [Framework vs. adopter](concepts/framework-vs-adopter.md): the seams a
-  language customizes, beside the defaults.
-- [Element addressing](concepts/element-addressing.md) and
-  [scope and visibility](concepts/scope-and-visibility.md): how a model element
-  is named, referenced and found.
-- [Contributions](concepts/contributions.md): adding synthetic AST and
-  registering checks and rules.
+- [How it works](concepts/how-it-works.md): the heads, the one shared
+  workspace behind them, and how clients open, write and save documents.
+- [Customizing services](concepts/customizing-services.md): where a binding
+  goes, how the modules compose, contributions and synthetic content.
+- [Customizing names, scope and visibility](concepts/customizing-names-and-scope.md):
+  how an element is named, referenced and found, and the four seams that
+  change it.
 - [Client sessions](concepts/client-sessions.md): how editors open, write and
   save documents.
 - [Hosting a head in a browser](concepts/browser-hosting.md).

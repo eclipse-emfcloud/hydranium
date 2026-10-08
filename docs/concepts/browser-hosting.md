@@ -36,9 +36,8 @@ exclusion from an oversight, so restating the list here would let a doc copy
 drift into claiming coverage the gate does not give.
 
 One head has a third spelling. `@hydranium/glsp-server/browser` is the mirror of
-its `/node` twin — the reason is in
-[Head module maps](head-module-maps.md#hydraniumglsp-server--graphical-head), and what matters
-here is the consequence: `.` stays free of both so it resolves under either
+its `/node` twin, because GLSP's launcher, app module and readiness signal all
+differ per platform. What matters here is the consequence: `.` stays free of both so it resolves under either
 platform, and the lint config bans naming either from neutral code.
 
 <!-- snippet-preamble

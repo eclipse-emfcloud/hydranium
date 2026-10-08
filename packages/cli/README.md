@@ -229,9 +229,8 @@ npx @hydranium/cli init ./order-flow --name OrderFlow --heads lsp,data,glsp \
    --grammar Layout --extensions diagram
 ```
 
-The scaffold wires only the framework defaults. The seams a real language customizes are walked
-beside those defaults in
-[`docs/concepts/framework-vs-adopter.md`](../../docs/concepts/framework-vs-adopter.md).
+The scaffold wires only the framework defaults. The seams a real language customizes are in
+[Adopting Hydranium](../../docs/ADOPTING.md).
 
 ## Entry points
 

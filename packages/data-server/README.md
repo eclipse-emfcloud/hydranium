@@ -91,8 +91,7 @@ the port constants — lives in `@hydranium/protocol/data`, and the generic
 `createRpcProxy` / `bindRpcMethods` machinery in `@hydranium/protocol`. The four
 distinct meanings of "document" this head sits between are worth reading first:
 [`docs/concepts/document-layers.md`](../../docs/concepts/document-layers.md). See
-also [`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) and
-[`docs/concepts/head-module-maps.md`](../../docs/concepts/head-module-maps.md).
+also [Adopting Hydranium](../../docs/ADOPTING.md).
 
 ## Status
 

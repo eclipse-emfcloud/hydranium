@@ -158,8 +158,8 @@ deliberately outside that gate. Also worth reading: [what "gated neutral" does a
 
 Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
 The API is not stable and may change without a deprecation cycle. See
-[`docs/concepts/architecture.md`](../../docs/concepts/architecture.md) for the
-GLSP head's place among the heads, and the [repository README](../../README.md)
+[Adopting Hydranium](../../docs/ADOPTING.md) for the GLSP head's place among
+the heads, and the [repository README](../../README.md)
 for current status and known limitations.
 
 ## License

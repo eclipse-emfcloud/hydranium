@@ -85,8 +85,8 @@ framework's launchers do, or the connection's faults leave no trace.
 | `./messages`| Every user-facing message the package raises, by code — what a translation catalogue keys on.                                                                                             | browser-neutral |
 | `./testing` | `makeGlspHarness`, `makeNoopGlspLogger`, `makeCapturingGlspLogger`.                                                                                                                       | browser-neutral |
 
-This is the one head with three platform subpaths
-([why](../../docs/concepts/head-module-maps.md#hydraniumglsp-server--graphical-head)). `.` and
+This is the one head with three platform subpaths, because GLSP's launcher, app module and
+readiness signal all differ per platform. `.` and
 `./testing` are
 gated as browser-neutral in CI (`scripts/check-neutral-bundles.mts`), which
 depends on `.` naming only the bare `@eclipse-glsp/server` specifier: a slip back
@@ -106,12 +106,10 @@ through `createMessagePortTransport`). Per diagram open, storage
 loads the document, your GModel factory renders it, and each user operation
 edits a working copy of the source root, written back to the shared document
 once when the operation completes, after which the GModel is re-derived and
-every listener on that document is notified. The module-by-module map is in
-[`docs/concepts/head-module-maps.md`](../../docs/concepts/head-module-maps.md);
-the worker bringup and its two bundler accommodations are in
+every listener on that document is notified. The worker bringup and its two bundler
+accommodations are in
 [`docs/concepts/browser-hosting.md`](../../docs/concepts/browser-hosting.md); the
-framework/adopter seams are in
-[`docs/concepts/framework-vs-adopter.md`](../../docs/concepts/framework-vs-adopter.md).
+framework/adopter seams are in [Adopting Hydranium](../../docs/ADOPTING.md).
 The Theia-side client wiring lives in `@hydranium/glsp-client-theia`.
 
 For the adopter path from a read-only projection to a writable diagram, see [Make a diagram editable](../../docs/guides/editable-diagram.md). It follows the per-diagram module, operation-handler, and shared-services boundaries.
