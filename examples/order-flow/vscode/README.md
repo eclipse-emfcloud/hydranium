@@ -37,8 +37,9 @@ and `order-flow.trace.server`. The editor selects `*.process` at
 is under _Open With_, the same way round as the Theia app.
 
 VS Code reads `contributes` statically, so none of those values can be imported
-from the source that must match them, and a mismatch is silent. The manifest's
-`//customEditors` note records what must match what.
+from the source that must match them, and a mismatch compiles. The manifest's
+`//customEditors` note records what must match what, and `test:host` checks the
+editor a `.process` opens in.
 
 ## Two webviews, two dependency graphs
 
@@ -91,6 +92,31 @@ also attaches to the forked server on port 6009.
 - **The F5 launch opens `../workspace` in place.** Read the
   [order-flow README](../README.md#the-fixture-workspace-is-edited-in-place) on the fixture workspace before you edit
   anything in a session.
+
+## Tests
+
+```bash
+npm --prefix examples/order-flow/vscode test              # vitest, in `check`
+npm --prefix examples/order-flow/vscode run test:host     # extension host, real VS Code
+npm --prefix examples/order-flow/vscode run test:e2e      # webviews, Playwright
+```
+
+The last two launch the VS Code build pinned in `test/vscode-version.mts`,
+downloaded into `.vscode-test/` on first use, on a scratch copy of
+`../workspace`. They read the built `out/` and the packages it loads, so run
+`build:all` first, and without a display prefix them with `xvfb-run -a`.
+Neither is in `check`; CI runs both in its `e2e (vscode)` job, after
+`npm run test:e2e:install` has downloaded the build with retries. Once it is
+cached, neither tier makes a request to VS Code's update server.
+
+- **`test:host`** runs `test/host` with Mocha inside the extension host,
+  through `@vscode/test-cli` and `.vscode-test.mjs`. It sees what the extension
+  API exposes: activation, the editor a `.process` opens in, the server's
+  diagnostics, the port commands and the properties panel's tab. It cannot see
+  inside a webview.
+- **`test:e2e`** drives the VS Code window with Playwright's Electron support
+  and asserts inside the webviews. Its selectors reach into the workbench DOM,
+  which is not a VS Code API, so a version bump can break them.
 
 ## Changing this example
 

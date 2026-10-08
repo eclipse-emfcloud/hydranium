@@ -56,4 +56,6 @@ npm --prefix examples/order-flow/vscode-servers run lint
 Nothing here runs on its own. To see it work, start
 [`../theia-app`](../theia-app/README.md) or press F5 on
 [`../vscode`](../vscode/README.md). It has no test script: the Theia app's
-Playwright suite and the port-command unit test in `../theia` cover it.
+Playwright suite and the port-command unit test in `../theia` cover it in
+Theia, and `../vscode`'s `test:host` runs its language client and port
+commands in VS Code.

@@ -134,17 +134,20 @@ npm exec -w @hydranium/core -- vitest                               # watch
 ### End-to-end (L5)
 
 There is one Playwright suite per host: the Theia app
-([README](../../examples/order-flow/theia-app/README.md)) and the browser page
-([README](../../examples/order-flow/browser/README.md)). Each README owns its
-commands. Neither suite is wired to `test`, so `npm run check` never depends on
-a downloaded browser binary. Three traps:
+([README](../../examples/order-flow/theia-app/README.md)), the browser page
+([README](../../examples/order-flow/browser/README.md)) and the VS Code
+extension ([README](../../examples/order-flow/vscode/README.md)), which adds an
+extension-host tier on `@vscode/test-cli` for what the extension API can see.
+Each README owns its commands. No suite is wired to `test`, so `npm run check`
+never depends on a downloaded browser or editor binary. Three traps:
 
 - The Theia app's `test:e2e` and `test:e2e:headed` skip every `@restart` spec,
   so running only those never executes them; `test:e2e:restart` does.
 - `reuseExistingServer` is on outside CI, so a stray process on the port gets
   tested instead of yours; a suspiciously fast pass is the tell.
-- The web server boots the **built** bundle, so framework changes need
-  `npm run build:all` first or you test stale code.
+- Every tier runs **built** code, the web servers their bundles and the VS Code
+  tiers the extension's `out/`, so framework changes need `npm run build:all`
+  first or you test stale code.
 
 ### Install-shape smokes (on demand)
 

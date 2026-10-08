@@ -89,10 +89,15 @@ function findReports(dir: string, found: string[] = []): string[] {
  * `\sname=` rather than `name=`, because `[^>]*` is greedy and would otherwise
  * match inside `classname="` and report every case under its SPEC FILE instead
  * of its title — which is what happened the first time this was done by hand.
+ * The attributes match lazily for the same reason at the other end: a greedy
+ * match takes the `/` of a self-closing `<testcase … />`, which Mocha writes
+ * for a passing case, and reads it as an open tag whose body runs to the next
+ * case's `</testcase>`, dropping the cases in between and charging their
+ * failure to the first.
  */
 function parseCases(xml: string): TestCase[] {
    const cases: TestCase[] = [];
-   for (const match of xml.matchAll(/<testcase\b([^>]*)\s*(\/>|>([\s\S]*?)<\/testcase>)/g)) {
+   for (const match of xml.matchAll(/<testcase\b([^>]*?)\s*(\/>|>([\s\S]*?)<\/testcase>)/g)) {
       const attributes = match[1];
       const body = match[3] ?? '';
       const name = /\sname="([^"]*)"/.exec(attributes)?.[1] ?? '(unnamed)';
