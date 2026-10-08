@@ -33,13 +33,14 @@ export interface WaitForOptions {
    readonly timeoutMs?: number;
    /** Poll the predicate every this-many milliseconds. Default 5. */
    readonly intervalMs?: number;
-   /** Error message on timeout. Default a generic phrasing. */
+   /** Error message on timeout, and when the predicate throws. Default a generic phrasing. */
    readonly message?: string;
 }
 
 /**
  * Resolve once `predicate()` returns true, polling at `intervalMs`; reject with
- * `message` once `timeoutMs` elapses. The **non-racy** alternative to a fixed
+ * `message` once `timeoutMs` elapses, or at once when the predicate throws, with
+ * the throw as the error's `cause`. The **non-racy** alternative to a fixed
  * sleep for awaiting an asynchronous side effect that lands on an observable
  * value.
  *
@@ -57,19 +58,45 @@ export function waitFor(predicate: () => boolean, options: WaitForOptions = {}):
    const timeoutMs = options.timeoutMs ?? 2000;
    const intervalMs = options.intervalMs ?? 5;
    const message = options.message ?? `Timed out after ${timeoutMs}ms waiting for a condition`;
-   if (predicate()) {
-      return Promise.resolve();
-   }
    return new Promise<void>((resolve, reject) => {
-      const deadline = setTimeout(() => {
+      // A throw would leave the promise unsettled from a timer, or escape
+      // `waitFor` itself on the first check; it rejects as the timeout instead,
+      // with the throw as cause. True once the promise is settled.
+      const settle = (timedOut: boolean): boolean => {
+         let met = false;
+         let threw = false;
+         let cause: unknown;
+         try {
+            met = predicate();
+         } catch (error: unknown) {
+            threw = true;
+            cause = error;
+         }
+         if (met) {
+            resolve();
+         } else if (timedOut || threw) {
+            reject(new Error(message, threw ? { cause } : undefined));
+         } else {
+            return false;
+         }
+         return true;
+      };
+      if (settle(false)) {
+         return;
+      }
+      const stop = (): void => {
          clearInterval(poll);
-         reject(new Error(message));
+         clearTimeout(deadline);
+      };
+      // A stalled loop can run the deadline after the condition came true but
+      // before the next poll saw it, so the deadline checks once more.
+      const deadline = setTimeout(() => {
+         settle(true);
+         stop();
       }, timeoutMs);
       const poll = setInterval(() => {
-         if (predicate()) {
-            clearInterval(poll);
-            clearTimeout(deadline);
-            resolve();
+         if (settle(false)) {
+            stop();
          }
       }, intervalMs);
    });
