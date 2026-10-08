@@ -111,6 +111,28 @@ stay human-readable, diffable and reviewable. It also means there is no
 abstraction for a database, an object store, or a remote model repository. An
 adopter that needs one supplies its own filesystem implementation.
 
+### Unsaved edits are kept only so far
+
+Unsaved edits live in the server's memory, and some ways of losing a client or
+the server lose them:
+
+- **A closing browser tab cannot wait for a save.** It can only ask the user
+  before leaving.
+- **A killed server loses the write it was making.** Nothing calls `fsync`
+  either, so a power loss is not covered.
+- **A page or worker that dies ends no session** when the heads talk over a
+  `MessagePort`, which reports no end of its own. A language server in a worker
+  keeps running after its page goes; only the editor's documents are closed.
+- **A client that comes back after the release grace finds its documents
+  reverted.** It writes its edits again where it can tell they still apply,
+  and reports the rest as lost.
+- **A restarted language server shows the editor's unsaved buffers as clean**
+  to the diagram and data clients, while the editor still shows them dirty: an
+  editor's first open counts its buffer as the file's text.
+- **VS Code keeps an editor dirty after a server save** of the text it shows,
+  and its next save writes the same bytes. Theia has `bindEditorDiskSync` for
+  this, and VS Code has no counterpart.
+
 ### One process writes a workspace
 
 **A workspace has a single writer, and that is a contract rather than an

@@ -5,9 +5,6 @@
   "docs/CONTRIBUTING.md": {
     "version": 4
   },
-  "docs/concepts/client-sessions.md": {
-    "timing": 7
-  },
   "docs/concepts/document-layers.md": {
     "date": 1
   },

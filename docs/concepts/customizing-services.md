@@ -3,8 +3,9 @@
 Hydranium's services are Langium services, bound by dependency injection. You
 change one by binding your own in a module composed after the framework's:
 the later binding wins, and the rest of the framework keeps working around it.
-This page covers where a binding goes, how the modules compose, and how to add
-to the framework's registries without replacing them.
+This page covers where a binding goes, how the modules compose, how to add to
+the framework's registries without replacing them, and how to serve documents
+from a filesystem of your own.
 [Customizing names, scope and visibility](customizing-names-and-scope.md)
 covers the scoping services in particular.
 
@@ -101,11 +102,12 @@ bindings, so they can `rebind` its tokens.
 
 ## Contributions: adding to the registries
 
-Four framework services hold registries an adopter adds to: integrity rules,
-validation checks, AST extensions and scope extensions. You add to them by
-declaring **contributions** in your language module, under the registry's
-group. Each service reads its group when it is built, and calls every
-contribution with itself as the registry.
+Five framework services hold registries an adopter adds to: integrity rules,
+validation checks, AST extensions, scope extensions and build-phase passes. You
+add to them by declaring **contributions** under the registry's group, in your
+language module, or in your shared module for build-phase passes. Each service
+reads its group when it is built, and calls every contribution with itself as
+the registry.
 
 | Registry service | Group | Contribution interface | Method |
 |---|---|---|---|
@@ -113,6 +115,7 @@ contribution with itself as the registry.
 | `ValidationContributionCollector` | `validation.checks` | `ValidationCheckContribution` | `registerValidationChecks(registry)` |
 | `AstExtensionService` | `ast.extensions` | `AstExtensionContribution` | `registerAstExtensions(registry)` |
 | `ScopeExtensionService` | `references.scopes` | `ScopeExtensionContribution` | `registerScopeExtensions(registry)` |
+| `BuildPhasePassService` (shared) | `buildPhasePasses` | `BuildPhasePassContribution` | `registerBuildPhasePasses(registry)` |
 
 The methods carry their registry in their name, so one class can implement
 several contribution interfaces without a collision.
@@ -192,6 +195,91 @@ function createMyLanguageModule(ctx: ServerModuleContext):
   `super`.** Besides running the integrity rules, it is what registers your
   validation checks before the build validates; an override that skips it
   has to touch each language's `ValidationContributionCollector` itself.
+
+### Which registry build work goes in
+
+Three of the registries run work during a build. Pick by what the work walks
+and by whether it needs the whole batch built first:
+
+| | Per document, as each is built | Once per build, over the batch |
+|---|---|---|
+| **Per node** | `AstExtension`: computed or synthetic properties | `IntegrityRule`: AST corrections that may change the text and reparse |
+| **Whole unit** | no registry: use an `AstExtension` whose `nodeFilter` matches only the root | `BuildPhasePass`: work across documents, such as resolving inherited members parent first |
+
+A `BuildPhasePass` runs in ascending `priority` within its phase, ties in the
+order registered. Give yours `0` or higher, and order passes that build on one
+another with increasing values: the negative band is the framework's, for
+passes such as integrity whose output the rest of the phase reads.
+
+## Serving documents from another filesystem
+
+The workspace reads files through the shared `workspace.FileSystemProvider`, a
+`FileSystemProviderRegistry` that dispatches by URI scheme. The framework
+serves `virtual:` itself, and every other scheme goes to the registry's `host`,
+the provider your host passes as `context.fileSystemProvider`.
+
+- **A document outlives its last close only where a provider serves it.** Once
+  no client holds a document, the framework rebuilds it from the provider when
+  the provider's `exists` answers for it, and removes it from the workspace
+  otherwise, as it does an editor's `untitled:` buffer or a `file:` document
+  created and never saved. The last client's unsaved edits go either way.
+- **Give another scheme a provider of its own** in the shared
+  `fileSystemProviders` group, keyed by the scheme without its colon. Your own
+  provider then answers for its own schemes only:
+
+<!-- snippet-preamble
+import { InMemoryFileSystemProvider } from '@hydranium/core';
+-->
+
+```ts
+const sharedModule = {
+   fileSystemProviders: {
+      library: (shared: ServerSharedServices) =>
+         new InMemoryFileSystemProvider(shared, { seed: { 'library:/types.domain': 'valuetype Text {}' } })
+   }
+};
+```
+
+- **Serve what you seed.** The workspace manager warns once at startup when no
+  provider can serve a document seeded from the `additionalDocuments` group or
+  an override of `loadAdditionalDocuments`, naming each such scheme and up to
+  three of the URIs, since each leaves the workspace at its last close.
+  Register a provider for the scheme, or serve it from the host's provider. A
+  host that drops such documents on purpose passes
+  `warnUnservedDocuments: false` to `HydraniumWorkspaceManager`.
+- **Reach your own provider through `host`.** The slot types its host as a
+  plain `WritableFileSystemProvider`. To use your provider's own members,
+  replace the slot's declaration in your services type with
+  `WithServiceOverrides`, and bind the registry with that host:
+
+<!-- snippet-preamble
+import {
+   DefaultFileSystemProviderRegistry,
+   type FileSystemProviderRegistry,
+   InMemoryFileSystemProvider,
+   type WithServiceOverrides
+} from '@hydranium/core';
+import { type DeepPartial, type Module, URI } from '@hydranium/langium';
+declare const shared: MyServices;
+-->
+
+```ts
+type MyServices = WithServiceOverrides<
+   ServerSharedServices,
+   { workspace: { FileSystemProvider: FileSystemProviderRegistry<InMemoryFileSystemProvider> } }
+>;
+
+const sharedModule: Module<MyServices, DeepPartial<MyServices>> = {
+   workspace: {
+      // Annotated: a module's slots are DeepPartial, so only the return type
+      // checks the host.
+      FileSystemProvider: (services): FileSystemProviderRegistry<InMemoryFileSystemProvider> =>
+         new DefaultFileSystemProviderRegistry(services, { host: new InMemoryFileSystemProvider(services) })
+   }
+};
+
+shared.workspace.FileSystemProvider.host.setFile(URI.parse('memory:///ws/a.domain'), 'entity A {}');
+```
 
 ## Synthetic content
 

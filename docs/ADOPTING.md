@@ -27,15 +27,14 @@ Two examples, for two different questions:
 - [How it works](concepts/how-it-works.md): the heads, the one shared
   workspace behind them, and how clients open, write and save documents.
 - [Customizing services](concepts/customizing-services.md): where a binding
-  goes, how the modules compose, contributions and synthetic content.
+  goes, how the modules compose, contributions, documents from another
+  filesystem, and synthetic content.
 - [Customizing names, scope and visibility](concepts/customizing-names-and-scope.md):
   how an element is named, referenced and found, and the four seams that
   change it.
 - [The four document layers](concepts/document-layers.md): what the user
   typed, what Langium built from it, what in-process consumers get, and what
   crosses the wire.
-- [Client sessions](concepts/client-sessions.md): how editors open, write and
-  save documents.
 - [Hosting a head in a browser](concepts/browser-hosting.md).
 
 ## Guides
@@ -46,6 +45,8 @@ Two examples, for two different questions:
   operation on the data head.
 - [Make a diagram editable](guides/editable-diagram.md) by connecting GLSP
   operations to the shared model.
+- [Connect a data client](guides/connect-a-data-client.md) that opens, edits
+  and saves models over the data head.
 - [Compose a server by hand](guides/compose-a-server.md) without `init`.
 
 ## Reference

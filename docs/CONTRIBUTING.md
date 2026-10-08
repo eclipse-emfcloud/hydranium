@@ -12,15 +12,18 @@ The design behind what the adopter pages under
 
 - [**Model coordination**](contributing/design/model-coordination.md) — how
   the heads share one document through one text store and one manager.
+- [**Client sessions**](contributing/design/client-sessions.md) — the full
+  contract of a session on each head: when a write answers, how a reconnect
+  restores, how editor saves and the release grace work.
 - [**The four document layers**](concepts/document-layers.md) — what the user
   typed, what Langium built from it, what in-process consumers get, what
   crosses the wire, and why the last two are different types.
 - [**Service placement and composition**](contributing/design/service-placement.md)
   — why each service sits on the shared or the per-language tier, and why
   composition has no framework layer over Langium's.
-- [**Build-pipeline registries**](concepts/build-pipeline-registries.md) — how
-  build-time work is wired into Langium's document-build pipeline, and which
-  registry a piece of work belongs in.
+- [**Build pipeline**](contributing/design/build-pipeline.md) — how build-time
+  work is wired into Langium's document build, and why integrity and adopter
+  passes share one priority space.
 - [**Scope and candidate services**](contributing/design/scope-services.md) —
   how reference handling is split between scope resolution and the candidate
   pipeline, and why.
