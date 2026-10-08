@@ -7,8 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { definePackageVitestConfig } from '../../../vitest.shared';
-
-// The host specs need the `vscode` module only an extension host provides; they
-// run under `test:host`.
-export default definePackageVitestConfig('order-flow-vscode', { exclude: ['test/host/**'] });
+/**
+ * The VS Code build both VS Code tiers download and run.
+ *
+ * Pinned rather than `stable`, so a VS Code release cannot turn a run red with
+ * no change in this repository, and the Playwright tier's workbench selectors
+ * move only when this does. Bump it on purpose and run both tiers.
+ */
+export const VSCODE_VERSION = '1.141.0';

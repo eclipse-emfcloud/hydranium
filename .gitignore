@@ -40,6 +40,10 @@ examples/order-flow/theia-app/gen-esbuild*.mjs
 examples/*/*/playwright-report/
 .playwright/
 
+# The VS Code builds `@vscode/test-electron` downloads for the extension's
+# VS Code tiers, with the profile directories it creates beside them.
+.vscode-test/
+
 # Turbo cache + per-package logs
 .turbo
 **/.turbo

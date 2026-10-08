@@ -168,7 +168,8 @@ function buildStepsWithoutProseGuard(steps: Guarded[]): string[] {
 const PINNED_GUARDS = {
    jobs: {
       build: '${{ !cancelled() }}',
-      'e2e-shard': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
+      'e2e-chromium': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
+      'e2e-vscode': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
       scaffold: "${{ !cancelled() && needs.changes.outputs.full != 'false' }}"
    },
    steps: {

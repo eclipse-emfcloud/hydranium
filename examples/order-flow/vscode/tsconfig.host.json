@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "out/host-test",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "types": ["node", "mocha"]
+  },
+  "include": ["test/host"],
+  "//": "Emits the extension-host specs for `test:host`; VS Code's Mocha runner loads JavaScript. The `src` modules a spec imports are emitted beside it, so the spec reads the same constants the extension registers under. Type-checked by `tsconfig.test.json` with the rest of `test`."
+}

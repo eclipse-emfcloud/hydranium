@@ -49,7 +49,7 @@ cross-grammar reference chain they exist for.
 | Browser host, no backend | [browser/](browser/README.md) | [Host in a browser](../../docs/guides/host-in-a-browser.md) |
 | Translations | [theia/src/nls/order-flow.de.json](theia/src/nls/order-flow.de.json), [server/src/nls/order-flow.de.json](server/src/nls/order-flow.de.json) | [Translate your language](../../docs/guides/translate-your-language.md) |
 | Unit tests | each package's `test/` | [Test your language](../../docs/guides/test-your-language.md) |
-| End-to-end tests | [theia-app/test/e2e/](theia-app/test/e2e/), [browser/test/e2e/](browser/test/e2e/) | |
+| End-to-end tests | [theia-app/test/e2e/](theia-app/test/e2e/), [browser/test/e2e/](browser/test/e2e/), [vscode/test/host/](vscode/test/host/), [vscode/test/e2e/](vscode/test/e2e/) | |
 | Sample models | [workspace/](workspace/README.md) | |
 
 Each directory is one npm package, named `@hydranium/example-order-flow-*`.
@@ -83,7 +83,7 @@ properties panel, which reserializes the whole document.
 
 Nothing warns you, because the suites still pass: they copy the file you
 changed. Run `git status examples/order-flow/workspace` after any manual
-session, and `git checkout --` what you did not mean to keep. The Playwright
+session, and `git checkout --` what you did not mean to keep. The end-to-end
 suites are safe, because they copy the tree into a temp directory first. So is
 the browser page, which seeds an in-memory filesystem and persists to
 `IndexedDB`.

@@ -3,9 +3,9 @@
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node", "mocha"]
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "playwright.config.mts"],
   "//files": "The webview's data port is tested in Node; listed by name because src/webview is excluded, and the rest of it needs the DOM lib.",
   "files": ["src/webview/properties-data-port.ts"]
 }

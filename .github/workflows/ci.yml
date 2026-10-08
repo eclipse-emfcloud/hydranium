@@ -52,7 +52,7 @@ defaults:
 
 jobs:
   # A pull request that changes only prose skips what prose cannot affect: the
-  # e2e shards, the init scaffold, and the Windows and macOS gates. The Ubuntu
+  # e2e jobs, the init scaffold, and the Windows and macOS gates. The Ubuntu
   # leg still builds and runs the gate tail, where every docs check lives.
   #
   # Only an explicit `full=false` skips anything. The required checks are this
@@ -638,8 +638,8 @@ jobs:
   # does nothing, a four-core runner already being saturated at two workers.
   # Each shard re-pays about 134s of checkout, install, build and browser
   # install, which is what bounds how many are worth having.
-  e2e-shard:
-    name: e2e (${{ matrix.shard }}/2)
+  e2e-chromium:
+    name: e2e (${{ matrix.label }})
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -647,8 +647,14 @@ jobs:
       # A shard that fails says nothing about the other, and cancelling it
       # discards the half of the report that was still going to be useful.
       fail-fast: false
+      # The label names the tiers a shard runs, so the check on the pull
+      # request says what failed; it must follow the `if:`s below.
       matrix:
-        shard: [1, 2]
+        include:
+          - shard: 1
+            label: browser 1/2, theia
+          - shard: 2
+            label: browser 2/2, theia restart+reconnect
     # Skipped in two cases. A dispatch can set `skip_e2e`, because repeating a
     # run to measure the gate should not also repeat four minutes this job
     # shares nothing with. A pull request skips it on a prose-only verdict. A
@@ -762,37 +768,116 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The VS Code tiers drive a downloaded VS Code, not Chromium, so this job
+  # installs no browser and a failure reports under its own check. Same skip
+  # conditions as the job above.
+  e2e-vscode:
+    name: e2e (vscode)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    needs: changes
+    if: ${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}
+
+    env:
+      NODE_OPTIONS: --report-on-fatalerror
+      TURBO_UI: stream
+      FORCE_COLOR: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Restore only, for the reason the job above gives.
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ !inputs.skip_node_modules_cache }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+            examples/*/*/node_modules
+            !**/node_modules/.vite
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
+
+      - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        run: npm ci --no-fund --no-audit
+
+      - name: Build
+        run: npm run build:all -w @hydranium/example-order-flow-vscode
+
+      # Downloads the pinned VS Code with retries, so the tiers below find it
+      # cached and make no request of their own to the update server.
+      - name: Install VS Code
+        run: npm run test:e2e:install -w @hydranium/example-order-flow-vscode
+
+      # Both tiers launch a real VS Code, which needs a display the runner does
+      # not have; `xvfb-run` provides one.
+      - name: VS Code e2e (extension-host tier)
+        run: xvfb-run -a npm run test:host -w @hydranium/example-order-flow-vscode
+
+      - name: VS Code e2e (webview tier)
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a npm run test:e2e -w @hydranium/example-order-flow-vscode
+
+      - name: Summarize test results
+        if: always()
+        run: node scripts/summarize-test-results.mts
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports-e2e-vscode
+          path: |
+            examples/order-flow/vscode/test-results/
+            examples/order-flow/vscode/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # A matrix job reports one check PER ENTRY, so sharding renames the check
   # branch protection is waiting for and nothing reports the old name ever
   # again — on this branch and, once merged, on every pull request after it.
   # The ruleset requires `e2e`, so this job exists to keep that name a stable
-  # contract and leave the shard COUNT an implementation detail the ruleset
-  # never has to learn about. Changing the count must not be a repository
-  # settings change.
+  # contract and leave the e2e jobs and their shard COUNT an implementation
+  # detail the ruleset never has to learn about. Changing either must not be a
+  # repository settings change.
   #
   # It is the only job here that needs no checkout: it reads a result and
   # nothing else.
   e2e:
-    needs: e2e-shard
-    # `always()`, or a skipped or failed shard leaves this pending rather than
+    needs: [e2e-chromium, e2e-vscode]
+    # `always()`, or a skipped or failed e2e job leaves this pending rather than
     # reporting — which is the very state this job exists to prevent.
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 5
 
     steps:
-      - name: Every shard passed
+      - name: Every e2e job passed
         run: |
           # A matrix `needs` result is already the aggregate: `success` only
           # when every entry succeeded. `skipped` is a PASS, because a dispatch
-          # with `skip_e2e` and a prose-only pull request skip the shards
+          # with `skip_e2e` and a prose-only pull request skip the e2e jobs
           # deliberately and must not report a failure here.
-          result='${{ needs.e2e-shard.result }}'
-          if [ "$result" != 'success' ] && [ "$result" != 'skipped' ]; then
-            echo "The e2e shards reported: $result" >&2
+          failed=0
+          for result in '${{ needs.e2e-chromium.result }}' '${{ needs.e2e-vscode.result }}'; do
+            if [ "$result" != 'success' ] && [ "$result" != 'skipped' ]; then
+              failed=1
+            fi
+          done
+          echo "e2e-chromium: ${{ needs.e2e-chromium.result }}, e2e-vscode: ${{ needs.e2e-vscode.result }}"
+          if [ "$failed" = 1 ]; then
+            echo "An e2e job did not pass" >&2
             exit 1
           fi
-          echo "e2e shards: $result"
 
   # Its own job so a scaffold that will not install, or whose heads fail,
   # reports as its own check. The check picks the npm that runs `init` and
