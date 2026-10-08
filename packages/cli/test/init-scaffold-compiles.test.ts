@@ -32,12 +32,13 @@
  *
  * They run inside the repo (under a gitignored `out/`) because the scaffold
  * imports `@hydranium/*`, `langium` and `@eclipse-glsp/*`, which resolve through
- * the workspace's hoisted `node_modules` — the scaffold's own `npm install`
- * would 404 until the packages are published.
+ * this package's devDependencies — the scaffold's own `npm install` would 404
+ * until the packages are published.
  */
 
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import { findPackageJSON } from 'node:module';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -45,7 +46,6 @@ import { generateTransferModel } from '../src/commands/generate-transfer-model.j
 import { type InitGrammarSpec, type InitHead, runInit } from '../src/commands/init.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const REPO_ROOT = path.resolve(PACKAGE_ROOT, '../..');
 
 /** Generating and type-checking a project is slow next to the rest of the suite. */
 const COMPILE_TIMEOUT_MS = 180_000;
@@ -71,19 +71,37 @@ const CASES: readonly CompileCase[] = [
 ];
 
 /**
- * Run a repo-local Node tool in the scaffold.
+ * The file behind `command` in the copy of `packageName` this package resolves.
+ *
+ * Not `<name>/package.json` through `require.resolve`, which `langium-cli`'s
+ * exports map refuses.
+ */
+function binPath(packageName: string, command: string): string {
+   const manifestPath = findPackageJSON(packageName, import.meta.url);
+   if (manifestPath === undefined) {
+      throw new Error(`${packageName} does not resolve from this package`);
+   }
+   const bin = (JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { bin?: Record<string, string> }).bin?.[command];
+   if (bin === undefined) {
+      throw new Error(`${packageName} declares no '${command}' binary`);
+   }
+   return path.join(path.dirname(manifestPath), bin);
+}
+
+/**
+ * Run `command` from a package this one declares, in the scaffold.
  *
  * The captured output is re-thrown rather than swallowed: `tsc` reports the
  * offending file and line on STDOUT, and without it a failure here says only
  * "command failed" about a project that no longer exists by the time anyone
  * reads it.
  */
-function runTool(targetDir: string, binary: string, args: readonly string[]): void {
+function runTool(targetDir: string, packageName: string, command: string, args: readonly string[]): void {
    try {
-      execFileSync(process.execPath, [path.join(REPO_ROOT, binary), ...args], { cwd: targetDir, stdio: 'pipe', encoding: 'utf-8' });
+      execFileSync(process.execPath, [binPath(packageName, command), ...args], { cwd: targetDir, stdio: 'pipe', encoding: 'utf-8' });
    } catch (err: unknown) {
       const output = err as { stdout?: string; stderr?: string };
-      throw new Error(`${binary} failed:\n${output.stdout ?? ''}${output.stderr ?? ''}`);
+      throw new Error(`${command} failed:\n${output.stdout ?? ''}${output.stderr ?? ''}`);
    }
 }
 
@@ -123,11 +141,7 @@ describe('the emitted scaffold compiles', () => {
             expect(JSON.parse(fs.readFileSync(base, 'utf-8'))).toHaveProperty('compilerOptions');
 
             // Both halves of the emitted `generate` script, in its order.
-            runTool(targetDir, 'node_modules/langium-cli/bin/langium.js', [
-               'generate',
-               '--file',
-               path.join(targetDir, 'langium-config.json')
-            ]);
+            runTool(targetDir, 'langium-cli', 'langium', ['generate', '--file', path.join(targetDir, 'langium-config.json')]);
             generateTransferModel({
                astFile: path.join(targetDir, 'src/language-server/generated/ast.ts'),
                augmentationFile: path.join(targetDir, 'src/language-server/ast.ts'),
@@ -136,16 +150,14 @@ describe('the emitted scaffold compiles', () => {
                terminalsName: `${name}Terminals`
             });
 
-            expect(() =>
-               runTool(targetDir, 'node_modules/typescript/bin/tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.json')])
-            ).not.toThrow();
+            expect(() => runTool(targetDir, 'typescript', 'tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.json')])).not.toThrow();
 
             // The emitted `typecheck:test`, which is a DIFFERENT check: it also
             // covers `test/`, and it turns on `isolatedModules`, so it is the only
             // thing that proves the emitted sources satisfy the stricter rules the
             // esbuild-based test runner needs.
             expect(() =>
-               runTool(targetDir, 'node_modules/typescript/bin/tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.test.json')])
+               runTool(targetDir, 'typescript', 'tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.test.json')])
             ).not.toThrow();
 
             // The diagram tests run the starter operation handler through an
@@ -154,7 +166,7 @@ describe('the emitted scaffold compiles', () => {
             const diagramTests = fs.readdirSync(path.join(targetDir, 'test')).filter(file => file.endsWith('-diagram.test.ts'));
             expect(diagramTests.length > 0).toBe(heads?.includes('glsp') ?? false);
             for (const diagramTest of diagramTests) {
-               expect(() => runTool(targetDir, 'node_modules/vitest/vitest.mjs', ['run', `test/${diagramTest}`])).not.toThrow();
+               expect(() => runTool(targetDir, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
             }
          } finally {
             // In `finally`, so a failing case cannot leave a directory that

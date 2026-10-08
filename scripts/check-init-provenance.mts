@@ -969,6 +969,73 @@ function selfTestPinComparison(sources: Record<string, string | undefined>): str
    return failures;
 }
 
+/** Every package `packages/cli` declares, in any dependency block, with its literal. */
+function readCliDeclared(): Readonly<Record<string, string>> {
+   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'packages/cli/package.json'), 'utf-8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+   };
+   return { ...manifest.dependencies, ...manifest.devDependencies };
+}
+
+/**
+ * Report each package the scaffold declares that `packages/cli` does not, or
+ * declares at a version the scaffold's pin does not admit.
+ *
+ * cli's scaffold-compiles test generates scaffolds inside cli and compiles and
+ * runs them there, so a package only the scaffold declares reaches them through
+ * npm's hoisting alone, and the test fails wherever npm does not hoist it; one
+ * cli declares at another version runs the test against a copy the scaffold
+ * would not resolve. No other gate sees either, since only generated code uses
+ * those packages.
+ */
+function compareCliDeclarations(emitted: Record<string, string>, cliDeclared: Readonly<Record<string, string>>): string[] {
+   const problems: string[] = [];
+   for (const [dependency, pin] of Object.entries(emitted)) {
+      if (dependency === '@hydranium/cli') {
+         continue;
+      }
+      const declared = cliDeclared[dependency];
+      if (declared === undefined) {
+         problems.push(
+            `${dependency}: the scaffold declares it but packages/cli/package.json does not. Add it to cli's devDependencies at the version the scaffold pins, or the scaffold-compiles test resolves it only where npm hoists it.`
+         );
+         continue;
+      }
+      // `init` derives these pins from cli's own manifest, and the workspace links them.
+      if (dependency.startsWith('@hydranium/') || declared === pin) {
+         continue;
+      }
+      const { agrees, why } = admits(pin, declared);
+      if (why !== undefined) {
+         problems.push(`${dependency}: the scaffold pins '${pin}' and packages/cli declares '${declared}', but ${why}.`);
+      } else if (!agrees) {
+         problems.push(
+            `${dependency}: the scaffold pins '${pin}' but packages/cli declares '${declared}', so the scaffold-compiles test runs against a copy the scaffold would not resolve.`
+         );
+      }
+   }
+   return problems;
+}
+
+/**
+ * Prove {@link compareCliDeclarations} still reports a missing declaration and
+ * a drifted one.
+ *
+ * Only those directions can fail silently: a comparison reporting too much
+ * turns the real run red.
+ */
+function selfTestCliDeclarations(): string[] {
+   const failures: string[] = [];
+   if (compareCliDeclarations({ 'some-package': '1.0.0' }, {}).length !== 1) {
+      failures.push('a scaffold dependency cli does not declare was not reported — a new template dependency would slip through');
+   }
+   if (compareCliDeclarations({ 'some-package': '1.0.0' }, { 'some-package': '0.9.0' }).length !== 1) {
+      failures.push('a cli version the scaffold pin does not admit was not reported — a bump of the scaffold alone would slip through');
+   }
+   return failures;
+}
+
 /**
  * Prove `--write` still respects the manifest before trusting it with an
  * example, on every run.
@@ -1145,6 +1212,13 @@ async function main() {
       process.exit(2);
    }
 
+   const cliSelfTestFailures = selfTestCliDeclarations();
+   if (cliSelfTestFailures.length > 0) {
+      console.error("✗ the cli-declaration self-test failed, so this run can say nothing about cli's manifest:\n");
+      cliSelfTestFailures.forEach(failure => console.error(`  - ${failure}`));
+      process.exit(2);
+   }
+
    if (write) {
       for (const target of TARGETS) {
          const written = writeTarget(init, target);
@@ -1162,10 +1236,11 @@ async function main() {
 
    let failed = false;
 
+   const emitted = emittedPins(init);
    // Run before the targets, because a pin that has drifted is a template defect
    // rather than an example one and every target would otherwise report it as
    // its own package.json drifting.
-   const pinProblems = comparePins(emittedPins(init), pinSources);
+   const pinProblems = comparePins(emitted, pinSources);
    if (pinProblems.length > 0) {
       failed = true;
       console.error('✗ the versions `init` scaffolds no longer match the ones this repo declares:\n');
@@ -1175,6 +1250,15 @@ async function main() {
       console.log(
          `✓ all ${Object.keys(SCAFFOLD_PIN_SOURCES).length} scaffolded third-party versions match the manifests that declare them`
       );
+   }
+
+   const cliProblems = compareCliDeclarations(emitted, readCliDeclared());
+   if (cliProblems.length > 0) {
+      failed = true;
+      console.error('✗ packages/cli does not match the packages `init` scaffolds:\n');
+      cliProblems.forEach(problem => console.error(`  - ${problem}`));
+   } else {
+      console.log('✓ packages/cli declares every package `init` scaffolds, at versions the scaffold admits');
    }
 
    for (const target of TARGETS) {

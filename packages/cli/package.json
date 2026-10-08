@@ -69,14 +69,24 @@
     "ts-morph": "^25.0.0"
   },
   "devDependencies": {
+    "@eclipse-glsp/graph": "2.7.0",
+    "@eclipse-glsp/server": "2.7.0",
     "@hydranium/core": "1.0.0-next",
     "@hydranium/data-server": "1.0.0-next",
+    "@hydranium/glsp-server": "1.0.0-next",
     "@hydranium/langium": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
+    "@types/node": "^22.0.0",
+    "inversify": "6.2.2",
+    "langium": "4.3.1",
+    "langium-cli": "4.3.0",
+    "reflect-metadata": "0.2.2",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
+    "vitest": "^4.0.0",
     "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver": "10.0.1"
+    "vscode-languageserver": "10.0.1",
+    "vscode-languageserver-protocol": "3.18.1"
   },
   "peerDependencies": {
     "@hydranium/core": "^1.0.0-next",
@@ -98,6 +108,7 @@
   "engines": {
     "node": ">=22.13"
   },
+  "//devDependencies": "Every package an `init` scaffold declares, other than this one, is declared here, whether or not `src` uses it: the scaffold-compiles test compiles and runs scaffolds inside this package, so their imports and tools resolve through these declarations. `check:init-provenance` holds this list and its versions to the scaffold's manifest.",
   "//exports": "Two keys, and the SHORT list is the point: `files` ships the whole compiled tree, so without a map every `lib/commands/*.js`, every internal helper and `lib/testing/echo-server.js` is deep-importable the moment this publishes, and semver then applies to all of it. `.` is the library barrel (the data-server subcommands an adopter calls as functions). `./lib/cli.js` is the BINARY ARTEFACT, and it is declared because a consumer that spawns the CLI resolves it BY SPECIFIER — `createRequire(import.meta.url).resolve('@hydranium/cli/lib/cli.js')` — to get the path npx would run; `bin` gives a shim on PATH, not a path, so dropping this key breaks that resolution and the failure surfaces as \"hydranium-cli is not built\", naming the wrong cause. `heap-analysis/` needs no key even though `files` ships it — `analyze-heap` reaches the analyzer through a `new URL(..., import.meta.url)` file URL, which `exports` does not gate, and the package's own tests reach it relatively. `./testing` is deliberately absent: `echo-server` is a spawnable stdio fixture, not a reusable export.",
   "//memlab": "@memlab/core and @memlab/heap-analysis are OPTIONAL PEER dependencies, not optionalDependencies, and the distinction is the whole point: npm installs optionalDependencies BY DEFAULT, both memlab packages pin puppeteer exactly, and puppeteer's postinstall downloads a Chrome binary — so every adopter of this CLI paid ~86 MB and a browser download for the one subcommand almost none of them run, and the download can fail and be walked past as a warning. An optional peer is not auto-installed, so `analyze-heap` documents `npm install @memlab/core @memlab/heap-analysis` as the opt-in and every other subcommand is unaffected. Taken pre-publish deliberately: after publish the install shape is what adopters already have.",
   "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`.",

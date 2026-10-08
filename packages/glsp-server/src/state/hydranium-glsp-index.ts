@@ -10,8 +10,8 @@
 import { type GModelElement, GModelIndex } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
 import { type AstNode, AstUtils, type URI } from '@hydranium/langium';
-import * as uuid from 'uuid';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
+import { randomUuid } from '@hydranium/protocol';
 import { workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
 
@@ -154,7 +154,7 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /** Return the GModel id assigned to `node`, falling back to a fresh `fallback_<uuid>`. */
    createId(node?: AstNode): string {
-      return this.findId(node, () => 'fallback_' + uuid.v4());
+      return this.findId(node, () => 'fallback_' + randomUuid());
    }
 
    /**

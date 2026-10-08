@@ -68,9 +68,6 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "watch": "tsc -b -w --preserveWatchOutput"
   },
-  "dependencies": {
-    "uuid": "^10.0.0"
-  },
   "devDependencies": {
     "@eclipse-glsp/server": "2.7.0",
     "@hydranium/core": "1.0.0-next",
