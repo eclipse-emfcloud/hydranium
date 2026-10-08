@@ -71,7 +71,7 @@ import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { REBUILD_TIMEOUT_MS, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -431,7 +431,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
       // the diagram session's `updateAll`, rebuild on the shared builder.
       glsp.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE));
       await glsp.nextAction(RequestBoundsAction.KIND);
-      await waitFor(() => data.events.length >= 1);
+      await waitFor(() => data.events.length >= 1, { timeoutMs: REBUILD_TIMEOUT_MS });
 
       const lastEvent = data.events[data.events.length - 1];
       expect(lastEvent.document.uri).toBe(processUri);
@@ -503,6 +503,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             baseVersion: 'any'
          });
          await waitFor(() => reconnected.events.length >= 1, {
+            timeoutMs: REBUILD_TIMEOUT_MS,
             message: 'the reconnected data watch did not receive its first update'
          });
          expect(data.events).toHaveLength(disposedDataEvents);
@@ -514,6 +515,7 @@ describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)
             baseVersion: 'any'
          });
          await waitFor(() => reconnected.events.length >= 2, {
+            timeoutMs: REBUILD_TIMEOUT_MS,
             message: 'the reconnected data watch did not receive its second update'
          });
          expect(textDocuments.get(processUri)?.getText()).toBe(EDITED_PROCESS_TEXT);

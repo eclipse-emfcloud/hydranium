@@ -19,7 +19,7 @@ import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-s
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
+import { REBUILD_TIMEOUT_MS, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 const FILE = 'model-hash.domain';
 const CLEAN = 'entity Solo {\n   a : string\n}\n';
@@ -65,7 +65,10 @@ describe('an edit that leaves the transfer model unchanged', () => {
 
       const written = await head.proxy.updateModelDocument({ uri, clientId: 'writer', model: COMMENTED, baseVersion: 'any' });
 
-      await waitFor(() => head.events.length === 1, { message: 'no update event for the comment-only edit' });
+      await waitFor(() => head.events.length === 1, {
+         timeoutMs: REBUILD_TIMEOUT_MS,
+         message: 'no update event for the comment-only edit'
+      });
       const [event] = head.events;
       expect({ version: event.document.model?.version, reason: event.reason, hash: event.document.model?.hash }).toEqual({
          version: written.model?.version,
@@ -83,7 +86,7 @@ describe('an edit that leaves the transfer model unchanged', () => {
 
       await head.proxy.updateModelDocument({ uri, clientId: 'writer', model: EDITED, baseVersion: 'any' });
 
-      await waitFor(() => head.events.length === 1, { message: 'no update event for the model edit' });
+      await waitFor(() => head.events.length === 1, { timeoutMs: REBUILD_TIMEOUT_MS, message: 'no update event for the model edit' });
       expect(head.events[0].document.model?.hash).not.toBe(validated.hash);
    });
 
