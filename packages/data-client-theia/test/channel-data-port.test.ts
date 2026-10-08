@@ -109,6 +109,14 @@ describe('ChannelDataPort', () => {
       expect(port.attempts).toEqual([{ outcome: 'cancelled' }, { outcome: 'cancelled' }]);
    });
 
+   it('refuses to connect once disposed', async () => {
+      const port = new TestPort();
+
+      port.dispose();
+
+      await expect(port.connect()).rejects.toThrow('disposed');
+   });
+
    it('still raises the connection failures when no lifecycle reports them', () => {
       const port = new TestPort();
       port.reportError(new Error('boom'), resolve(DATA_SERVER_CONNECT_FAILED, { detail: 'boom' }));

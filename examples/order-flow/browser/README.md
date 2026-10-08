@@ -570,9 +570,12 @@ what a browser host must accommodate, and why — is
   `closeLanguageClientDocuments`. A page or a worker that dies still ends
   nothing, because the port cannot say so. Here that costs nothing, since the
   worker dies with the page, and the page never disposes a connection, so the
-  signal is wiring for a host that does. A disposed
-  `WorkerDataPort` refuses to connect again, because the worker's end of its
-  port stays closed.
+  signal is wiring for a host that does. Because disposing any connection
+  over the port ends the head, `WorkerDataPort` hands every connection
+  generation the same connection: a fresh one per generation would leave the
+  one a failed readiness check used still reading the port, with no way to
+  dispose it that keeps the head alive. A disposed `WorkerDataPort` refuses to
+  connect again, because the worker's end of its port stays closed.
 - **Nothing asynchronous may sit between the LSP reader and `listen`.** The
   stored workspace is restored *before* the connection is constructed, and that
   is not tidiness: `createMessagePortTransport` starts its port as it is built

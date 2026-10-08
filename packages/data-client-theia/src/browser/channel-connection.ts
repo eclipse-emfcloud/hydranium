@@ -213,10 +213,10 @@ export interface ChannelConnectionHandle {
     *
     * **This is the event a consumer wants, not {@link onDidReconnect}.** Anything
     * derived from a connection — an `createRpcProxy`, a readiness gate, a
-    * `DataSession` generation — is dead from this moment, and a consumer that
+    * `DataConnection` generation — is dead from this moment, and a consumer that
     * waits for the replacement to be live instead keeps sending into the dead one
     * for the whole gap. A `DataPort` implementation translates this into the
-    * port's own `onDispose`, which is what makes `DataSession` drop its
+    * port's own `onDispose`, which is what makes `DataConnection` drop its
     * generation.
     *
     * Never fires when {@link OpenChannelConnectionOptions.reconnect} is off.

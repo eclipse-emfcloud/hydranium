@@ -5,5 +5,7 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  "//files": "The webview's data port is tested in Node; listed by name because src/webview is excluded, and the rest of it needs the DOM lib.",
+  "files": ["src/webview/properties-data-port.ts"]
 }

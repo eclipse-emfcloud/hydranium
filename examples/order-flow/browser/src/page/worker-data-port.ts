@@ -27,6 +27,7 @@ export class WorkerDataPort implements DataPort {
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose = this.disposeEmitter.event;
    protected disposed = false;
+   protected connection?: MessageConnection;
 
    constructor(
       protected readonly port: MessagePort,
@@ -42,20 +43,27 @@ export class WorkerDataPort implements DataPort {
     *
     * Both ends use `createMessagePortTransport`; see it for why.
     *
+    * Every generation gets the same connection. A fresh one per generation
+    * would leave the one a failed readiness check used still reading the port,
+    * and disposing that one is no way out: disposing any connection over the
+    * port ends the worker's head, and the retry would wait for an answer that
+    * never comes.
+    *
     * **Rejects once this port is disposed, and a disposed port cannot be
-    * reused** — the one exception to `DataPort.connect`'s rule that a rejection
-    * leaves the port reusable. The dispose drops the current connection, which
-    * signals its end, and the worker's end of the port then stays closed: a
-    * later connection over it would send requests nothing answers, and hang.
+    * reused.** Its dispose disposes the connection, which signals the close to
+    * the worker, whose end of the port then stays closed: a later connection
+    * over it would send requests nothing answers, and hang.
     */
    connect(): Promise<MessageConnection> {
       if (this.disposed) {
          return Promise.reject(new Error('WorkerDataPort: the port is disposed, and the data head behind it has ended'));
       }
-      const transport = createMessagePortTransport(this.port);
-      const connection = createMessageConnection(transport.reader, transport.writer, this.logger);
-      connection.listen();
-      return Promise.resolve(connection);
+      if (!this.connection) {
+         const transport = createMessagePortTransport(this.port);
+         this.connection = createMessageConnection(transport.reader, transport.writer, this.logger);
+         this.connection.listen();
+      }
+      return Promise.resolve(this.connection);
    }
 
    reportError(error: unknown, reported: ResolvedMessage): void {
@@ -70,9 +78,11 @@ export class WorkerDataPort implements DataPort {
       console.error(`[data head] ${renderFrameworkMessage(reported)}`, error);
    }
 
+   /** The consumer hears it first; the connection goes even when no generation holds it, as after a failed readiness check. */
    dispose(): void {
       this.disposed = true;
       this.disposeEmitter.fire();
       this.disposeEmitter.dispose();
+      this.connection?.dispose();
    }
 }
