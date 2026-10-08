@@ -9,6 +9,7 @@
 
 import { type GEdge, GEdgeView, Point, type RenderingContext, angleOfPoint, svg, toDegrees } from '@eclipse-glsp/client';
 import { injectable } from 'inversify';
+import { type VNode } from 'snabbdom';
 
 /**
  * A `.process` connection, drawn with an arrowhead at its target.
@@ -32,15 +33,10 @@ import { injectable } from 'inversify';
  * factory IS what the `/** @jsx svg *\/` pragma compiles to, and calling it
  * keeps this package free of a JSX toolchain it otherwise has no use for — its
  * `tsconfig.json` configures none.
- *
- * The return type is inferred rather than written, because spelling it means
- * importing `VNode` from `snabbdom` — a transitive dependency of the GLSP client
- * that this package does not declare, and `import/no-extraneous-dependencies`
- * is right to reject reaching through the graph for it.
  */
 @injectable()
 export class ProcessEdgeView extends GEdgeView {
-   protected override renderAdditionals(edge: GEdge, segments: Point[], context: RenderingContext) {
+   protected override renderAdditionals(edge: GEdge, segments: Point[], context: RenderingContext): VNode[] {
       const additionals = super.renderAdditionals(edge, segments, context);
       const penultimate = segments[segments.length - 2];
       const last = segments[segments.length - 1];

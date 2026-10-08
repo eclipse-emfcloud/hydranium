@@ -12,7 +12,7 @@ orientation only.
 
 ## Runtime dependency licences
 
-The hard runtime closure is 51 packages: 41 MIT, 6 Apache-2.0, 3 ISC, 1
+The hard runtime closure is 50 packages: 40 MIT, 6 Apache-2.0, 3 ISC, 1
 BSD-3-Clause. It contains **no** GPL, AGPL, LGPL, SSPL or BUSL code.
 
 ### Apache-2.0
@@ -45,12 +45,12 @@ so there is no notice text to propagate and this section is the disclosure.
 
 ### MIT and ISC
 
-The remaining 44 packages are MIT or ISC. Both require the copyright notice and
+The remaining 43 packages are MIT or ISC. Both require the copyright notice and
 permission notice to accompany the software, which npm satisfies by installing
 each package with its own `LICENSE` file. Notable direct dependencies:
 `langium`, `vscode-jsonrpc`, `vscode-languageserver`,
 `vscode-languageserver-protocol`, `vscode-uri`, `commander`, `@clack/prompts`,
-`ts-morph`, `uuid`, `fast-json-patch`.
+`ts-morph`, `fast-json-patch`.
 
 ## Vendored source
 
