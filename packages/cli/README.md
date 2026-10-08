@@ -207,6 +207,10 @@ npm install
 npm run build                # langium generate + tsc, into lib/
 npm test                     # the scaffolded DI-composition test
 
+# A model to work on: the starter grammar's nodes, one referencing the other
+mkdir models
+printf 'node Start -> End\nnode End\n' > models/first.my-lang
+
 # The editor entry: LSP on stdio, every other head on a published socket
 node lib/main.js --stdio
 

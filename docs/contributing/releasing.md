@@ -12,6 +12,12 @@ last release tag. `1.0.0-next` is the **base**, committed in the root
 manifest and in all ten package manifests; `.<n>` is appended by
 `scripts/release.mts` in the runner's tree and is never committed.
 
+The line starts at major one, and that is not a stability claim. Under
+`fixed` versioning with caret peer ranges, a zero-major line could not take a
+minor bump at all, so the major cannot carry the alpha signal; the prerelease
+suffix carries it instead. A minor bump may break the API for as long as the
+framework is alpha.
+
 Three properties follow, and each is load-bearing:
 
 - **It is monotonic.** A commit hash is not: a seven-character short SHA

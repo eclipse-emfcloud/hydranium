@@ -16,13 +16,9 @@ npm before 11.6, which includes every npm a Node 22 release bundles, crashes on
 a fresh install that includes `vitest` 4.1 or later, with `Cannot read
 properties of null (reading 'edgesOut')`
 ([npm/cli#8261](https://github.com/npm/cli/issues/8261)). `init` holds the
-scaffold's `vitest` at `~4.0.18` so its first install works on Node 22. It
-lifts the hold only in a workspace whose root `packageManager` declares npm 11.6
-or later, and only when the npm running `init` is known to be 11.6 or later too,
-since npm does not enforce `packageManager`. `init` learns that npm from the
-user agent `npx` and `npm run` set, so run any other way, as a global binary or
-through pnpm or yarn, it keeps the hold. Raise it once every npm that installs
-your project is 11.6 or later.
+scaffold's `vitest` at `~4.0.18` so its first install works on Node 22, unless
+it can tell that every npm installing the project is 11.6 or later. Raise the
+hold yourself once that is true.
 
 ## One physical copy of Langium, and the wire stack pinned under it
 
@@ -90,15 +86,6 @@ top of the tree. Without them another member's `langium` or LSP packages can
 hold the top, as in an installed root that `generator-langium` wrote, and your
 package then gets its own copies beside the framework's, even of the same
 versions.
-
-**If you followed an earlier version of this page**, remove the
-`vscode-jsonrpc` and `vscode-languageserver-protocol` entries from your root
-`overrides`, and the `vscode-jsonrpc` patch with the `patch-package`
-`postinstall` that applied it. Without the patch those overrides stop GLSP at
-startup, since `@eclipse-glsp/protocol` requires `vscode-jsonrpc/browser`, and
-they conflict with the versions `init` declares. Keep `langium` pinned, declare
-`vscode-languageserver` `10.0.1`, `vscode-languageserver-protocol` `3.18.1` and
-`vscode-jsonrpc` `9.0.0` as `init` does, and reinstall from scratch as above.
 
 ## TypeScript 5.4 or newer
 
@@ -226,7 +213,7 @@ afterward.
 
 ## Related
 
-- [Status, limitations and roadmap](status.md) — what the exact pin costs you,
-  alongside the other known limitations.
-- [Troubleshooting a server you are building](troubleshooting.md) — the
+- [Status and limitations](status.md): what the exact pin costs you, alongside
+  the other known limitations.
+- [Troubleshooting a server you are building](troubleshooting.md): the
   symptoms a duplicated copy actually produces.
