@@ -15,7 +15,7 @@ The design behind what the adopter pages under
 - [**Client sessions**](contributing/design/client-sessions.md) — the full
   contract of a session on each head: when a write answers, how a reconnect
   restores, how editor saves and the release grace work.
-- [**The four document layers**](concepts/document-layers.md) — what the user
+- [**The four document layers**](contributing/design/document-layers.md) — what the user
   typed, what Langium built from it, what in-process consumers get, what
   crosses the wire, and why the last two are different types.
 - [**Service placement and composition**](contributing/design/service-placement.md)

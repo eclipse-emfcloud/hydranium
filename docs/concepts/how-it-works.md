@@ -1,64 +1,62 @@
 # How it works
 
-Hydranium's central idea is **one shared workspace, several heads**. The model
-of your language is text on disk, kept live as a Langium AST, and that live AST
-is the single source of truth. Each head exposes it to one kind of client, a
-text editor, a form or a diagram, and none of them keeps a copy of its own.
+Your models are text files on disk. Hydranium keeps them live as one Langium
+AST, the **shared workspace**, and every client works on it: a text editor, a
+form, a diagram. Each kind of client talks to its own **head**. No head keeps a
+copy of the model, so an edit made through one head shows up in all the others.
 
 ![An editor host connects over one channel per protocol to a Hydranium server, whose heads share one Langium workspace over the model files on disk](../img/architecture.svg)
 
 ## One server, several heads
 
-The heads run together in **one server process**. In Theia or VS Code that
-process is separate from the editor: the extension host spawns it and connects
-to it, as it would for any language server. Nothing assumes that layout,
-though. Every head speaks JSON-RPC over a `MessageConnection`, on whatever
-transport the host chooses: stdio, a socket, a web worker's `MessagePort`, or
-an in-process pair in tests. The server's code is the same in every case; only
-the launch differs.
+All heads run in **one server process**. In Theia or VS Code the extension host
+spawns that process and connects to it, as it would for any language server.
+
+Each head speaks JSON-RPC over a `MessageConnection`, on whatever transport the
+host chooses: stdio, a socket, a web worker's `MessagePort`, or an in-process
+pair in tests. Your server code is the same on every transport; only the launch
+differs.
 
 Three heads come with the framework:
 
 - **The LSP head** serves text editors. It is an ordinary Langium language
-  server, at `@hydranium/core/lsp`, with one difference: its edits land in the
-  shared workspace rather than a private document store, so a form or diagram
-  open on the same document sees them.
-- **The data head** serves clients that want the model rather than its text: a
-  form wants entities and attributes, not text ranges. It is a typed JSON-RPC
-  API, `@hydranium/data-server`, that reads, updates and saves documents and
-  pushes their changes. It projects the live AST onto a transfer shape the CLI
-  generates from your grammar, so there is no second model to keep in step.
+  server, at `@hydranium/core/lsp`. Its edits land in the shared workspace, so
+  a form or diagram open on the same document sees them.
+- **The data head** serves clients that want the model rather than its text,
+  such as a form. It is a typed JSON-RPC API, `@hydranium/data-server`, that
+  reads, updates and saves documents and pushes their changes. It sends the
+  live AST in a transfer shape the CLI generates from your grammar, so you have
+  no second model to keep in step.
 - **The GLSP head** serves diagrams, through `@hydranium/glsp-server`. It
-  derives a diagram from the shared model, and turns each edit on the diagram
-  back into an edit of the model. What the diagram shows is yours: you write the
-  factory that turns your model into a diagram, one per diagram type.
+  derives a diagram from the shared model and turns each diagram edit back into
+  a model edit. You write the factory that turns your model into a diagram, one
+  per diagram type.
 
-The set is open. A head is code that holds the shared services and speaks a
-protocol on a connection, so you can add your own, such as an MCP server for AI
-agents, a REST bridge or a code-generation endpoint, the dashed _custom head_ in
-the diagram. The heads coordinate only through the shared workspace, so an edit
-made through one shows up in all the others with no protocol between them.
+You can add a head of your own, the dashed _custom head_ in the diagram: code
+that holds the shared services and speaks its protocol on a connection. Heads
+coordinate only through the shared workspace, so yours needs no protocol to the
+others.
 
-What is open is the set of heads in one process, not the number of processes:
-[one process writes a workspace](../adopting/status.md#one-process-writes-a-workspace).
+Add heads to the one process; do not start a second process on the same
+workspace: [one process writes a workspace](../adopting/status.md#one-process-writes-a-workspace).
 
 ## The shared workspace
 
-The workspace every head works on has three layers, as the diagram shows.
+The workspace has three layers, as the diagram shows.
 
-- **Model coordination** lets several clients work on one document. There is
-  one shared text per document, and every head writes to it.
-- **Language workspace** is Langium's own pipeline, parse, link, validate and
-  index, over the live AST.
-- **Language semantics** is what `@hydranium/core` adds on top, which you would
-  otherwise build for each language yourself:
+- **Model coordination** lets several clients work on one document. Each
+  document has one shared text, and every head writes to it.
+- **Language workspace** is Langium's own pipeline over the live AST: parse,
+  link, validate and index.
+- **Language semantics** is what `@hydranium/core` adds, so you do not build it
+  for each language yourself:
   - **projects and visibility tiers**: a directory marked as a project sees its
     own elements and those its declared dependencies make public;
   - **integrity rules**: checks and repairs across documents;
   - **AST extensions**: computed properties and synthetic children attached
     while a document builds;
-  - **serialization**: base classes, and JSON and YAML serializers, for
-    turning an edited model back into your language's text;
+  - **serialization**: base classes, and JSON and YAML serializers, that turn
+    an edited model back into your language's text;
   - **the transfer model**: the typed shape the data head sends, generated by
     the CLI.
 
@@ -68,17 +66,16 @@ where your language changes these defaults.
 
 ## Documents, sessions and saves
 
-Every client that opens or writes documents does it through a **client
-session**. A session's id is the author of its edits, the key it recognises its
-own echoes by, and the owner of what it has open. The text editor behind the
-LSP head takes part under a reserved id of its own.
+Every client that opens or writes documents does so through a **client
+session**. The session's client id marks the edits it makes, lets the client
+recognise its own echoes among update events, and owns what it has open. The
+text editor behind the LSP head takes part under an id the framework reserves.
 
-- **A document is opened before it is written.** The first open loads it from
-  disk; later opens join the same shared text. A session that writes a document
-  it does not have open fails with `DocumentNotOpenError`.
-- **Writes name the version they are based on.** A write based on a version
-  that has since moved on fails with `ConflictError` rather than overwriting the
-  newer text.
+- **Open a document before you write it.** The first open loads it from disk;
+  later opens join the same shared text. Writing a document your session does
+  not have open fails with `DocumentNotOpenError`.
+- **Name the version a write is based on.** If that version has since moved on,
+  the write fails with `ConflictError` rather than overwriting the newer text.
 - **An update changes the shared model; a save writes it to disk.** A save
   writes the document's current text, which includes the unsaved edits of
   every other client working on it.
@@ -87,9 +84,9 @@ LSP head takes part under a reserved id of its own.
 - **Reads need no session.** Snapshots, waits for a current model and change
   subscriptions live on `ModelService`.
 - **A lost connection keeps its unsaved text for a while.** When a client's
-  connection drops, its documents wait out a release grace (`releaseGraceMs`)
-  before the shared text is dropped, and a client that reconnects under the
-  same id within it finds its unsaved edits.
+  connection drops, its documents keep their shared text for a release grace,
+  `releaseGraceMs`. A client that reconnects under the same id within it finds
+  its unsaved edits.
 
 [Connect a data client](../guides/connect-a-data-client.md) shows a client
 working through a session, and
