@@ -1,15 +1,15 @@
 # Getting started
 
-From nothing to a language server you have built, tested and run a model
-through, with the CLI's `init` doing the wiring.
+This page takes you from nothing to a language server you have built, tested
+and run a model through. The CLI's `init` does the wiring.
 
 ## Before you start
 
-Node and npm must be at least the versions [Requirements](requirements.md)
+You need Node and npm at least at the versions [Requirements](requirements.md)
 names.
 
-> **Pin an exact version.** Every release is a prerelease, and a caret range
-> matches no prerelease, so a range will not resolve one. `init` writes exact
+> **Pin an exact version.** Every release is a prerelease that may break the
+> API, and a range would let npm move you to the next one. `init` writes exact
 > versions for you.
 
 ## Scaffold a language
@@ -20,11 +20,14 @@ npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp
 
 `init` writes a complete project: a starter grammar in `src/grammar/`, the
 services wiring, a server entry that starts every head, and build and test
-scripts. The three
-heads serve text editors (LSP), forms and tools (data) and a diagram (GLSP);
-leave `glsp` out for a language without one. Leave `--name` off on a terminal
-and `init` asks instead, then prints the command it composed. Every option is
-in the [CLI README](../../packages/cli/README.md).
+scripts.
+
+- `--heads` picks the heads: LSP serves text editors, data serves forms and
+  tools, GLSP serves a diagram. Leave `glsp` out for a language without one.
+- Leave `--name` off on a terminal and `init` asks instead, then prints the
+  command it composed.
+
+Every option is in the [CLI README](../../packages/cli/README.md).
 
 ## Build and test
 
@@ -52,8 +55,8 @@ npx hydranium-cli validate --services ./lib/services.js ./models
 ```
 
 It reports no problems. Change `End` in the first line to `Missing` and run it
-again: it reports the unresolved reference with its position and exits
-non-zero, so it works as a check in CI.
+again. This time it reports the unresolved reference with its position and exits
+non-zero, so you can use it as a check in CI.
 
 ## Look at the language with the CLI
 
@@ -63,8 +66,8 @@ npx hydranium-cli lint-grammar --services ./lib/services.js   # grammar conventi
 npx hydranium-cli model-docs --services ./lib/services.js --out-file model-reference.md
 ```
 
-Edit the grammar, rebuild, and run them again: each reads the built services,
-so it always describes the language as it is.
+Each reads the built services. Edit the grammar, rebuild, and run them again to
+see the language as it is.
 
 ## Where to go from here
 

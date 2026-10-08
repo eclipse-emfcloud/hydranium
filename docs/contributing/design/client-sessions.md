@@ -395,7 +395,8 @@ for the holder to end, which covers a client that reconnects
 under its old id without resuming. A load whose token does not match is not
 kept waiting. When the id is still held, the diagram does not load: the client
 gets a rejection naming the id, and the user a message saying the diagram's
-identifier is in use, with `DIAGRAM_SESSION_REFUSED` as its code. A save before
+identifier is in use (`DIAGRAM_SESSION_REFUSED`, code
+`hydranium/glsp-server/diagram-session-refused`). A save before
 the diagram has loaded fails the same way. Taking the id over without the token
 would end the other participant's session, and working without one would share
 its opens, so its close would close the diagram's documents too.
@@ -630,9 +631,15 @@ has debounced for the document is dropped: the revert rebuilds or removes the
 document, and the text a `virtual:` document is rebuilt from already holds that
 change.
 
-The bound provider is a `FileSystemProviderRegistry` that dispatches by scheme;
-how an adopter serves a scheme of its own, and the startup warning for seeded
-documents no provider serves, are in
+The bound provider is a `FileSystemProviderRegistry` that dispatches by
+scheme: the framework registers a provider for `virtual:` in the shared
+`fileSystemProviders` group, every scheme with no entry there goes to the
+registry's `host`, the provider from `context.fileSystemProvider`, and its
+TSDoc says how a scheme gets a provider of its own. The workspace manager
+warns once at startup when no provider serves a seeded document, since it
+would leave the workspace at its last close; a host that drops such
+documents on purpose passes `warnUnservedDocuments: false`. The adopter's
+view is in
 [Customizing services](../../concepts/customizing-services.md#serving-documents-from-another-filesystem).
 
 `TextDocuments.onDidReleaseDocument` fires when a document is released,

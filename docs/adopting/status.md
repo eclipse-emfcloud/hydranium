@@ -2,155 +2,135 @@
 
 ## Status: alpha
 
-Hydranium publishes a prerelease to npm on every merge to `main`. The public API
-is not frozen: names, module layout, service slots and DI bindings can change
-between releases, without a deprecation window.
+Every merge to `main` publishes a prerelease to npm. The public API is not
+frozen: names, module layout, service slots and DI bindings can change between
+releases, with no deprecation window.
 
-- **Use it if** you are willing to track the framework closely, pin each
-  release exactly, and adapt your code when a seam moves.
-- **Wait if** you need a stable dependency for a product on a fixed schedule.
+- **Use it** if you can track the framework closely, pin each release exactly,
+  and adapt your code when a seam moves.
+- **Wait** if you need a stable dependency for a product on a fixed schedule.
 
-It is alpha because the _surface_ is still moving, not because the _machinery_
-is unproven: three protocol heads already run on one shared workspace.
+Alpha describes the API surface, not the machinery: three protocol heads
+already run on one shared workspace.
 
 ## Stability and versioning
 
-- **Pin exactly.** Every release is a prerelease, and no semver range matches a
-  prerelease, so a range resolves none of them. Until the first stable release,
-  a bare `npm install` gets the newest prerelease. Any release may break the
-  API, and there is no changelog on this line.
-- **Never mix versions.** All `@hydranium/*` packages are released together at
-  one version, and several of them share types by identity rather than by
-  structure.
-- **Subpaths are surface too.** A subpath export such as `@hydranium/core/lsp`
-  is as stable as the package root. A subpath ending in `/testing` is test
-  support only and may change with no notice; do not import it from production
-  code.
-- **`protected` members are surface.** The framework is extended by
-  subclassing, so `protected` members are held to the same bar as public ones.
-  A `protected` member with no caller in the framework is a seam, not dead code.
+- **Pin exactly.** Every release is a prerelease, any of them may break the
+  API, and there is no changelog. A range would let npm move you to a newer
+  prerelease, and a bare `npm install` gets the newest one.
+- **Use one version for every `@hydranium/*` package.** They are released
+  together, and several share types by identity, so mixed versions do not fit
+  together.
+- **Subpaths count as API.** A subpath such as `@hydranium/core/lsp` is as
+  stable as the package root. A `testing` subpath, and any subpath under it, is
+  test support that can change without notice; do not import it from
+  production code.
+- **`protected` members count as API.** You extend the framework by
+  subclassing, so a `protected` member is held to the same bar as a public one,
+  even when nothing in the framework calls it.
 
 ## Known limitations
 
 ### The framework ships no translations
 
-Every message is English until you supply a catalogue; the server then renders
+Every message is English until you supply a catalogue. The server then renders
 diagnostics and messages in each client's locale.
 [Translate your language](../guides/translate-your-language.md) shows how, and
-what stays English: a string sent without a code, and client text the host
-translates itself.
+what stays English.
 
 ### Data-head updates are whole-document
 
-`updateModelDocument` takes either a complete transfer-model root or the
-complete serialized text. There is no incremental or patch-based update on the
-data head: editing one attribute of a large model sends the whole model. The
-same holds in the other direction: an update notification carries the whole
-document, not a delta.
+`updateModelDocument` takes a complete transfer-model root or the complete
+serialized text. Editing one attribute of a large model sends the whole model,
+and an update notification carries the whole document back.
 
-This is a throughput ceiling on very large models, not a correctness problem.
-Conflict detection is version-based (`baseVersion`), so concurrent whole-model
-updates are rejected rather than silently merged.
+This limits throughput on very large models, not correctness. Each update
+carries a `baseVersion`, so a concurrent update is rejected rather than
+silently merged.
 
 ### Langium is pinned to one exact version
 
-Hydranium requires a **single physical copy** of Langium in the dependency
-graph, so the version is pinned exactly and the LSP wire stack beneath it moves
-with it as one chain. **You cannot choose a different Langium version.** The
-mechanism, the exact chain, and what your own manifest has to say are in
-[Requirements](requirements.md).
-
-It costs you in two places: a Langium release you want is a release you wait
-for, and every change to the pin needs a from-scratch reinstall rather than a
-lockfile refresh.
+The framework needs a single physical copy of Langium in your install, so you
+cannot choose a different Langium version. You wait for the framework to adopt
+a Langium release, and every change to the pin needs a from-scratch reinstall.
+[Requirements](requirements.md) says what your manifest declares.
 
 ### Semantic tokens add no colour in Theia
 
-Theia hands a server's semantic tokens to Monaco wherever the server runs, but
-Monaco does not colour them. Theia loads a theme's `tokenColors` and drops its
-`semanticHighlighting` and `semanticTokenColors`, so under the default
-`editor.semanticHighlighting.enabled` value, `configuredByTheme`, semantic
-highlighting stays off. Turning the setting on does not fix it: Monaco looks a
-token's type up as a theme rule name, and Theia's themes name their rules by
-TextMate scope. A type that happens to name a styled scope (`comment`,
-`keyword`) takes that colour; every other type takes the editor's default
-foreground. Syntactic (TextMate) highlighting still applies, and VS Code
-colours the same tokens.
+In Theia, your server's semantic tokens leave the text in the editor's default
+colour, while VS Code colours them. TextMate highlighting still applies.
 
-The framework cannot ship the colours, because the token types are each
-language's own. A host can: the browser example turns the setting on and adds
-theme rules named by its server's token types, in
+The cause is in Theia: its themes keep `tokenColors` and drop their semantic
+token colours, and their rules are named by TextMate scope, while Monaco looks
+up a semantic token by its type name. Turning on
+`editor.semanticHighlighting.enabled` alone colours only the types that happen
+to match a scope, such as `comment` or `keyword`.
+
+The framework cannot ship the colours, because each language has its own token
+types. Your host can: turn the setting on and add theme rules named by your
+server's token types, as the browser example does in
 [`monaco-lsp-adapter.ts`](../../examples/order-flow/browser/src/page/monaco-lsp-adapter.ts).
 
 ### Client libraries cover Theia only
 
-The framework ships client-side wiring for **Theia**: a base every head shares,
-a data-head client, and a GLSP client. There is no such library for VS Code or
-for a plain browser page; both are shown in the examples, as code you copy
-rather than a package you depend on. The protocol packages are host-neutral, so
-writing a client for another host is supported.
+The client packages target Theia. For VS Code or a plain browser page, copy the
+client code from the order-flow example. The protocol packages are
+host-neutral, so a client for another host is supported.
 
 ### Persistence is text files on disk
 
-The model is text on disk, parsed into a live AST. That is deliberate: files
-stay human-readable, diffable and reviewable. It also means there is no
-abstraction for a database, an object store, or a remote model repository. An
-adopter that needs one supplies its own filesystem implementation.
+Your model is text on disk, parsed into a live AST, so files stay readable,
+diffable and reviewable. There is no built-in support for a database, an object
+store or a remote model repository. If you need one, supply your own filesystem
+provider.
 
 ### Unsaved edits are kept only so far
 
-Unsaved edits live in the server's memory, and some ways of losing a client or
-the server lose them:
+Unsaved edits live in the server's memory. You lose some of them when:
 
-- **A closing browser tab cannot wait for a save.** It can only ask the user
+- **A browser tab closes.** It cannot wait for a save; it can only ask the user
   before leaving.
-- **A killed server loses the write it was making.** Nothing calls `fsync`
-  either, so a power loss is not covered.
-- **A page or worker that dies ends no session** when the heads talk over a
-  `MessagePort`, which reports no end of its own. A language server in a worker
-  keeps running after its page goes; only the editor's documents are closed.
-- **A client that comes back after the release grace finds its documents
-  reverted.** It writes its edits again where it can tell they still apply,
-  and reports the rest as lost.
-- **A restarted language server shows the editor's unsaved buffers as clean**
-  to the diagram and data clients, while the editor still shows them dirty: an
-  editor's first open counts its buffer as the file's text.
-- **VS Code keeps an editor dirty after a server save** of the text it shows,
-  and its next save writes the same bytes. Theia has `bindEditorDiskSync` for
-  this, and VS Code has no counterpart.
+- **The server is killed.** The write in progress is lost. Nothing calls
+  `fsync`, so a power loss is not covered either.
+- **A page or worker dies** while the heads talk over a `MessagePort`. A port
+  reports no end, so no session ends. A language server in a worker keeps
+  running after its page goes; only the editor's documents are closed.
+- **A client returns after the release grace** (`releaseGraceMs`). Its
+  documents have been reverted. It writes its edits again where it can tell
+  they still apply, and reports the rest as lost.
+- **The language server restarts.** The diagram and data clients then see the
+  editor's unsaved buffers as clean, while the editor still shows them dirty.
+- **The server saves text a VS Code editor shows.** VS Code keeps the editor
+  dirty, and its next save writes the same bytes. In Theia,
+  `bindEditorDiskSync` handles this; VS Code has no counterpart.
 
 ### One process writes a workspace
 
-**A workspace has a single writer, and that is a contract rather than an
-oversight.** The framework serializes writes only _within_ one process. There
-is no filesystem lock, so two processes over one workspace do not coordinate at
-all: neither sees the other's writes queued, and the second write to land is
-the one that stays on disk.
+A workspace has a single writer by contract. The framework serializes writes
+only within one process, and takes no filesystem lock. Two processes over one
+workspace do not coordinate: the later write wins.
 
-- Run one server process per workspace. Several heads sharing that process is
-  the supported shape, and a second process writing the same directory is not.
-- `hydranium-cli save` spawns its own data server, so running it against a
-  workspace an editor already has open is two writers. Point it at a workspace
-  nothing else is editing, or accept that the last write wins. The other
+- Run one server process per workspace, with all its heads in that process.
+- `hydranium-cli save` spawns its own data server. Run it only on a workspace
+  nothing else is editing, or accept that the later write wins. The other
   subcommands only read.
-- An adopter that needs writes from several processes has to coordinate them
-  itself, above the framework.
+- If you need writes from several processes, coordinate them yourself, above
+  the framework.
 
-What the framework does guarantee is that a file is not left half-written: a
-write replaces the file whole, so a reader sees either the previous revision or
-the new one. That prevents a torn file, not a lost write. Because the
-replacement is a new file:
+A write never leaves a file half-written: it replaces the file whole, so a
+reader sees the old revision or the new one. That prevents a torn file, not a
+lost write. Because the replacement is a new file:
 
-- a symlinked model file keeps its link, and the file it points at is replaced;
+- a symlinked model file keeps its link, and its target is replaced;
 - permission bits carry over, but ownership, extended attributes and ACLs do
-  not. Model files that depend on those have to be written through a filesystem
-  provider of your own;
-- a file with more than one hard link is the exception. It is written in place,
-  so all its names see the new content and keep their ownership and
-  attributes, but a reader that catches that write can see it half-done.
+  not. If your model files depend on those, write them through your own
+  filesystem provider;
+- a file with more than one hard link is written in place instead. All its
+  names see the new content and keep their attributes, but a reader can catch
+  that write half-done.
 
 ## Getting involved
 
-Bug reports, questions and ideas are welcome on the
-[issue tracker](https://github.com/eclipse-emfcloud/hydranium/issues), which is
-also where planned work is tracked.
+Report bugs, ask questions and suggest ideas on the
+[issue tracker](https://github.com/eclipse-emfcloud/hydranium/issues), which
+also tracks planned work.
