@@ -24,6 +24,9 @@ The design behind what the adopter pages under
 - [**Build pipeline**](contributing/design/build-pipeline.md) — how build-time
   work is wired into Langium's document build, and why integrity and adopter
   passes share one priority space.
+- [**GLSP operations**](contributing/design/glsp-operations.md) — how a
+  diagram operation edits a working copy and writes it once, and what runs
+  again on undo and redo.
 - [**Browser hosting**](contributing/design/browser-hosting.md) — why the
   packages split into portable and Node-only entries, and what the neutrality
   gate does and does not promise.

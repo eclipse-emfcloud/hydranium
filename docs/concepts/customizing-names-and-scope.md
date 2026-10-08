@@ -159,7 +159,8 @@ exported at, Seam 1, not what it is called.
 order-flow changes visibility without touching this filter, which is the
 intended shape: its folder-based `ProjectManager` declares each project's
 dependencies, Seam 1 exports the symbol at the `public` tier, and the default
-filter does the rest. A standard library added through an
+filter does the rest. A
+[standard library](../guides/ship-a-standard-library.md) added through an
 `AdditionalDocumentContribution` lands at `universal` and resolves everywhere,
 again without a filter change.
 

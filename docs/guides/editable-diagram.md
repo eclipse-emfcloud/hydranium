@@ -59,51 +59,22 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
 }
 ```
 
-2. Add an operation handler for every advertised edit. Mutate `sourceRoot`
-   inside `HydraniumGlspRecordingCommand`; the operation writes the copy's
-   projection once when it completes, which persists and republishes it to the
-   other heads, and undo and redo apply that one change. During an operation
-   `sourceRoot` is a working copy of the built root, so no other reader sees
-   the edit before its write lands.
+2. Add an operation handler for every edit the diagram offers. Change
+   `sourceRoot` inside a `HydraniumGlspRecordingCommand`: the operation works
+   on a copy nobody else sees, writes the change once when it completes, and
+   undo and redo apply that one change. The rules that keep it working:
+   - Edit another document through `modelState.workingRootOf(uri)`, never
+     through a root read from the model service.
+   - A node of the copy belongs to no document. Pass
+     `modelState.builtNodeOf(node)` to anything that looks a document up: a
+     scope, reference candidates, a qualified name.
+   - Build references with `modelState.referenceTo(target, source)`.
+   - One gesture is one operation. Combine edits in a `CompoundOperation`,
+     and never dispatch an operation and await it from a GModel factory, a
+     submit or an undo: the two wait for each other forever.
 
-   Reach the root of any other document the handler edits through
-   `modelState.workingRootOf(uri)`; a root read from the model service is the
-   one every reader shares.
-
-   Nodes of a working copy have no `$document`, so a transfer encoder hook sees
-   no `context.uri` while it projects them, and a lookup that reads a node's
-   document — a scope, reference candidates, or the project a name is
-   qualified in — throws or answers for no document. Pass
-   `modelState.builtNodeOf(node)` to such lookups during an operation and keep
-   editing the copy.
-
-   Build references with `modelState.referenceTo(target, source)`: its `ref`
-   stays the copy node, which an identity comparison later in the same
-   operation needs. By default its `$refText` is the `ReferenceBuilder`'s
-   answer for the built target and the source's nearest built container, so a
-   target renamed in the same operation is named as built, and a target
-   created in it is named without a project. With `{ tier: 'own' }` it is the
-   target's own name, read off the copy. The builder called on a copy node
-   directly loses the projects and the target's language.
-
-   A side effect a command carries outside the model — a command that does not
-   record, or a recording command's `undoAction` / `redoAction` — runs again on
-   undo and redo, against throwaway copies: `sourceRoot` and `workingRootOf`
-   answer copies there, discarded afterwards, and the model changes only by the
-   operation's recorded transition. A recording command executed there throws;
-   the undo then fails whole: the steps it already ran are run back, nothing is
-   written, and GLSP's command stack flushes.
-
-   One gesture is one operation. An operation a handler dispatches runs after
-   the handler's own, as its own write and undo step, and its `dispatch`
-   resolves before it runs; build a gesture of several edits as a
-   `CompoundOperation`, or have the handler execute another operation's
-   handler through the `OperationHandlerRegistry` inside `createCommand`.
-   Only operations are queued that way, and only while one runs, its undo's
-   side effects included. Other code that runs while the diagram holds its
-   order — a GModel factory, a submit, an undo's write — must not dispatch an
-   operation and await it, and no such code may await a dispatched undo, redo
-   or model request: each waits for that code to finish, and the two deadlock.
+   [GLSP operations](../contributing/design/glsp-operations.md) explains each
+   rule, and what runs again on undo and redo.
 
 <!-- snippet-preamble
 import type { Command, CreateNodeOperation, MaybePromise } from '@eclipse-glsp/server';
@@ -213,18 +184,17 @@ override `secondaryBaseVersion` to return `'any'`.
 
 ## How you know it worked
 
-Run the GLSP integration suite:
+Test each operation as the scaffold's diagram test does: start your diagram
+module in `makeGlspHarness` over a scratch workspace, open a document, dispatch
+the operation, and wait for the dirty state the server sends once the edit is
+written. Then assert the document's text, and that an undo and a redo take the
+change out and put it back. When the operation can affect another grammar,
+assert that document too.
 
-```sh
-npm exec -w @hydranium/example-order-flow-server -- vitest run test/glsp/process-operations.integration.test.ts
-```
-
-Open the diagram, perform one operation, and assert all three boundaries: the
-operation is accepted, the shared source document changes, and a subsequent
-model request contains the changed element. Add a text-side assertion when the
-operation can affect another grammar. A useful red control removes the
-operation handler or the recording-command write; the test must fail before
-accepting the operation as successful.
+Check that the test can fail: remove the operation handler, or the write in
+its recording command, and the test must turn red. The order-flow example's
+version is `server/test/glsp/process-operations.integration.test.ts`, and
+[Test your language](test-your-language.md) covers the rest.
 
 ## What this guide does not give
 

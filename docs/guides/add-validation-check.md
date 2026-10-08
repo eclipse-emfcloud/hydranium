@@ -73,17 +73,17 @@ export const languageModule = {
 
 ## How you know it worked
 
-Run the focused validation test:
+Add two cases to your validation test, as the scaffold's `validating.test.ts`
+does: parse a model with `parseHelper`, build it with
+`{ validation: true }`, and read `document.diagnostics`. The valid model has no
+diagnostic from your rule; the invalid one has your message, starting on the
+offending element's line.
 
-```sh
-npm exec -w @hydranium/example-order-flow-server -- vitest run test/process-transition-rules.test.ts
-```
-
-The valid case has no rule diagnostic; the invalid case has the expected message
-text, and its diagnostic starts on the offending transition's line. The red
-control removes the `transitions` entry from `validation.checks` in
-`order-flow-module.ts`; the invalid case must then fail because the rule
-diagnostics are absent, not merely because parsing failed.
+Check that the test can fail: remove your entry from `validation.checks`, and
+the invalid case must turn red because your diagnostic is missing, not because
+the model failed to parse. The order-flow example's version is
+`server/test/process-transition-rules.test.ts`, and
+[Test your language](test-your-language.md) covers the rest.
 
 ## What this guide does not give
 

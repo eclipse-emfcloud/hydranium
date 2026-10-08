@@ -286,8 +286,8 @@ shared.workspace.FileSystemProvider.host.setFile(URI.parse('memory:///ws/a.domai
 Some content of a language comes from no file: a standard library, built-in
 types. Hydranium marks such content in two ways, at two granularities:
 
-- **a `virtual:` URI** for a whole document whose AST is built in code. Build
-  one with `virtualUri`, and check one with `isVirtualUri`;
+- **a `virtual:` URI** for a whole document no file backs. Build one with
+  `virtualUri`, and check one with `isVirtualUri`;
 - **a `$synthetic: true` flag** for a single node built in code, typically a
   mirror beside a real declaration. Set it with `markSynthetic` or
   `markSyntheticTree`, and check it with `isSyntheticNode`.
@@ -307,75 +307,5 @@ class MyDocumentValidator extends HydraniumDocumentValidator {
 }
 ```
 
-Build a synthetic document with Langium's `LangiumDocumentFactory.fromModel`:
-
-```ts
-import { markSyntheticTree, virtualUri } from '@hydranium/core';
-
-// 1. Build the AST root by hand. Casting through `unknown` is
-//    acceptable — synthetic AST nodes do not go through the parser.
-const stdlibRoot: Root = {
-   $type: 'Root',
-   name: 'std',
-   elements: [...stdlibElements]
-} as unknown as Root;
-
-// 2. (optional) Opt every node in the tree into skip-validation.
-markSyntheticTree(stdlibRoot);
-
-// 3. Materialise the LangiumDocument.
-const stdlibDoc = services.shared.workspace.LangiumDocumentFactory
-   .fromModel(stdlibRoot, virtualUri('stdlib', 'stdlib.lang'));
-
-// 4. The document is now suitable for the tier factories on
-//    HydraniumAstNodeDescriptionProvider.
-provider.createUniversal({ node, name: node.name, document: stdlibDoc });
-```
-
-Two things decide whether anything can see it:
-
-- **Register it, or it is invisible.** A document built this way is not part of
-  the workspace until an `AdditionalDocumentContribution` in the shared
-  `additionalDocuments` group returns it. Only then is it built and indexed like
-  a file. A virtual document that is never registered reaches no scope, and
-  nothing reports it.
-- **End its URI with a registered file extension.** A document finds its
-  language by extension, so a URI without one belongs to no language.
-
-To compare against synthetic nodes from anywhere, export them as module-level
-constants and compare by identity:
-
-<!-- snippet-preamble
-import { virtualUri } from '@hydranium/core';
--->
-
-```ts
-// stdlib.ts (an adopter's synthetic stdlib module)
-export const STDLIB_URI = virtualUri('stdlib', 'stdlib.lang');
-
-export const STDLIB_ANY_ELEMENT: Element = {
-   $type: ElementMeta.$type,
-   name: 'Any'
-} as unknown as Element;
-
-export const STDLIB_ELEMENTS: readonly Element[] = [STDLIB_ANY_ELEMENT];
-
-export const STDLIB_ROOT: Root = {
-   $type: RootMeta.$type,
-   name: 'std',
-   elements: [...STDLIB_ELEMENTS]
-} as unknown as Root;
-```
-
-<!-- snippet-preamble
-import { isVirtualUri } from '@hydranium/core';
-declare const STDLIB_ANY_ELEMENT: Element;
--->
-
-```ts
-// Identity check from anywhere
-if (node === STDLIB_ANY_ELEMENT) { /* it's the stdlib's Any */ }
-
-// Contributor check from a description
-if (isVirtualUri(description.documentUri)) { /* virtual-document content */ }
-```
+[Ship a standard library](../guides/ship-a-standard-library.md) shows the
+common case, a whole virtual document written in your own syntax.
