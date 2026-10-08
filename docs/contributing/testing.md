@@ -1,9 +1,8 @@
 # Testing
 
-How Hydranium is tested, how to run the tests, and how to add new ones.
-
-This is the practical guide. The factory and harness conventions live in the
-**Test support** section of [`conventions.md`](conventions.md).
+How Hydranium is tested, which tests a change needs, and the traps that make a
+test pass without proving anything. The factory and harness conventions are in
+**Test support** in [`conventions.md`](conventions.md).
 
 ## Strategy
 
@@ -11,362 +10,159 @@ We think in **layers**. Each layer answers a different question; a feature is
 well-tested when the layers that apply to it are covered — not when one layer is
 exhaustive.
 
-| Layer | What it proves | Where it lives |
-|---|---|---|
-| **L0 — Static** | It type-checks. | `tsc -b` (src) + `typecheck:test` (tests) |
-| **L1 — Unit** | One class/function behaves, collaborators stubbed. | each package's `test/`, run by Vitest |
-| **L2 — In-process integration** | Several real collaborators wired through a seam (a server over an in-memory connection). | `makeLspHarness` (`@hydranium/core/testing/node`), `makeDataServerHarness` (`@hydranium/data-server/testing`), `makeGlspHarness` (`@hydranium/glsp-server/testing`), exercised from the example server |
-| **L3 — Conformance** | An implementation honors a protocol, host-independent. | `@hydranium/conformance` (per-head batteries) |
-| **L4 — Subprocess** | A real server process over its real transport. | `startSpawnedServer` (`@hydranium/core/testing/node`) owns the spawn, the handshake, the captures, the port poll and the teardown; the specs live beside the entry they run — `examples/order-flow/server/test/smoke/` (stdio LSP, plus data and GLSP sockets) |
-| **L5 — System / E2E** | The whole app through the real UI. | one Playwright suite per host the framework claims to run in — the Theia app and the browser page — each beside its own `playwright.config.mts`, adopter-style |
+| Layer | What it proves |
+|---|---|
+| **L0 — Static** | It type-checks: `tsc -b` for sources, `typecheck:test` for tests. |
+| **L1 — Unit** | One class/function behaves, collaborators stubbed. |
+| **L2 — In-process integration** | Several real collaborators wired through a seam (a server over an in-memory connection). |
+| **L3 — Conformance** | An implementation honors a protocol, host-independent (`@hydranium/conformance`). |
+| **L4 — Subprocess** | A real server process over its real transport. |
+| **L5 — System / E2E** | The whole app through the real UI, in every host the framework claims to run in. |
 
-Cross-cutting techniques layered on top:
+Cross-cutting techniques layered on top: a **golden corpus** that holds
+`serialize(parse(x)) === x` byte-stable, **property tests** with `fast-check`
+over the patch/merge algebra, **perf baselines** (root `npm run bench`, see
+[`perf-baseline.md`](perf-baseline.md)), and a Stryker **mutation audit**
+(`audit:mutation` and `audit:mutation:quick` in `@hydranium/core`) that finds
+unasserted behaviour. The last two run on demand, outside turbo, `npm test`
+and `npm run check`.
 
-- **Golden corpus** — byte-stable `serialize(parse(x)) === x` over canonical
-  fixtures (`examples/order-flow/server/test/fixtures/serializer/`).
-- **Property tests** — `fast-check` over the patch/merge algebra
-  (`packages/protocol/test/*.property.test.ts`).
-- **Perf baselines** — `vitest bench` over a real example's services (not a gate).
-- **Mutation audit** — Stryker, run on demand to find unasserted behaviour
-  (not a gate; configured in `packages/core/stryker.conf.json`).
+### Picking the layer
 
-### Test-support conventions (one screenful)
+- A pure function or one class with stubbed collaborators → L1, in that
+  package's `test/`.
+- Anything that needs a real grammar, the wire, or several services
+  cooperating → an L2 harness test in the example server. Core has no grammar,
+  so grammar-dependent behaviour cannot be unit-tested in core.
+- A protocol guarantee every head must honor → an L3 conformance check.
+- A framework-owned transition (rollback, retry, conflict) is tested where its
+  owner lives. A caller-level retry test would duplicate policy Hydranium
+  deliberately leaves to adopters.
 
-- **Runner: Vitest.** Globals come from `'vitest'` (`import { describe, it, expect } from 'vitest'`), spies are `vi.*`, and a spy handle is typed `MockInstance`. No test SUITE imports `@jest/globals` — the one place it appears is the conformance kit's shipped jest runner adapter, which exists so an adopter on Jest can run the kit.
-- **`typecheck:test` is the type gate.** Vitest only transpiles, so each package's `test` script runs `typecheck:test` before `vitest run`. Tests are type-checked by `tsc --noEmit -p tsconfig.test.json`, not by the runner. No package passes `--passWithNoTests`, deliberately: it turns "the runner matched no files" into exit 0, which no gate can tell from a suite that passed, so a config or glob change that stops matching would read as green forever. A package that genuinely has no tests yet should not carry a `test` script at all. `@hydranium/conformance` appends a second runner after vitest, a Jest pass under `--experimental-vm-modules` scoped to `test/jest/` (see `packages/conformance/jest.config.cjs`) that keeps the shipped Jest adapter from rotting. Read a package's own `scripts.test` before assuming the shape — the examples do not all match the framework's.
+Reuse the `*/testing` scaffolding before hand-rolling a mock, and add new
+scaffolding there by the rules in **Test support**.
 
-- **`testTimeout` is 20s under `CI` and 5s locally**, set once in `vitest.shared.ts`. The asymmetry is deliberate: a shared CI executor runs the same suite several times slower than a developer machine under equal parallel load, and a slow test is cheapest to find where it is being written. **It does not protect a SYNCHRONOUS test.** The timeout is an event-loop timer, so a test body that blocks — anything built on `spawnSync` or `execFileSync` — runs to completion however long it takes, and no timeout of any value will interrupt it. Make a test async if you want the timeout to mean anything for it.
+## Runner rules and their pitfalls
 
-- **Under `CI`, vitest also writes `test-results/junit.xml` per package**, uploaded by the workflow on `always()`. Its per-`testcase` `time` attribute is the only place a single test's cost is recorded: the console reporter totals a package and names no test, so without it "which test is closest to the timeout" can only be answered by one going red.
-- **One construction verb — `make`.** Doubles are `makeStub<Service>()`, harnesses `make<Subject>Harness()`, builders/fixtures `make<Thing>()`. The one exception is `startSpawnedServer`, which owns a child process, so it takes the `start` verb the production launchers use and can fail rather than merely construct. Reusable scaffolding ships from a package's `*/testing` subpath (`@hydranium/core/testing`, …); most are browser-neutral and gated as such, and a few are deliberately excluded from that gate on their merits — `scripts/check-neutral-bundles.mts` names each exclusion beside its reason, and being named there is what separates a considered exclusion from an oversight. Anything needing a real filesystem or a Node stream transport ships from `*/testing/node` instead.
-- **No fixed sleeps.** Await asynchrony with `waitFor` / `tick`, never a hand-rolled `setTimeout`.
+**No package passes `--passWithNoTests`.** It turns "the runner matched no
+files" into exit 0, which no gate can tell from a suite that passed, so a config
+or glob change that stops matching would read as green forever. A package that
+has no tests yet carries no `test` script at all.
 
-Full detail: **Test support** in [`conventions.md`](conventions.md).
+**`testTimeout` does not protect a synchronous test.** `vitest.shared.ts` sets
+`testTimeout` once, higher under `CI` than locally: a shared CI executor runs
+the suite several times slower, and a slow test is cheapest to find where it is
+being written. The timeout is an event-loop timer, so a test body that blocks —
+anything built on `spawnSync` or `execFileSync` — runs to completion however
+long it takes. Make the test async if the timeout is to mean anything for it.
+Under `CI` each package also writes `test-results/junit.xml`; its per-testcase
+`time` is the only record of which test is closest to the timeout.
 
-## Commands
+**A quiet run is not a clean run.** LSP harness teardown is quiet because the
+harness attaches the way a server entry point does: `withHydraniumLspFeatures`
+and `startLanguageServer` drop only a send whose peer is already gone. Once a
+services tree exists in the worker, the workspace manager's process-level
+`unhandledRejection` listener logs a genuine rejection rather than failing the
+test, and Vitest does not report it. Read the log.
 
-### The gate (run this before a PR)
+**`ModelService.onModelUpdated` never fires by itself on a `makeTestServices`
+tree**, because the stub document builder runs no phases. Drive it with the
+bundle's `documentBuilder.firePhase(state, document)`, and prove one delivery
+before believing an empty event list — otherwise a negative assertion passes
+because nothing was ever wired up.
 
-```bash
-npm run check        # the whole gate: see below
-```
+**A disconnect while a request is in flight cannot be asserted from the
+client.** `vscode-jsonrpc` rejects every pending request when its connection is
+disposed, so hold the request on the server until the transport is gone and
+assert on the server's own outcome.
 
-Individual stages, all run across every package via turbo:
+## Writing a test
 
-```bash
-npm test             # typecheck:test + vitest run
-npm run lint         # oxlint
-npm run typecheck    # typecheck:test only
-npm run build        # tsc -b (framework graph)
-npm run build:all    # framework + the example apps
-```
-
-### One package / one file (fast inner loop)
-
-```bash
-npm test -w @hydranium/core                                   # one package
-npm exec -w @hydranium/core -- vitest run test/util/uri-util.test.ts   # one file
-npm exec -w @hydranium/core -- vitest run test/... -t 'partial name'   # one test
-npm exec -w @hydranium/core -- vitest                          # watch mode
-```
-
-### UI / end-to-end (L5, Playwright)
-
-There are **two** L5 suites, each with its own `playwright.config.mts` and its
-own `test:e2e*` scripts — one per host the framework is expected to run in.
-Neither is wired to `test`, so `npm run check` never depends on a downloaded
-browser binary; each package's `//test:e2e` note states what only that tier can
-cover. Locate them with `git ls-files | grep playwright.config`, which is the
-enumeration that cannot fall behind.
-
-**Theia host** — boots Theia on **localhost:3001** and drives it with a real
-browser. Needs the app built first, and Chromium installed once.
-
-```bash
-npm run build:all                                              # bundle the app (incl. core)
-npm --prefix examples/order-flow/theia-app run test:e2e:install   # one-time: Chromium
-npm --prefix examples/order-flow/theia-app run test:e2e           # headless
-npm --prefix examples/order-flow/theia-app run test:e2e:headed    # watch it run
-npm --prefix examples/order-flow/theia-app run test:e2e:ui        # Playwright UI mode
-npm --prefix examples/order-flow/theia-app run test:e2e:restart   # the @restart tier
-```
-
-`test:e2e` and `test:e2e:headed` carry `--grep-invert @restart`, so a run of
-either **skips every `@restart`-tagged spec** — a contributor running only the
-first two commands never executes them at all. Why, and the other traps this
-tier has sprung, are in
-[`examples/order-flow/theia-app/README.md`](../../examples/order-flow/theia-app/README.md),
-which owns the Playwright config.
-
-**Browser host** — the same head in a web worker, served as a plain page. Same
-four verbs, no restart tier:
-
-```bash
-npm --prefix examples/order-flow/browser run build
-npm --prefix examples/order-flow/browser run test:e2e:install   # one-time: Chromium
-npm --prefix examples/order-flow/browser run test:e2e
-```
-
-Two caveats govern both Playwright tiers and have each cost time more than once:
-`reuseExistingServer` is on outside CI, so a stray process on the port gets
-tested instead of yours and a suspiciously fast pass is the tell; and the
-webServer boots the **built** bundle, so framework changes need
-`npm run build:all` first or you test stale code. Both are stated in full, with
-the rest of the tier's traps, in
-[`examples/order-flow/theia-app/README.md`](../../examples/order-flow/theia-app/README.md).
-
-### Subprocess LSP smoke (L4)
-
-```bash
-npm test -w @hydranium/example-order-flow-server   # includes test/smoke/ (stdio LSP)
-```
-
-### Packed consumer smoke (on demand)
-
-```bash
-npm run check:packed-consumer
-```
-
-This builds and packs the server-side framework packages, installs their
-tarballs into a disposable project outside the npm workspace, compiles the
-bookstore server with `NodeNext`, opens a document over LSP and expects it to
-publish no diagnostics, then requests its model over the data socket. It
-installs the bookstore server's own dependencies with no overrides, then checks
-the resolved versions, one physical Langium and LSP protocol, and one 9.x
-JSON-RPC. Run it when changing package exports, peers, or server bootstrap.
-It is separate from the regular gate because it performs a fresh npm install.
-Set `HYDRANIUM_KEEP_PACKED_CONSUMER=1` to inspect the disposable project after
-a failure.
-
-The package-file assertion has a deliberate negative control. After a build,
-run `node scripts/check-packed-consumer.mts --negative-missing-package-file`;
-it must fail with `consumer package @hydranium/core is missing or installed
-through a symlink`. This confirms the check reaches the install-shape assertion
-rather than merely completing the consumer smoke.
-
-### Scaffold smoke (every pull request that changes more than prose)
-
-```bash
-npm run check:init-scaffold
-```
-
-This installs the packed `@hydranium/cli`, with the framework packages it
-needs packed too, and scaffolds with that binary, the way an adopter's `npx`
-does, in seven shapes: standalone with every head, standalone with LSP and data,
-standalone with LSP and GLSP, standalone LSP-only, and three `--monorepo`
-members. The first two each join a fresh workspace whose root declares an npm
-that installs `vitest` 4.1. The first member, with every head, is scaffolded and installed under the npm the
-oldest supported Node bundles, like the standalone shapes, so `init` holds
-`vitest` below 4.1; the second, LSP-only, under the root's npm, so `init` lifts
-the hold. The third, LSP-only, joins the root `generator-langium` writes, the
-fixture `init`'s tests use, installed before `init` runs, so another member's
-`langium` 4.4 and LSP packages hold the top of the tree. Each shape asserts
-which `vitest` range `init` emitted, and each member's root gets the
-`workspaces` entry and the pins `init` prints for it. The check
-changes each scaffold's manifest in two ways: it repoints the `@hydranium/*` packages the scaffold
-declares at the packed candidates, and adds the framework peers those need,
-which npm would otherwise fetch from the registry, to the block of the package
-that needs them. It also copies in the smoke script that drives the heads. A
-framework package the shape does not declare and nothing it declares needs must
-not be installed. After each install it asserts one physical copy each of
-`langium` and `vscode-languageserver-protocol`, of `@eclipse-glsp/protocol` in
-the GLSP shapes, and one 9.x `vscode-jsonrpc` (the 8.x copies `@eclipse-glsp/*`
-nest are allowed), counted among the member's dependencies in a workspace,
-then builds the project,
-compiles it again with the oldest TypeScript the adopter requirements state
-(under the scaffold's own `skipLibCheck`, so dependency declarations are not
-checked at that version), runs its own tests and drives every head the shape
-has over `lib/main.js`: LSP, the data socket and the GLSP socket. An LSP
-request for a missing document must reject with `-32802`, which it resolves
-with instead when the protocol splits, and a data read of one must resolve
-with no model. The standalone scaffold with every head is then reinstalled with
-`--omit=dev` and driven again, as a deployment would. CI runs it as its own
-job, because the bookstore consumer above is assembled by hand and so cannot
-show what an adopter's first install meets. It is skipped, with the e2e shards
-and the Windows and macOS gates, on a pull request that changes only prose.
-`HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the project, as for that smoke.
-
-### Published prerelease baseline smoke
-
-```bash
-npm run check:published-baseline
-```
-
-This resolves the current published prerelease from npm, installs the same
-server-side packages at that exact version into a fresh consumer, and runs the
-same TypeScript, LSP, and data-server checks. It is opt-in because it depends
-on registry availability and the current published prerelease. The consumer
-source is this tree's bookstore server, so an example already using an
-unpublished API fails it without any published package being at fault.
-
-### Published prerelease upgrade smoke
-
-```bash
-npm run check:prerelease-upgrade
-```
-
-This installs the prerelease the `latest` dist-tag names into a disposable
-consumer, replaces those dependencies with the candidate package tarballs, then
-compiles and runs the LSP and data-server smoke against the candidates.
-Resolution, migration, and runtime failures are reported at their respective
-phases. The baseline is resolved per run and printed; set
-`HYDRANIUM_UPGRADE_FROM` to that version to repeat a failure against it.
-
-### Audits — on demand, NOT CI gates
-
-```bash
-npm run audit:mutation -w @hydranium/core         # Stryker, full core (~3 min)
-npm run audit:mutation:quick -w @hydranium/core   # Stryker, model-service only (~10 s sanity)
-npm run bench -w @hydranium/example-order-flow-server   # vitest bench, perf baselines
-```
-
-These are deliberately kept out of `turbo` / `npm test` / `npm run check`. Run
-them when you want a coverage map (mutation) or a perf number (bench), not on
-every change.
-
-The open-document integrity CST assertions have a focused red control: with
-the post-commit `reconcileDocument` call in `DefaultIntegrityService`
-temporarily disabled, `integrity-open-document-repair.test.ts` fails in both
-sync modes on the CST-versus-store assertion. Restore the call before any other
-run; this control checks that the assertion reaches the reconciliation boundary
-and is not merely reading the already-correct AST.
-
-The browser's visible-editor integrity case has its own red control: temporarily
-make the page's `workspace/applyEdit` handler a no-op. The data-head declaration
-signature still reaches `Entity:ShipmentLog__1`, but the selected Monaco buffer
-stays duplicated, so the exact visible declaration assertions fail. Restore the handler
-before other L5 runs; this distinguishes a store-only repair from one that reaches
-the editor.
-
-### Lifecycle failure and rollback controls
-
-The lifecycle transitions are covered where their owner lives: snapshot
-rollback (`packages/data-server/test/data-server.test.ts`), watch/close rollback
-and retry (`packages/protocol/test/client/data-connection.test.ts`),
-workspace/applyEdit rejection and shadow recovery
-(`packages/core/test/documents/hydranium-text-documents.test.ts`), stale
-update/save conflicts (`packages/core/test/langium/model-service/model-service.test.ts`),
-and save-write propagation
-(`packages/core/test/langium/workspace/persistent-file-system-provider.test.ts`).
-These are framework-owned transitions; a caller-level retry test would
-duplicate policy that Hydranium deliberately leaves to adopters.
-
-### Cross-head coherence controls
-
-`examples/order-flow/server/test/coherence.integration.test.ts` covers the
-shared LSP/data/GLSP tree: a data write an LSP edit overtook is refused with a
-typed conflict, per-client close ownership and watcher cleanup, reconnect, and
-convergence. A disconnect while a write is in flight is a separate case,
-because the client cannot see the server's answer: `vscode-jsonrpc` rejects
-every pending request when its connection is disposed. That test holds the
-write on the server until the transport is gone, then asserts on the server's
-own outcome. Its red control: send the held write with the current version as
-`baseVersion` instead of the stale one. The released write then applies, and the
-assertion that the server answered with a conflict fails.
-
-Teardown is quiet because the harness attaches the way a server entry point
-does: its connection carries `withHydraniumLspFeatures`, and
-`startLanguageServer` guards Langium's fire-and-forget diagnostics publish.
-Both drop only a send whose peer is already gone. A quiet run is still not
-proof of a clean one: once a services tree exists in the worker, the workspace
-manager's process-level `unhandledRejection` listener logs a genuine rejection
-rather than failing the test, and Vitest does not report it. Read the log.
-
-## What to do when adding tests
-
-1. **Pick the layer.** A pure function or one class with stubbed collaborators →
-   L1 unit in that package's `test/`. Something that needs a real grammar, the
-   wire, or several services cooperating → an L2 harness test in the example
-   server (core has no grammar, so grammar-dependent behaviour cannot be
-   unit-tested in core). A protocol guarantee every head must honor → an L3 `@hydranium/conformance`
-   check.
-2. **Reuse the support kit.** Reach for `makeTestServices`, the `makeStub*`
-   doubles, and the `make*Harness` factories before hand-rolling a mock. Add new
-   scaffolding to the relevant `*/testing` subpath following the `make`-verb
-   convention — or `*/testing/node` when it needs a filesystem or a Node
-   transport, since `*/testing` is gated browser-neutral.
-
-   Four of these are easy to miss because the thing they replace does not look
-   like a mock:
-
-   - **`makeParseSemanticRoot(services, guard)`** (`@hydranium/core/testing`) —
-     parse text INTO the workspace and get the typed semantic root back.
-     Langium's `parseHelper` registers the document but does not put it on the
-     filesystem, and project discovery, `DocumentBuilder.update` and
-     `getOrCreateDocument` all read from there, so a parse-only fixture breaks
-     the moment anything rebuilds.
-   - **`runUpdatePipeline(shared, args)`** (`@hydranium/core/testing`) — drive
-     the rewrite chain plus the serializer the way a session's `update` does,
-     with both resolved per URI. Hand-chaining the rewrites instead snapshots
-     the registry, and a chain that has fallen behind still compiles and passes.
-   - **`makeFakeDataPort` / `makeCapturingDataClient`**
-     (`@hydranium/protocol/testing`) — the CLIENT side of the data head, usable
-     without standing up a server.
-   - **`makeGeneratedWorkspace({ root, generator, emit })`**
-     (`@hydranium/core/testing/node`) — the scaffolding a deterministic volume
-     corpus needs (seeded stream, marker-as-overwrite-permit, LF normalisation,
-     per-extension tally); the caller supplies only `emit`.
-
-   And one trap worth knowing: on a `makeTestServices` tree,
-   `ModelService.onModelUpdated` never fires by itself, because the stub builder
-   runs no phases. Drive it with the bundle's
-   `documentBuilder.firePhase(state, document)`, and prove one delivery before
-   believing an empty event list — otherwise a negative assertion passes
-   because nothing was ever wired up.
-3. **Red first.** Write the assertion, watch it fail for the right reason, then
+1. **Red first.** Write the assertion, watch it fail for the right reason, then
    make it pass. A characterization test that comes out **red against unmodified
    code is a latent bug** — investigate it, do not adjust the test to match the
    surprising behaviour. Name the failing run and why it failed under "how you
-   know it works" in the pull request description, as step 4 does for a control.
-4. **Run a control before believing a new test.** Where step 3 does not apply —
-   a test written alongside the fix it guards, or over code that already
+   know it works" in the pull request description.
+2. **Run a control before believing a new test.** Where red-first does not
+   apply — a test written alongside the fix it guards, or over code that already
    works — break the code that test covers and confirm THAT test goes red. A
    test that cannot fail is worse than no test, because it reads as coverage.
-   Name the control and what it broke under "how you know it works" in the
-   pull request description. The commit body carries no test evidence: the
-   control is undone before the commit, so it is no part of the change.
-
-   **A control that refuses to redden is a result**, not a nuisance: the test
-   does not reach the path it claims to, and the next move is finding out why
-   rather than rewording the assertion. Some of the ways that happen have
-   nothing to do with the test:
-
-   - **The break stopped the build**, so the task never ran and the green
-     belongs to turbo rather than to the suite.
-   - **A name filter matched nothing.** `-t` / `--testNamePattern` skips every
-     test in every matched file and still exits 0, so the run reports success
-     while asserting nothing. A file pattern is safe here, since no package
-     passes `--passWithNoTests`.
-   - **The break landed on a source the run does not load.** A package's own
-     tests import `src` directly, but an example or end-to-end test resolves
-     `@hydranium/*` to built `lib`, so editing `src` without rebuilding changes
-     nothing the run can see.
-
-   Stryker (`npm run audit:mutation`) asks the same question automatically,
-   over a whole package rather than one test. It finds assertions that were
-   never load-bearing; it does not replace the control on the test in front of
-   you.
-5. **Every test must justify its existence** — it should catch a real class of
+   Name the control and what it broke under "how you know it works". The commit
+   body carries no test evidence: the control is undone before the commit, so
+   it is no part of the change.
+3. **Every test must justify its existence** — it should catch a real class of
    bug. No tautological or vacuous assertions.
-6. **Keep it deterministic.** Fake time with `makeFakeClock` (anything routed
-   through `services.Clock`); await with `waitFor` / `tick`; never a fixed sleep.
-7. **Green means the gate.** Before committing, `npm run check` must pass in
-   full, with **0 lint errors and 0 warnings**. Read the run's VERDICT line —
-   `✓ GATE PASSED` or `✗ GATE FAILED` — and not turbo's task count: turbo is the
-   first clause of a long chain, so `Tasks: N successful` can print while a later
-   clause reddens. A capture with no verdict line in it did not finish.
+4. **Keep it deterministic.** Fake time with `makeFakeClock` (anything routed
+   through `services.Clock`); await with `waitFor` / `tick`; never a fixed
+   sleep.
+5. **Green means the gate.** `npm run check` must pass in full; read its
+   verdict as [The gate](../CONTRIBUTING.md#the-gate) describes.
 
-## Where things are
+### A control that refuses to redden
 
-- Per-package unit tests: `packages/*/test/`
-- Shared test scaffolding: `packages/*/src/testing/` (shipped via `*/testing`;
-  the runtime-bound half lives in `src/testing/node/`, shipped via `*/testing/node`)
-- Conformance kit: `packages/conformance/` (Vitest, plus one Jest smoke in
-  `test/jest/` that exercises the shipped Jest adapter)
-- L2 integration + L4 smoke + golden corpus: `examples/order-flow/server/test/`
-- L5 Playwright e2e, Theia host: `examples/order-flow/theia-app/test/e2e/`
-- L5 Playwright e2e, browser host: `examples/order-flow/browser/test/e2e/`
-- The on-ramp example's own suite: `examples/bookstore/server/test/` — it covers
-  what `hydranium-cli init` scaffolds, so a regression there means the shape a
-  new adopter starts from is broken
-- Perf benches: `examples/order-flow/server/test/perf.bench.ts`
+It is a result, not a nuisance: the test does not reach the path it claims to,
+and the next move is finding out why rather than rewording the assertion. Some
+of the ways that happen have nothing to do with the test:
+
+- **The break stopped the build**, so the task never ran and the green belongs
+  to turbo rather than to the suite.
+- **A name filter matched nothing.** `-t` / `--testNamePattern` skips every test
+  in every matched file and still exits 0, so the run reports success while
+  asserting nothing. A file pattern is safe here, since no package passes
+  `--passWithNoTests`.
+- **The break landed on a source the run does not load.** A package's own tests
+  import `src` directly, but an example or end-to-end test resolves
+  `@hydranium/*` to built `lib`, so editing `src` without rebuilding changes
+  nothing the run can see.
+
+The mutation audit asks the same question over a whole package. It finds
+assertions that were never load-bearing; it does not replace the control on the
+test in front of you.
+
+## Running tests
+
+`npm run check` is the gate; the root `package.json` names its stages (`test`,
+`lint`, `typecheck`, `build`, `build:all`). For the inner loop, run Vitest in
+one workspace:
+
+```bash
+npm exec -w @hydranium/core -- vitest run test/<file>.test.ts       # one file
+npm exec -w @hydranium/core -- vitest run test/... -t 'partial name' # one test
+npm exec -w @hydranium/core -- vitest                               # watch
+```
+
+### End-to-end (L5)
+
+There is one Playwright suite per host: the Theia app
+([README](../../examples/order-flow/theia-app/README.md)) and the browser page
+([README](../../examples/order-flow/browser/README.md)). Each README owns its
+commands. Neither suite is wired to `test`, so `npm run check` never depends on
+a downloaded browser binary. Three traps:
+
+- The Theia app's `test:e2e` and `test:e2e:headed` skip every `@restart` spec,
+  so running only those never executes them; `test:e2e:restart` does.
+- `reuseExistingServer` is on outside CI, so a stray process on the port gets
+  tested instead of yours; a suspiciously fast pass is the tell.
+- The web server boots the **built** bundle, so framework changes need
+  `npm run build:all` first or you test stale code.
+
+### Install-shape smokes (on demand)
+
+All four drive `scripts/check-packed-consumer.mts`, whose header describes each
+mode, and sit outside the regular gate because each performs a fresh npm
+install. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the disposable project.
+
+- `check:packed-consumer` installs the packed server-side packages outside the
+  workspace and drives the bookstore server over LSP and the data socket. Run
+  it when changing package exports, peers, or server bootstrap.
+- `check:init-scaffold` scaffolds with the packed `@hydranium/cli`, as an
+  adopter's `npx` does, in each supported shape, then builds, tests and drives
+  every head. It shows what an adopter's first install meets, which the
+  hand-assembled bookstore consumer cannot. CI runs it as its own job on every
+  pull request that changes more than prose.
+- `check:published-baseline` runs the consumer smoke against the published
+  prerelease. The consumer is this tree's bookstore server, so an example
+  already using an unpublished API fails it with no published package at fault.
+- `check:prerelease-upgrade` upgrades a consumer of the prerelease `latest`
+  names to the candidate tarballs. It prints that baseline; set
+  `HYDRANIUM_UPGRADE_FROM` to it to repeat a failure.

@@ -1,169 +1,125 @@
 # Releasing Hydranium
 
-Every merge to `main` publishes. There is no release ceremony, no version
-commit and no approval step between a merged PR and a version on npm —
-so the thing to understand before reading further is that the version
-number is **derived**, never written down.
+A push to `main` that can change a published tarball publishes. There is no
+release ceremony, no version commit and no approval step between a merged PR
+and a version on npm, because the version number is **derived**, never written
+down.
 
 ## The version
 
-Each release is `1.0.0-next.<n>`, where `n` counts the commits since the
-last release tag. `1.0.0-next` is the **base**, committed in the root
-manifest and in all ten package manifests; `.<n>` is appended by
-`scripts/release.mts` in the runner's tree and is never committed.
+Each release is `<base>.<n>`, where `n` counts the commits since the last
+release tag. The base is a `-next` prerelease committed as `version` in the
+root manifest and in every package manifest; `scripts/release.mts` appends
+`.<n>` in the runner's tree, and it is never committed.
 
-The line starts at major one, and that is not a stability claim. Under
-`fixed` versioning with caret peer ranges, a zero-major line could not take a
-minor bump at all, so the major cannot carry the alpha signal; the prerelease
-suffix carries it instead. A minor bump may break the API for as long as the
-framework is alpha.
+The line starts at major one, and that is not a stability claim. Under `fixed`
+versioning with caret peer ranges, a zero-major line could not take a minor
+bump at all, so the prerelease suffix carries the alpha signal instead. A minor
+bump may break the API for as long as the framework is alpha.
 
 Three properties follow, and each is load-bearing:
 
-- **It is monotonic.** A commit hash is not: a seven-character short SHA
-  is all digits about 4% of the time, and semver compares an all-numeric
-  prerelease identifier *below* every alphanumeric one — so roughly one
-  release in twenty-five would sort behind its predecessor. Worse, a
-  numeric identifier with a leading zero is not valid semver at all, so
-  about one in 270 would fail to publish.
-- **No range matches it.** `^1.0.0` resolves no prerelease, so a
-  dependency range can never pick up a prerelease by accident. A consumer
-  has to ask for the version, or for a dist-tag.
-- **The stable release sorts above all of it.** `1.0.0-next.999 <
-  1.0.0`, so cutting `1.0.0` is a clean upgrade from every prerelease that
-  preceded it.
+- **It is monotonic.** A commit hash is not: a short SHA is sometimes all
+  digits, semver sorts an all-numeric prerelease identifier *below* every
+  alphanumeric one, and one with a leading zero is not valid semver at all, so
+  such a release would sort behind its predecessor or fail to publish.
+- **No range matches it.** A caret range on a stable version resolves no
+  prerelease, so a consumer has to ask for the version, or for a dist-tag.
+- **The stable release sorts above all of it.** `X.Y.Z-next.<n>` sorts below
+  `X.Y.Z` for every `n`, so cutting the stable version is a clean upgrade from
+  every prerelease before it.
 
-All ten packages publish **in lockstep** at the same version, and the
-intra-framework ranges are rewritten to that version **exactly** — not
-with a caret. `^1.0.0-next.7` also matches `1.0.0` and `1.1.0`, so a
-caret minted on a prerelease would let a consumer of one package resolve a
-sibling from a future stable line. The set that publishes is the set
-that was built together.
+The counter counts commits, not releases, so a push that does not publish
+leaves a gap in `n`. That is expected, not a lost release.
+
+All packages publish **in lockstep** at one version, with intra-framework
+ranges rewritten to it **exactly**. A caret on a prerelease also matches the
+stable versions above it in the same major, so it would let a consumer of one
+package resolve a sibling from a future stable line. The set that publishes is
+the set that was built together.
 
 ## Dist-tags
 
-**Until the first stable release, every prerelease publishes to `latest`.**
-That looks wrong and is not. npm assigns `latest` to the first version
-of a new package whatever `--tag` asks for, so publishing only to `next`
-would strand `latest` on the very first prerelease, permanently — a bare
-`npm install @hydranium/core` would resolve a version from months ago.
-Moving it afterwards is not an option either: `npm dist-tag add` cannot
-authenticate over OIDC ([npm/cli#8547][8547]), so it would mean keeping
-a long-lived token for that one call.
+**Until the first stable release, every prerelease publishes to `latest`.** npm
+assigns `latest` to the first version of a new package whatever `--tag` asks
+for, so publishing only to `next` would strand `latest` on the very first
+prerelease and a bare `npm install @hydranium/core` would resolve it forever.
+Moving the tag afterwards would need `npm dist-tag add`, which cannot
+authenticate over OIDC ([npm/cli#8547][8547]), so it would mean keeping a
+long-lived token for that one call. After the first stable release, `latest`
+belongs to the stable line and the rolling line moves to `next`.
 
-After the first stable release, `latest` belongs to the stable line and
-the rolling line moves to `next`.
-
-`scripts/release.mts` **derives** which of the two applies by asking the
-registry whether any non-prerelease version exists, rather than reading
-a flag someone has to remember to flip on the day it stops being true.
+`scripts/release.mts` **derives** which applies by asking the registry whether
+any non-prerelease version exists, rather than reading a flag someone has to
+remember to flip on the day it stops being true.
 
 [8547]: https://github.com/npm/cli/issues/8547
 
 ## How a release runs
 
-`.github/workflows/release.yml`, on every push to `main` and on
-`workflow_dispatch`:
+`.github/workflows/release.yml` runs on every push to `main` and on
+`workflow_dispatch`, in three jobs:
 
-1. Runs the **contributor gate** in the `gate` job, in parallel on every
-   platform CI covers: `npm run check` on Linux, `npm run check:platform`
-   elsewhere, as CI does.
-2. Once every leg has passed, the publishing job checks out with
-   `fetch-depth: 0` — the counter needs the tags.
-3. Pins the toolchain to the `packageManager` version.
-4. Preflights the publish environment (see below).
-5. Installs and builds the same commit.
-6. Runs `node scripts/release.mts next`.
+- **`changes`** classifies the pushed range with `scripts/release-changed.mts`
+  and skips the other two jobs when every changed path is on that script's
+  skip list of paths that reach no tarball. Anything else publishes, and so
+  does a dispatch or a range whose base does not resolve: an over-trigger costs
+  one content-identical version, an under-trigger silently withholds a real
+  release. `check:release-trigger` self-tests the list against real merges.
+  Dispatch exists to re-run a release at the same commit.
+- **`gate`** runs the contributor gate on every platform CI covers, as CI does.
+- **`release`** needs both. It preflights the publish environment (see
+  [Trusted publishing](#trusted-publishing)), rebuilds the commit and runs
+  `node scripts/release.mts next`. The guarantee is that the commit passed, not
+  that these exact files did; both builds come from the same commit and
+  lockfile.
 
-Before merging a package or export change, also run the opt-in packed
-consumer smoke locally:
+The gate lives here rather than in CI because both workflows fire on the same
+`push: main` with no dependency either way, so a red CI run cannot stop a
+publish. CI asserts the arrangement instead: it fails unless `release.yml`'s
+gate runs CI's command on CI's `os:` list and the publishing job needs the gate
+job.
 
-```bash
-npm run check:packed-consumer
-```
-
-It installs the built tarballs outside the workspace and exercises both the
-LSP and data-server heads. This check is intentionally not part of the regular
-release gate because it performs a fresh npm install, but it is the release
-validation for package exports, peer dependencies, and server bootstrap.
-
-When validating compatibility with the last published prerelease, also run:
-
-```bash
-npm run check:published-baseline
-```
-
-That check installs the exact prerelease version advertised by npm and runs the
-same consumer smoke without workspace tarballs. It validates the published
-baseline; it does not exercise an upgrade to candidate packages. The consumer
-it compiles is this tree's bookstore server, so an example that already uses
-an unpublished API fails it while the published packages are fine.
-
-To validate an upgrade from the published prerelease to the candidate
-packages, also run:
-
-```bash
-npm run check:prerelease-upgrade
-```
-
-It upgrades from whatever the `latest` dist-tag names when it runs, and prints
-that version; set `HYDRANIUM_UPGRADE_FROM` to it to repeat a failing run
-against the same baseline.
-
-The gate lives here rather than in CI deliberately: both workflows fire
-on the same `push: main` with no dependency either way, so they race and
-a red CI run cannot stop a publish. CI asserts the arrangement instead:
-a step reads `release.yml` and fails unless its gate runs the same command
-as CI's and the publishing job needs the gate job. The gate's `os:` list
-must equal CI's, which CI compares too.
-
-The publishing job rebuilds the commit rather than reusing the gated
-build, so the guarantee is that the commit passed, not that these exact
-files did. Both builds come from the same commit and lockfile.
+The install-shape smokes in
+[Testing](testing.md#install-shape-smokes-on-demand) are not part of the
+release gate; run them before merging a package or export change.
 
 ## Trusted publishing
 
-Publishing authenticates over OIDC. There is no npm token, and
-`release.yml` deliberately sets no `NODE_AUTH_TOKEN`: npm only reaches
-for OIDC when it finds no usable token first, so a token in the
-environment does not add a fallback — it silently takes precedence, and
-the trusted-publisher path is never exercised.
+Publishing authenticates over OIDC, and `release.yml` deliberately sets no
+`NODE_AUTH_TOKEN`: npm reaches for OIDC only when it finds no usable token, so
+a token in the environment silently takes precedence and the trusted-publisher
+path is never exercised. Two configuration details cause most failures, and
+both are silent:
 
-Two configuration details cause most of the failures, and both are
-silent:
+- **`actions/setup-node` must not be given `registry-url`.** Given one, it
+  writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into an `.npmrc`
+  and points `NPM_CONFIG_USERCONFIG` at it. With no token that expands to an
+  *empty* token, which npm treats as a credential, so it never attempts the
+  exchange and the publish fails with `ENEEDAUTH`, or with a 404 that is really
+  a 403 ([actions/setup-node#1551][1551]).
+- **The workflow filename in the publisher configuration is a filename, not a
+  path**, and it is case-sensitive. Renaming `release.yml` breaks every
+  configuration at once, and npm does not validate a configuration when it is
+  saved: the first signal is a failed publish.
 
-- **`actions/setup-node` must not be given `registry-url`.** Given one,
-  it writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into
-  an `.npmrc` and points `NPM_CONFIG_USERCONFIG` at it. With no token
-  that expands to an *empty* token, which npm treats as a credential to
-  use — so it never attempts the exchange, and the publish fails with
-  `ENEEDAUTH`, or with a 404 that is really a 403.
-  ([actions/setup-node#1551][1551])
-- **The workflow filename in the publisher configuration is a filename,
-  not a path**, and it is case-sensitive. Renaming `release.yml` breaks
-  every configuration at once, and npm does not validate a
-  configuration when it is saved — the first signal is a failed publish.
-
-Provenance is attached automatically under OIDC, so `release.yml` sets
-no `NPM_CONFIG_PROVENANCE`: setting it would make a run that had quietly
-fallen back to another credential still look provenanced in the log
-while attaching nothing. Confirm it on the registry page.
+`release.yml` sets no `NPM_CONFIG_PROVENANCE`, because OIDC attaches provenance
+by itself and the variable would make a run that quietly fell back to another
+credential look provenanced in the log while attaching nothing. Confirm
+provenance on the registry page.
 
 [1551]: https://github.com/actions/setup-node/issues/1551
 
 ## Adding a package to the published set
 
-Trusted publishing is configured **per package**, and a package must
-already exist before it can be configured — so a new package's first
-publish cannot use OIDC, and until it is configured it fails the next
-release for the whole set, which publishes in lockstep.
+Trusted publishing is configured **per package**, and only for a package that
+already exists, so a new package's first publish cannot use OIDC. Until it is
+configured, it fails the next release for the whole lockstep set.
 
-1. Publish that package once **locally**, under `npm login`. It cannot
-   be done from `release.yml`: that workflow is OIDC-only and its
-   preflight fails when it finds an `_authToken`, because a token takes
-   precedence over OIDC and would leave the trusted-publisher path
-   untested. That version carries no provenance; the first OIDC publish
-   attaches it.
+1. Publish the package once **locally**, under `npm login`. `release.yml`
+   cannot: its preflight fails on any `_authToken`, because a token would take
+   precedence over OIDC. That version carries no provenance; the first OIDC
+   publish attaches it.
 2. Configure the publisher:
 
    ```bash
@@ -171,17 +127,16 @@ release for the whole set, which publishes in lockstep.
      --file release.yml --allow-publish --yes
    ```
 
-   `--allow-publish` is not optional. Configurations created from
-   2026-09-03 allow only `npm stage publish` by default, which would
-   turn every release into a staged submission awaiting 2FA approval.
-   Account-level 2FA is required, and granular tokens with the bypass
-   option are rejected.
-3. `npm logout`, so no credential remains that could take precedence
-   over OIDC on a later local run.
+   `--allow-publish` is not optional: without it a new configuration allows
+   only `npm stage publish`, turning every release into a staged submission
+   awaiting 2FA approval. Account-level 2FA is required, and granular tokens
+   with the bypass option are rejected.
+3. `npm logout`, so no credential can take precedence over OIDC on a later
+   local run.
 
 Publishing a scoped package over OIDC has an open failure report
-([npm/cli#8976][8976]), so confirm the next automated release carries the
-new package rather than assuming it.
+([npm/cli#8976][8976]), so confirm the next automated release carries the new
+package.
 
 [8976]: https://github.com/npm/cli/issues/8976
 
@@ -189,49 +144,38 @@ new package rather than assuming it.
 
 Three things in one commit, and the second is the one that bites:
 
-1. Set the base to `1.0.0` and publish with
-   `node scripts/release.mts latest`.
-2. **Move the base on to `1.1.0-next`.** `git describe` now finds
-   `v1.0.0`, so the counter resets — with the base still at
-   `1.0.0-next`, the next prerelease computes `1.0.0-next.1`, which sorts
-   *below* the release just cut and is probably already published.
-3. Tag `v1.0.0`.
+1. Set the base to the stable version (the `-next` base without its suffix)
+   and publish with `node scripts/release.mts latest`.
+2. **Move the base on to the next minor's `-next`.** After the cut,
+   `git describe` finds the stable tag and the counter resets, so a base left
+   at the old `-next` computes `<old base>.1`, which sorts *below* the release
+   just cut and is probably already published.
+3. Tag `v<stable version>`.
 
-`scripts/release.mts` guards this from both sides: `next` refuses a base
-that is not a `-next` version, and `latest` refuses one that is. Each
-catches the other's forgotten half.
+`scripts/release.mts` guards both halves: `next` refuses a base that is not a
+`-next` version, and `latest` refuses one that is.
 
-Expect one transient: immediately after the cut, `next` still points at
-the last prerelease and is therefore *behind* `latest`. It corrects itself
-on the first prerelease of the new line.
+Right after the cut, `next` still points at the last prerelease and so is
+*behind* `latest`, until the first prerelease of the new line.
 
 ## Re-deriving the scaffold provenance targets
 
-`examples/bookstore/server` is generated from the `init` templates and
-recorded as `identical`, so any change to what `init` emits leaves those
-targets no longer matching. Re-derive them rather than editing the
-derived copy:
+`examples/bookstore/server` is generated from the `init` templates and recorded
+as `identical`, so any change to what `init` emits leaves those targets stale.
+Re-derive them; never hand-edit the derived copy:
 
 ```bash
 npm run build                                  # see the warning below
 node scripts/check-init-provenance.mts --write
 ```
 
-**Build first, or this silently does the wrong thing.** The script
-imports `packages/cli/lib/commands/init.js`, so against a stale or
-absent build it reports a FALSE CLEAN and `--write` re-derives from the
-*previous* template — baking a stale README into the published example
-and certifying it as matching. Never hand-edit the derived copy.
+**Build first, or this silently does the wrong thing.** The script imports
+`packages/cli/lib/commands/init.js`, so against a stale or absent build it
+reports a FALSE CLEAN and `--write` re-derives from the *previous* template,
+baking a stale README into the published example and certifying it as
+matching.
 
-## What changesets is still for
+## Changesets
 
-`@changesets/cli` remains installed, and `npx changeset` still records
-release notes. It does **not** drive versioning or publishing on the
-rolling line — the version is derived, so there is nothing for
-`changeset version` to compute — and the repository is deliberately not
-in pre-release mode. Its role is the CHANGELOG for the stable cut.
-
-Two consequences worth knowing before reaching for it: pre-release mode
-forbids snapshot releases outright, and `changeset version` exits early
-when no changesets are pending, so neither offers a rolling mechanism
-this could have used instead.
+Changesets feed only the CHANGELOG for the stable cut, never the version; when
+to write one is in [Commits & PRs](../CONTRIBUTING.md#commits--prs).

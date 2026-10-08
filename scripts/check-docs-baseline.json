@@ -14,13 +14,6 @@
   "docs/contributing/perf-baseline.md": {
     "version": 1
   },
-  "docs/contributing/releasing.md": {
-    "date": 1,
-    "version": 13
-  },
-  "docs/contributing/testing.md": {
-    "timing": 2
-  },
   "examples/bookstore/README.md": {
     "history": 1
   },
