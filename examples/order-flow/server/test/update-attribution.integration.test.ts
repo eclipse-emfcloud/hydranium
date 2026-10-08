@@ -28,7 +28,12 @@ import { type AstNode, Deferred, DocumentState, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
+import {
+   REBUILD_TIMEOUT_MS,
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness
+} from './order-flow-harness.js';
 
 const CUSTOMER = 'orders/attribution-customer.domain';
 const ORDER = 'orders/attribution-order.domain';
@@ -280,7 +285,7 @@ describe('update attribution against the real builder', () => {
 
       await reader.close(uri(LONE));
 
-      await waitFor(() => events.length > 0, { message: 'no update event for the revert' });
+      await waitFor(() => events.length > 0, { timeoutMs: REBUILD_TIMEOUT_MS, message: 'no update event for the revert' });
       expect(events.map(attribution)).toEqual(
          events.map(() => ({ reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: UNKNOWN_CLIENT_ID }))
       );

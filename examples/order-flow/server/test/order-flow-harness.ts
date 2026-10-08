@@ -85,6 +85,13 @@ export const WORKSPACE_FILES = {
 /** Test-only fixtures that must stay OUT of the sample workspace. */
 export const FIXTURE_ROOT = path.resolve(HERE, 'fixtures');
 
+/**
+ * How long to wait for a watch's update event, which the server sends only once
+ * the edit's rebuild completes; a loaded runner takes longer than `waitFor`'s
+ * 2s default for that.
+ */
+export const REBUILD_TIMEOUT_MS = 5_000;
+
 export interface OrderFlowHarness {
    readonly shared: OrderFlowSharedServices;
    readonly domain: OrderFlowServices;
