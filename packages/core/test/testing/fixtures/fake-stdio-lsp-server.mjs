@@ -120,6 +120,11 @@ function main() {
             connection.sendNotification('textDocument/publishDiagnostics', { uri, diagnostics: [{ range: ZERO_RANGE, message }] });
             return true;
          }
+         case 'probe/applyEdit': {
+            // Answers with what the client answered, so a test reads the reply.
+            const { uri, newText } = /** @type {{ uri: string, newText: string }} */ (params[0]);
+            return connection.sendRequest('workspace/applyEdit', { edit: { changes: { [uri]: [{ range: ZERO_RANGE, newText }] } } });
+         }
          case 'ns/head/port':
             return (attempts.get(method) ?? 0) >= FIXTURE_PORT_ATTEMPTS ? FIXTURE_PORT : undefined;
          case 'shutdown':

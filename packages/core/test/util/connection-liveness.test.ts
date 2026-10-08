@@ -28,7 +28,7 @@
 import { PassThrough } from 'node:stream';
 import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { describe, expect, it } from 'vitest';
-import { isConnectionGoneError } from '../../src/util/connection-liveness.js';
+import { isClientGoneError, isConnectionGoneError } from '../../src/util/connection-liveness.js';
 
 function writeAfterDestroy(): Promise<Error> {
    const stream = new PassThrough();
@@ -87,5 +87,26 @@ describe('isConnectionGoneError', () => {
       // registry from being read as a dead peer.
       expect(isConnectionGoneError(new Error('Document is disposed'))).toBe(false);
       expect(isConnectionGoneError(new Error('This model has been disposed'))).toBe(false);
+   });
+});
+
+describe('isClientGoneError', () => {
+   it('recognises a write to a socket the client closed, by code or, rewrapped, by message', () => {
+      // A client that disconnects mid-write: the notification rejects with
+      // Node's error, a request with a ResponseError that keeps only the message.
+      expect(isClientGoneError(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).toBe(true);
+      expect(isClientGoneError(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).toBe(true);
+      expect(isClientGoneError(new ResponseError(ErrorCodes.MessageWriteError, 'write EPIPE'))).toBe(true);
+   });
+
+   it('recognises what isConnectionGoneError does, and still not a genuine failure', () => {
+      expect(isClientGoneError(new Error('Connection is disposed.'))).toBe(true);
+      expect(isClientGoneError(new Error('applyEdit rejected by the client'))).toBe(false);
+   });
+
+   it('leaves isConnectionGoneError to call a socket error a failure, since it names no peer', () => {
+      // A network file system can reset too; at a call that also reads files,
+      // that is a failed operation, not a client gone.
+      expect(isConnectionGoneError(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).toBe(false);
    });
 });

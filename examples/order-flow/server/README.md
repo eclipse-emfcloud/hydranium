@@ -123,10 +123,10 @@ npm --prefix examples/order-flow/server test
 ```
 
 The suite covers the language tier, each head end to end over its real
-transport, and the framework's conformance kit, one suite per head. The
-`test/smoke` suites spawn the built `lib/main.js` as a child process through
-`startSpawnedServer`, described in
-[Test your language](../../../docs/guides/test-your-language.md);
+transport, and the framework's conformance kit, one suite per head, with the
+GLSP one run again over the built entry's socket. The `test/smoke` suites
+spawn the built `lib/main.js` as a child process through `startSpawnedServer`,
+described in [Test your language](../../../docs/guides/test-your-language.md);
 `test/smoke/spawned-order-flow-server.ts` supplies only the entry to run and
 the workspace folder name. Copy that file's shape rather than its contents.
 

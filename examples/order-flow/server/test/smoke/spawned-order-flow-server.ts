@@ -11,12 +11,13 @@
  * The shared launch surface for the subprocess smoke suites: `node lib/main.js
  * --stdio` as a real child process, driven over the real LSP wire.
  *
- * The spawn, the handshake, the diagnostics / `window/logMessage` / stderr
- * captures, the polled port lookup and the SIGKILL-backed teardown are all
- * framework surface — `startSpawnedServer` from `@hydranium/core/testing/node`,
- * whose doc carries the transport's two traps (stdout IS the protocol channel,
- * and a publish fans out). All this module supplies is what is specific to THIS
- * example: which built entry to run, and what to call its workspace folder.
+ * The spawn, the handshake, the diagnostics / `window/logMessage` /
+ * `workspace/applyEdit` / stderr captures, the polled port lookup and the
+ * SIGKILL-backed teardown are all framework surface — `startSpawnedServer`
+ * from `@hydranium/core/testing/node`, whose doc carries the transport's two
+ * traps (stdout IS the protocol channel, and a publish fans out). All this
+ * module supplies is what is specific to THIS example: which built entry to
+ * run, and what to call its workspace folder.
  *
  * `lib/main.js` is what this package's `order-flow-server` bin key and its
  * `start` script point at, so it is the entry a host spawns, and it is the only

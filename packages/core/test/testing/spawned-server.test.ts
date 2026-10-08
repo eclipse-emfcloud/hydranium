@@ -210,6 +210,18 @@ describe('startSpawnedServer', () => {
       expect(head[0].message).toBe(FIXTURE_FIRST_DIAGNOSTIC);
    });
 
+   it("captures and answers the child's workspace/applyEdit", async () => {
+      const server = await boot('apply-edit', 'default');
+
+      const from = server.appliedEdits.length;
+      const reply = await server.connection.sendRequest('probe/applyEdit', { uri: FIXTURE_DIAGNOSTIC_URI, newText: 'pushed' });
+
+      expect(reply).toEqual({ applied: true });
+      const edit = await server.nextAppliedEdit(FIXTURE_DIAGNOSTIC_URI, { fromIndex: from });
+      expect(edit.uris).toEqual([FIXTURE_DIAGNOSTIC_URI]);
+      expect(edit.text).toBe('pushed');
+   });
+
    it('ignores already-captured publishes when no fromIndex is given', async () => {
       const server = await boot('no-index', 'default');
 

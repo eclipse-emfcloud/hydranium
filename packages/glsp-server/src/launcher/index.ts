@@ -13,6 +13,7 @@ export * from './abstract-hydranium-glsp-diagram-module.js';
 // rather than upstream's — the server-container override discards a subclass of
 // `DefaultGLSPServer`.
 export * from './hydranium-glsp-server.js';
+export * from './drop-notifications-to-gone-client.js';
 export * from './glsp-connection-logger.js';
 // The socket bringup lives in `@hydranium/glsp-server/node` and the worker
 // bringup in `@hydranium/glsp-server/browser`, not here: each pulls the

@@ -290,7 +290,9 @@ function createStorage(
    container.bind(ClientSessionManager).toConstantValue(sessions);
    container.bind(ModelSubmissionHandler).toConstantValue({
       hasPendingInitialRequest: () => false,
-      submitModel: () => Promise.resolve([])
+      startedSubmissions: 0,
+      submitModel: () => Promise.resolve([]),
+      withdrawLastSubmission: () => undefined
    } as unknown as ModelSubmissionHandler);
    container.bind(CommandStack).toConstantValue({
       saveIsDone() {
@@ -422,7 +424,9 @@ function createPolicyStorage(options: {
    } as unknown as ActionDispatcher);
    container.bind(ModelSubmissionHandler).toConstantValue({
       hasPendingInitialRequest: () => false,
-      submitModel: () => Promise.resolve([])
+      startedSubmissions: 0,
+      submitModel: () => Promise.resolve([]),
+      withdrawLastSubmission: () => undefined
    } as unknown as ModelSubmissionHandler);
    container.bind(CommandStack).toConstantValue({ saveIsDone() {}, isDirty: true } as unknown as CommandStack);
    container.bind(ModelState).toConstantValue({
@@ -983,7 +987,7 @@ describe('HydraniumGlspStorage', () => {
       it('dispatches the bound validator markers as a SetMarkersAction (reason batch)', async () => {
          const { storage } = createStorage('client-1');
          const marker: Marker = { elementId: 'e1', kind: 'error', label: 'dup', description: 'dup' };
-         const dispatch = vi.fn();
+         const dispatch = vi.fn((_action: SetMarkersAction) => Promise.resolve());
          (storage as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [marker] };
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
 
@@ -998,13 +1002,34 @@ describe('HydraniumGlspStorage', () => {
 
       it('dispatches an empty marker set to clear when the model is valid', async () => {
          const { storage } = createStorage('client-1');
-         const dispatch = vi.fn();
+         const dispatch = vi.fn((_action: SetMarkersAction) => Promise.resolve());
          (storage as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [] };
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
 
          await storage.refreshDiagnosticMarkers();
 
          expect((dispatch.mock.calls[0][0] as SetMarkersAction).markers).toEqual([]);
+      });
+
+      it('logs a validator that throws as an error, and markers it cannot send as a warning, never rejecting', async () => {
+         const throwingLog = makeCapturingGlspLogger();
+         const throwing = createStorage('client-1', undefined, throwingLog.logger).storage;
+         (throwing as unknown as { modelValidator: unknown }).modelValidator = {
+            validate: () => Promise.reject(new Error('validator bug'))
+         };
+         (throwing as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch: vi.fn() };
+         await expect(throwing.refreshDiagnosticMarkers()).resolves.toBeUndefined();
+         expect(throwingLog.lines.map(line => line.level)).toEqual(['error']);
+
+         const unsendableLog = makeCapturingGlspLogger();
+         const unsendable = createStorage('client-1', undefined, unsendableLog.logger).storage;
+         (unsendable as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [] };
+         (unsendable as unknown as { actionDispatcher: unknown }).actionDispatcher = {
+            dispatch: () => Promise.reject(new Error('Connection is disposed.'))
+         };
+         await unsendable.refreshDiagnosticMarkers();
+         await waitFor(() => unsendableLog.lines.length > 0);
+         expect(unsendableLog.lines.map(line => line.level)).toEqual(['warn']);
       });
 
       it('is a no-op when no validator is bound', async () => {
@@ -1224,6 +1249,65 @@ describe('HydraniumGlspStorage', () => {
          storage.dirtyChanged('file:///x.a', false);
 
          expect(dirtyStates).toEqual(['true external', 'true external']);
+      });
+   });
+
+   describe('a resubmit that matches the last submission', () => {
+      it('is taken back, so the revision the client holds still applies', async () => {
+         const services = makeNoopSharedServices<ServerSharedServices>({
+            model: { ModelService: { ...makeSessionModelService(), getDocument: () => undefined } },
+            workspace: { ModelLedger: new DefaultModelLedger() }
+         });
+         const { storage } = createStorage('client-1', services);
+         const withdrawLastSubmission = vi.fn();
+         const handler = {
+            hasPendingInitialRequest: () => false,
+            startedSubmissions: 4,
+            lastSubmittedSignature: 'unchanged',
+            submitModel: () => {
+               handler.startedSubmissions++;
+               return Promise.resolve([{ kind: 'requestBounds' }]);
+            },
+            withdrawLastSubmission
+         };
+         (storage as unknown as { submissionHandler: unknown }).submissionHandler = handler;
+
+         const actions = await (storage as unknown as { captureAndSubmit(uri: string, root: AstNode): Promise<unknown> }).captureAndSubmit(
+            'file:///a/main.x',
+            { $type: 'TestRoot' }
+         );
+
+         expect(actions).toEqual([]);
+         expect(withdrawLastSubmission).toHaveBeenCalledExactlyOnceWith(5);
+      });
+
+      it('is sent when the graph changed', async () => {
+         const services = makeNoopSharedServices<ServerSharedServices>({
+            model: { ModelService: { ...makeSessionModelService(), getDocument: () => undefined } },
+            workspace: { ModelLedger: new DefaultModelLedger() }
+         });
+         const { storage } = createStorage('client-1', services);
+         const withdrawLastSubmission = vi.fn();
+         const submitted: Action = { kind: 'requestBounds' };
+         const handler = {
+            hasPendingInitialRequest: () => false,
+            startedSubmissions: 0,
+            lastSubmittedSignature: 'before',
+            submitModel: () => {
+               handler.lastSubmittedSignature = 'after';
+               return Promise.resolve([submitted]);
+            },
+            withdrawLastSubmission
+         };
+         (storage as unknown as { submissionHandler: unknown }).submissionHandler = handler;
+
+         const actions = await (storage as unknown as { captureAndSubmit(uri: string, root: AstNode): Promise<unknown> }).captureAndSubmit(
+            'file:///a/main.x',
+            { $type: 'TestRoot' }
+         );
+
+         expect(actions).toEqual([submitted]);
+         expect(withdrawLastSubmission).not.toHaveBeenCalled();
       });
    });
 

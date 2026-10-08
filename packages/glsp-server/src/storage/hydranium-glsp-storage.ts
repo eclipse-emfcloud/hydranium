@@ -18,6 +18,7 @@ import {
    type Disposable,
    GLSPServerError,
    Logger as GlspLogger,
+   type Marker,
    MarkersReason,
    type MaybePromise,
    MessageAction,
@@ -471,7 +472,15 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (actions.length > 0) {
          // Defer through the injectable Clock (not raw setTimeout) so the dispatch is
          // testable and cancels on session disposal; parked on toDispose for that.
-         this.toDispose.push(this.sharedServices.Clock.setTimer(() => this.actionDispatcher.dispatchAll(actions), 0));
+         this.toDispose.push(
+            this.sharedServices.Clock.setTimer(
+               () =>
+                  this.actionDispatcher
+                     .dispatchAll(actions)
+                     .catch((error: unknown) => this.logger.warn(`Could not send the settled model of ${rootUri}: ${String(error)}`)),
+               0
+            )
+         );
       }
    }
 
@@ -635,7 +644,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected flushResubmit(): void {
       const rootUri = this.state.sourceUri;
       this.doUpdateAndSubmit(rootUri).then(
-         actions => this.actionDispatcher.dispatchAll(actions),
+         actions =>
+            this.actionDispatcher
+               .dispatchAll(actions)
+               .catch((error: unknown) => this.logger.warn(`Could not send the resubmitted model of ${rootUri}: ${String(error)}`)),
          error => this.logger.error(`Update-and-submit failed for ${rootUri}: ${error instanceof Error ? error.message : String(error)}`)
       );
    }
@@ -736,8 +748,11 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // to be answered by an echo of itself — the operation had delivered the
       // model, and the external comparison had never heard of it.
       const previousSignature = this.submissionHandler.lastSubmittedSignature;
+      // The number this submission takes as it starts.
+      const submission = this.submissionHandler.startedSubmissions + 1;
       const submitActions = await this.submissionHandler.submitModel('external');
       if (this.submissionHandler.lastSubmittedSignature === previousSignature) {
+         this.submissionHandler.withdrawLastSubmission(submission);
          return [];
       }
       return submitActions;
@@ -1045,13 +1060,25 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * set, so re-pushing the full set clears stale markers (an empty set clears
     * all once the model is valid), and sharing the tool-palette validate
     * command's `BATCH` reason means the two paths replace rather than duplicate.
+    *
+    * Never rejects: the update listener that calls it is not awaited. A
+    * validator that throws is logged as an error, markers that cannot be sent
+    * as a warning.
     */
    async refreshDiagnosticMarkers(): Promise<void> {
       if (!this.modelValidator) {
          return;
       }
-      const markers = await this.modelValidator.validate([this.state.root], MarkersReason.BATCH);
-      this.actionDispatcher.dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.BATCH }));
+      let markers: Marker[];
+      try {
+         markers = await this.modelValidator.validate([this.state.root], MarkersReason.BATCH);
+      } catch (error: unknown) {
+         this.logger.error(`Validation of ${this.state.sourceUri} failed: ${String(error)}`);
+         return;
+      }
+      this.actionDispatcher
+         .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.BATCH }))
+         .catch((error: unknown) => this.logger.warn(`Could not send the markers of ${this.state.sourceUri}: ${String(error)}`));
    }
 
    sessionDisposed(_clientSession: ClientSession): void {

@@ -105,4 +105,30 @@ describe('buildGlspChecks', () => {
          'dispose'
       ]);
    });
+
+   it('awaits an asynchronous expectMutated, and fails the check on a late false', async () => {
+      const driver: Drv = {
+         start: async () => undefined,
+         dispatch: () => undefined,
+         nextAction: async kind => ({ kind }) as never,
+         dispose: () => undefined
+      };
+      const checkAnswering = (verdict: boolean) =>
+         buildGlspChecks({
+            connect: () => driver,
+            diagrams: [
+               {
+                  ...base,
+                  createOperation: {
+                     action: () => ({ kind: 'createNode' }),
+                     expectedResponseKind: 'requestBounds',
+                     expectMutated: () => new Promise<boolean>(resolve => setTimeout(() => resolve(verdict), 10))
+                  }
+               }
+            ]
+         }).find(candidate => candidate.title.includes('create operation'));
+
+      await expect(checkAnswering(true)?.body?.()).resolves.toBeUndefined();
+      await expect(checkAnswering(false)?.body?.()).rejects.toThrow(/expectMutated was false/);
+   });
 });

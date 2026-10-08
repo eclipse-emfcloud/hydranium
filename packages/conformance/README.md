@@ -29,6 +29,7 @@ npm install --save-dev @hydranium/conformance
 | `@hydranium/protocol` | `^1.0.0-next` |
 | `@jest/globals`       | `^29.0.0`     |
 | `vitest`              | `^4.0.0`      |
+| `vscode-jsonrpc`      | `^9.0.0`      |
 
 `vitest` and `@jest/globals` are optional peers: install the runner you use.
 
@@ -58,19 +59,29 @@ The GLSP slice is generic over your action type and takes a `GlspFixture` per
 diagram type. The fixture builds your native actions, and the kit matches the
 responses by `kind`.
 
+To check a deployed GLSP server rather than one built in your test process,
+return `connectGlspSocketDriver({ port, diagramType, clientActionKinds })` from
+`connect`. The driver sees only GLSP actions, so a create check's
+`expectMutated` observes the write on a channel you hold, as a host would: the
+`workspace/applyEdit` the server pushes on your LSP connection, for a document
+you opened there first. It may return a promise for that push. A server that
+lays out on the client finishes a load only once its `requestBounds` is
+answered, so pass `respond` to send back the `computedBounds` a client would.
+
 For where the kit fits among your other tests, see *Test your language* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Entry points
 
-| Subpath    | Use it for                                                   | Runs in |
-| ---------- | ------------------------------------------------------------ | ------- |
-| `.`        | `LanguageFixture` and the runner-agnostic check primitives.  | Node    |
-| `./data`   | The data-head checks and driver port.                        | Node    |
-| `./lsp`    | The LSP-head checks and driver port.                         | Node    |
-| `./glsp`   | The GLSP-head checks and driver port.                        | Node    |
-| `./vitest` | Run the checks under vitest.                                 | Node    |
-| `./jest`   | Run the checks under Jest.                                   | Node    |
+| Subpath       | Use it for                                                   | Runs in |
+| ------------- | ------------------------------------------------------------ | ------- |
+| `.`           | `LanguageFixture` and the runner-agnostic check primitives.  | Node    |
+| `./data`      | The data-head checks and driver port.                        | Node    |
+| `./lsp`       | The LSP-head checks and driver port.                         | Node    |
+| `./glsp`      | The GLSP-head checks and driver port.                        | Node    |
+| `./glsp/node` | A GLSP driver over a socket, for a deployed server.          | Node    |
+| `./vitest`    | Run the checks under vitest.                                 | Node    |
+| `./jest`      | Run the checks under Jest.                                   | Node    |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`
 (`NodeNext` or `Bundler`); see *Requirements* in

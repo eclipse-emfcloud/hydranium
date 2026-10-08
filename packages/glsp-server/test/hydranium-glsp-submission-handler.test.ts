@@ -11,15 +11,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
    type Action,
    type DirtyStateChangeReason,
-   type GModelRoot,
+   GModelRoot,
    type GModelRootSchema,
    LayoutOperation,
    ModelSubmissionHandler,
+   type ModelValidator,
    type SetModelAction
 } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { type AstNode, DocumentState } from '@hydranium/langium';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
+import { makeCapturingGlspLogger } from '../src/testing/index.js';
 
 /**
  * Spy-target surfaces that narrow GLSP's `MaybePromise<Action[]>` return type and surface
@@ -174,6 +176,183 @@ describe('HydraniumGlspSubmissionHandler', () => {
          } finally {
             parentSpy.mockRestore();
          }
+      });
+   });
+
+   describe('withdrawLastSubmission', () => {
+      /** A parent submit that bumps the revision, as GLSP's does, and answers the same graph every time. */
+      function bumpingParent(state: FakeState) {
+         return vi.spyOn(ModelSubmissionHandler.prototype as unknown as ParentSubmitSurface, 'submitModel').mockImplementation(async () => {
+            if (state.root) {
+               state.root.revision = (state.root.revision ?? 0) + 1;
+            }
+            return [{ kind: 'requestBounds', newRoot: { type: 'graph', id: 'graph' } } as Action];
+         });
+      }
+
+      /** Submit as the storage does, answering the number to withdraw it by. */
+      async function submitNumbered(handler: TestSubmissionHandler, reason: DirtyStateChangeReason): Promise<number> {
+         const submission = handler.startedSubmissions + 1;
+         await handler.submitModel(reason);
+         return submission;
+      }
+
+      it('returns the revision to the one the client was given, for duplicates in a row', async () => {
+         const state = makeState({ messages: [] });
+         state.root = new GModelRoot();
+         state.root.revision = 0;
+         const handler = bindFakeState(new TestSubmissionHandler(), state);
+         handler.setReadyEventForTest(undefined);
+         const parentSpy = bumpingParent(state);
+
+         try {
+            await handler.submitModel('operation');
+            const sent = state.root.revision;
+            const signature = handler.lastSubmittedSignature;
+
+            handler.withdrawLastSubmission(await submitNumbered(handler, 'external'));
+            expect(state.root.revision).toBe(sent);
+            expect(handler.lastSubmittedSignature).toBe(signature);
+
+            // A second duplicate must not return to the first one's bumped revision.
+            handler.withdrawLastSubmission(await submitNumbered(handler, 'external'));
+            expect(state.root.revision).toBe(sent);
+         } finally {
+            parentSpy.mockRestore();
+         }
+      });
+
+      it('withdraws through an override that returns its own array', async () => {
+         class ExtendingSubmissionHandler extends TestSubmissionHandler {
+            override async submitModel(reason?: DirtyStateChangeReason, layout?: LayoutOperation): Promise<Action[]> {
+               return [...(await super.submitModel(reason, layout)), { kind: 'extra' }];
+            }
+         }
+         const state = makeState({ messages: [] });
+         state.root = new GModelRoot();
+         state.root.revision = 0;
+         const handler = bindFakeState(new ExtendingSubmissionHandler(), state);
+         handler.setReadyEventForTest(undefined);
+         const parentSpy = bumpingParent(state);
+
+         try {
+            await handler.submitModel('operation');
+            const sent = state.root.revision;
+
+            handler.withdrawLastSubmission(await submitNumbered(handler, 'external'));
+            expect(state.root.revision).toBe(sent);
+         } finally {
+            parentSpy.mockRestore();
+         }
+      });
+
+      it('leaves a root another submission rebuilt since alone', async () => {
+         const state = makeState({ messages: [] });
+         state.root = new GModelRoot();
+         state.root.revision = 0;
+         const handler = bindFakeState(new TestSubmissionHandler(), state);
+         handler.setReadyEventForTest(undefined);
+         const parentSpy = bumpingParent(state);
+
+         try {
+            await handler.submitModel('operation');
+            const dropped = await submitNumbered(handler, 'external');
+            // Another submission rebuilt the root before the caller withdrew.
+            state.root.revision = (state.root.revision ?? 0) + 1;
+            const rebuilt = state.root.revision;
+
+            handler.withdrawLastSubmission(dropped);
+            expect(state.root.revision).toBe(rebuilt);
+         } finally {
+            parentSpy.mockRestore();
+         }
+      });
+
+      it('leaves alone a submission that finished after the dropped one, though its graph matches', async () => {
+         const state = makeState({ messages: [] });
+         state.root = new GModelRoot();
+         state.root.revision = 0;
+         const handler = bindFakeState(new TestSubmissionHandler(), state);
+         handler.setReadyEventForTest(undefined);
+         const parentSpy = bumpingParent(state);
+
+         try {
+            await handler.submitModel('operation');
+            const dropped = await submitNumbered(handler, 'external');
+            // An operation started and finished before the caller withdrew; the
+            // client was given its revision.
+            await handler.submitModel('operation');
+            const sent = state.root.revision;
+
+            handler.withdrawLastSubmission(dropped);
+            expect(state.root.revision).toBe(sent);
+         } finally {
+            parentSpy.mockRestore();
+         }
+      });
+
+      it('returns the revision to the one the client was given, when the duplicate started before that submission finished', async () => {
+         const state = makeState({ messages: [] });
+         state.root = new GModelRoot();
+         state.root.revision = 0;
+         const handler = bindFakeState(new TestSubmissionHandler(), state);
+         handler.setReadyEventForTest(undefined);
+         const answers: Array<() => void> = [];
+         // Bumps when called, as GLSP's does, and answers when the test says.
+         const parentSpy = vi
+            .spyOn(ModelSubmissionHandler.prototype as unknown as ParentSubmitSurface, 'submitModel')
+            .mockImplementation(() => {
+               if (state.root) {
+                  state.root.revision = (state.root.revision ?? 0) + 1;
+               }
+               return new Promise<Action[]>(resolve =>
+                  answers.push(() => resolve([{ kind: 'requestBounds', newRoot: { type: 'graph', id: 'graph' } } as Action]))
+               );
+            });
+
+         try {
+            const first = handler.submitModel('operation');
+            const sent = state.root.revision;
+            const submission = handler.startedSubmissions + 1;
+            const second = handler.submitModel('external');
+            answers[0]();
+            await first;
+            answers[1]();
+            await second;
+
+            handler.withdrawLastSubmission(submission);
+            expect(state.root.revision).toBe(sent);
+         } finally {
+            parentSpy.mockRestore();
+         }
+      });
+   });
+
+   describe('performLiveValidation', () => {
+      class LiveValidatingHandler extends HydraniumGlspSubmissionHandler<TestRoot> {
+         validateForTest(validator: ModelValidator): Promise<void> {
+            return this.performLiveValidation(validator);
+         }
+      }
+
+      function makeLiveValidatingHandler(dispatch: () => Promise<void>) {
+         const { logger, lines } = makeCapturingGlspLogger();
+         const handler = new LiveValidatingHandler();
+         (handler as unknown as { modelState: unknown }).modelState = { root: new GModelRoot(), logger, setStatus: () => undefined };
+         (handler as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
+         return { handler, logged: () => lines.map(line => [line.level, line.message]) };
+      }
+
+      it('logs a validator that throws as an error, and markers it cannot send as a warning, never rejecting', async () => {
+         const throwing = makeLiveValidatingHandler(() => Promise.resolve());
+         await expect(
+            throwing.handler.validateForTest({ validate: () => Promise.reject(new Error('validator bug')) })
+         ).resolves.toBeUndefined();
+         expect(throwing.logged()).toEqual([['error', 'Live validation failed: Error: validator bug']]);
+
+         const unsendable = makeLiveValidatingHandler(() => Promise.reject(new Error('Connection is disposed.')));
+         await expect(unsendable.handler.validateForTest({ validate: () => Promise.resolve([]) })).resolves.toBeUndefined();
+         expect(unsendable.logged()).toEqual([['warn', 'Could not send the live-validation markers: Error: Connection is disposed.']]);
       });
    });
 

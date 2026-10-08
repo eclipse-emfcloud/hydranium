@@ -8,14 +8,14 @@
  ********************************************************************************/
 
 import { LogMessageNotification, MessageType, type Features, type RemoteConsole } from 'vscode-languageserver';
-import { isConnectionGoneError } from '../util/connection-liveness.js';
+import { isClientGoneError } from '../util/connection-liveness.js';
 
 /**
  * Add Hydranium's connection-liveness handling to a language-server
  * connection's console. The upstream `RemoteConsole` catches every failed log
  * notification and prints `Sending log message failed`, so every ordinary
  * teardown reports a failure; this console drops only a failure that
- * {@link isConnectionGoneError} recognises and re-raises any other as an
+ * {@link isClientGoneError} recognises and re-raises any other as an
  * unhandled rejection.
  *
  * Supply it where the connection is created. `createConnection` builds the
@@ -58,7 +58,7 @@ export function withHydraniumLspFeatures<T extends Features>(features: T): T {
             }
 
             private handleLogSendFailure(error: unknown): void {
-               if (!isConnectionGoneError(error)) {
+               if (!isClientGoneError(error)) {
                   void Promise.reject(error);
                }
             }
