@@ -89,10 +89,6 @@ const SNIPPET_TARGETS = [
       host: 'packages/protocol'
    },
    {
-      readme: 'packages/protocol/README.md',
-      host: 'packages/protocol'
-   },
-   {
       readme: 'docs/contributing/conventions.md',
       host: 'examples/order-flow/server',
       // Illustrative stand-ins the prose names but never defines. Real

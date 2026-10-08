@@ -38,36 +38,5 @@
   },
   "examples/order-flow/vscode/README.md": {
     "timing": 1
-  },
-  "packages/cli/README.md": {
-    "size": 1,
-    "version": 2
-  },
-  "packages/client-theia/README.md": {
-    "timing": 1,
-    "version": 1
-  },
-  "packages/conformance/README.md": {
-    "version": 1
-  },
-  "packages/core/README.md": {
-    "version": 1
-  },
-  "packages/data-client-theia/README.md": {
-    "timing": 1,
-    "version": 1
-  },
-  "packages/data-server/README.md": {
-    "version": 1
-  },
-  "packages/glsp-client-theia/README.md": {
-    "timing": 3,
-    "version": 1
-  },
-  "packages/glsp-server/README.md": {
-    "version": 3
-  },
-  "packages/langium/README.md": {
-    "version": 1
   }
 }

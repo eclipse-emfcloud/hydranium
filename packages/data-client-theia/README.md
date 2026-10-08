@@ -1,61 +1,20 @@
 # `@hydranium/data-client-theia`
 
-Theia client primitives for the hydranium **data head** — the companion of
-`@hydranium/data-server` in the
-[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework.
-
-The data head's frontend speaks the data server's own `vscode-jsonrpc` protocol
-over a channel that the Theia backend relays byte-for-byte onto the server's
-socket. This package is the Theia-specific half of that arrangement: the browser-side
-transport and the backend-side connection handler and forwarder. Everything above
-the transport — the connection, its sessions, the event fan-out — is host-neutral
-and lives in `@hydranium/protocol/client`. Install it if a Theia application needs
-form editors, trees, or code-gen driven from the live AST rather than from LSP
-text edits.
+The Theia connection for the
+[Hydranium](https://github.com/eclipse-emfcloud/hydranium) data head, the
+companion of `@hydranium/data-server`. Install it when forms, trees or views in
+a Theia application work on the live model rather than on text. It builds on
+`@hydranium/client-theia`.
 
 ## What it gives you
 
-- **`openChannelConnection`** with `createChannelConnection` and
-  `ChannelConnectionHandle` — wraps a Theia `Channel` as a `vscode-jsonrpc`
-  `MessageConnection`, gated on a `whenReady` promise, and by default
-  re-establishes it by **re-opening the channel** when the connection is lost.
-  Re-opening rather than rebuilding is what recovers a restarted language server:
-  a server restart closes only the multiplexed sub-channel, so no replacement
-  channel ever arrives on its own. Retries follow `DEFAULT_RECONNECT_DELAYS`,
-  escalating per consecutive loss and resetting after
-  `RECONNECT_ESCALATION_RESET_MS`.
-- **`ChannelDataPort`** — the `DataPort` implementation over a Theia frontend
-  channel, and the only class a Theia adopter has to write against. Subclass it
-  with a `servicePath`; it supplies the channel, the workspace gate, the
-  reconnect signal and the `MessageService` error sink. Bind one per service path
-  in singleton scope. Hand it to `DataConnectionWithEvents` (from
-  `@hydranium/protocol`) and each connection reports through the
-  `ConnectionReporter`, a data server not ready after 30 s included; the
-  connection, its sessions and its event fan-out are the host-neutral ones every
-  other shell uses.
-- **`EmitterDataClient`** (on `./common`, not `./browser`) — the default
-  client-side implementation of the data protocol's inbound notifications,
-  fanning each one out to a Theia `Event` of the matching name
-  (`onDidUpdateDocument`, `onDidSaveDocument`, …). Bind an instance as the
-  `localTarget` of the frontend's RPC proxy. It sits on the common tier because
-  its only runtime dependency is `@theia/core`'s root entry, which is Theia's own
-  common tier, so a backend or a plain-Node consumer can bind it too.
-- **`whenWorkspaceOpen`** — resolves once Theia reports a workspace root. The data
-  server only starts once the LSP launches for a workspace, so connecting earlier
-  would hang in port discovery; pass this as `whenReady`.
-- **`DataSessionStopContribution`** — ends a frontend's data sessions with its
-  page, so the server ends them as closed rather than waiting for the connection
-  to go, and holds the page while one of them is saving.
-  `bindDataConnection(bind, isBound, ConnectionClass)` binds a connection with
-  its sessions tracked, and binds this contribution and the
-  `ConnectionReporter` the connection's port injects unless they are bound.
-- **Backend (`./node`)** — `DataServerConnectionHandler` (the socket bridge,
-  over `@hydranium/client-theia`'s `SocketChannelForwarder`),
-  `createDataServerConnectionContainerModule(...handlers)` for the
-  frontend-scoped module boilerplate, and `HostDiagnosticsServer` with
-  `createHostDiagnosticsBackendModule()` — which, paired with the browser-side
-  `bindHostDiagnostics`, lights up the "Backend" diagnostics commands in
-  `@hydranium/client-theia`'s contribution.
+- A data connection in the Theia frontend: you subclass `ChannelDataPort`, and
+  the connection and sessions from `@hydranium/protocol` run over it.
+- A connection that waits for a workspace, and reconnects on its own when the
+  channel is lost, a restarted server included.
+- Sessions that end with the page, and a page held while one of them saves.
+- The backend handler that relays the channel to the data server's socket.
+- Diagnostics commands for the Theia backend process, beside the server's.
 
 ## Install
 
@@ -63,76 +22,61 @@ text edits.
 npm install @hydranium/data-client-theia
 ```
 
-You must already have a Theia application with `@theia/workspace` available, and a
-running hydranium data server to connect to. The declared peer dependencies are:
-
-| Peer                      | Range                |
-| ------------------------- | -------------------- |
-| `@hydranium/client-theia` | `^1.0.0-next`        |
-| `@hydranium/protocol`     | `^1.0.0-next`        |
-| `@theia/core`             | `^1.70.0`            |
-| `@theia/workspace`        | `^1.70.0`            |
-| `inversify`               | `^6.0.0`             |
-| `vscode-jsonrpc`          | `^9.0.0`             |
+| Peer                      | Range         |
+| ------------------------- | ------------- |
+| `@hydranium/client-theia` | `^1.0.0-next` |
+| `@hydranium/protocol`     | `^1.0.0-next` |
+| `@theia/core`             | `^1.70.0`     |
+| `@theia/workspace`        | `^1.70.0`     |
+| `inversify`               | `^6.0.0`      |
+| `vscode-jsonrpc`          | `^9.0.0`      |
 
 ## Wiring
 
-This package declares no `theiaExtensions` — it is a library your own Theia
-extension builds on. That extension's `package.json` declares the entries, and
-each entry names one frontend/backend module pair:
+This package declares no `theiaExtensions`; your own Theia extension declares
+them and binds from here.
 
-- the **frontend** module:
-  - binds your `ChannelDataPort` subclass in singleton scope;
-  - calls `bindDataConnection(bind, isBound, MyConnection)` for the connection
-    over it;
-  - calls `bindChannelLogger` from `@hydranium/client-theia`, where the port
-    logs the connection failures it leaves to the reporter, and the connection
-    over it logs at debug level what it does on its own;
-  - calls `bindEditorDiskSync` from `@hydranium/client-theia`, since a data
-    server save writes a file an editor can have open;
-  - calls `bindHostDiagnostics` for the diagnostics commands;
-- the **backend** module is typically a one-liner:
-  `export default createDataServerConnectionContainerModule(MyHandler)`, where
-  `MyHandler` extends `DataServerConnectionHandler`.
+- In a frontend module, subclass `ChannelDataPort` with a `servicePath` and
+  bind it in singleton scope. Call `bindDataConnection` for the connection
+  over it.
+- In the same frontend, call `bindChannelLogger` from
+  `@hydranium/client-theia`, and its `bindEditorDiskSync`, since a data server
+  save writes a file an editor can have open.
+- For the backend diagnostics commands, call `bindHostDiagnostics` in the
+  frontend and export `createHostDiagnosticsBackendModule()` from a backend
+  module.
+- In the backend, export
+  `createDataServerConnectionContainerModule(MyHandler)`, where `MyHandler`
+  extends `DataServerConnectionHandler` and names your server's port command.
 
-More than one handler is the normal case, not an exotic one. Theia keys a
-frontend channel by its service path and refuses a second channel on a path
-already open, so every frontend abstraction reaching the data head on its own
-channel needs its own `servicePath` — while the shared `portCommand` still names
-the one server process behind them all. Several participants over ONE channel
-need no second handler: that is what `DataConnection`'s sessions are for, and it
-is the cheaper arrangement.
+Give each frontend channel its own `servicePath`. Theia refuses a second
+channel on a path already open, silently: the frontend hangs with nothing in
+the log. For several participants on one channel, use sessions instead.
 
-The refusal is silent, which is what makes it expensive: the loser's promise is
-left unsettled rather than rejected, so a frontend that shared a path hangs on
-its loading state indefinitely with nothing in the server log to say why.
+For the whole setup, see *Host in Theia* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Entry points
 
-| Subpath     | Holds                                                                                                                                                                                                | Environment                      |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `.`         | Nothing — the surface is split by environment, so the root barrel stays empty.                                                                                                                        | browser-neutral (gated)          |
-| `./common`  | `EmitterDataClient` — a module lands here only when values, types and relative imports are all neutral or Theia COMMON tier. No error-reconstruction bridge, and that is a property of the transport: the direct `vscode-jsonrpc` connection carries a typed error across the relay natively. | browser-neutral (gated)          |
-| `./browser` | `openChannelConnection`, `createChannelConnection`, `ChannelDataPort`, `bindHostDiagnostics`, `whenWorkspaceOpen`, `DataSessionStopContribution`, `bindDataConnection` | browser / Theia frontend (gated) |
-| `./node`    | `DataServerConnectionHandler`, `createDataServerConnectionContainerModule`, `HostDiagnosticsServer`, `createHostDiagnosticsBackendModule`                                    | Node / Theia backend             |
+| Subpath     | Use it for                                                    | Runs in         |
+| ----------- | ------------------------------------------------------------- | --------------- |
+| `.`         | Nothing; import a subpath                                     | browser-neutral |
+| `./common`  | The data server's notifications as Theia events, on any side  | browser-neutral |
+| `./browser` | The port, the connection binding and the diagnostics proxy    | Theia frontend  |
+| `./node`    | The connection handler and the backend modules                | Theia backend   |
 
-Resolve the subpaths with [a resolver that reads
-`exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them. "Gated" means the
-repository's neutral-bundle check enforces that the entry bundles for the
-browser with no `node:*` import, transitive ones included; `./node` is
-deliberately outside that gate. Also worth reading: [what "gated neutral" does and does not promise](../../docs/contributing/design/browser-hosting.md#what-gated-neutral-does-and-does-not-promise).
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
-The API is not stable and may change without a deprecation cycle. See
-[Adopting Hydranium](../../docs/ADOPTING.md) for the data head's place among
-the heads, and the [repository README](../../README.md)
-for current status and known limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
-`MIT` — see this package's [`LICENSE`](./LICENSE). Third-party notices for the
-runtime dependency closure are collected in the repository
-[`NOTICE.md`](../../NOTICE.md).
+`MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.

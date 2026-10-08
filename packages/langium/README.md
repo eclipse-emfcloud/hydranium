@@ -1,50 +1,20 @@
 # `@hydranium/langium`
 
-The pinned [Langium](https://langium.org/) re-export for the
-[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework — the single chokepoint every
-`@hydranium/*` package, and every adopter of them, imports Langium through.
-
-You do not install this for its own API: it is almost entirely passthrough. You install it because a
-framework package will resolve it anyway, and because importing Langium through it is how your
-project stays in lockstep with the version the framework was built against.
-
-## Why this package exists
-
-Langium is pinned to **one exact version** here, to guarantee a **single physical copy** across the
-workspace. Re-export is transparent — given one physical install, importing `AstUtils` or
-`OperationCancelled` from `@hydranium/langium` and from `langium` yields the same object and the
-same declaration. That transparency is exactly what a split install destroys: two copies of Langium
-mean two sets of declarations, which TypeScript refuses to mix, and two sets of module-level values,
-so one that Langium compares by identity, such as its cancellation signal, is not recognised by the
-other copy. The framework refuses to start a server whose AST reflection is built on a copy other
-than its own. Without the pin, single-copy is only a semver-dedup coincidence, one minor bump away
-from breaking.
-
-For an **adopter**, the reason to route imports here is not runtime identity (that already holds) —
-it is **version coupling**. Langium sits in a chain with `vscode-languageserver`,
-`vscode-languageserver-protocol` and `vscode-jsonrpc`, whose links move together. An
-adopter importing `langium` directly owns that pin itself and can drift out of lockstep with the
-framework it composes; importing it from here means the framework owns it.
-
-The chokepoint is **lint-enforced**, not merely conventional: an oxlint
-`no-restricted-imports` rule over `packages/**` and `examples/**` rejects direct imports of
-`langium`, `langium/lsp`, `langium/node`, `langium/test` and `vscode-uri` (whose `URI` Langium
-re-exports and owns the version of). This package itself is exempt, as is any `generated` directory —
-`langium-cli` emits direct imports there and rewrites them on every build, which is also why
-`langium` stays a declared dependency of an adopter's own package.
+[Langium](https://langium.org/), re-exported for the
+[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework. Import
+Langium through this package so your install has one copy of it and the
+framework owns the Langium version chain. `@hydranium/core` takes it as a peer,
+so you install it alongside.
 
 ## What it gives you
 
-- Langium's full API surface, re-exported: `AstNode`, `AstUtils`, `URI`, `UriUtils`, the service
-  types, the DI helpers — everything, unfiltered.
-- A subpath per upstream subpath, so `langium/lsp`, `langium/node` and `langium/test` each have a
-  chokepoint mirror.
-- One ambient type augmentation: `AstNode.$synthetic`, a marker for a node that was programmatically
-  constructed rather than parsed. Type-level only — the behaviour that reads it lives in
-  `@hydranium/core`.
-- Two additions to the `UriUtils` namespace, so framework URI helpers sit beside Langium's own:
-  `UriUtils.toUri` (normalise a `URI | string`) and `UriUtils.isAncestorOrEqual` (a scheme- and
-  authority-aware containment check, unlike `UriUtils.contains`).
+- Langium's full API, unfiltered. Replace `langium` with `@hydranium/langium` in
+  your imports; nothing else changes, because the symbols are the same objects.
+- A mirror of each Langium subpath, so `langium/lsp`, `langium/node` and
+  `langium/test` go through the same pin.
+- Langium and its `vscode-languageserver`, `vscode-languageserver-protocol` and
+  `vscode-jsonrpc` chain move together, at the versions the framework was built
+  against, instead of a pin you maintain yourself.
 
 ## Install
 
@@ -54,37 +24,31 @@ npm install @hydranium/langium
 
 No peer dependencies: `langium` is a direct, exact dependency of this package.
 
-## Subpaths
+Still declare `langium` in your own package, at the version this package pins:
+the code `langium-cli` generates imports `langium` directly. If your install
+resolves a second copy, the framework refuses to start your language server.
 
-| Subpath  | Re-exports     | Contents                                  |
-| -------- | -------------- | ----------------------------------------- |
-| `.`      | `langium`      | Core API + the framework's augmentations. |
-| `./lsp`  | `langium/lsp`  | LSP service defaults.                     |
-| `./node` | `langium/node` | `NodeFileSystem`.                         |
-| `./test` | `langium/test` | Parsing / validation test helpers.        |
+## Entry points
 
-Resolve the subpaths with [a resolver that reads `exports`](../../docs/adopting/requirements.md#a-resolver-that-reads-exports);
-`"Node"` (node10) reaches none of them.
+| Subpath  | Use it for                    | Runs in         |
+| -------- | ----------------------------- | --------------- |
+| `.`      | instead of `langium`          | browser-neutral |
+| `./lsp`  | instead of `langium/lsp`      | browser-neutral |
+| `./node` | instead of `langium/node`     | Node-only       |
+| `./test` | instead of `langium/test`     | Node-only       |
 
-## Usage
-
-Replace `langium` with `@hydranium/langium` in your import specifiers; nothing else changes, because
-the symbols are the same objects.
-
-The one thing to know is that the root entry is **side-effecting**: importing anything from
-`@hydranium/langium` loads the `UriUtils` augmentation, which mutates the runtime `UriUtils` object.
-That is why the added helpers are visible process-wide once any framework package has loaded — and
-why code that imports `UriUtils` from `langium` without ever loading the framework correctly sees
-only the stock surface.
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The API is
-Langium's and is stable to the extent Langium's is; what is not yet settled is the augmentation set
-and the pinned version. See the [repository README](../../README.md) for the current status and
-known limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
 `MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
-[`NOTICE.md`](../../NOTICE.md) for third-party notices.
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.

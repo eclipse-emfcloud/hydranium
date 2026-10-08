@@ -27,7 +27,7 @@ scripts.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
-Every option is in the [CLI README](../../packages/cli/README.md).
+`npx @hydranium/cli init --help` lists every option.
 
 ## Build and test
 

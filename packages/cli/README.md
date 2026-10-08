@@ -1,261 +1,109 @@
 # `@hydranium/cli`
 
-The headless tool surface of the [Hydranium](https://github.com/eclipse-emfcloud/hydranium)
-framework, published as the `hydranium-cli` binary.
-
-Install it if you are building a Hydranium language. `init` scaffolds a complete project from one
-invocation; the other twelve subcommands drive an already-built head from a shell or a CI step —
-grammar introspection, headless validation, transfer-model codegen, memory measurement, and
-operations against a spawned data-server.
+The `hydranium-cli` binary of the
+[Hydranium](https://github.com/eclipse-emfcloud/hydranium) framework. You
+install it when you build a Hydranium language: `init` scaffolds the project,
+and the other commands drive your built head from a shell or a CI step.
 
 ## What it gives you
 
-- **`init`** — a buildable project (starter grammar, `create<Name>Services` DI wiring, an LSP +
-  data-server launch, `langium-config.json`, build scripts) from one command, or from a wizard that
-  echoes the flags it composed.
-- **CI gates that need no editor** — `validate` exits non-zero on a diagnostic; `lint-grammar`
-  checks that every concrete cross-reference target carries a name property and that each language
-  declares an entry rule.
-- **Grammar introspection** — `reflect` (type hierarchy, terminals, every cross-reference target;
-  Markdown or `--json`) and `model-docs` (a navigable Markdown model reference for your own docs).
-- **Codegen** — `generate-transfer-model` turns a Langium-generated AST into a serializable transfer
-  model, once or in `--watch`.
-- **Memory and profiling** — `measure-memory`, `ast-ground-truth`, and the memlab-based
-  `analyze-heap`.
-- **Data-server operations** — `projects`, `query`, `save` and `watch` spawn a data-server child and
-  speak its protocol, printing JSON / NDJSON a script can pipe.
+- Scaffold a buildable language project with one `init` command, or answer a
+  wizard that echoes the command it composed.
+- Fail a CI step on a diagnostic or a grammar-convention violation, with no
+  editor running.
+- Dump your grammar's reflection, or write a Markdown model reference for your
+  own docs.
+- Generate the serializable transfer model from Langium's generated AST.
+- Measure model-store memory and analyze a V8 heap snapshot.
+- List, read, save and watch documents through a spawned data server, printing
+  JSON a script can pipe.
 
 ## Install
 
-`init` needs no install at all:
+`init` needs no install:
 
 ```bash
 npx @hydranium/cli init ./my-lang --name MyLang
 ```
 
-For the subcommands you run repeatedly, add it to the project it inspects, or install it globally:
+For the commands you run repeatedly, add it to the project it inspects, or
+install it globally:
 
 ```bash
 npm install --save-dev @hydranium/cli
 npm install --global @hydranium/cli
 ```
 
-The framework edges are **peer dependencies** — `@hydranium/core`, `@hydranium/data-server`,
-`@hydranium/langium`, `@hydranium/protocol` and `vscode-jsonrpc` — so the CLI runs the same physical
-copies as the head it inspects (`init` itself needs none of them). The memlab packages
-`analyze-heap` loads are **optional peer dependencies**, so installing this package pulls no browser:
-run `npm install @memlab/core @memlab/heap-analysis` (heavy, ~86 MB) before the first
-`analyze-heap`. Every other subcommand works without them.
+| Peer                     | Range         |
+| ------------------------ | ------------- |
+| `@hydranium/core`        | `^1.0.0-next` |
+| `@hydranium/data-server` | `^1.0.0-next` |
+| `@hydranium/langium`     | `^1.0.0-next` |
+| `@hydranium/protocol`    | `^1.0.0-next` |
+| `@memlab/core`           | `^2.0.3`      |
+| `@memlab/heap-analysis`  | `^2.0.3`      |
+| `vscode-jsonrpc`         | `^9.0.0`      |
 
-## Subcommands
+The two memlab packages are optional peers that only `analyze-heap` loads:
+install them with `npm install @memlab/core @memlab/heap-analysis` before its
+first run.
 
-`hydranium-cli --help` lists them; `hydranium-cli <command> --help` prints one command's own flags.
+## Commands
 
-Most subcommands take `--services <module>`: an ESM module exporting a zero-arg
-`createServices(): { shared }` thunk — normally your build's `./lib/services.js`. The head wires its
-own filesystem inside, so the CLI boots it with no arguments.
+`hydranium-cli --help` lists the commands, and `hydranium-cli <command> --help`
+lists each command's flags.
 
-To run the head from its TypeScript source instead, register a loader with `--import <specifier>`
-(repeatable), which the CLI passes as Node's own `--import` to the process that imports the head:
-`npx hydranium-cli reflect --import tsx --services ./src/services.ts`. A package name resolves from
-the directory the command runs in, as Node's flag does; a path, absolute or relative, is resolved
-against that directory and passed on as a file URL, so Windows paths work too. Node's built-in type
-stripping is not enough on its own: it neither maps a head's `./x.js` imports to their `.ts` sources
-nor accepts the namespaces Langium generates.
+- **Scaffolding.** `init` writes a project you can build right away.
+- **Grammar and workspace.** Boot your built head to reflect its grammar, lint
+  it, write a model reference, validate a workspace, or count its AST nodes.
+- **Codegen.** `generate-transfer-model` turns the AST into a transfer model,
+  once or on watch.
+- **Memory.** Measure a workspace's model-store memory, and analyze a heap
+  snapshot.
+- **Data server.** Spawn your data head and list projects, or query, save or
+  watch a document.
 
-**Scaffolding**
+The commands that boot your head take `--services <module>`. That is an ESM
+module exporting a zero-arg `createServices()` that returns `{ shared }`,
+normally your build's `./lib/services.js`. To run the head from its TypeScript
+source instead, register a loader with `--import`:
+`npx hydranium-cli reflect --import tsx --services ./src/services.ts`.
 
-- `init <target-dir>` — scaffold a new language project. See the section below.
-
-**Grammar and workspace** (`--services <module>`)
-
-- `reflect` — dump the grammar/AST reflection: type hierarchy, per-language terminals and entry
-  rule, every cross-reference target. `--json`, `--out-file <file>`.
-- `lint-grammar` — check the grammar against framework conventions; non-zero exit on a violation.
-  `--name-property <p>` (repeatable), `--strict`, `--json`.
-- `model-docs` — emit a navigable Markdown model reference on stdout, or into `--out-file <file>`.
-- `validate <workspace>` — build a workspace headlessly and report its diagnostics; non-zero exit on
-  any error. `--strict` (also fail on warnings), `--json`, `--out-file <file>`.
-- `measure-memory <workspace>` — measure model-store memory in an `--expose-gc` child.
-  `--edits <N>`, `--edit-docs <N>`, `--churn-suffix <ext>`, `--settle <ms>`, `--snapshot`,
-  `--snapshot-path <p>`, `--profile <dims>`, `--session-out <dir>`, `--json`.
-- `ast-ground-truth <workspace>` — tally the live model's AST nodes by `$type`, the ground truth
-  `analyze-heap --validate` checks a snapshot against. `--out-file <file>`.
-
-All six also take `--log-level <off|error|warn|info|debug|trace>`, which sets the threshold for the
-head the subcommand boots — not for the CLI itself. It reaches the head through the child's
-environment, so a head that binds a logger of its own decides what the flag means to it.
-
-The three `<workspace>` commands resolve that argument to an existing directory before they start —
-a filesystem path or a `file:` URI — and exit 2 naming it when it reaches none. Without that a CI
-step whose path has rotted builds nothing, reports whatever documents the head contributes
-independently of the workspace, and exits 0; the count is a property of the head, so it can be
-plausibly non-zero and cannot be read as the tell.
-
-**Codegen**
-
-- `generate-transfer-model` — generate a transfer-model TypeScript file from a Langium AST.
-  `--ast-file`, `--augmentation-file` and `--out-file` are required, and may come from
-  `--config <path>` instead; `--langium-config <path>` derives `--ast-file` from that config's `out`
-  directory. `--watch` regenerates on change, and the output-naming flags (`--element-type-name`,
-  `--terminals-name`, `--terminals-source-name`, `--skip-type-alias`, `--skip-terminal`,
-  `--regen-command`) tune the emitted file.
-
-**Heap analysis**
-
-- `analyze-heap <snapshot>` — Langium-aware V8 heap-snapshot analysis. Its flags (`--out-file`,
-  `--json`, `--diff`, `--validate <gt.json>`, `--renderer`, and the drill-down tuning flags) are
-  declared alongside every other subcommand's, so an unrecognised one is rejected rather than
-  ignored.
-
-**Child-process heap ceiling** (`HYDRANIUM_CLI_MAX_OLD_SPACE_MB`)
-
-Subcommands that spawn a child — `analyze-heap`, `measure-memory`, `validate`, `lint-grammar`,
-`reflect`, `model-docs`, `ast-ground-truth` — give it `--max-old-space-size=8192` on a machine with
-no cgroup memory limit, and **no ceiling at all when there is one**. A ceiling above the limit lets
-V8 grow past it without collecting hard, so the kernel kills the container rather than the child
-reporting a heap error.
-
-Under a limit, Node derives its own ceiling from that limit, which is a fraction of it — so a
-roomy container gives a child less than the same machine would unconstrained. Set
-`HYDRANIUM_CLI_MAX_OLD_SPACE_MB` to state a ceiling in MiB; it wins in a container too. `0` means
-"let Node decide". A value below 256, or one carrying a unit suffix, is reported and ignored rather
-than passed on.
-
-**Data-server operations** (`--server "<cmd> [args...]"`)
-
-These spawn a data-server child and talk to it over its protocol. All four also take `--cwd <dir>`
-and `--log-level <off|error|warn|info|debug|trace>`.
-
-`--server` has to name an entry that puts the **data** protocol on stdio, which for a scaffolded
-project is `lib/data-server-main.js` — `init` emits it, and the `<project-id>-data-server` bin key
-points at it. `lib/main.js` is the editor entry: stdio there carries LSP and the data head is a
-socket whose port is published over the LSP connection, so pointing `--server` at it answers
-`Unhandled method data-server/getProjects` (or, without `--stdio`, exits on "Connection input stream
-is not set"). Pass the workspace as the entry's own argument rather than through `--cwd`: `--cwd`
-re-roots the child, so a relative entry path would resolve against the workspace — the parser
-refuses that combination by name rather than letting the child fail on a bare module-not-found.
-An absolute entry path works with `--cwd`.
+The data-server commands take `--server "<cmd> [args...]"`. Point it at the
+data head's stdio entry, `lib/data-server-main.js` in a scaffolded project, not
+at the editor entry `lib/main.js`, whose stdio carries LSP. Pass the workspace
+as the entry's argument rather than through `--cwd`:
 
 ```bash
 hydranium-cli projects --server "node ./lib/data-server-main.js ./models"
 ```
 
-- `projects` — list the projects the server exposes, one JSON envelope per line.
-- `query --uri <uri>` — print that document's envelope as a single JSON line.
-- `save --uri <uri> --content <text|@file>` — update and persist the document; an `@`-prefixed value
-  reads the content from a file. `--client-id <id>`. This is the only writing subcommand, and it
-  spawns a data server of its own: a workspace has a **single writer**, so pointing it at one an
-  editor already has open is two writers and the later write wins. Neither process will see a
-  half-written file, but nothing serialises them either, so a lost write is the documented
-  outcome rather than a defect — the guarantee, its one exception and what it does not cover are
-  in [Status: one process writes a workspace](../../docs/adopting/status.md#one-process-writes-a-workspace).
-- `watch --uri <uri>` — subscribe to document updates and print events as NDJSON until Ctrl-C.
-  `--client-id <id>`.
+`save` spawns a data server of its own, and a workspace has one writer. Saving
+into a workspace an editor has open makes two writers, and one write is lost.
 
-## `init` in detail
-
-`init` writes a project you can build immediately, and it writes **only inside the target
-directory** — it refuses a non-empty directory without `--force`, and it never edits a surrounding
-manifest (a root `workspaces` entry and dependency pins are printed, not added). It also does
-**not** run `npm install` or `langium generate`; both are printed as next steps.
-
-Project options are position-free:
-
-- `<target-dir>` and `--name <Name>` are required. `--name` is the PascalCase **project** name and
-  drives the shared generated symbols (`<Name>AstReflection`, `<Name>GeneratedSharedModule`).
-- `--heads <list>` picks the protocol heads from `lsp`, `data`, `glsp`; default `lsp,data`. `lsp` is
-  mandatory — it owns the workspace, the build pipeline and the shared tier the others read through.
-- `--monorepo` scaffolds a member of the surrounding npm workspace, `--scope <@scope>` sets the npm
-  scope, `--public` drops the emitted `"private": true`, `--force` allows a non-empty directory.
-  `--monorepo` also prints the exact pins, `langium` and the LSP stack among them, for the root's
-  `devDependencies`: npm installs a root's own dependencies at the top of the tree, so another
-  member's version cannot leave this package on a copy the framework does not share.
-
-The emitted manifest carries `files` (`lib`, `src`, `syntaxes`), a derived `description` and
-`keywords`, and an empty `author` for you to fill. It is `"private": true` unless you pass
-`--public`, because it also declares `"license": "UNLICENSED"` — a scaffold cannot pick a licence for
-your project, and a package that grants no rights has no business being publishable to a public
-registry. Choose a licence, then pass `--public`. The wizard asks this on every run rather than
-letting a default settle it. `files` is not cosmetic: without it npm falls back
-to the `.gitignore` the scaffold also writes, which ignores `lib/` — so a publish would ship `main`
-and omit the `bin` targets beside it, and succeed. There is deliberately no `repository`: a scaffold
-cannot know yours, and tooling follows that field rather than merely displaying it.
-
-There is one `bin` key per executable entry — `<project-id>` for `src/main.ts`, plus
-`<project-id>-data-server` for `src/data-server-main.ts` when `data` is in `--heads`. Both sources
-begin with a `#!` line, because npm sets the exec bit on a linked target without adding one: a
-first line that is anything else is handed to the shell.
-
-Grammar options are **repeatable and order-scoped**: each applies to the `--grammar` it follows.
-
-- `--grammar <Name>` — the PascalCase grammar name; pass it once per grammar. Defaults to `--name`.
-- `--extensions <list>` — comma-separated file extensions for that grammar, leading dot optional;
-  accumulates. Defaults to the kebab-cased grammar name.
-- `--language-id <id>` — override that grammar's derived routing key.
-- `--diagram` — scaffold a GLSP diagram for that grammar; requires `glsp` in `--heads`.
-
-Leave `--name` off on an interactive terminal and `init` prompts instead, then echoes the command it
-composed before running it — so the wizard is a way to reach an `init` command line, not an
-alternative to one. Without a TTY a missing `--name` stays an error, so CI never hangs.
-
-```bash
-# Scaffold, install, build
-npx @hydranium/cli init ./my-lang --name MyLang
-cd my-lang
-npm install
-npm run build                # langium generate + tsc, into lib/
-npm test                     # the scaffolded DI-composition test
-
-# A model to work on: the starter grammar's nodes, one referencing the other
-mkdir models
-printf 'node Start -> End\nnode End\n' > models/first.my-lang
-
-# The editor entry: LSP on stdio, every other head on a published socket
-node lib/main.js --stdio
-
-# The data head alone, on stdio — the entry the four --server subcommands spawn
-hydranium-cli projects --server "node ./lib/data-server-main.js ./models"
-
-# Drive the rest of the CLI against the built factory
-npx hydranium-cli reflect      --services ./lib/services.js
-npx hydranium-cli lint-grammar --services ./lib/services.js
-npx hydranium-cli validate     --services ./lib/services.js ./models
-npx hydranium-cli model-docs   --services ./lib/services.js --out-file model-reference.md
-
-# Several grammars, three heads, one of them with a diagram
-npx @hydranium/cli init ./order-flow --name OrderFlow --heads lsp,data,glsp \
-   --grammar Domain --grammar Process --diagram \
-   --grammar Layout --extensions diagram
-```
-
-The scaffold wires only the framework defaults. The seams a real language customizes are in
-[Adopting Hydranium](../../docs/ADOPTING.md).
+Commands that spawn a child give it a heap ceiling; set
+`HYDRANIUM_CLI_MAX_OLD_SPACE_MB` to state your own in MiB.
 
 ## Entry points
 
-This package declares a two-key `exports` map — the root barrel and the CLI
-binary — plus a `main` and a `bin`. The binary key names the file, `./lib/cli.js`:
-a consumer that spawns the binary resolves it by specifier, and `bin` offers a
-shim on `PATH` rather than a path.
+| Subpath          | Use it for                                                                   | Runs in |
+| ---------------- | ---------------------------------------------------------------------------- | ------- |
+| `hydranium-cli`  | The binary (`bin`).                                                          | Node    |
+| `.`              | Spawn a data server and get a typed proxy; run the codegen as a function.    | Node    |
+| `./lib/cli.js`   | Resolve the binary's file by specifier, to spawn it from a script or a test. | Node    |
 
-| Entry            | Kind   | Contents                         |
-| ---------------- | ------ | -------------------------------- |
-| `hydranium-cli`  | `bin`  | The binary — all 13 subcommands. |
-| `@hydranium/cli` | `main` | Programmatic API (see below).    |
-
-The programmatic surface is the part of the CLI worth calling from your own scripts and tests rather
-than through argv: `spawnDataServer` / `withDataServer` (spawn a data-server child and get a typed
-proxy, with teardown), `generateTransferModel` / `watchTransferModel` (the codegen, as a function),
-and the `runProjects` / `runQuery` / `runSave` / `runWatch` command bodies.
+The subpaths need a TypeScript `moduleResolution` that reads `exports`
+(`NodeNext` or `Bundler`); see *Requirements* in
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Status
 
-Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The subcommand
-surface and the programmatic API are both still moving. See the [repository README](../../README.md)
-for the current status and known limitations.
+Alpha: every release is a prerelease that may break the API, so pin an exact
+version. Guides and known limitations:
+[Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## License
 
 `MIT` — see this package's [`LICENSE`](./LICENSE), and the repository
-[`NOTICE.md`](../../NOTICE.md) for third-party notices.
+[`NOTICE.md`](https://github.com/eclipse-emfcloud/hydranium/blob/main/NOTICE.md)
+for third-party notices.
