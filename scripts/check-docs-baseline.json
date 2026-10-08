@@ -5,9 +5,6 @@
   "docs/CONTRIBUTING.md": {
     "version": 4
   },
-  "docs/concepts/architecture.md": {
-    "timing": 1
-  },
   "docs/concepts/client-sessions.md": {
     "timing": 7
   },

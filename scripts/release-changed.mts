@@ -186,7 +186,7 @@ const FIXTURES = [
    },
    { name: "a package's README is packed and publishes", paths: ['packages/core/README.md'], publishable: true },
    { name: "the root's README is packed nowhere", paths: ['README.md'], publishable: false },
-   { name: 'a doc page publishes nothing', paths: ['docs/concepts/architecture.md'], publishable: false },
+   { name: 'a doc page publishes nothing', paths: ['docs/concepts/how-it-works.md'], publishable: false },
    { name: 'a changeset publishes nothing', paths: ['.changeset/reject-non-file-writes.md'], publishable: false },
    { name: 'an example source publishes nothing', paths: ['examples/order-flow/server/src/main.ts'], publishable: false },
    {

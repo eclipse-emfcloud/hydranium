@@ -112,20 +112,22 @@ const SNIPPET_TARGETS = [
    // Every fence here is a skip, so nothing compiles — the entry exists because
    // discovery requires one, and it will start earning its keep the moment a
    // compilable fence is added.
-   { readme: 'docs/concepts/scope-and-visibility.md', host: 'examples/order-flow/server' },
-   // Same: its one fence contrasts a working intersection order against a
-   // broken one, so half of it must not compile by construction.
+   { readme: 'docs/concepts/customizing-names-and-scope.md', host: 'examples/order-flow/server' },
    {
-      readme: 'docs/concepts/contributions.md',
+      readme: 'docs/concepts/customizing-services.md',
       host: 'examples/order-flow/server',
       preamble: [
          "import type { AstNode } from 'langium';",
-         "import { HydraniumDocumentValidator } from '@hydranium/core';",
+         "import { inject } from 'langium';",
+         "import { createDefaultModule, createDefaultSharedModule } from 'langium/lsp';",
+         "import { HydraniumDocumentValidator, createServerLanguageModule, createServerSharedModule } from '@hydranium/core';",
+         "import { createLspServerLanguageModule, createLspServerSharedModule } from '@hydranium/core/lsp';",
          'import type {',
          '   HydraniumAstNodeDescriptionProvider,',
          '   IntegrityRule,',
          '   IntegrityRuleContribution,',
          '   IntegrityRuleRegistry,',
+         '   ServerModuleContext,',
          '   ServerSharedServices',
          "} from '@hydranium/core';",
          'type Root = AstNode & { name: string; elements: Element[] };',
@@ -141,10 +143,14 @@ const SNIPPET_TARGETS = [
          'declare const services: ServerSharedServices & { readonly shared: ServerSharedServices };',
          'declare const provider: HydraniumAstNodeDescriptionProvider;',
          'declare const node: Element;',
-         'declare const description: { documentUri: string };'
+         'declare const description: { documentUri: string };',
+         'declare const ctx: ServerModuleContext;',
+         'declare const MyGrammarGeneratedSharedModule: never;',
+         'declare const MyGrammarGeneratedModule: never;',
+         'declare const MyAddedSharedModule: never;',
+         'declare const MyAddedLanguageModule: never;'
       ].join('\n')
    },
-   { readme: 'docs/concepts/framework-vs-adopter.md', host: 'examples/order-flow/server' },
    { readme: 'docs/concepts/client-sessions.md', host: 'examples/order-flow/server' },
    // Hosted by the BROWSER example, not the server one: its fence names
    // `@hydranium/glsp-server/browser`, and only a package that declares the
@@ -165,22 +171,6 @@ const SNIPPET_TARGETS = [
          // able to catch.
          'interface MyAstDiagnostic extends AstDiagnostic { ruleId: string }',
          'interface MyTransferDiagnostic extends TransferDiagnostic { ruleId: string }'
-      ].join('\n')
-   },
-   {
-      readme: 'docs/concepts/shared-vs-language-di-scope.md',
-      host: 'examples/order-flow/server',
-      preamble: [
-         "import { inject } from 'langium';",
-         "import { createDefaultModule, createDefaultSharedModule } from 'langium/lsp';",
-         "import { createServerLanguageModule, createServerSharedModule } from '@hydranium/core';",
-         "import { createLspServerLanguageModule, createLspServerSharedModule } from '@hydranium/core/lsp';",
-         "import type { ServerModuleContext } from '@hydranium/core';",
-         'declare const ctx: ServerModuleContext;',
-         'declare const MyGrammarGeneratedSharedModule: never;',
-         'declare const MyGrammarGeneratedModule: never;',
-         'declare const MyAddedSharedModule: never;',
-         'declare const MyAddedLanguageModule: never;'
       ].join('\n')
    },
    {

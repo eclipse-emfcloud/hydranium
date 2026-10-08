@@ -122,6 +122,5 @@ launch-configuration names.
   README documents.
 
 The framework-level maps this example is an instance of are
-[`docs/concepts/architecture.md`](../../docs/concepts/architecture.md),
-[`docs/concepts/head-module-maps.md`](../../docs/concepts/head-module-maps.md)
-and [`docs/contributing/testing.md`](../../docs/contributing/testing.md).
+[`docs/concepts/how-it-works.md`](../../docs/concepts/how-it-works.md) and
+[`docs/contributing/testing.md`](../../docs/contributing/testing.md).

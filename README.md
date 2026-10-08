@@ -53,13 +53,13 @@ truth.
 ## Architecture
 
 <p align="center">
-  <a href="docs/concepts/architecture.md">
+  <a href="docs/concepts/how-it-works.md">
     <img src="docs/img/architecture.svg" alt="An editor host connects over one channel per protocol to a Hydranium server, whose heads share one Langium workspace over the model files on disk">
   </a>
 </p>
 
 Each editor connects over its own protocol, and every head works on one shared
-Langium workspace. [How it works](docs/concepts/architecture.md) explains the
+Langium workspace. [How it works](docs/concepts/how-it-works.md) explains the
 layers.
 
 ## Start your own

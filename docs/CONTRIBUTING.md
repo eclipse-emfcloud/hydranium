@@ -19,8 +19,9 @@ what the version number does and does not promise.
   measurement that is comparable with an earlier one.
 - How the framework is built:
   [document layers](concepts/document-layers.md),
-  [shared vs per-language DI scope](concepts/shared-vs-language-di-scope.md),
-  [head module maps](concepts/head-module-maps.md) and
+  [model coordination](contributing/design/model-coordination.md),
+  [service placement](contributing/design/service-placement.md),
+  [scope services](contributing/design/scope-services.md) and
   [build-pipeline registries](concepts/build-pipeline-registries.md).
 
 ## Reporting issues

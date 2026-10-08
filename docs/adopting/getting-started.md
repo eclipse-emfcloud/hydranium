@@ -68,7 +68,7 @@ so it always describes the language as it is.
 
 ## Where to go from here
 
-- **Understand what you built.** [Architecture](../concepts/architecture.md)
+- **Understand what you built.** [How it works](../concepts/how-it-works.md)
   explains the heads and the one shared workspace behind them.
   [bookstore](../../examples/bookstore/README.md) is what `init` gives you, with
   a sample workspace; read it beside your own project.
@@ -77,8 +77,8 @@ so it always describes the language as it is.
   [live demo](https://eclipse-emfcloud.github.io/hydranium/): three grammars
   that reference each other, all three heads, and Theia, VS Code and browser
   hosts. The [guides](../ADOPTING.md#guides) walk through the common tasks, and
-  [Framework vs. adopter](../concepts/framework-vs-adopter.md) shows the seams a
-  real language customizes.
+  [customizing services](../concepts/customizing-services.md) shows where a real
+  language changes the defaults.
 
 To wire Hydranium into an existing project instead of a scaffold, see
 [Compose a server by hand](../guides/compose-a-server.md).

@@ -23,6 +23,13 @@ together, and a name with no head spans all of them.
 | [`@hydranium/conformance`](../../packages/conformance/README.md) | you want to check your server against the protocol | A conformance suite you run against your own server, in any test runner. |
 | [`@hydranium/langium`](../../packages/langium/README.md) | you import Langium at all | The one route to Langium, so exactly one copy of it exists in your install. |
 
+The `.` entry of `@hydranium/protocol`, `@hydranium/langium` and each server
+head runs anywhere, a browser included. A `./node` subpath is server-only and may use Node's APIs, and a `./testing` subpath is test
+support you never import from production code. A few heads have one more:
+`@hydranium/core/lsp` is the LSP head, and `@hydranium/glsp-server/browser`
+starts the GLSP head in a web worker. A package's `exports` field lists all of
+its subpaths.
+
 The client libraries are Theia-only. VS Code and browser hosts are shown end to
 end in order-flow, as example code you copy rather than a package you depend
 on; the protocol packages are host-neutral, so a client for another host is
