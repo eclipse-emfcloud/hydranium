@@ -22,16 +22,6 @@ Two examples, for two different questions:
   and browser hosts. Look things up in it, and copy from it for an application
   of your own.
 
-## Guides
-
-- [Add a validation check](guides/add-validation-check.md) for a
-  language-owned invariant.
-- [Add a data-server method](guides/data-server-method.md) that exposes a typed
-  operation on the data head.
-- [Make a diagram editable](guides/editable-diagram.md) by connecting GLSP
-  operations to the shared model.
-- [Compose a server by hand](guides/compose-a-server.md) without `init`.
-
 ## How it works
 
 - [How it works](concepts/how-it-works.md): the heads, the one shared
@@ -41,9 +31,22 @@ Two examples, for two different questions:
 - [Customizing names, scope and visibility](concepts/customizing-names-and-scope.md):
   how an element is named, referenced and found, and the four seams that
   change it.
+- [The four document layers](concepts/document-layers.md): what the user
+  typed, what Langium built from it, what in-process consumers get, and what
+  crosses the wire.
 - [Client sessions](concepts/client-sessions.md): how editors open, write and
   save documents.
 - [Hosting a head in a browser](concepts/browser-hosting.md).
+
+## Guides
+
+- [Add a validation check](guides/add-validation-check.md) for a
+  language-owned invariant.
+- [Add a data-server method](guides/data-server-method.md) that exposes a typed
+  operation on the data head.
+- [Make a diagram editable](guides/editable-diagram.md) by connecting GLSP
+  operations to the shared model.
+- [Compose a server by hand](guides/compose-a-server.md) without `init`.
 
 ## Reference
 
