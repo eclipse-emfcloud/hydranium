@@ -21,25 +21,25 @@ Three properties follow, and each is load-bearing:
   numeric identifier with a leading zero is not valid semver at all, so
   about one in 270 would fail to publish.
 - **No range matches it.** `^1.0.0` resolves no prerelease, so a
-  dependency range can never pick up a nightly by accident. A consumer
+  dependency range can never pick up a prerelease by accident. A consumer
   has to ask for the version, or for a dist-tag.
 - **The stable release sorts above all of it.** `1.0.0-next.999 <
-  1.0.0`, so cutting `1.0.0` is a clean upgrade from every nightly that
+  1.0.0`, so cutting `1.0.0` is a clean upgrade from every prerelease that
   preceded it.
 
 All ten packages publish **in lockstep** at the same version, and the
 intra-framework ranges are rewritten to that version **exactly** — not
 with a caret. `^1.0.0-next.7` also matches `1.0.0` and `1.1.0`, so a
-caret minted on a nightly would let a consumer of one package resolve a
+caret minted on a prerelease would let a consumer of one package resolve a
 sibling from a future stable line. The set that publishes is the set
 that was built together.
 
 ## Dist-tags
 
-**Until the first stable release, every nightly publishes to `latest`.**
+**Until the first stable release, every prerelease publishes to `latest`.**
 That looks wrong and is not. npm assigns `latest` to the first version
 of a new package whatever `--tag` asks for, so publishing only to `next`
-would strand `latest` on the very first nightly, permanently — a bare
+would strand `latest` on the very first prerelease, permanently — a bare
 `npm install @hydranium/core` would resolve a version from months ago.
 Moving it afterwards is not an option either: `npm dist-tag add` cannot
 authenticate over OIDC ([npm/cli#8547][8547]), so it would mean keeping
@@ -187,7 +187,7 @@ Three things in one commit, and the second is the one that bites:
    `node scripts/release.mts latest`.
 2. **Move the base on to `1.1.0-next`.** `git describe` now finds
    `v1.0.0`, so the counter resets — with the base still at
-   `1.0.0-next`, the next nightly computes `1.0.0-next.1`, which sorts
+   `1.0.0-next`, the next prerelease computes `1.0.0-next.1`, which sorts
    *below* the release just cut and is probably already published.
 3. Tag `v1.0.0`.
 
@@ -196,20 +196,8 @@ that is not a `-next` version, and `latest` refuses one that is. Each
 catches the other's forgotten half.
 
 Expect one transient: immediately after the cut, `next` still points at
-the last nightly and is therefore *behind* `latest`. It corrects itself
-on the first nightly of the new line.
-
-## The edit that must ride the first publish
-
-It is not automated and reddens no gate, so it is silent when skipped and
-visible only on the published artefact.
-
-**Rewrite the README's prerelease blockquote.** `README.md` opens its
-getting-started section with a note describing the rolling line. Until
-the first version reaches the registry that note is *ahead* of reality —
-the `npx` lines it governs still answer 404. It is accurate from the
-first publish onward, and wrong before it, so the window is closed by
-publishing rather than by editing.
+the last prerelease and is therefore *behind* `latest`. It corrects itself
+on the first prerelease of the new line.
 
 ## Re-deriving the scaffold provenance targets
 

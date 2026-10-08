@@ -26,7 +26,7 @@ it is **version coupling**. Langium sits in a chain with `vscode-languageserver`
 adopter importing `langium` directly owns that pin itself and can drift out of lockstep with the
 framework it composes; importing it from here means the framework owns it.
 
-The chokepoint is **lint-enforced**, not merely conventional: an ESLint
+The chokepoint is **lint-enforced**, not merely conventional: an oxlint
 `no-restricted-imports` rule over `packages/**` and `examples/**` rejects direct imports of
 `langium`, `langium/lsp`, `langium/node`, `langium/test` and `vscode-uri` (whose `URI` Langium
 re-exports and owns the version of). This package itself is exempt, as is any `generated` directory —
@@ -79,9 +79,10 @@ only the stock surface.
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is Langium's and is stable
-to the extent Langium's is; what is not yet settled is the augmentation set and the pinned version.
-See the [repository README](../../README.md) for the current status and known limitations.
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The API is
+Langium's and is stable to the extent Langium's is; what is not yet settled is the augmentation set
+and the pinned version. See the [repository README](../../README.md) for the current status and
+known limitations.
 
 ## License
 

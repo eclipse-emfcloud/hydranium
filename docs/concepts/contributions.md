@@ -18,12 +18,12 @@ underlying property, applied at different granularities:
 
 - **`virtual:` URI scheme** — identity for whole documents whose
   root AST is built in code (stdlib classes, library types,
-  contributor pseudo-classes). Use {@link virtualUri} to construct
-  these URIs; {@link isVirtualUri} checks the scheme.
+  contributor pseudo-classes). Use `virtualUri` to construct
+  these URIs; `isVirtualUri` checks the scheme.
 - **`$synthetic: true` flag** — per-node marker for nodes built in
   code, typically AST-extension mirrors that exist alongside a "real"
-  authoritative copy. Set via {@link markSynthetic}; check via
-  {@link isSyntheticNode}.
+  authoritative copy. Set via `markSynthetic`; check via
+  `isSyntheticNode`.
 
 The two mechanisms compose: a node is synthetic if either applies.
 Adopters can mix freely — synthetic documents with selective

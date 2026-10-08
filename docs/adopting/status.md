@@ -2,7 +2,8 @@
 
 ## Status: alpha, pre-v0
 
-Hydranium is under active development and **publishes to npm nightly**. Every
+Hydranium is under active development and **publishes to npm on every
+merge**. Every
 package sits on the `1.0.0-next` prerelease line, and that number is not a
 stability claim — "Stability and versioning" below says what it does and does not
 mean. The public API is not frozen: names, module layout, service slots and DI
@@ -209,24 +210,23 @@ maps](../concepts/head-module-maps.md).
 
 The published packages declare a Node floor you cannot go under, and it is a
 floor rather than a preference — [Requirements](requirements.md) gives the
-version and the reason. Developing the framework itself needs the same one.
+version and the reason. Developing the framework itself needs a newer one, the
+`engines.node` floor in the root `package.json`, because the repository's
+scripts are TypeScript that Node runs by stripping types.
 
 ## Roadmap
 
 Directions, in rough priority order. None of these is a dated commitment.
 
-1. **First published release.** Get `@hydranium/*` onto npm under an alpha tag,
-   with a changelog and a documented upgrade path, so adopters can consume it
-   without a workspace link.
-2. **Freeze the v0 surface.** Settle role names, member visibility and module
+1. **Freeze the v0 surface.** Settle role names, member visibility and module
    layout, publish the list of what is covered by the compatibility promise, and
    start writing migration notes against it.
-3. **Finish the internationalization sweep.** The catalogue seam on the shared
+2. **Finish the internationalization sweep.** The catalogue seam on the shared
    tree exists; what remains is routing every user-facing literal through it,
    and a way to emit a starter catalogue from the declared codes.
-4. **Incremental data-head updates.** A patch-shaped update path alongside the
+3. **Incremental data-head updates.** A patch-shaped update path alongside the
    whole-document one, so large models stop paying full serialization per edit.
-5. **Broader client coverage.** Promote the VS Code and browser wiring from
+4. **Broader client coverage.** Promote the VS Code and browser wiring from
    example code into supported packages, so a non-Theia host is a dependency
    rather than a copy-paste.
 

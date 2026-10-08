@@ -12,8 +12,8 @@ for building modeling-language servers — LSP for textual editing, and a typed
 RPC data-server head for non-LSP clients (form editors, diagrams,
 code-generators) that need direct access to the live AST.
 
-**Status:** alpha — pre-v0, under active development, published nightly to npm
-as `1.0.0-next` prereleases.
+**Status:** alpha — pre-v0, under active development. Every merge to `main`
+publishes a `1.0.0-next` prerelease to npm.
 
 **[Try the live demo](https://eclipse-emfcloud.github.io/hydranium/)** — the
 order-flow example running entirely in your browser: a diagram and three text
@@ -113,7 +113,7 @@ together, and a name with no head spans all of them.
 | `@hydranium/glsp-server` | you want graphical editing | Generic GLSP server framework — storage, submission, computed-bounds, dispatcher, state, command stack. |
 | **Client integrations** | | |
 | `@hydranium/client-theia` | your host is Theia | Cross-head Theia primitives — Output-channel logger, log-level preference, memory diagnostics, socket-forwarding connection handler. |
-| `@hydranium/data-client-theia` | …and you run the data head | Theia-side data-head client wiring — data-service frontend, emitter data client, channel connection, workspace gate. |
+| `@hydranium/data-client-theia` | …and you run the data head | Theia-side data-head client wiring — channel data port, emitter data client, channel connection, workspace gate. |
 | `@hydranium/glsp-client-theia` | …and you run the GLSP head | Theia-side GLSP client wiring — connection handler, dispatcher, diagram widget, module helpers. |
 | **Tooling** | | |
 | `@hydranium/cli` | always, as a devDependency | Framework CLI (`hydranium-cli`) — scaffold a project (`init`), introspect a grammar (`reflect` / `lint-grammar` / `model-docs`), headless `validate`, transfer-model codegen, and data-server ops (`projects` / `query` / `save` / `watch`). |
@@ -345,10 +345,11 @@ adopter really needs, a shipping out-of-tree adopter is the better oracle.
 
 ## Status and limitations
 
-Hydranium is alpha, pre-v0, and published nightly as `1.0.0-next` prereleases.
-The known limitations — no internationalization layer, whole-document data-head
-updates, an exact Langium pin, Theia-only client libraries, and semantic tokens
-Theia does not colour — are described with their consequences in
+Hydranium is alpha and pre-v0, and every merge to `main` publishes a
+`1.0.0-next` prerelease. The known limitations — no shipped translations,
+whole-document data-head updates, an exact Langium pin, Theia-only client
+libraries, and semantic tokens Theia does not colour — are described with their
+consequences in
 [`docs/adopting/status.md`](./docs/adopting/status.md), alongside the versioning policy and the
 roadmap.
 
@@ -430,8 +431,7 @@ one line of its own — `✓ GATE PASSED` or `✗ GATE FAILED`, naming the claus
 decided it — and that line is the one to read. Its ABSENCE means the run was cut
 short rather than that it passed.
 `scripts.check` in `package.json` is the enumeration in force, and the only one
-— [`CONTRIBUTING.md`](./CONTRIBUTING.md#the-gate) names the clauses and what
-each is for, but does not fix their order.
+— [`CONTRIBUTING.md`](./CONTRIBUTING.md#the-gate) says how to read a run.
 
 See [`docs/contributing/testing.md`](docs/contributing/testing.md) for the test strategy, per-package
 commands, the Playwright UI e2e, and the on-demand mutation / perf audits.
@@ -451,8 +451,8 @@ npm --prefix examples/order-flow/theia-app run start
 # open http://localhost:3001
 ```
 
-Releases use [changesets](./docs/contributing/releasing.md) — every PR that changes
-behaviour should ship with a `npx changeset` entry.
+Every merge to `main` publishes a prerelease;
+[`docs/contributing/releasing.md`](./docs/contributing/releasing.md) has the mechanics.
 
 ## Contributing
 

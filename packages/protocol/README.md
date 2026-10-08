@@ -60,6 +60,7 @@ names, a worked example — is in
 @hydranium/protocol               # transfer documents, references, RPC machinery
 @hydranium/protocol/data          # DataServerProtocol / DataClientProtocol
 @hydranium/protocol/client        # the host-neutral client tier
+@hydranium/protocol/messages      # every message it raises, by code
 @hydranium/protocol/node          # process memory and heap-snapshot helpers
 @hydranium/protocol/testing       # test doubles, waiters, catalogue audit
 @hydranium/protocol/testing/node  # the Node-only doubles

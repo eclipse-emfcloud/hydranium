@@ -64,6 +64,7 @@ and its generated AST already in place; `hydranium-cli init` scaffolds both.
 | `.`                   | The head-neutral framework core: DI modules, AST semantics, build pipeline, model coordination.                                                                                                              | browser-neutral |
 | `./lsp`               | The LSP textual head — `startLanguageServer`, its two DI modules, and the Langium-LSP overrides.                                                                                                             | browser-neutral |
 | `./node`              | Server-only: `DefaultFileSystemProvider` / `NodeFileSystem`, `startStdioServer`, `startSocketServer`, `publishPortOnLspConnection`, and the headless tools `validateWorkspace` / `reflectGrammar` / `lintGrammar`. | Node-only       |
+| `./messages`          | Every user-facing message the package raises, by code — what a translation catalogue keys on.                                                                                                                      | browser-neutral |
 | `./testing`           | Langium-layer doubles plus `makeTestServices` and `makeFakeDocument`.                                                                                                                                        | browser-neutral |
 | `./testing/node`      | Test support that needs a real filesystem, a stream transport or a child process: scratch workspace, golden corpus, `makeLspHarness`, `startSpawnedServer`.                                                  | Node-only       |
 | `./testing/playwright`| Playwright fixtures for end-to-end profiling and server-log capture.                                                                                                                                        | Node-only       |
@@ -94,8 +95,8 @@ boundary and the registration-contribution pattern the services follow are in
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The API is not
-stable and may change without a deprecation cycle. See the
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`.
+The API is not stable and may change without a deprecation cycle. See the
 [repository README](../../README.md) for the current status and known
 limitations.
 

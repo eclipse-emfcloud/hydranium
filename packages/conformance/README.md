@@ -108,10 +108,10 @@ among the framework's test layers, see [`docs/contributing/testing.md`](../../do
 
 ## Status
 
-Alpha — pre-v0, published nightly as `1.0.0-next` prereleases. The check batteries are being
-populated incrementally and the driver ports are not yet stable — a new check can turn a passing
-adopter red by design. See the [repository README](../../README.md) for the current status and
-known limitations.
+Alpha — pre-v0, published as a `1.0.0-next` prerelease on every merge to `main`. The check batteries
+are being populated incrementally and the driver ports are not yet stable — a new check can turn a
+passing adopter red by design. See the [repository README](../../README.md) for the current status
+and known limitations.
 
 ## License
 

@@ -39,7 +39,7 @@ One head has a third spelling. `@hydranium/glsp-server/browser` is the mirror of
 its `/node` twin — the reason is in
 [Head module maps](head-module-maps.md#hydraniumglsp-server--graphical-head), and what matters
 here is the consequence: `.` stays free of both so it resolves under either
-platform, and eslint bans naming either from neutral code.
+platform, and the lint config bans naming either from neutral code.
 
 <!-- snippet-preamble
 import { LogLevel, ServerModule } from '@eclipse-glsp/server';

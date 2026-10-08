@@ -60,8 +60,8 @@ serialization services layered onto that AST).
 ## Textual modeling — the LSP head
 
 Textual editing is provided by an ordinary Langium language server, exposed at
-the [`@hydranium/core/lsp`](../../packages/core/src/lsp) subpath and started via
-the launcher utilities in [`packages/core/src/launcher`](../../packages/core/src/launcher).
+the [`@hydranium/core/lsp`](../../packages/core/src/lsp) subpath and started with
+its `startLanguageServer`.
 Langium builds the parser, scope provider, linker, validators and completion
 from the adopter's grammar; on workspace scan it produces the document store
 plus an index of node descriptions used for cross-reference linking and for the
