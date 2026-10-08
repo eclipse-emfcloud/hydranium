@@ -132,3 +132,19 @@ which the contribution model removes:
 Contribution groups are records rather than arrays because Langium's
 `Module.merge` deep-merges records by key, so the framework's contributions and
 an adopter's accumulate; an array slot would be replaced by the last module.
+
+## One reflection over every grammar
+
+The shared `AstReflection` must know the types of every language in the
+composition. It is one shared slot, and indexing, reference routing, linking
+and the transfer encoder all ask it through `isSubtype` and
+`getTypeMetaData`, so a type it does not know is silently missed by every one
+of them. One `langium-cli` run over one `langium-config.json` generates such a
+reflection, and `init` emits every grammar of a project into one config.
+Separately generated language packages each bind the slot from their generated
+shared module, and the last binding wins. Their composition binds a
+`CompositeAstReflection` (`core/src/langium/composite-ast-reflection.ts`) over
+every package's reflection instead. A type name two reflections share must
+denote one type; properties that differ throw. `assertReflectionCoversLanguages`
+(`core/src/langium/bootstrap.ts`) fails the boot when none of a language's
+types are known, and warns when some are missing.

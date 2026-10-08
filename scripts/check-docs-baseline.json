@@ -5,22 +5,10 @@
   "docs/contributing/perf-baseline.md": {
     "version": 1
   },
-  "examples/bookstore/README.md": {
-    "history": 1
-  },
   "examples/bookstore/server/README.md": {
     "unreachable": 1
   },
   "examples/bookstore/workspace/README.md": {
     "unreachable": 1
-  },
-  "examples/order-flow/browser/README.md": {
-    "size": 9
-  },
-  "examples/order-flow/server/README.md": {
-    "version": 3
-  },
-  "examples/order-flow/vscode/README.md": {
-    "timing": 1
   }
 }

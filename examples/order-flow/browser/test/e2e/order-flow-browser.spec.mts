@@ -257,8 +257,8 @@ test.describe('order-flow in a web worker', () => {
 
       await page.goto('/');
 
-      // The LSP head, against the same oracle the README names: `hydranium-cli
-      // validate` over `examples/order-flow/workspace` from Node. A SHORTER list
+      // The LSP head, against `hydranium-cli validate` over
+      // `examples/order-flow/workspace` from Node. A SHORTER list
       // is the failure this seeding arrangement is most likely to produce, so the
       // count is exact rather than a lower bound.
       await expect(page.locator('[data-report="status"]')).toHaveAttribute(

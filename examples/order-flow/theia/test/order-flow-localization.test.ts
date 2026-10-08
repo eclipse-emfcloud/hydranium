@@ -172,8 +172,8 @@ describe('the German catalogue', () => {
    });
 
    it('falls back to English for a code it deliberately does not carry', () => {
-      // The catalogue is partial on purpose, so this is the majority case rather
-      // than an edge one. It is also why a typo cannot be caught at runtime.
+      // The server renders this code, so this catalogue leaves it out. The same
+      // fallback is why a typo cannot be caught at runtime.
       const untranslated = resolve(coreMessages.NO_LOADABLE_CONTENT, { uri: 'file:///a.of' });
       expect(renderFrameworkMessage(untranslated, translations)).toBe('No loadable content for file:///a.of');
    });

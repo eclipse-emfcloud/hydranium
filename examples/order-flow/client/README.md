@@ -27,9 +27,10 @@ port. The **diagram** binds nothing transport-related: a GLSP diagram's
 transport is GLSP's own `GLSPClient`, and
 `IDiagramOptions.glspClientProvider` is a required field every shell already
 supplies where it composes the container — the Theia and VS Code integrations
-through `containerConfiguration`, the browser page directly. The **data head** does need
-one, because in a VS Code webview there is no way to reach the extension host's
-connection — so the port abstracts the transport hop, not merely the protocol.
+through `containerConfiguration`, the browser page directly. The **data head**
+does need one, because in a VS Code webview there is no way to reach the
+extension host's connection — so the port abstracts the transport hop, not
+merely the protocol.
 
 This split is a requirement, not an implementation detail. `glsp-client-theia`
 is not a diagram — it is the Theia *mounting* of one. Folding the diagram
@@ -39,104 +40,67 @@ look Theia-only.
 
 ## What is here
 
-- `src/diagram/order-flow-process-diagram-types.ts` — the client half of the
-  `.process` contract: diagram type, element type ids, file extension. Kept off
-  `@eclipse-glsp/client` (it uses `@eclipse-glsp/protocol`) so the contract test
-  runs headless.
-- `src/diagram/order-flow-process-diagram-module.ts` — the diagram definition:
-  GLSP's default model elements plus one model/view registration per element
-  type the server stamps, and `initializeOrderFlowProcessDiagramContainer` for a
-  host to compose its own modules into.
-- `src/data/order-flow-properties-model.ts` — `OrderFlowPropertiesModel`, a
-  document-scoped properties panel minus the drawing. It belongs here rather
-  than in the framework because it carries a **policy**: which fields are
-  editable.
-- `src/properties/properties-form.ts` — `PropertiesForm`, the drawing half:
-  plain DOM over the model's `fields`, mounted unchanged by the Theia widget
-  and the VS Code webview alike. It is the only file here that touches the DOM.
-  A write goes out on `change` — Enter or leaving the field — rather than per
-  keystroke, because `TransferUpdateDocumentArgs.model` is the whole document root and
-  there is no path-scoped variant, so a keystroke-level write would reparse and
-  reserialize the file on every letter. Until it goes, the field carries
-  `data-pending` and reveals its `.field-hint`; each host styles those two, and
-  a host that styles neither still gets a hidden hint rather than a note that
-  never clears. **Pending means the input differs from what this form last WROTE
-  into it, not from the model** — `setFields` refuses to overwrite a focused
-  input, so comparing against the model would mark a field that someone else
-  changed and the reader never touched.
-- `src/properties/properties-messages.ts` — the panel's own user-facing
-  messages, declared with the framework's `defineMessage`. This is the adopter
-  half of message externalization: a stable code beside an English default,
-  rendered by whoever knows the reading user's locale. Which side that is
-  differs by message, and the split is worth copying. A **failure** is resolved
-  where it is raised and handed to the host, because the host owns the surface
-  it lands on. A **label** the form draws has no raise site, so the host passes
-  a `renderMessage` in `PropertiesFormOptions` instead and the form renders at
-  draw time; omitting it takes the English, which is the same fallback a missing
-  catalogue entry gives. Leaving labels as literals is what makes a panel read
-  half-translated, and the untranslated half is the half a reader meets on an
-  ordinary document rather than on a broken one.
-  **This tier still renders its own messages, and only its own**
-  — they fire when the data server is unreachable, which is precisely when no
-  server could have worded them. A diagnostic arrives already rendered, in the
-  locale its client declared at init, so the form draws `message` as it came:
-  re-rendering it here would put two authorities on one sentence. Two rules make
-  the declarations copyable — the `hydranium/` code namespace is reserved for the
-  framework, so an adopter prefixes with its own name (`order-flow/<area>/<name>`);
-  and the messages are declared once for the panel rather than once per host,
-  because the Theia widget and the VS Code webview present the same surface and a
-  failure has to read identically in both.
-- `src/data/order-flow-messenger-channel.ts` — the VS Code adapter, presenting
-  a `vscode-messenger` `Messenger` as a `PostMessageChannel` so the data head
-  rides the same hop the diagram already uses. Hand-rolled here because the
-  framework ships Theia client packages and no VS Code equivalents, so a VS Code
-  host has to supply this adapter itself.
+- [`src/diagram/order-flow-process-diagram-types.ts`](src/diagram/order-flow-process-diagram-types.ts)
+  — the client half of the `.process` contract: diagram type, element type ids,
+  file extension. Kept off `@eclipse-glsp/client` (it uses
+  `@eclipse-glsp/protocol`) so the contract test runs headless.
+- [`src/diagram/order-flow-process-diagram-module.ts`](src/diagram/order-flow-process-diagram-module.ts)
+  — the diagram definition: GLSP's default model elements plus one model/view
+  registration per element type the server stamps, and
+  `initializeOrderFlowProcessDiagramContainer` for a host to compose its own
+  modules into.
+- [`src/diagram/order-flow-process-views.ts`](src/diagram/order-flow-process-views.ts)
+  and
+  [`src/diagram/order-flow-process-model.ts`](src/diagram/order-flow-process-model.ts)
+  — the transition arrowhead and the gateway's diamond anchoring.
+- [`src/diagram/order-flow-process-tool-palette.ts`](src/diagram/order-flow-process-tool-palette.ts)
+  — withdraws the palette's collapse toggle with the palette on a read-only
+  canvas.
+- [`src/data/order-flow-properties-model.ts`](src/data/order-flow-properties-model.ts)
+  — `OrderFlowPropertiesModel`, a document-scoped properties panel minus the
+  drawing. It belongs here rather than in the framework because it carries a
+  **policy**: which fields are editable.
+- [`src/properties/properties-form.ts`](src/properties/properties-form.ts) —
+  `PropertiesForm`, the drawing half: plain DOM over the model's `fields`,
+  mounted unchanged by the Theia widget and the VS Code webview alike. It is
+  the only file here that touches the DOM. A write goes out on `change` —
+  Enter or leaving the field — rather than per keystroke, because each write
+  sends the whole document root (see
+  [The properties model](#the-properties-model)). Until it goes, the field
+  carries `data-pending` and reveals its `.field-hint`; each host styles those
+  two, and a host that styles neither still gets a hidden hint rather than a
+  note that never clears. **Pending means the input differs from what this form
+  last WROTE into it, not from the model** — `setFields` refuses to overwrite a
+  focused input, so comparing against the model would mark a field that someone
+  else changed and the reader never touched.
+- [`src/properties/properties-messages.ts`](src/properties/properties-messages.ts)
+  — the panel's own user-facing messages, declared once for both hosts with
+  `defineMessage`. The codes are `order-flow/<area>/<name>`, because
+  `hydranium/` is reserved for the framework. A failure is resolved where it is
+  raised and handed to the host, which owns the surface it lands on. A label
+  the form draws is rendered through the `renderMessage` the host passes in
+  `PropertiesFormOptions`, and in English when it passes none. A diagnostic
+  arrives already rendered by the server, so the form draws its `message` as it
+  came. Translating the rest of your language is in
+  [Translate your language](../../../docs/guides/translate-your-language.md).
+- [`src/data/order-flow-messenger-channel.ts`](src/data/order-flow-messenger-channel.ts)
+  — the VS Code adapter, presenting a `vscode-messenger` `Messenger` as a
+  `PostMessageChannel` so the data head rides the same hop the diagram already
+  uses. Hand-rolled here because the framework ships Theia client packages and
+  no VS Code equivalents, so a VS Code host has to supply this adapter itself.
 
-Everything it stands on that is host-neutral and grammar-free lives in
-**`@hydranium/protocol/client`**: `DataPort` (the seam a host fills in),
-`DataConnection` (typed proxy, readiness gate, reconnect), `DataSession`
-(open/watch ordering, echo recognition), `DataEvents` (the inbound
-`DataClientProtocol` fanned out) and the two halves of the structured-clone
-hop, `createPostMessageTransport` and `relayToPostMessageChannel`.
+The palette's entries are defined on the server, in `order-flow-server`'s
+[`order-flow-tool-palette-item-provider.ts`](../server/src/glsp/order-flow-tool-palette-item-provider.ts),
+beside the operation handlers behind them.
 
-The tool palette is not defined here: GLSP drives it from the server's
-`shapeTypeHints` / `edgeTypeHints`, so the palette and the operation handlers
-behind it live in `order-flow-server`.
-
-## The client tier it stands on
-
-`@hydranium/protocol/client` supplies the transport seam and everything above
-it, so this package re-derives none of it. In short:
-
-- **`DataPort`** — what a host implements: `connect()`, `clientId`,
-  `reportError`, `onDispose`. It abstracts the transport *hop*, not the
-  protocol, because a VS Code webview cannot reach the extension host's
-  connection.
-- **`DataConnection`** — the readiness gate and the reconnect policy.
-  `connected()` hands back the ready proxy rather than `void`, so a cached
-  proxy cannot outlive its connection.
-- **`DataSession`** — one participant on that connection: the open-then-watch
-  order and echo recognition.
-- **`DataEvents`** — the inbound `DataClientProtocol` fanned out, since a
-  connection binds exactly one and a host usually has several listeners.
-- **`createPostMessageTransport`** — a `MessageReader` / `MessageWriter` pair
-  over a structured-clone-only pipe, for a webview. It deliberately does not
-  build the `MessageConnection`: that needs a vscode-jsonrpc runtime
-  abstraction layer only `/node` and `/browser` install, and only the host
-  knows its side.
-- **`relayToPostMessageChannel`** — the other end of that hop, for the side
-  that does hold a socket. It pumps whole JSON-RPC messages between a framed
-  transport and the same channel shape, decoding neither, and buffers what
-  arrives while the socket is still opening — a `DataConnection`'s readiness
-  handshake is already in flight before the relay is wired, and dropping it
-  presents as a client hanging forever against a healthy server.
-
-Those modules carry the reasoning in their own doc comments. The property worth
-repeating here is the one that makes the split work: **`createRpcProxy` runs
-unchanged across a webview hop**, measured in
-`test/order-flow-post-message-transport.test.ts`, which drives a real data
-server through `structuredClone` in both directions including a
-server-initiated push and a conflict reconcile.
+Everything host-neutral and grammar-free this package stands on, from
+`DataPort` to both halves of the post-message hop, is
+`@hydranium/protocol/client`; how to use it is in
+[Connect a data client](../../../docs/guides/connect-a-data-client.md).
+`test/order-flow-post-message-transport.test.ts` drives a real data server
+through `structuredClone` in both directions, including a server-initiated
+push and a conflict reconcile, so `createRpcProxy` is shown to run unchanged
+across a webview hop.
 
 ## The properties model
 
@@ -168,16 +132,6 @@ model.onDidChange(() => render(model.fields));
 const outcome = await model.setField('name', 'Fulfilment');
 ```
 
-**The literal above is an id per PARTICIPANT, not per participant kind.** It
-keys the server's `(uri, clientId)` hold and watch and is the echo key a write
-is matched against, so two participants sharing it collapse onto one hold — the
-first close releases it under the survivor, which then stops receiving updates
-for a document it is still showing — and each reads the other's writes as its
-own echo. A constant is right only where exactly one participant can exist per
-connection, as in a singleton view; anything the host can open twice mints the
-id per instance, and `createSession` throws on a duplicate rather than
-degrading.
-
 **Document-scoped, not selection-scoped**, and that is a decision. Nothing in
 the framework bridges GLSP selection to a host widget, so selection is
 shell-owned glue; and a transfer element carries only `$type` — no id — so the
@@ -189,12 +143,13 @@ is a string, minus `$`- and `_`-prefixed ones. So no grammar and no property
 name appears in the source. The cost is that a cross-reference is presented like
 any other string, because its transfer form *is* its reference text.
 
-`setField` sends the **whole root**, because `TransferUpdateDocumentArgs.model` is the
-document root and there is no path-scoped variant — the encoder is AST→transfer
-only and the parser is the decoder. So a field edit is read-modify-write, and
-what keeps it from clobbering a concurrent writer is `baseVersion` plus
-`reconcileWrite`, the same loop the GLSP state writes through. A host renders each outcome differently, which is why
-`setField` returns a status rather than `void`:
+`setField` sends the **whole root**, because `TransferUpdateDocumentArgs.model`
+is the document root and there is no path-scoped variant — the encoder is
+AST→transfer only and the parser is the decoder. So a field edit is
+read-modify-write, and what keeps it from clobbering a concurrent writer is
+`baseVersion` plus `reconcileWrite`, the same loop the GLSP state writes
+through. A host renders each outcome differently, which is why `setField`
+returns a status rather than `void`:
 
 | Outcome | Meaning |
 | --- | --- |

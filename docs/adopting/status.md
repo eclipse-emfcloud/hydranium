@@ -2,8 +2,8 @@
 
 ## Status: alpha
 
-Every merge to `main` publishes a prerelease to npm. The public API is not
-frozen: names, module layout, service slots and DI bindings can change between
+Every merge to `main` that can change a published package publishes a
+prerelease to npm. The public API is not frozen: names, module layout, service slots and DI bindings can change between
 releases, with no deprecation window.
 
 - **Use it** if you can track the framework closely, pin each release exactly,

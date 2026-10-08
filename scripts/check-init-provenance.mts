@@ -12,7 +12,7 @@
  * `init`-provenance gate for the examples that claim to have been scaffolded by
  * `hydranium-cli init`.
  *
- * Each target carries a per-file table saying which files are still the
+ * Each target's README carries a table saying which files are still the
  * scaffold's and which were adapted. This gate makes that table executable.
  *
  * Why it exists: prose about provenance rots exactly as fast as any other
@@ -197,8 +197,8 @@ const ORDER_FLOW_INVOCATION: Invocation = {
 
 /**
  * Per-emitted-path provenance for `order-flow`. Keys must match `init`'s output
- * exactly; each `reason` is the sentence the target's provenance table is
- * expected to agree with.
+ * exactly; each `reason` is the only record of why, and the target's README
+ * table, which groups the paths by verdict, is expected to agree with it.
  *
  * **That agreement is NOT machine-checked — this gate never reads a README** —
  * so a reason is only as good as the last person to look at the actual diff.
@@ -225,11 +225,9 @@ const ORDER_FLOW_MANIFEST: Manifest = {
       verdict: 'adapted',
       reason: "the example's own name and metadata, a second bin, extra scripts, and the GLSP head's dependencies"
    },
-   // This example predates the scaffold's `.gitignore`, so the repo root's rules
-   // cover its `lib/` and `syntaxes/` instead. Adding the file would be correct
-   // and would also be the only reason this package has one, so it is recorded
-   // as dropped rather than backfilled — and the root patterns have to stay
-   // either way, since they are what covers this example.
+   // The repo root's rules cover this example's `lib/` and `syntaxes/`, so the
+   // scaffold's `.gitignore` is recorded as dropped rather than added; the root
+   // patterns have to stay, since they are what covers this example.
    '.gitignore': { verdict: 'dropped', reason: "the repo root's rules cover this example's lib/ and syntaxes/" },
    // The recorded invocation emits exactly the three language entries, ids,
    // extensions and TextMate paths the example has — the gate's strongest claim.
@@ -241,7 +239,7 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
    'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
    'vitest.config.ts': { verdict: 'adapted', reason: "uses the repo's shared vitest config" },
-   'README.md': { verdict: 'adapted', reason: 'rewritten as the tutorial' },
+   'README.md': { verdict: 'adapted', reason: "rewritten as the example's map" },
    // The scaffold emits these paths itself, so each entry is a plain 'adapted'.
    'src/grammar/domain.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
    'src/grammar/process.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
@@ -350,8 +348,8 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'package.json': { verdict: 'adapted', exempt: ['name'], reason: 'the in-repo example package name' },
    // The scaffold's rules. This repo's root covers them all too, so bookstore is
    // ignored twice; the overlap is inert (git ignore rules are additive) and the
-   // root patterns have to stay for `order-flow`, which predates the scaffold's
-   // `.gitignore`.
+   // root patterns have to stay for `order-flow`, which has no `.gitignore` of
+   // its own.
    '.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
    'langium-config.json': { verdict: 'identical', reason: 'one language, derived from --name' },
    'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
