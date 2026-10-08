@@ -5,6 +5,26 @@ stable, so expect breaking changes between releases.
 [Stability and versioning](adopting/status.md#stability-and-versioning) says
 what the version number does and does not promise.
 
+## How the framework is built
+
+The design behind what the adopter pages under
+[How it works](ADOPTING.md#how-it-works) describe; read those first.
+
+- [**Model coordination**](contributing/design/model-coordination.md) — how
+  the heads share one document through one text store and one manager.
+- [**The four document layers**](concepts/document-layers.md) — what the user
+  typed, what Langium built from it, what in-process consumers get, what
+  crosses the wire, and why the last two are different types.
+- [**Service placement and composition**](contributing/design/service-placement.md)
+  — why each service sits on the shared or the per-language tier, and why
+  composition has no framework layer over Langium's.
+- [**Build-pipeline registries**](concepts/build-pipeline-registries.md) — how
+  build-time work is wired into Langium's document-build pipeline, and which
+  registry a piece of work belongs in.
+- [**Scope and candidate services**](contributing/design/scope-services.md) —
+  how reference handling is split between scope resolution and the candidate
+  pipeline, and why.
+
 ## Developer documentation
 
 - [**Conventions**](contributing/conventions.md) — the rules code, comments,
@@ -17,12 +37,6 @@ what the version number does and does not promise.
   failures that only happen while building or testing this repo.
 - [**Performance baseline**](contributing/perf-baseline.md) — how to take a
   measurement that is comparable with an earlier one.
-- How the framework is built:
-  [document layers](concepts/document-layers.md),
-  [model coordination](contributing/design/model-coordination.md),
-  [service placement](contributing/design/service-placement.md),
-  [scope services](contributing/design/scope-services.md) and
-  [build-pipeline registries](concepts/build-pipeline-registries.md).
 
 ## Reporting issues
 
