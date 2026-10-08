@@ -145,6 +145,13 @@ export class DataConnection<
     * watch's handle is disposed.
     */
    protected readonly watches = new Map<string, string>();
+   /**
+    * Per id, the URI of a watch whose handle was disposed with no ready
+    * generation to unwatch on. {@link generationReady} sends the unwatch to the
+    * next ready one: a generation that failed its readiness check after its
+    * watches were sent leaves them on a connection the port may hand back.
+    */
+   protected readonly pendingUnwatches = new Map<string, string>();
    /** The port's logger, or one that logs nothing. */
    protected readonly logger: Logger;
    /** Backs {@link onDidReconnect}. */
@@ -263,21 +270,23 @@ export class DataConnection<
          if (!this.watches.delete(clientId)) {
             return;
          }
-         // Without a generation the server dropped the watch with its
-         // connection, and one that drops before it is ready drops it too: the
-         // unwatch follows no drop to a connection opened only for it.
+         // Without a ready generation the unwatch waits for the next one,
+         // rather than opening a connection only for it.
+         const unwatchLater = (): void => {
+            this.pendingUnwatches.set(clientId, uri);
+         };
          const generation = this.generation;
-         if (generation) {
-            (generation.ready ??= this.awaitReady(generation)).then(
-               () => {
-                  if (this.generation === generation) {
-                     this.logger.debug(`Unwatch ${uri} as ${clientId}`);
-                     generation.server.unwatchModelDocument({ uri, clientId }).catch(() => undefined);
-                  }
-               },
-               () => undefined
-            );
+         if (!generation) {
+            unwatchLater();
+            return;
          }
+         (generation.ready ??= this.awaitReady(generation)).then(() => {
+            if (this.generation === generation) {
+               this.unwatch(generation, clientId, uri);
+            } else {
+               unwatchLater();
+            }
+         }, unwatchLater);
       });
    }
 
@@ -393,10 +402,18 @@ export class DataConnection<
       super.generationReady(generation);
       this.reconnectSessions();
       this.watches.forEach((uri, clientId) => this.watchAgain(generation, clientId, uri));
+      this.pendingUnwatches.forEach((uri, clientId) => this.unwatch(generation, clientId, uri));
+      this.pendingUnwatches.clear();
       if (this.readyBefore) {
          this.reconnectEmitter.fire(undefined);
       }
       this.readyBefore = true;
+   }
+
+   /** Take back the watch of `uri` under `clientId` on `generation`; the server ignores one it does not hold. */
+   protected unwatch(generation: RpcConnectionGeneration<TServer>, clientId: string, uri: string): void {
+      this.logger.debug(`Unwatch ${uri} as ${clientId}`);
+      generation.server.unwatchModelDocument({ uri, clientId }).catch(() => undefined);
    }
 
    /**
@@ -456,6 +473,7 @@ export class DataConnection<
       // For a factory's session whose `detach` does not fire.
       this.sessions.clear();
       this.watches.clear();
+      this.pendingUnwatches.clear();
       this.createSessionEmitter.dispose();
       this.reconnectEmitter.dispose();
       this.dirtyChangedEmitter.dispose();

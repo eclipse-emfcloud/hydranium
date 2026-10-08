@@ -54,10 +54,22 @@ export interface DataPort {
    /**
     * Open the transport and hand back a listening `MessageConnection`.
     *
-    * Called at most once per connection generation. A rejection is a
-    * transport-construction failure and is reported through
-    * {@link reportError} by the consumer; it must leave the port reusable, so
-    * that a later generation can retry.
+    * Called at most once per connection generation. A rejection before the
+    * port is disposed is a transport-construction failure and is reported
+    * through {@link reportError} by the consumer; it must leave the port
+    * reusable, so that a later generation can retry.
+    *
+    * The consumer disposes a connection only when it drops the generation on
+    * {@link onDispose} or is disposed itself, so the connection of a generation
+    * that failed its readiness check stays with the port. A port whose
+    * connections reach one far end hands back the same connection until it is
+    * disposed: a second live one would take answers meant for the first, or end
+    * that far end when disposed. A port that opens an independent transport per
+    * call disposes the one it opened before at the next call. Either releases
+    * its connection at its own dispose and refuses to connect after it, since
+    * the consumer reconnects when told. Either serves one consumer: one
+    * consumer's dispose, or its next call to a port of the second kind,
+    * disposes the connection another still uses.
     */
    connect(): Promise<MessageConnection>;
 
@@ -87,7 +99,7 @@ export interface DataPort {
     * forces this to exist, since a restarted server binds new ephemeral ports
     * and nothing re-discovers them.
     *
-    * `DataSession` drops its connection generation on this event and
+    * `DataConnection` drops its connection generation on this event and
     * builds a fresh one on the next request.
     *
     * A local `Event`, deliberately: nothing here crosses a structured-clone

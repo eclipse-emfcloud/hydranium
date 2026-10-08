@@ -32,7 +32,7 @@ import {
    DataConnectionWithEvents
 } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
-import { DATA_SERVER_NOT_READY } from '../../src/client/rpc-connection';
+import { DATA_SERVER_NOT_READY, type RpcConnectionGeneration } from '../../src/client/rpc-connection';
 import {
    DATA_SESSION_ANSWER_WITHOUT_MODEL,
    DATA_SESSION_RESTORE_FAILED,
@@ -2756,6 +2756,149 @@ describe('DataConnection.watchDocument', () => {
          dispose();
       }
    });
+   /**
+    * A port that hands every later generation one live connection, as one
+    * over a channel does after its first connection was lost: the server
+    * behind it keeps what a failed generation sent.
+    */
+   function sharedAfterDrop(options: {
+      readonly failReady: () => boolean;
+      readonly onReady?: () => void;
+      readonly behaviour?: ServerBehaviour;
+   }): {
+      readonly connection: DataConnection<ProbeElement>;
+      readonly calls: ServerCall[];
+      readonly port: FakeDataPort;
+      dropFirst(): void;
+      dispose(): void;
+   } {
+      const calls: ServerCall[] = [];
+      const first = makeDuplexConnectionPair();
+      const shared = makeDuplexConnectionPair();
+      recordingServer(first.left, calls, {});
+      recordingServer(shared.left, calls, options.behaviour ?? {});
+      let connects = 0;
+      const port = makeFakeDataPort({ connect: () => (++connects === 1 ? first.right : shared.right) });
+      class ThrowingConnection extends DataConnection<ProbeElement> {
+         protected override generationReady(generation: RpcConnectionGeneration<DataServerProtocol<ProbeElement>>): void {
+            super.generationReady(generation);
+            if (options.failReady()) {
+               throw new Error('not ready');
+            }
+         }
+      }
+      const connection = new ThrowingConnection(port, new DataEvents<ProbeElement>(), { onReady: options.onReady });
+      return {
+         connection,
+         calls,
+         port,
+         dropFirst: () => {
+            port.fireDispose();
+            closeEnds(first);
+         },
+         dispose: () => {
+            connection.dispose();
+            closeEnds(first);
+            closeEnds(shared);
+         }
+      };
+   }
+
+   it('takes back, on the next ready connection, a watch disposed while a connection dropped before it was ready', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const watch = await connection.watchDocument(URI_A);
+         const watcher = watcherOf(calls);
+         const before = calls.length;
+         behaviour.readyGate = new Promise<void>(() => undefined);
+         let asked = false;
+         behaviour.beforeReady = () => {
+            asked = true;
+         };
+         dropTransport();
+         await waitFor(() => asked, { message: 'the reconnect never asked for readiness' });
+
+         watch.dispose();
+         dropTransport();
+         behaviour.readyGate = undefined;
+         await connection.connected();
+
+         await waitFor(() => of(calls.slice(before), 'unwatch').length > 0, { message: 'the watch was never taken back' });
+         expect(of(calls.slice(before), 'unwatch')).toEqual([{ method: 'unwatch', clientId: watcher, uri: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('takes back a watch disposed while a connection that then fails at readiness was coming up', async () => {
+      let fail = false;
+      const behaviour: ServerBehaviour = {};
+      const test = sharedAfterDrop({ failReady: () => fail, behaviour });
+      const ready = gate();
+      try {
+         const watch = await test.connection.watchDocument(URI_A);
+         const watcher = watcherOf(test.calls);
+         const before = test.calls.length;
+         fail = true;
+         test.dropFirst();
+         await expect(test.connection.connected()).rejects.toThrow('not ready');
+         behaviour.readyGate = ready.promise;
+         let asked = false;
+         behaviour.beforeReady = () => {
+            asked = true;
+         };
+         const failing = test.connection.connected();
+         failing.catch(() => undefined);
+         await waitFor(() => asked, { message: 'the retry never asked for readiness' });
+
+         watch.dispose();
+         ready.release();
+         await expect(failing).rejects.toThrow('not ready');
+         fail = false;
+         behaviour.readyGate = undefined;
+         await test.connection.connected();
+
+         await waitFor(() => of(test.calls.slice(before), 'unwatch').length > 0, { message: 'the watch was never taken back' });
+         expect(of(test.calls.slice(before), 'unwatch')).toEqual([{ method: 'unwatch', clientId: watcher, uri: URI_A }]);
+      } finally {
+         ready.release();
+         test.dispose();
+      }
+   });
+
+   for (const trigger of ['generationReady', 'onReady'] as const) {
+      it(`takes back a watch disposed after its connection failed at readiness, through a throwing ${trigger}`, async () => {
+         let fail = false;
+         const test = sharedAfterDrop({
+            failReady: () => trigger === 'generationReady' && fail,
+            onReady: () => {
+               if (trigger === 'onReady' && fail) {
+                  throw new Error('not ready');
+               }
+            }
+         });
+         try {
+            const watch = await test.connection.watchDocument(URI_A);
+            const watcher = watcherOf(test.calls);
+            const before = test.calls.length;
+            fail = true;
+            test.dropFirst();
+            await expect(test.connection.connected()).rejects.toThrow('not ready');
+            await waitFor(() => of(test.calls.slice(before), 'watch').length > 0, { message: 'the watch was never sent again' });
+
+            watch.dispose();
+            fail = false;
+            await test.connection.connected();
+
+            // The failed connection is the one handed back, and its server still holds the watch.
+            await waitFor(() => of(test.calls.slice(before), 'unwatch').length > 0, { message: 'the watch was never taken back' });
+            expect(of(test.calls.slice(before), 'unwatch')).toEqual([{ method: 'unwatch', clientId: watcher, uri: URI_A }]);
+         } finally {
+            test.dispose();
+         }
+      });
+   }
 });
 
 describe('DataConnection.reportError', () => {

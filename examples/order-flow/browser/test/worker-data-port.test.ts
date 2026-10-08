@@ -30,4 +30,36 @@ describe('WorkerDataPort', () => {
          ports.dispose();
       }
    });
+
+   it('hands every generation the same connection', async () => {
+      const ports = makeMessagePortPair();
+      const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
+      try {
+         const first = await dataPort.connect();
+
+         // A second would leave the first reading the port, and disposing the
+         // first would end the worker's head.
+         expect(await dataPort.connect()).toBe(first);
+      } finally {
+         dataPort.dispose();
+         ports.dispose();
+      }
+   });
+
+   it('releases its connection when disposed, though no generation holds it any more', async () => {
+      const ports = makeMessagePortPair();
+      const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
+      try {
+         const connection = await dataPort.connect();
+         let released = false;
+         connection.onDispose(() => (released = true));
+
+         // As after a failed readiness check: the consumer holds no generation to drop.
+         dataPort.dispose();
+
+         expect(released).toBe(true);
+      } finally {
+         ports.dispose();
+      }
+   });
 });

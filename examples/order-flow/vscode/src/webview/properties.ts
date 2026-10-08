@@ -13,7 +13,7 @@
  * The whole stack above the hop is host-invariant — the messenger channel
  * presents `postMessage` as a `PostMessageChannel`,
  * `createPostMessageTransport` turns that into a reader/writer pair,
- * `DataSession` owns readiness and reconnect over a `DataPort`, and
+ * `DataConnection` owns readiness and reconnect over a `DataPort`, and
  * `OrderFlowPropertiesModel` owns the open/watch/write/reconcile policy. What
  * this file adds is only the two things a webview alone can do: acquire the VS
  * Code API, and draw.
@@ -174,8 +174,8 @@ function main(): void {
    });
 
    messenger.onNotification(ORDER_FLOW_PANEL_CONNECTION_LOST, () => {
-      // Fires the port's `onDispose`, which makes `DataSession` drop its
-      // generation and dispose the connection — that is what rejects the
+      // The port fires its `onDispose`, which makes `DataConnection` drop its
+      // generation, and disposes the connection — that is what rejects the
       // requests that would otherwise hang, since the clone pipe still looks
       // open from in here.
       port.connectionLost();

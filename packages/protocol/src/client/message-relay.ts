@@ -121,7 +121,7 @@ export interface MessageRelay extends Disposable {
  *
  * It is not enough that a disciplined client awaits its own connection before
  * sending: a host builds the far-side connection and hands it back *without*
- * waiting for the relay, so `DataSession`'s very first call — the readiness
+ * waiting for the relay, so `DataConnection`'s very first call — the readiness
  * handshake — is already in flight while the socket is still opening. Dropping
  * that first request presents as a client hanging forever on connect against a
  * perfectly healthy server.

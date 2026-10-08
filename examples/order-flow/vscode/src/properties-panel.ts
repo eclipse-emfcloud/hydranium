@@ -180,7 +180,7 @@ export class OrderFlowPropertiesPanel {
     *   restored panel tears its webview down and revealing it re-runs the
     *   bootstrap. That degrades correctly rather than breaking: the fresh page
     *   sends `ready` again, this class re-sends the pending document, and the new
-    *   `DataSession` opens a second connection generation over the still-live
+    *   `DataConnection` opens a second connection generation over the still-live
     *   relay — the same path `connectionLost` exercises.
     * - **`webview.options` ARE re-applied** here, because script permission and
     *   the local resource root are not restored with the tab.

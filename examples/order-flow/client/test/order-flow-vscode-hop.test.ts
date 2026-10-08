@@ -22,9 +22,9 @@
  *
  * **The reconnect case is the one worth having, but not for the hazard it looks
  * like.** The webview messenger's ONE-HANDLER-PER-METHOD registry is real —
- * `DataSession` builds a fresh `PostMessageTransport` per connection generation,
- * each calls `channel.onMessage` again, and upstream's registry is a `Map`, so
- * generation two's registration replaces generation one's — and it is *benign*:
+ * the port builds a fresh `PostMessageTransport` once the relay is lost, each
+ * calls `channel.onMessage` again, and upstream's registry is a `Map`, so the
+ * second connection's registration replaces the first's — and it is *benign*:
  * flipping the double to allow many handlers per method leaves every suite
  * green, because a superseded generation's reader is already inert via the
  * channel's per-subscription forwarding flag, so a surviving stale handler has
@@ -109,23 +109,34 @@ type Participant = 'host-extension' | 'webview' | 'other-webview';
 class MessengerHopPort implements DataPort {
    readonly clientId = 'order-flow-properties-webview';
    readonly errors: Array<{ error: unknown; message: ResolvedMessage }> = [];
-   /** One entry per connection generation, so a reconnect is observable. */
+   /** One entry per connection built, so a reconnect is observable. */
    readonly generations: MessageConnection[] = [];
 
    protected readonly disposeEmitter = new Emitter<void>();
    readonly onDispose: Event<void> = this.disposeEmitter.event;
-   protected readonly toDispose: Array<{ dispose(): void }> = [];
+   protected disposed = false;
+   protected connection?: MessageConnection;
 
    constructor(protected readonly channel: PostMessageChannel) {}
 
    async connect(): Promise<MessageConnection> {
-      const transport = createPostMessageTransport(this.channel);
-      this.toDispose.push(transport);
-      const connection = createMessageConnection(transport.reader, transport.writer);
-      connection.onDispose(() => transport.dispose());
-      connection.listen();
-      this.generations.push(connection);
-      return connection;
+      if (this.disposed) {
+         throw new Error('MessengerHopPort: the port is disposed');
+      }
+      if (!this.connection) {
+         const transport = createPostMessageTransport(this.channel);
+         const connection = createMessageConnection(transport.reader, transport.writer);
+         connection.onDispose(() => {
+            transport.dispose();
+            if (this.connection === connection) {
+               this.connection = undefined;
+            }
+         });
+         connection.listen();
+         this.connection = connection;
+         this.generations.push(connection);
+      }
+      return this.connection;
    }
 
    reportError(error: unknown, message: ResolvedMessage): void {
@@ -134,15 +145,17 @@ class MessengerHopPort implements DataPort {
 
    /** What the panel's `connectionLost` notification triggers. */
    connectionLost(): void {
+      const lost = this.connection;
+      this.connection = undefined;
       this.disposeEmitter.fire();
+      lost?.dispose();
    }
 
    dispose(): void {
+      this.disposed = true;
+      this.disposeEmitter.fire();
       this.disposeEmitter.dispose();
-      for (const disposable of this.toDispose.reverse()) {
-         disposable.dispose();
-      }
-      this.toDispose.length = 0;
+      this.connection?.dispose();
    }
 }
 

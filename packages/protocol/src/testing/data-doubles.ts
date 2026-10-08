@@ -60,6 +60,10 @@ export interface FakeDataPortOptions {
     *
     * Throwing (or rejecting) here is the transport-construction failure path,
     * which the consumer surfaces through {@link FakeDataPort.reported}.
+    *
+    * The double disposes none of these connections and goes on connecting
+    * after its dispose, where a real port releases its connection and refuses:
+    * the test owns them.
     */
    connect(): MessageConnection | Promise<MessageConnection>;
    /** The port's {@link DataPort.logger}. */

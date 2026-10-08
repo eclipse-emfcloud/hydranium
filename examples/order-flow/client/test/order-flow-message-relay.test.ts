@@ -231,7 +231,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       //
       // It is NOT the only test that depends on the buffer, however much it
       // looks like it: `connect()` returns the far-side connection without
-      // waiting for the relay's socket, so `DataSession`'s readiness handshake
+      // waiting for the relay's socket, so `DataConnection`'s readiness handshake
       // is already in flight inside the same window. Deleting the buffer reddens
       // most of this suite, measured. What this test adds is a *named* early
       // request whose failure mode is unambiguous, rather than a timeout three

@@ -60,6 +60,8 @@ export abstract class ChannelDataPort implements DataPort {
    readonly onDispose: Event<void> = this.disposeEmitter.event;
 
    protected handle?: ChannelConnectionHandle;
+   /** Set by {@link dispose}, after which {@link connect} rejects. */
+   protected disposed = false;
 
    /** How long a connection may take before it is reported as failed; it keeps trying after. */
    protected readonly connectFailureNoticeMs: number = 30_000;
@@ -92,8 +94,15 @@ export abstract class ChannelDataPort implements DataPort {
     * a command the language server answers, and the language server only
     * launches once there is a workspace to launch it for. Asking earlier polls
     * a command nobody has registered.
+    *
+    * Rejects once the port is disposed: the consumer reconnects when the
+    * dispose fires {@link onDispose}, and a channel opened then is closed by
+    * nothing.
     */
    connect(): Promise<MessageConnection> {
+      if (this.disposed) {
+         return Promise.reject(new Error(`${this.constructor.name}: the port is disposed`));
+      }
       // Read per call rather than cached: `current` is repointed at a fresh
       // promise every time the channel is re-opened, so reading through the
       // handle is what makes a later generation reach the live server.
@@ -165,6 +174,7 @@ export abstract class ChannelDataPort implements DataPort {
    }
 
    dispose(): void {
+      this.disposed = true;
       this.settleAttempt();
       this.handle?.dispose();
       this.handle = undefined;

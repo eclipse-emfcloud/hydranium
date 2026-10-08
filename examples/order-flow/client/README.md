@@ -94,10 +94,10 @@ look Theia-only.
 
 Everything it stands on that is host-neutral and grammar-free lives in
 **`@hydranium/protocol/client`**: `DataPort` (the seam a host fills in),
-`DataSession` (typed proxy, readiness gate, open/watch ordering, echo
-recognition, reconnect), `DataEvents` (the inbound `DataClientProtocol` fanned
-out) and the two halves of the structured-clone hop,
-`createPostMessageTransport` and `relayToPostMessageChannel`.
+`DataConnection` (typed proxy, readiness gate, reconnect), `DataSession`
+(open/watch ordering, echo recognition), `DataEvents` (the inbound
+`DataClientProtocol` fanned out) and the two halves of the structured-clone
+hop, `createPostMessageTransport` and `relayToPostMessageChannel`.
 
 The tool palette is not defined here: GLSP drives it from the server's
 `shapeTypeHints` / `edgeTypeHints`, so the palette and the operation handlers
@@ -112,9 +112,11 @@ it, so this package re-derives none of it. In short:
   `reportError`, `onDispose`. It abstracts the transport *hop*, not the
   protocol, because a VS Code webview cannot reach the extension host's
   connection.
-- **`DataSession`** — the readiness gate, the open-then-watch order, echo
-  recognition, and the reconnect policy. `connected()` hands back the ready
-  proxy rather than `void`, so a cached proxy cannot outlive its connection.
+- **`DataConnection`** — the readiness gate and the reconnect policy.
+  `connected()` hands back the ready proxy rather than `void`, so a cached
+  proxy cannot outlive its connection.
+- **`DataSession`** — one participant on that connection: the open-then-watch
+  order and echo recognition.
 - **`DataEvents`** — the inbound `DataClientProtocol` fanned out, since a
   connection binds exactly one and a host usually has several listeners.
 - **`createPostMessageTransport`** — a `MessageReader` / `MessageWriter` pair
@@ -125,7 +127,7 @@ it, so this package re-derives none of it. In short:
 - **`relayToPostMessageChannel`** — the other end of that hop, for the side
   that does hold a socket. It pumps whole JSON-RPC messages between a framed
   transport and the same channel shape, decoding neither, and buffers what
-  arrives while the socket is still opening — a `DataSession`'s readiness
+  arrives while the socket is still opening — a `DataConnection`'s readiness
   handshake is already in flight before the relay is wired, and dropping it
   presents as a client hanging forever against a healthy server.
 

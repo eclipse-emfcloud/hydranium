@@ -11,10 +11,10 @@
  * `RpcConnection`'s reconnect policy — the generation a port dispose drops and
  * the one the next request builds.
  *
- * Every generation gets its OWN duplex pair, answering `ping` with its own
- * label. A reused far end makes "the proxy was rebuilt" and "the proxy is still
- * the dead one" answer identically, so a test over a shared server would pass
- * for a connection that never reconnects.
+ * In the reconnect tests every generation gets its OWN duplex pair, answering
+ * `ping` with its own label. A reused far end makes "the proxy was rebuilt" and
+ * "the proxy is still the dead one" answer identically, so a test over a shared
+ * server would pass for a connection that never reconnects.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -49,9 +49,13 @@ interface ServerDouble {
 }
 
 /** A server answering `ping` with `label`, so the answer names the generation. */
-function serveGeneration(connection: MessageConnection, label: string): ServerDouble {
+function serveGeneration(
+   connection: MessageConnection,
+   label: string,
+   waitForReady: () => Promise<void> = async () => undefined
+): ServerDouble {
    const target = {
-      waitForReady: async (): Promise<void> => undefined,
+      waitForReady,
       ping: async (): Promise<string> => label
    };
    bindRpcMethods(connection, target, ['waitForReady', 'ping'], { methodNamespace: WIRE_PREFIX });
@@ -277,6 +281,35 @@ describe('RpcConnection reconnect', () => {
          expect(await afterReconnect.ping({ value: 'x' })).toBe('generation-2');
       } finally {
          test.dispose();
+      }
+   });
+});
+
+describe('RpcConnection after a failed readiness check', () => {
+   it('leaves the connection to the port, so a port that shares one can retry on it', async () => {
+      const pair = makeDuplexConnectionPair();
+      let checks = 0;
+      serveGeneration(pair.left, 'shared', async () => {
+         if (++checks === 1) {
+            throw new Error('not ready');
+         }
+      });
+      const port = makeFakeDataPort({ connect: () => pair.right });
+      const rpc = new RpcConnection<TestServer, RecordingClient>(port, new RecordingClient(), {
+         methodNamespace: WIRE_PREFIX,
+         clientMethods: CLIENT_METHODS,
+         lifecycle: {}
+      });
+      try {
+         await expect(rpc.connected()).rejects.toThrow(/not ready/);
+
+         // Disposed after the failure, the shared connection would fail this
+         // retry and every later one.
+         expect(await (await rpc.connected()).ping({ value: 'x' })).toBe('shared');
+      } finally {
+         rpc.dispose();
+         pair.dispose();
+         port.dispose();
       }
    });
 });

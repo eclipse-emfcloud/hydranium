@@ -207,7 +207,7 @@ test.describe.serial('Order-flow data connection across a language-server restar
       // observable end to end: `openChannelConnection` sees the sub-channel close
       // and re-opens the path, the backend forwarder re-runs its port command and
       // finds the replacement server's new ephemeral port, and the port reports
-      // the loss so `DataSession` drops the generation that still addressed the
+      // the loss so `DataConnection` drops the generation that still addressed the
       // dead process. Any one of those missing leaves the panel on "Loading…"
       // exactly as it did before, so this passing is what says all three ran.
       //
