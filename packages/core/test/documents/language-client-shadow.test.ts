@@ -169,16 +169,16 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       expect(isFullReplace(edits, 'a\nB\nc\n')).toBe(false);
    });
 
-   test('invalidateClientText forces next call back to full-range replace', () => {
+   test('invalidateLanguageClientText forces next call back to full-range replace', () => {
       const { shadow } = openShadow();
       shadow.preparePush(KEY, URI, 'a\nb\n');
-      shadow.invalidateClientText(URI);
+      shadow.invalidateLanguageClientText(URI);
       expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(true);
    });
 
    test('a settled push ignores a second answer', () => {
       const { shadow } = openShadow();
-      shadow.setClientText(URI, 'a\nb\n');
+      shadow.setLanguageClientText(URI, 'a\nb\n');
       const push = shadow.preparePush(KEY, URI, 'a\nB\n');
       push?.notifyOutcome('applied');
       // A refusal drops the diff baseline; counted, the next push would be a full replace.
@@ -186,9 +186,9 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       expect(isFullReplace(editsOf(shadow, 'a\nB\nc\n'), 'a\nB\nc\n')).toBe(false);
    });
 
-   test('setClientText primes the baseline so next call is a diff', () => {
+   test('setLanguageClientText primes the baseline so next call is a diff', () => {
       const { shadow } = openShadow();
-      shadow.setClientText(URI, 'a\nb\n');
+      shadow.setLanguageClientText(URI, 'a\nb\n');
       expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(false);
    });
 
@@ -212,7 +212,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       };
       const { shadow, lines } = openShadow(corrupting);
       // Prime a baseline so the push takes the diff path (not the first-sync full replace).
-      shadow.setClientText(URI, 'a\nb\nc\n');
+      shadow.setLanguageClientText(URI, 'a\nb\nc\n');
       const edits = editsOf(shadow, 'a\nB\nc\n');
       expect(fallbacks(lines).map(line => line.level)).toEqual(['warn']);
       expect(isFullReplace(edits, 'a\nB\nc\n')).toBe(true);

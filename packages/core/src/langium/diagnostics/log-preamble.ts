@@ -50,7 +50,7 @@ export function logPreamble(logger: Logger, options: LogPreambleOptions): void {
 
 function logSessionInfo(logger: Logger, productName: string, version: string, systemInfoLines: readonly string[]): void {
    const now = new Date();
-   const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD, unambiguous across midnight
+   const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD in UTC, which can differ from the reader's local date
    const lines = [
       DIVIDER,
       `${productName} server session`,

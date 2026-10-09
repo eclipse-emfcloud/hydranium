@@ -458,7 +458,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          const committed = this.commitChange(uri, document, verdict.kind === 'direct' ? changes : [{ text: verdict.text }], clientId);
          document = committed.document;
          if (editor) {
-            this.languageClientShadow.setClientText(clientUri, document.getText());
+            this.languageClientShadow.setLanguageClientText(clientUri, document.getText());
             // Content-identical echo: the editor is echoing text we already had.
             // The model is unchanged, so skip the rebuild. Restricted to the
             // editor: a ModelService-authored change is never skipped.
@@ -1443,7 +1443,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * declares.
     */
    setLanguageClientText(uri: DocumentUri, text: string): void {
-      this.languageClientShadow.setClientText(this.toLanguageClientUri(uri), text);
+      this.languageClientShadow.setLanguageClientText(this.toLanguageClientUri(uri), text);
    }
 
    /**
@@ -1452,7 +1452,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * that text.
     */
    invalidateLanguageClientText(uri: DocumentUri): void {
-      this.languageClientShadow.invalidateClientText(this.toLanguageClientUri(uri));
+      this.languageClientShadow.invalidateLanguageClientText(this.toLanguageClientUri(uri));
    }
 
    protected consumePendingContent(uri: DocumentUri): string | undefined {

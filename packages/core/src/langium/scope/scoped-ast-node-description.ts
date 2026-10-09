@@ -157,9 +157,7 @@ export function isUniversalTier(description: AstNodeDescription): description is
  * URI's project, the public-tier sibling belonging to that
  * same project is redundant (the project-tier sibling under a shorter
  * name is already in scope) and should be hidden from completion /
- * linking. The framework's
- * `HydraniumScopeProvider.bucketFor` uses this
- * predicate to enforce the own-project canonical filter on the typed scope path.
+ * linking.
  *
  * `projectId` accepts `string | undefined` for adopter-call-site
  * ergonomics: when the source has no resolvable project (standalone

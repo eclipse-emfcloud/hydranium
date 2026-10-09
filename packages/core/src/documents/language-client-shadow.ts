@@ -104,7 +104,7 @@ export interface LanguageClientShadow {
     * change against `document`, the synced document. The caller has already
     * dropped a stale change. After a `direct` or `divergent` verdict the caller
     * commits the change and reports the synced text through
-    * {@link LanguageClientShadow.setClientText}: a `direct` change advances what
+    * {@link LanguageClientShadow.setLanguageClientText}: a `direct` change advances what
     * the client was last heard to hold only through that call, and without it
     * the next change is rebuilt against a stale text.
     */
@@ -116,7 +116,7 @@ export interface LanguageClientShadow {
       changes: TextDocumentContentChangeEvent[]
    ): LanguageClientChangeVerdict;
    /** The client holds `text` with nothing in flight. */
-   setClientText(clientUri: LanguageClientUri, text: string): void;
+   setLanguageClientText(clientUri: LanguageClientUri, text: string): void;
    /** The client closed `clientUri`; what it held there is forgotten. */
    removeOpen(key: CanonicalUri, clientUri: LanguageClientUri): void;
    /** Whether the client has `key` open: under `clientUri` when given, else under any URI. */
@@ -143,7 +143,7 @@ export interface LanguageClientShadow {
     * hold that text. What the client was last heard to hold stays, and its
     * changes are still rebuilt against it.
     */
-   invalidateClientText(clientUri: LanguageClientUri): void;
+   invalidateLanguageClientText(clientUri: LanguageClientUri): void;
 }
 
 /**
@@ -208,7 +208,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       uris.set(clientUri, { declaredVersion: version });
       // Dropped: a seed set before the open names no buffer, and a line diff
       // against it splices text the client does not hold.
-      this.invalidateClientText(clientUri);
+      this.invalidateLanguageClientText(clientUri);
       this.heardTexts.set(clientUri, text);
       if (firstOpen) {
          this.baselines.set(clientUri, text);
@@ -259,7 +259,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       const pending = this.pending.get(clientUri);
       if (!pending?.length && heard === document.getText()) {
          // The ranges apply to the synced text as sent, and the caller's
-         // setClientText records the result. Were it rebuilt here too, every
+         // setLanguageClientText records the result. Were it rebuilt here too, every
          // keystroke would copy the whole text a second time and rescan its lines.
          return { kind: 'direct' };
       }
@@ -277,7 +277,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       return heard === document.getText() ? { kind: 'direct' } : { kind: 'divergent', text: reconstructed };
    }
 
-   setClientText(clientUri: LanguageClientUri, text: string): void {
+   setLanguageClientText(clientUri: LanguageClientUri, text: string): void {
       this.baselines.set(clientUri, text);
       this.heardTexts.set(clientUri, text);
       this.pending.delete(clientUri);
@@ -286,7 +286,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
    removeOpen(key: CanonicalUri, clientUri: LanguageClientUri): void {
       const uris = this.opens.get(key);
       if (uris?.delete(clientUri)) {
-         this.invalidateClientText(clientUri);
+         this.invalidateLanguageClientText(clientUri);
          this.heardTexts.delete(clientUri);
          if (uris.size === 0) {
             this.opens.delete(key);
@@ -301,7 +301,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
 
    removeAllOpens(key: CanonicalUri): void {
       for (const clientUri of this.opens.get(key)?.keys() ?? []) {
-         this.invalidateClientText(clientUri);
+         this.invalidateLanguageClientText(clientUri);
          this.heardTexts.delete(clientUri);
       }
       this.opens.delete(key);
@@ -357,7 +357,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       outcome: LanguageClientPushOutcome
    ): void {
       if (outcome !== 'applied') {
-         this.invalidateClientText(clientUri);
+         this.invalidateLanguageClientText(clientUri);
       } else if (version !== null && state) {
          // A client steps once per applied edit that changes its buffer. Left
          // to the echo, a push sent next is refused at the old version.
@@ -365,7 +365,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       }
    }
 
-   invalidateClientText(clientUri: LanguageClientUri): void {
+   invalidateLanguageClientText(clientUri: LanguageClientUri): void {
       this.baselines.delete(clientUri);
       this.pending.delete(clientUri);
    }
