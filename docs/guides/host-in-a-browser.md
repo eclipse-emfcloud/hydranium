@@ -179,7 +179,8 @@ const fileSystem = await persistentFileSystem({
 
 Two limits hold for any browser host: a page or worker that dies ends no
 session, since a port cannot report it, and a closing tab cannot wait for a
-save. See [Status and limitations](../adopting/status.md#unsaved-edits-are-kept-only-so-far).
+save. See
+[Status and limitations](../adopting/status.md#unsaved-edits-are-kept-only-so-far).
 
 ## Going further
 

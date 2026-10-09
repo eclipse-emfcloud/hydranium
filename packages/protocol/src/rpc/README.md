@@ -94,7 +94,8 @@ behaviour instead of dispatching a wire call. Adopters defining wire
 methods should avoid:
 
 - `onDidOpenConnection` / `onDidCloseConnection` — return the lifecycle events
-- `then` — returns `undefined` so the proxy isn't auto-awaited by host-environment promise detection
+- `then` — returns `undefined` so the proxy isn't auto-awaited by
+  host-environment promise detection
 - `toJSON` — returns `undefined` so serialisers don't try to flatten the proxy
 
 Symbol property accesses also return `undefined` (the proxy is not

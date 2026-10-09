@@ -17,10 +17,10 @@ Two examples, for two different questions:
   grammar, all three heads with a diagram, and a sample workspace. Read it
   beside your own scaffold to understand what each piece does.
 - [**order-flow**](../examples/order-flow/README.md) is a complete application
-  and the one behind the [live demo](https://eclipse-emfcloud.github.io/hydranium/):
-  three grammars that reference each other, all three heads, and Theia, VS Code
-  and browser hosts. Look things up in it, and copy from it for an application
-  of your own.
+  and the one behind the
+  [live demo](https://eclipse-emfcloud.github.io/hydranium/): three grammars
+  that reference each other, all three heads, and Theia, VS Code and browser
+  hosts. Look things up in it, and copy from it for an application of your own.
 
 ## How it works
 

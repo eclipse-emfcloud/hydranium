@@ -11,8 +11,9 @@ Heads: LSP
 Register a `ValidationCheckContribution` under the language module's
 `validation.checks` group. The framework collects it into Langium's validation
 registry, so the same check runs when the LSP validates the document. See
-[contributions](../concepts/customizing-services.md#contributions-adding-to-the-registries) for the composition rule
-and [document layers](../concepts/document-layers.md) for the diagnostic path.
+[contributions](../concepts/customizing-services.md#contributions-adding-to-the-registries)
+for the composition rule and [document layers](../concepts/document-layers.md)
+for the diagnostic path.
 
 ## Steps
 

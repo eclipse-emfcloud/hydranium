@@ -40,8 +40,8 @@ theia, app). `build` is three steps: a native rebuild
 (`theia rebuild:browser`), `link:plugin`, then `theia build`.
 
 `npm start` opens `../workspace` in place; read the
-[order-flow README](../README.md#the-fixture-workspace-is-edited-in-place) on the fixture workspace before you edit
-anything in a manual session.
+[order-flow README](../README.md#the-fixture-workspace-is-edited-in-place) on
+the fixture workspace before you edit anything in a manual session.
 
 **Port 3001, not Theia's default 3000**, because a second Theia app is routinely
 run beside this one and a shared port silently makes one suite drive the other's

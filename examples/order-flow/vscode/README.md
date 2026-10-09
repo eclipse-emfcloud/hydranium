@@ -93,8 +93,8 @@ also attaches to the forked server on port 6009.
   output, which is gitignored — so the server must be built first. `build:all`
   handles that; a bare `build` in a clean tree does not.
 - **The F5 launch opens `../workspace` in place.** Read the
-  [order-flow README](../README.md#the-fixture-workspace-is-edited-in-place) on the fixture workspace before you edit
-  anything in a session.
+  [order-flow README](../README.md#the-fixture-workspace-is-edited-in-place) on
+  the fixture workspace before you edit anything in a session.
 
 ## Tests
 

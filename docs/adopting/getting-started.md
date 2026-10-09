@@ -75,9 +75,9 @@ see the language as it is.
   explains the heads and the one shared workspace behind them.
   [bookstore](../../examples/bookstore/README.md) is what `init` gives you, with
   a sample workspace; read it beside your own project.
-- **Build a complete application.** [order-flow](../../examples/order-flow/README.md)
-  is the application behind the
-  [live demo](https://eclipse-emfcloud.github.io/hydranium/): three grammars
+- **Build a complete application.**
+  [order-flow](../../examples/order-flow/README.md) is the application behind
+  the [live demo](https://eclipse-emfcloud.github.io/hydranium/): three grammars
   that reference each other, all three heads, and Theia, VS Code and browser
   hosts. The [guides](../ADOPTING.md#guides) walk through the common tasks, and
   [customizing services](../concepts/customizing-services.md) shows where a real

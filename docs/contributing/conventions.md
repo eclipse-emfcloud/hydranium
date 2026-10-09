@@ -187,6 +187,37 @@ story belongs in the commit. Every page is reachable from `README.md` or
 unreachable pages and these rot patterns to `scripts/check-docs-baseline.json`,
 which may only fall.
 
+**Every page has one audience.** The root README is for evaluators: what
+Hydranium is, the demo, and the two ways on. Adopter pages
+(`docs/ADOPTING.md`, `docs/adopting/`, `docs/concepts/`, `docs/guides/`) are
+for people building a language on the framework; developer pages
+(`docs/CONTRIBUTING.md`, `docs/contributing/`) are for people changing it. A
+fact an adopter needs never lives only on a developer page.
+
+**Adopter pages talk to the reader**: "you", what the reader does or sees
+first, then how the framework does it, only as far as the reader needs. A
+guide is numbered steps that end in how the reader knows it worked. **A detail
+stays only if an example or the `init` scaffold uses it, or an adopter cannot
+succeed without it**; the rest is TSDoc's or `--help`'s.
+
+**Design pages state contracts**: invariants, their reasons and their
+trade-offs, in the present tense. **No page restates code**: no lists of
+members, options or errors, no signatures, no traces that follow the source.
+Delete such material rather than move it. A table stays only when the reader
+acts on every row.
+
+**A package README follows the template** (what it gives you, install with
+the peer table, wiring where the adopter binds something, entry points by
+role, status, licence) **and links only the repository, `docs/ADOPTING.md`,
+`docs/CONTRIBUTING.md` and `NOTICE.md`, as absolute URLs**, because npm keeps
+each version's page as it shipped; name a guide in text rather than link it.
+`check:readmes` holds the sections and the links. **An example README maps
+each concern to its files** and links the guide rather than repeating it.
+
+**Prose is wrapped at 80 columns**; only a line that is one link, code span or
+word may run longer. `check:docs` fails the rest, since oxfmt does not format
+Markdown.
+
 ## User-facing messages
 
 **The framework externalizes user-facing strings, ships no catalogue and

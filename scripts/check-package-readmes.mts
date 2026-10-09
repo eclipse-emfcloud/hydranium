@@ -21,9 +21,10 @@
  * exactly that page. So a README must also carry a top-level heading NAMING its
  * own package, have prose under the heading, show how to install itself, warn
  * that it is pre-v0, state its licence, demonstrate something in a code fence,
- * and agree with its own manifest about its peer dependencies. Every predicate
- * is mechanical: the gate refuses to hold a style opinion, because one would be
- * edited away rather than met.
+ * and agree with its own manifest about its peer dependencies. It must also
+ * keep the conventions' template sections in order, and link only pages that
+ * outlive a version, because npm keeps each version's page as it shipped.
+ * Every predicate is mechanical.
  *
  * Private packages (the examples) are skipped — nothing is distributed.
  *
@@ -38,7 +39,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -229,6 +230,51 @@ function peerProblem(contents: string, peerDependencies: Record<string, string>)
    return undefined;
 }
 
+/** The template's sections, in reading order; a package may add its own between them. */
+const TEMPLATE_SECTIONS = ['What it gives you', 'Install', 'Entry points', 'Status', 'License'];
+
+/** The missing or misplaced template section, or undefined. */
+function sectionProblem(contents: string): string | undefined {
+   const headings = [...contents.matchAll(/^##\s+(.+?)\s*$/gm)].map(match => match[1]);
+   let from = 0;
+   for (const section of TEMPLATE_SECTIONS) {
+      const index = headings.indexOf(section, from);
+      if (index < 0) {
+         return `no "## ${section}" section where the template puts it (${TEMPLATE_SECTIONS.join(', ')})`;
+      }
+      from = index + 1;
+   }
+   return undefined;
+}
+
+const REPOSITORY = 'https://github.com/eclipse-emfcloud/hydranium';
+
+/** The repository pages a README may link, because they stay put across versions. */
+const ENTRY_PAGES = ['docs/ADOPTING.md', 'docs/CONTRIBUTING.md', 'NOTICE.md'];
+
+/**
+ * The first link that would break or go stale on the npm page, or undefined.
+ * The registry serves the README without the repository around it, so a
+ * relative link out of the package resolves nowhere, and a deep docs page
+ * moves while every published version keeps pointing at it.
+ */
+function linkProblem(contents: string): string | undefined {
+   const prose = contents.replace(/^ {0,3}```[\s\S]*?^ {0,3}```/gm, '').replace(/`+[^`]*`+/g, '');
+   for (const [, target] of prose.matchAll(/\]\(\s*<?([^)\s>]+)/g)) {
+      if (target.startsWith('#')) continue;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) {
+         if (!target.startsWith(REPOSITORY)) continue;
+         const page = target.slice(REPOSITORY.length).replace(/#.*$/, '').replace(/\/$/, '');
+         if (page === '' || ENTRY_PAGES.some(entry => page === `/blob/main/${entry}`)) continue;
+         return `links ${target}: link the repository, ${ENTRY_PAGES.join(', ')} instead, and name the page`;
+      }
+      if (normalize(target).startsWith('..')) {
+         return `links ${target} outside the package, which resolves nowhere on npm`;
+      }
+   }
+   return undefined;
+}
+
 /**
  * Why this README would render as a useless npm page, or would misinstruct a
  * consumer, or undefined if it would do neither. Takes the contents rather than
@@ -275,6 +321,10 @@ function readmeProblem(contents: string, packageName: string, peerDependencies: 
    if (!/^ {0,3}```/m.test(contents)) {
       return 'no fenced code block: nothing on the page shows the package in use';
    }
+   const problem = sectionProblem(contents) ?? linkProblem(contents);
+   if (problem) {
+      return problem;
+   }
    return peerProblem(contents, peerDependencies);
 }
 
@@ -315,6 +365,11 @@ const WELL_FORMED = [
    'into rejecting everything would satisfy every must-fail canary below, and would then redden every',
    'package in the repository rather than reporting a gate whose verdict has stopped meaning anything.',
    '',
+   '## What it gives you',
+   '',
+   `Every link a page may carry: the [repository](${REPOSITORY}), [Adopting](${REPOSITORY}/blob/main/docs/ADOPTING.md#guides),`,
+   `a [file in the package](./src/rpc/README.md), an [upstream site](https://langium.org/) and [a heading](#install).`,
+   '',
    '## Install',
    '',
    '```bash',
@@ -328,6 +383,10 @@ const WELL_FORMED = [
    canaryPeerRow('@scope/peer'),
    canaryPeerRow('@scope/peer-extra'),
    canaryPeerRow('@scope/peer-union'),
+   '',
+   '## Entry points',
+   '',
+   'The package root, the only subpath.',
    '',
    '## Status',
    '',
@@ -410,6 +469,23 @@ const CANARIES = [
    // predicates and stop isolating either.
    { name: 'shaped-stub', contents: SHAPED_STUB, peers: {}, problem: `need ${MINIMUM_BODY_BYTES}` },
    { name: 'no-code-fence', contents: WELL_FORMED.replace('```bash\n', '').replace('```\n', ''), problem: 'no fenced code block' },
+   { name: 'missing-section', contents: WELL_FORMED.replace('## Entry points', '## Subpaths'), problem: 'no "## Entry points" section' },
+   // Every section is present, so only the ORDER can fail it.
+   {
+      name: 'section-out-of-order',
+      contents: WELL_FORMED.replace('## What it gives you', '## Overview').replace('## Status', '## What it gives you\n\n## Status'),
+      problem: 'no "## Install" section'
+   },
+   {
+      name: 'link-out-of-package',
+      contents: WELL_FORMED.replace('./src/rpc/README.md', '../../docs/guides/a.md'),
+      problem: 'outside the package'
+   },
+   {
+      name: 'deep-repository-link',
+      contents: WELL_FORMED.replace('docs/ADOPTING.md#guides', 'docs/guides/a.md'),
+      problem: 'link the repository'
+   },
    // The row for the SHORTEST peer name goes; the two that extend it stay. A
    // mention test without its right anchor still finds the string inside them
    // and reports this page clean.
