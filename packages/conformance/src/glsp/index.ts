@@ -12,7 +12,9 @@
  * head, generic over the adopter's action type `TAction`. The kit imports NO
  * `@eclipse-glsp/*` types: the FIXTURE supplies the native actions
  * (`requestModel()`, `createOperation.action()`) and the kit matches responses
- * by `kind` (a `string`) via the driver's `nextAction`.
+ * by `kind` (a `string`) via the driver's `nextAction`. The one field it reads
+ * beyond `kind` is the `reason` of the `setDirtyState` that is an operation's
+ * receipt.
  *
  * The driver port (`GlspConformanceDriver<TAction>`) is the minimal
  * `start` / `dispatch` / `nextAction` surface that `@hydranium/glsp-server/
@@ -40,7 +42,12 @@ export interface GlspConformanceDriver<TAction> extends Harness {
    start(): Promise<void>;
    /** Send an action to the server. Fire-and-forget (GLSP `process` is `void`). */
    dispatch(action: TAction): void;
-   /** Resolve with the next captured action whose `kind` matches; reject on timeout. */
+   /**
+    * Resolve with the next action whose `kind` matches and that arrived after
+    * the last {@link dispatch}, or since `start` before any; reject on timeout.
+    * Only after the dispatch, so an action an earlier step sent cannot pass for
+    * the answer to this one.
+    */
    nextAction<T extends TAction = TAction>(kind: string, timeoutMs?: number): Promise<T>;
 }
 
@@ -64,7 +71,18 @@ export interface GlspCreateOperationSpec<TAction, TDriver extends GlspConformanc
     *   loaded.
     */
    readonly action: (driver: TDriver) => TAction;
-   /** The action kind the server settles the operation with (e.g. a re-`RequestBounds` for client-laid-out diagrams). */
+   /**
+    * The action kind the server settles the operation with (e.g. a
+    * re-`RequestBounds` for client-laid-out diagrams).
+    *
+    * The kit also waits for the operation's receipt: GLSP's
+    * `OperationActionHandler` submits every operation that ran with reason
+    * `'operation'`, and `ModelSubmissionHandler` ends that submission with a
+    * `setDirtyState` carrying it. A declined operation sends none,
+    * so an action of this kind from something else, such as a late submission
+    * of the load, cannot pass for the operation's. The driver's session must
+    * receive `setDirtyState`.
+    */
    readonly expectedResponseKind: string;
    /**
     * Returns whether the source model gained the element — the adopter reads its
@@ -140,6 +158,40 @@ export interface GlspConformanceOptions<TAction, TDriver extends GlspConformance
    readonly suiteTitle?: string;
 }
 
+/** GLSP's `SetDirtyStateAction.KIND`, named here because the kit imports no GLSP type. */
+const SET_DIRTY_STATE_KIND = 'setDirtyState';
+
+/** The reason GLSP's `OperationActionHandler` submits an operation that ran with, which its dirty state carries. */
+const OPERATION_REASON = 'operation';
+
+function isOperationReceipt(action: unknown): boolean {
+   return typeof action === 'object' && action !== null && 'reason' in action && action.reason === OPERATION_REASON;
+}
+
+/**
+ * Resolve once the operation's receipt arrives, passing over a dirty state
+ * with any other reason. Rejects with the wait's own failure, which may be a
+ * closed connection rather than a missing receipt.
+ */
+async function nextOperationReceipt<TAction>(driver: GlspConformanceDriver<TAction>): Promise<void> {
+   for (;;) {
+      let dirtyState: TAction;
+      try {
+         dirtyState = await driver.nextAction(SET_DIRTY_STATE_KIND);
+      } catch (error: unknown) {
+         const reason = error instanceof Error ? error.message : String(error);
+         throw new Error(
+            `Waiting for the operation's receipt, a ${SET_DIRTY_STATE_KIND} with reason '${OPERATION_REASON}', failed: ${reason}. ` +
+               `If none arrived in time, either no operation ran or the session does not declare ${SET_DIRTY_STATE_KIND}.`,
+            { cause: error }
+         );
+      }
+      if (isOperationReceipt(dirtyState)) {
+         return;
+      }
+   }
+}
+
 /**
  * Build the GLSP check battery — per diagram type: `start()` resolves;
  * `RequestModel` responds with the expected kind (+ optional `expectResponse`
@@ -199,6 +251,7 @@ export function buildGlspChecks<TAction, TDriver extends GlspConformanceDriver<T
                   driver.dispatch(diagram.requestModel());
                   await driver.nextAction(diagram.expectedResponseKind);
                   driver.dispatch(operation.action(driver));
+                  await nextOperationReceipt(driver);
                   await driver.nextAction(operation.expectedResponseKind);
                   assert.ok(
                      await operation.expectMutated(driver),

@@ -57,7 +57,9 @@ Each function takes `connect` and `languages`:
 
 The GLSP slice is generic over your action type and takes a `GlspFixture` per
 diagram type. The fixture builds your native actions, and the kit matches the
-responses by `kind`.
+responses by `kind`. A create check also waits for the operation's receipt,
+the `setDirtyState` with reason `'operation'` GLSP sends for an operation that
+ran, so the session must declare `setDirtyState`.
 
 To check a deployed GLSP server rather than one built in your test process,
 return `connectGlspSocketDriver({ port, diagramType, clientActionKinds })` from

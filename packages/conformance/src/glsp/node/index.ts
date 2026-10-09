@@ -52,8 +52,10 @@ export interface GlspSocketDriverOptions<TAction extends { readonly kind: string
     * The client's reply to a received action, sent back to the server, or
     * `undefined` for none. A server that lays out on the client finishes a
     * `requestModel` only once its `requestBounds` is answered with
-    * `computedBounds`, so a load without this stops half way. A throw fails
-    * every pending and later wait with it.
+    * `computedBounds`, so a load without this stops half way. A reply is not a
+    * dispatch, as the GLSP client's own is an automatic answer to the server,
+    * so it leaves the point `nextAction` matches from where it was. A throw
+    * fails every pending and later wait with it.
     */
    readonly respond?: (action: TAction) => TAction | undefined;
    /** Default bound for {@link GlspConformanceDriver.nextAction}, and the bound on the TCP connect and on each `start()` request. */
@@ -103,6 +105,8 @@ export async function connectGlspSocketDriver<TAction extends { readonly kind: s
       }
    };
    const consumed = new WeakSet<TAction>();
+   // Where the last dispatch fell in `actions`; a wait matches only from here.
+   let dispatchedAt = 0;
    const waiters: Array<{ readonly kind: string; readonly resolve: (action: TAction) => void; readonly fail: (error: Error) => void }> = [];
    // Why no awaited action can arrive any more, once something ended the session.
    let ended: { readonly reason: string; readonly cause?: unknown } | undefined;
@@ -173,10 +177,13 @@ export async function connectGlspSocketDriver<TAction extends { readonly kind: s
          );
       },
 
-      dispatch: send,
+      dispatch(action: TAction): void {
+         dispatchedAt = actions.length;
+         send(action);
+      },
 
       nextAction<T extends TAction = TAction>(kind: string, waitMs = timeoutMs): Promise<T> {
-         const existing = actions.find(action => action.kind === kind && !consumed.has(action));
+         const existing = actions.find((action, index) => index >= dispatchedAt && action.kind === kind && !consumed.has(action));
          if (existing) {
             consumed.add(existing);
             return Promise.resolve(existing as T);
@@ -202,9 +209,18 @@ export async function connectGlspSocketDriver<TAction extends { readonly kind: s
                   waiters.splice(at, 1);
                }
                // Naming what did arrive tells an operation the server declined
-               // (a status or nothing at all) apart from a transport that hangs.
-               const seen = actions.map(action => action.kind).join(', ') || 'nothing';
-               reject(new Error(`No '${kind}' action within ${waitMs}ms on session ${clientSessionId}; received: ${seen}`));
+               // (a status or nothing at all) apart from a transport that hangs,
+               // split at the last dispatch, before which no match counts.
+               const kindsIn = (from: number, to?: number): string =>
+                  actions
+                     .slice(from, to)
+                     .map(action => action.kind)
+                     .join(', ') || 'nothing';
+               const seen =
+                  dispatchedAt === 0
+                     ? `received: ${kindsIn(0)}`
+                     : `received before the last dispatch, which a wait does not match: ${kindsIn(0, dispatchedAt)}; since: ${kindsIn(dispatchedAt)}`;
+               reject(new Error(`No '${kind}' action within ${waitMs}ms on session ${clientSessionId}; ${seen}`));
             }, waitMs);
             waiters.push(waiter);
          });

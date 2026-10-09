@@ -16,6 +16,7 @@
 
 import * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
+import { waitFor } from '@hydranium/protocol/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connectGlspSocketDriver, type GlspSocketDriver } from '../src/glsp/node/index.js';
 
@@ -128,6 +129,44 @@ describe('connectGlspSocketDriver', () => {
          driver.dispatch({ kind: 'echo' });
          // The peer echoes the reply too, which is how it is seen arriving.
          expect(await driver.nextAction('answerReply')).toEqual({ kind: 'answerReply', mine: true });
+      } finally {
+         driver.dispose();
+      }
+   });
+
+   it('does not count what respond sends as a dispatch', async () => {
+      const driver = await connectGlspSocketDriver<Act>({
+         port,
+         diagramType: 'type-one',
+         clientActionKinds: [],
+         respond: action => (action.kind === 'echoReply' ? { kind: 'answer' } : undefined),
+         timeoutMs: 500
+      });
+      try {
+         await driver.start();
+         driver.dispatch({ kind: 'echo' });
+         await waitFor(() => driver.actions.some(action => action.kind === 'answerReply'));
+         // The reply went out after echoReply arrived; as a dispatch it would
+         // have put echoReply before the mark.
+         expect(await driver.nextAction('echoReply')).toEqual({ kind: 'echoReply', mine: true });
+      } finally {
+         driver.dispose();
+      }
+   });
+
+   it('waits only for an action that arrived after the last dispatch', async () => {
+      const driver = await connect();
+      try {
+         await driver.start();
+         driver.dispatch({ kind: 'echo' });
+         await waitFor(() => driver.actions.some(action => action.kind === 'echoReply'));
+         driver.dispatch({ kind: 'other' });
+
+         expect(await driver.nextAction('otherReply')).toEqual({ kind: 'otherReply', mine: true });
+         // Arrived before the last dispatch, so it is no answer to it.
+         await expect(driver.nextAction('echoReply', 100)).rejects.toThrow(
+            /No 'echoReply' action within 100ms .*received before the last dispatch, which a wait does not match: echoReply; since: otherReply/
+         );
       } finally {
          driver.dispose();
       }

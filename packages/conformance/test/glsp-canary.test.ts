@@ -24,12 +24,15 @@ import type { ConformanceCheck } from '../src/conformance-suite.js';
 
 interface CanaryAction {
    readonly kind: string;
+   readonly reason?: string;
 }
 
 const REQUEST_MODEL = 'canaryRequestModel';
 const MODEL_RESPONSE = 'canaryModelResponse';
 const CREATE = 'canaryCreate';
 const CREATE_RESPONSE = 'canaryCreateResponse';
+/** GLSP's receipt for an operation that ran: a dirty state with reason `'operation'`. */
+const OPERATION_RECEIPT: CanaryAction = { kind: 'setDirtyState', reason: 'operation' };
 
 /** Bounds the deliberately silent cases; the fake answers synchronously otherwise. */
 const RESPONSE_TIMEOUT_MS = 40;
@@ -45,6 +48,12 @@ interface GlspCanaryDefects {
    readonly responseRejected?: boolean;
    /** The operation settles but the source model is unchanged. */
    readonly notMutated?: boolean;
+   /**
+    * The create operation is declined, so no receipt is sent, while a late
+    * submission of the load (an external resubmit: the response kind and a
+    * dirty state with reason `'external'`) arrives in its place.
+    */
+   readonly declinedWithLateLoadSubmission?: boolean;
 }
 
 /**
@@ -68,8 +77,10 @@ class CanaryGlspServer implements GlspConformanceDriver<CanaryAction> {
       if (action.kind === REQUEST_MODEL && !this.defects.noModelResponse) {
          this.delivered.push({ kind: MODEL_RESPONSE });
       }
-      if (action.kind === CREATE && !this.defects.noOperationResponse) {
-         this.delivered.push({ kind: CREATE_RESPONSE });
+      if (action.kind === CREATE && this.defects.declinedWithLateLoadSubmission) {
+         this.delivered.push({ kind: CREATE_RESPONSE }, { kind: OPERATION_RECEIPT.kind, reason: 'external' });
+      } else if (action.kind === CREATE && !this.defects.noOperationResponse) {
+         this.delivered.push({ kind: CREATE_RESPONSE }, OPERATION_RECEIPT);
       }
    }
 
@@ -163,7 +174,14 @@ describe('the /glsp battery discriminates', () => {
       { label: 'a RequestModel that is never answered', defects: { noModelResponse: true }, expected: [REQUEST_MODEL_CHECK, CREATE_CHECK] },
       { label: 'a model response the fixture rejects', defects: { responseRejected: true }, expected: [REQUEST_MODEL_CHECK] },
       { label: 'a create operation that is never answered', defects: { noOperationResponse: true }, expected: [CREATE_CHECK] },
-      { label: 'a create operation that mutates nothing', defects: { notMutated: true }, expected: [CREATE_CHECK] }
+      { label: 'a create operation that mutates nothing', defects: { notMutated: true }, expected: [CREATE_CHECK] },
+      // The response kind arrives, but from the load rather than the operation;
+      // only the missing receipt tells them apart.
+      {
+         label: 'a declined create operation answered by a late submission of the load',
+         defects: { declinedWithLateLoadSubmission: true },
+         expected: [CREATE_CHECK]
+      }
    ];
 
    for (const canary of canaries) {

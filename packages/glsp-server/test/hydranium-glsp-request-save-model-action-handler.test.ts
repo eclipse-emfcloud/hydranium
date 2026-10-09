@@ -32,6 +32,7 @@ import { ContainerModule, inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
 import { ModelSavedAction, ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../src/storage/hydranium-glsp-request-save-model-action-handler.js';
@@ -183,10 +184,13 @@ describe('HydraniumGlspRequestSaveModelActionHandler', () => {
 
       server.dispatch(RequestSaveModelAction.create({ requestId: 'save-1' }));
       server.dispatch(RequestSaveModelAction.create({ requestId: 'save-2' }));
-      const first = await server.nextAction<ModelSavedAction>(ModelSavedAction.KIND);
-      const second = await server.nextAction<ModelSavedAction>(ModelSavedAction.KIND);
+      // Read from the capture: a wait matches only after the last dispatch, and
+      // the first answer is to the one before it.
+      const answers = (): ModelSavedAction[] =>
+         server.actions.filter((action): action is ModelSavedAction => action.kind === ModelSavedAction.KIND);
+      await waitFor(() => answers().length === 2);
 
-      expect([first.responseId, second.responseId]).toEqual(['save-1', 'save-2']);
+      expect(answers().map(answer => answer.responseId)).toEqual(['save-1', 'save-2']);
    });
 
    it('rejects a request whose save fails, shows the failure, and saves the next one', async () => {
