@@ -16,11 +16,14 @@ import {
    EndProgressAction,
    GLSPClientProxy,
    GLSPServer,
+   MessageAction,
    ModelState,
+   RejectAction,
    RequestBoundsAction,
    RequestModelAction,
    SOURCE_URI_ARG,
    SetDirtyStateAction,
+   SetMarkersAction,
    SetModelAction,
    StartProgressAction,
    StatusAction,
@@ -87,33 +90,49 @@ export interface MakeGlspHarnessOptions {
    readonly clientSessionId?: string;
    /**
     * Adopter-specific client action kinds to forward IN ADDITION to
-    * {@link DEFAULT_CLIENT_ACTION_KINDS}. The server's
+    * {@link MINIMAL_CLIENT_ACTION_KINDS}. The server's
     * `ClientActionForwarder` only forwards declared kinds to the capturing
     * `GLSPClientProxy`, so list any custom server→client action a test needs
-    * to observe. The standard set covers ordinary round-trips, so most tests
+    * to observe. The minimal set covers ordinary round-trips, so most tests
     * leave this unset.
     */
    readonly additionalClientActionKinds?: ReadonlyArray<string>;
 }
 
 /**
- * The standard client-bound action kinds a real GLSP client handles — the
- * minimal set needed for any model round-trip. The harness declares these on
- * the session by default so the capturing {@link GLSPClientProxy} receives
- * them and the action dispatcher never errors with "no handler registered"
- * for an ordinary server→client action. Adopter-specific kinds are added via
+ * The fewest client-bound action kinds a session can declare and still finish
+ * a model round-trip without the server's dispatcher erroring with "no handler
+ * registered" for an ordinary server→client action.
+ *
+ * A real GLSP client declares every kind its own handler registry holds, which
+ * is far more than this, and GLSP ships no fixed list to declare instead. So a
+ * test session that leaves one of these out sees errors no deployed client
+ * would, or none at all: a dispatch the server does not await, such as the
+ * markers after a load, fails without telling the client. The harness declares
+ * them by default; adopter-specific kinds are added via
  * {@link MakeGlspHarnessOptions.additionalClientActionKinds}.
  */
-const DEFAULT_CLIENT_ACTION_KINDS: ReadonlyArray<string> = [
+export const MINIMAL_CLIENT_ACTION_KINDS: ReadonlyArray<string> = Object.freeze([
    SetModelAction.KIND,
    UpdateModelAction.KIND,
    RequestBoundsAction.KIND,
    SetDirtyStateAction.KIND,
    StatusAction.KIND,
+   MessageAction.KIND,
+   SetMarkersAction.KIND,
    StartProgressAction.KIND,
    UpdateProgressAction.KIND,
    EndProgressAction.KIND
-];
+]);
+
+/**
+ * Whether the server reported a failure to the client: a rejected request, or
+ * an ERROR or FATAL message. A server can fail a request and still send the
+ * model, so a test that sees the model has not yet seen the load succeed.
+ */
+export function isRejectionOrError(action: Action): boolean {
+   return RejectAction.is(action) || (MessageAction.is(action) && (action.severity === 'ERROR' || action.severity === 'FATAL'));
+}
 
 /** Options for {@link GlspHarness.nextModelSubmission}. */
 export interface NextModelSubmissionOptions {
@@ -235,7 +254,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
 ): GlspHarness<TState> {
    const applicationId = options.applicationId ?? 'test-app';
    const clientSessionId = options.clientSessionId ?? 'test-session';
-   const clientActionKinds = [...DEFAULT_CLIENT_ACTION_KINDS, ...(options.additionalClientActionKinds ?? [])];
+   const clientActionKinds = [...MINIMAL_CLIENT_ACTION_KINDS, ...(options.additionalClientActionKinds ?? [])];
    const createLogger = options.createLogger ?? (() => makeNoopGlspLogger());
 
    const actions: Action[] = [];

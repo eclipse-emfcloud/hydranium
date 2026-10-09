@@ -19,6 +19,7 @@ import {
    GGraph,
    GLSPClientProxy,
    GLSPServer,
+   MessageAction,
    type GModelFactory,
    type GModelIndex,
    GNode,
@@ -26,6 +27,7 @@ import {
    ModelState,
    type ModelSubmissionHandler,
    OperationHandler,
+   RejectAction,
    type OperationHandlerConstructor,
    RequestBoundsAction,
    RequestModelAction,
@@ -48,7 +50,7 @@ import { HydraniumGlspIndex } from '../../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../../src/submission/hydranium-glsp-submission-handler.js';
-import { makeGlspHarness } from '../../src/testing/glsp-harness.js';
+import { isRejectionOrError, makeGlspHarness } from '../../src/testing/glsp-harness.js';
 
 // ---------------------------------------------------------------------------
 // Grammar-free GLSP fixture. GLSP needs no Langium grammar to round-trip — a
@@ -478,5 +480,14 @@ describe('makeGlspHarness', () => {
       } finally {
          harness.dispose();
       }
+   });
+});
+
+describe('isRejectionOrError', () => {
+   it('counts a rejected request and an ERROR or FATAL message, and nothing milder', () => {
+      expect(isRejectionOrError(RejectAction.create('refused'))).toBe(true);
+      expect(isRejectionOrError(MessageAction.create('broken', { severity: 'ERROR' }))).toBe(true);
+      expect(isRejectionOrError(MessageAction.create('broken', { severity: 'FATAL' }))).toBe(true);
+      expect(isRejectionOrError(MessageAction.create('careful', { severity: 'WARNING' }))).toBe(false);
    });
 });

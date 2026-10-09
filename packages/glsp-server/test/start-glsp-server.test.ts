@@ -133,6 +133,16 @@ describe('HydraniumGlspSocketServerLauncher', () => {
       await expect(received).resolves.toEqual(message);
    });
 
+   it('drops a notification sent once GLSP has disposed the connection', async () => {
+      const { head } = await connect();
+      head.listen();
+      head.dispose();
+
+      await expect(
+         head.sendNotification(JsonrpcGLSPClient.ActionMessageNotification, { clientId: 'client-1', action: { kind: 'test' } })
+      ).resolves.toBeUndefined();
+   });
+
    it('answers a framework error thrown in a request handler with its code and data', async () => {
       const { head, client } = await connect();
       head.onRequest('test/initialize', () => {

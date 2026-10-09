@@ -83,6 +83,8 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
    }
 
    override async submitModel(reason?: DirtyStateChangeReason, layout?: LayoutOperation): Promise<Action[]> {
+      // Numbered before the first await, so a caller can predict it.
+      const submission = ++this._startedSubmissions;
       if (this.readyEvent !== undefined) {
          // Adopters with on-build integrity rules wait so the GModel-factory walk sees
          // a settled AST; otherwise the GModel could include elements the build pass is
@@ -90,8 +92,15 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
          // via onReadyRefreshed.
          await this.modelState.ready(this.readyEvent);
       }
-      const actions = await super.submitModel(reason, layout);
+      const submitted = super.submitModel(reason, layout);
+      // Read before awaiting: GLSP bumps the revision synchronously, and another
+      // submission may run once this one yields.
+      const revision = this.modelState.root?.revision;
+      const actions = await submitted;
+      this.previousSubmission = { signature: this._lastSubmittedSignature, revision: this.lastSubmittedRevision };
       this._lastSubmittedSignature = this.signatureOf(actions);
+      this.lastSubmittedRevision = revision;
+      this.lastCompletedSubmission = submission;
       this.logSubmit(reason, actions);
       return actions;
    }
@@ -111,16 +120,71 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
 
    protected _lastSubmittedSignature?: string;
 
+   /** GModel revision of the last submission, whatever its reason. */
+   protected lastSubmittedRevision?: number;
+
+   /**
+    * How many submissions have started, whatever their reason. A caller that
+    * may drop the submission it is about to start names it to
+    * {@link withdrawLastSubmission} as this count plus one.
+    */
+   get startedSubmissions(): number {
+      return this._startedSubmissions;
+   }
+
+   protected _startedSubmissions = 0;
+
+   /** The number of the submission that completed last. */
+   protected lastCompletedSubmission?: number;
+
+   /** What {@link withdrawLastSubmission} restores. */
+   protected previousSubmission?: { readonly signature?: string; readonly revision?: number };
+
+   /**
+    * Take back the latest submission, which the caller drops unsent because it
+    * matches the one before. `submission` is its number, the
+    * {@link startedSubmissions} count when it started. GLSP bumped the GModel
+    * revision for it; left bumped, the client's measured bounds for the graph
+    * it already has arrive stale and its update is never sent. A no-op once
+    * another submission has finished or rebuilt the root since, which the
+    * client is given instead.
+    *
+    * An override of {@link submitModel} may return its own array. If it awaits
+    * before calling `super.submitModel`, another submission can take the number
+    * first, and the withdraw is then a no-op.
+    */
+   withdrawLastSubmission(submission: number): void {
+      const previous = this.previousSubmission;
+      if (!previous || submission !== this.lastCompletedSubmission || this.modelState.root?.revision !== this.lastSubmittedRevision) {
+         return;
+      }
+      this.previousSubmission = undefined;
+      this._lastSubmittedSignature = previous.signature;
+      this.lastSubmittedRevision = previous.revision;
+      const root = this.modelState.root;
+      if (root && previous.revision !== undefined) {
+         root.revision = previous.revision;
+      }
+   }
+
    /**
     * Live validation as the {@link DiagramStatus.VALIDATION} status, rather than
     * GLSP's own status writes, whose closing clear erases any status still in
     * force, such as the reason a diagram is read-only.
+    *
+    * Never rejects: GLSP runs it from a debounce that drops the result, so a
+    * failure here would go unhandled. A validator that throws is logged as an
+    * error, markers that cannot be sent as a warning.
     */
    protected override async performLiveValidation(validator: ModelValidator): Promise<void> {
       this.modelState.setStatus(DiagramStatus.VALIDATION, { message: 'Validate Model...', severity: 'INFO' });
       try {
          const markers = await validator.validate([this.modelState.root], MarkersReason.LIVE);
-         await this.actionDispatcher.dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }));
+         await this.actionDispatcher
+            .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }))
+            .catch((error: unknown) => this.modelState.logger.warn(`Could not send the live-validation markers: ${String(error)}`));
+      } catch (error: unknown) {
+         this.modelState.logger.error(`Live validation failed: ${String(error)}`);
       } finally {
          this.modelState.setStatus(DiagramStatus.VALIDATION, undefined);
       }

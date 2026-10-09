@@ -61,7 +61,8 @@ import {
    type ProtocolConnection,
    type PublishDiagnosticsParams
 } from 'vscode-languageserver-protocol/node';
-import { type NextDiagnosticsOptions } from './lsp-server-connection.js';
+import { captureAppliedEdits } from './applied-edit-capture.js';
+import { type AppliedEdit, type NextAppliedEditOptions, type NextDiagnosticsOptions } from './lsp-server-connection.js';
 
 /**
  * Default bound on the `initialize` handshake, and the reason there is one at
@@ -196,6 +197,21 @@ export interface SpawnedServer extends Harness {
     */
    nextDiagnostics(uri: string, timeoutMsOrOptions?: number | NextDiagnosticsOptions): Promise<Diagnostic[]>;
    /**
+    * Every `workspace/applyEdit` the child sent, in arrival order; append-only,
+    * each answered `{ applied: true }` as a real language client does.
+    *
+    * A Hydranium server mirrors an edit only for a document this connection has
+    * opened, so a write to one never sent `didOpen` here produces no entry. A
+    * second `applyEdit` handler registered on {@link connection} displaces this
+    * capture.
+    */
+   readonly appliedEdits: ReadonlyArray<AppliedEdit>;
+   /**
+    * Resolve with the next captured `workspace/applyEdit` addressing `uri`,
+    * with the same `fromIndex` and `match` contract as the in-process tier's.
+    */
+   nextAppliedEdit(uri: string, timeoutMsOrOptions?: number | NextAppliedEditOptions): Promise<AppliedEdit>;
+   /**
     * Graceful `shutdown` / `exit`, each bounded, then `SIGKILL`. Resolves with
     * the child's exit code — `null` when a signal ended it, which is itself the
     * observable that the graceful path did not work. Idempotent.
@@ -303,6 +319,7 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
    connection.onNotification(LogMessageNotification.type, params => {
       logMessages.push(params);
    });
+   const appliedEditCapture = captureAppliedEdits(connection, RESPONSE_TIMEOUT_MS);
    connection.listen();
 
    const killTimeoutMs = options.killTimeoutMs ?? DEFAULT_KILL_TIMEOUT_MS;
@@ -470,7 +487,10 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
             waiters.add(notify);
          });
       },
+      appliedEdits: appliedEditCapture.appliedEdits,
+      nextAppliedEdit: appliedEditCapture.nextAppliedEdit,
       dispose(): Promise<number | null> {
+         appliedEditCapture.dispose();
          liveServers.delete(server);
          disposal ??= terminate();
          return disposal;

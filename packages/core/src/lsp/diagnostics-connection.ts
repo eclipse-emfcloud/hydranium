@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import type { Connection } from 'vscode-languageserver';
-import { isConnectionGoneError } from '../util/connection-liveness.js';
+import { isClientGoneError } from '../util/connection-liveness.js';
 
 const wrappedConnections = new WeakSet<object>();
 
@@ -40,13 +40,13 @@ export function guardDiagnosticsConnection(connection: Connection): void {
       try {
          result = sendDiagnostics(params);
       } catch (error: unknown) {
-         if (isConnectionGoneError(error)) {
+         if (isClientGoneError(error)) {
             return Promise.resolve();
          }
          throw error;
       }
       void result.catch(error => {
-         if (isConnectionGoneError(error)) {
+         if (isClientGoneError(error)) {
             return;
          }
          throw error;

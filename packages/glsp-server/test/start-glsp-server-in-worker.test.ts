@@ -94,6 +94,18 @@ type GlspConnection = ReturnType<WorkerServerLauncher['createConnection']>;
 @injectable()
 class AdopterLauncher extends HydraniumGlspWorkerServerLauncher {}
 
+/** The launcher's connection for one port, as GLSP's `start` builds it. */
+class ConnectingLauncher extends HydraniumGlspWorkerServerLauncher {
+   constructor() {
+      super();
+      this.logger = makeNoopGlspLogger();
+   }
+
+   connect(context: TransferredMessagePort): GlspConnection {
+      return this.createConnection({ context } as unknown as WorkerLaunchOptions);
+   }
+}
+
 /** A module recording the launcher a head resolves, under GLSP's token or bypassing it. */
 function observeLauncher(resolved: WorkerServerLauncher[]): ContainerModule {
    return new ContainerModule((_bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
@@ -275,16 +287,6 @@ describe('startGlspServerInWorker', () => {
    /** GLSP sends typed messages, built by the copy of `vscode-jsonrpc` its
     *  protocol resolves, over the connection this launcher builds from another. */
    it("sends a message typed by GLSP's copy of vscode-jsonrpc over the launcher's connection", async () => {
-      class ConnectingLauncher extends HydraniumGlspWorkerServerLauncher {
-         constructor() {
-            super();
-            this.logger = makeNoopGlspLogger();
-         }
-
-         connect(context: TransferredMessagePort): GlspConnection {
-            return this.createConnection({ context } as unknown as WorkerLaunchOptions);
-         }
-      }
       const headConnection = new ConnectingLauncher().connect(ports.port2);
       const transport = createMessagePortTransport(ports.port1);
       const connection = createMessageConnection(transport.reader, transport.writer);
@@ -300,5 +302,14 @@ describe('startGlspServerInWorker', () => {
          headConnection.dispose();
          connection.dispose();
       }
+   });
+
+   it('drops a notification sent once GLSP has disposed the connection', async () => {
+      const headConnection = new ConnectingLauncher().connect(ports.port2);
+      headConnection.dispose();
+
+      await expect(
+         headConnection.sendNotification(JsonrpcGLSPClient.ActionMessageNotification, { clientId: 'client-1', action: { kind: 'test' } })
+      ).resolves.toBeUndefined();
    });
 });

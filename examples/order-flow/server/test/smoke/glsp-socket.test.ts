@@ -16,7 +16,7 @@
  * `GLSPClientProxy` to a capturing stub, so actions never cross a socket. GLSP's
  * JSON-RPC handshake, `ActionMessage` framing and per-connection session
  * container over the real transport a host uses are therefore reachable only from
- * here.
+ * this subprocess tier.
  *
  * What this asserts, in the order a host integration does it:
  * - `order-flow/glsp/port` answers over the LSP connection, so the port-publish
@@ -40,7 +40,16 @@
  */
 
 import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
-import { type ActionMessage, BaseJsonrpcGLSPClient, GLSPClient, RequestBoundsAction, RequestModelAction } from '@eclipse-glsp/protocol';
+import { isRejectionOrError, MINIMAL_CLIENT_ACTION_KINDS } from '@hydranium/glsp-server/testing';
+import {
+   type ActionMessage,
+   BaseJsonrpcGLSPClient,
+   ComputedBoundsAction,
+   GLSPClient,
+   RequestBoundsAction,
+   RequestModelAction,
+   SetModelAction
+} from '@eclipse-glsp/protocol';
 import { type GNode, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { sendByMethodName } from '@hydranium/protocol';
 import * as net from 'node:net';
@@ -178,6 +187,23 @@ describe('order-flow GLSP socket smoke', () => {
 
       const clientSessionId = 'smoke-session';
       const received: ActionMessage[] = [];
+      // The load ends with the model the request is answered with, or with the
+      // first failure. The bounds arrive before either, so a check made on the
+      // bounds alone could pass ahead of a rejection.
+      let settleLoad: () => void = () => undefined;
+      const loadSettled = new Promise<void>((resolve, reject) => {
+         const timer = setTimeout(
+            () => reject(new Error(`The load never settled within 15s; saw: ${received.map(msg => msg.action.kind).join(', ')}`)),
+            15_000
+         );
+         settleLoad = () => {
+            clearTimeout(timer);
+            resolve();
+         };
+      });
+      // Handled now and awaited last, so a failure before the await does not
+      // leave this timer to reject unhandled against whichever test runs next.
+      loadSettled.catch(() => undefined);
       const nextBounds = new Promise<RequestBoundsAction>((resolve, reject) => {
          const timer = setTimeout(
             () => reject(new Error(`No ${RequestBoundsAction.KIND} within 15s; saw: ${received.map(msg => msg.action.kind).join(', ')}`)),
@@ -185,20 +211,29 @@ describe('order-flow GLSP socket smoke', () => {
          );
          glspClient!.onActionMessage(message => {
             received.push(message);
+            if (SetModelAction.is(message.action) || isRejectionOrError(message.action)) {
+               settleLoad();
+            }
             if (RequestBoundsAction.is(message.action)) {
+               // The client's half of the layout: without it the request never
+               // completes. Measured nothing, which the server accepts as is.
+               glspClient!.sendActionMessage({
+                  clientId: clientSessionId,
+                  action: ComputedBoundsAction.create([], { revision: message.action.newRoot.revision })
+               });
                clearTimeout(timer);
                resolve(message.action);
             }
          }, clientSessionId);
       });
 
-      // `clientActionKinds` is what the server routes BACK to us — without
-      // RequestBounds listed, a client-laid-out diagram's response is dropped
-      // server-side and this test would time out rather than fail loudly.
+      // `clientActionKinds` is what the server routes back to us. A kind the
+      // server sends that neither side handles fails its dispatch and rejects
+      // the request, so the session declares the kinds a model load needs.
       await glspClient.initializeClientSession({
          clientSessionId,
          diagramType: DIAGRAM_TYPE,
-         clientActionKinds: [RequestBoundsAction.KIND]
+         clientActionKinds: [...MINIMAL_CLIENT_ACTION_KINDS]
       });
       glspClient.sendActionMessage({
          clientId: clientSessionId,
@@ -225,5 +260,11 @@ describe('order-flow GLSP socket smoke', () => {
       expect(pay?.position).toEqual(PAY_BOUNDS.position);
       expect(pay?.size).toEqual(PAY_BOUNDS.size);
       expect(cancel?.position).not.toEqual(PAY_BOUNDS.position);
+
+      // A session missing a kind the server sends still gets the bounds, with
+      // the request itself rejected, so the bounds alone cannot show the
+      // session behaved like a host's.
+      await loadSettled;
+      expect(received.map(message => message.action).filter(isRejectionOrError)).toEqual([]);
    }, 30_000);
 });

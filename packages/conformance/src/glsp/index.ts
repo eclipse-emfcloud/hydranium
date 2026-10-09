@@ -80,8 +80,12 @@ export interface GlspCreateOperationSpec<TAction, TDriver extends GlspConformanc
     * fixture to its input document, so a fixture whose input was MUTATED by an
     * earlier check silently expects the wrong number. Give each check pristine
     * input, or take the delta route above.
+    *
+    * May answer asynchronously. It runs once the response kind has arrived, and
+    * a write observed from another process, a `workspace/applyEdit` say, can
+    * arrive after that.
     */
-   readonly expectMutated: (driver: TDriver) => boolean;
+   readonly expectMutated: (driver: TDriver) => boolean | Promise<boolean>;
 }
 
 /**
@@ -197,7 +201,7 @@ export function buildGlspChecks<TAction, TDriver extends GlspConformanceDriver<T
                   driver.dispatch(operation.action(driver));
                   await driver.nextAction(operation.expectedResponseKind);
                   assert.ok(
-                     operation.expectMutated(driver),
+                     await operation.expectMutated(driver),
                      'expectMutated was false — the create operation did not mutate the source model'
                   );
                } finally {

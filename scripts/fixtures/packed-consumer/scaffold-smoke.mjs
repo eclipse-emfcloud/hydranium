@@ -74,24 +74,35 @@ try {
    }
 
    if (heads.includes('glsp')) {
+      // Imported here, because a scaffold without the GLSP head does not install the package.
+      const { MINIMAL_CLIENT_ACTION_KINDS, isRejectionOrError } = await import('@hydranium/glsp-server/testing');
       const glspRpc = await connect(await server.port('my-lang/glsp/port'));
       const actions = [];
-      glspRpc.onNotification('process', message => actions.push(message.action));
+      glspRpc.onNotification('process', message => {
+         actions.push(message.action);
+         // The client's half of a layout, without which a client-laid-out load
+         // never completes. Measured nothing, which the server accepts as is.
+         if (message.action.kind === 'requestBounds') {
+            // A server gone mid-run fails the wait for setModel below, not
+            // the process on an unhandled rejection.
+            try {
+               glspRpc
+                  .sendNotification('process', {
+                     clientId: 'scaffold-smoke',
+                     action: { kind: 'computedBounds', bounds: [], revision: message.action.newRoot.revision }
+                  })
+                  .catch(() => undefined);
+            } catch {
+               // A closed connection throws rather than rejecting.
+            }
+         }
+      });
       glspRpc.listen();
       await glspRpc.sendRequest('initialize', { applicationId: 'scaffold-smoke', protocolVersion: '1.0.0' });
       await glspRpc.sendRequest('initializeClientSession', {
          clientSessionId: 'scaffold-smoke',
          diagramType: 'my-lang',
-         clientActionKinds: [
-            'setModel',
-            'updateModel',
-            'setDirtyState',
-            'status',
-            'message',
-            'requestBounds',
-            'startProgress',
-            'endProgress'
-         ]
+         clientActionKinds: [...MINIMAL_CLIENT_ACTION_KINDS]
       });
       glspRpc.sendNotification('process', {
          clientId: 'scaffold-smoke',
@@ -102,6 +113,11 @@ try {
          'the diagram model'
       );
       assert.equal(model.newRoot.children.filter(child => child.type.startsWith('node')).length, 2);
+      // The server answers a request it fails with a rejection and may still
+      // send the bounds, so they alone do not show the load succeeded; the
+      // model the request is answered with does.
+      await waitFor(() => actions.find(action => action.kind === 'setModel' || isRejectionOrError(action)), 'the end of the diagram load');
+      assert.deepEqual(actions.filter(isRejectionOrError), []);
    }
 
    assert.deepEqual(

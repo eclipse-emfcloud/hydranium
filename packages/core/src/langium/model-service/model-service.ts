@@ -26,7 +26,7 @@ import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
 import { AstDocument } from '../../documents/ast-document-manager.js';
-import { isConnectionGoneError } from '../../util/connection-liveness.js';
+import { isClientGoneError } from '../../util/connection-liveness.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import { labelPhaseListener } from '../document-builder/labeled-phase-listener.js';
@@ -1120,7 +1120,7 @@ export class DefaultModelService<
             // ordinary shutdown. Reporting it at `error` makes routine teardown
             // look like it needs investigating. A genuine applyEdit failure
             // (client refused, request malformed) still surfaces at `error`.
-            if (isConnectionGoneError(err)) {
+            if (isClientGoneError(err)) {
                uriLogger.debug(`applyEdit to ${LANGUAGE_CLIENT_ID} skipped: client disconnected`);
             } else {
                uriLogger.error(`applyEdit to ${LANGUAGE_CLIENT_ID} failed: ${err}`);

@@ -53,7 +53,9 @@ package's main entry; see
    it supplies the checks. The order-flow server runs it for all three heads,
    in `test/data-conformance.integration.test.ts`,
    `test/lsp-conformance.integration.test.ts` and
-   `test/glsp/glsp-conformance.integration.test.ts`; its
+   `test/glsp/glsp-conformance.integration.test.ts`, and the GLSP checks again
+   over the built server's socket in
+   `test/smoke/glsp-socket-conformance.test.ts`; its
    [README](../../packages/conformance/README.md) explains the fixtures. Break
    one fixture on purpose once, and check that the check you expect turns red.
 

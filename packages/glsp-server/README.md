@@ -59,7 +59,9 @@ See *Make a diagram editable* and *Host in a browser* in
   `HydraniumGlspSocketServerLauncher` or `HydraniumGlspWorkerServerLauncher`.
   If it overrides `createConnection`, it passes
   `createGlspConnectionLogger(this.logger)` as the connection's logger, or the
-  connection logs to `console` or nowhere instead of your logger.
+  connection logs to `console` or nowhere instead of your logger, and wraps the
+  result in `dropNotificationsToGoneClient(connection, this.logger)`, or every
+  client that disconnects leaves an unhandled rejection in the server.
 - **GLSP brings its own copy of `vscode-jsonrpc`.** A typed message built by
   one copy and sent over a connection from another throws
   `Unknown parameter structure auto`. Wrap a connection you hand GLSP, or send

@@ -68,3 +68,30 @@ export function isConnectionGoneError(err: unknown): boolean {
    const normalized = message.toLowerCase();
    return CONNECTION_GONE_PATTERNS.some(pattern => pattern.test(normalized));
 }
+
+const SOCKET_GONE_CODES = new Set(['EPIPE', 'ECONNRESET']);
+
+/** `write EPIPE` / `read ECONNRESET`, as a request's `ResponseError` copies the message. */
+const SOCKET_GONE_PATTERN = /\b(epipe|econnreset)\b/;
+
+/**
+ * Whether `err` means the client a connection serves has gone: what
+ * {@link isConnectionGoneError} recognises, or a write to a socket the client
+ * closed (`EPIPE`, `ECONNRESET`), matched by code or, for a request, by the
+ * code's name in the message.
+ *
+ * Only for a call whose errors can come from that connection alone. A socket
+ * error names no peer, so where a file system or another socket can fail the
+ * same call, it is a genuine failure and {@link isConnectionGoneError} is the
+ * one to ask.
+ */
+export function isClientGoneError(err: unknown): boolean {
+   if (isConnectionGoneError(err)) {
+      return true;
+   }
+   if (err instanceof Error && 'code' in err && typeof err.code === 'string' && SOCKET_GONE_CODES.has(err.code)) {
+      return true;
+   }
+   const message = err instanceof Error ? err.message : String(err);
+   return SOCKET_GONE_PATTERN.test(message.toLowerCase());
+}

@@ -12,6 +12,7 @@ import { PassThrough, type TransformCallback } from 'node:stream';
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import { type Connection, ProposedFeatures } from 'vscode-languageserver/node';
 import { withHydraniumLspFeatures } from '../../lsp/connection-features.js';
+import { captureAppliedEdits } from './applied-edit-capture.js';
 // The node `createConnection` from `vscode-languageserver/node` is built for a
 // standalone server PROCESS: it wires `process.exit()` onto the input stream's
 // `end`/`close` events, onto the `exit` notification (via its watchDog), and onto
@@ -26,7 +27,6 @@ import { withHydraniumLspFeatures } from '../../lsp/connection-features.js';
 // package map the LSP 3.18 libs ship.)
 import { createConnection, type WatchDog } from 'vscode-languageserver';
 import {
-   ApplyWorkspaceEditRequest,
    CompletionRequest,
    DidChangeTextDocumentNotification,
    DidCloseTextDocumentNotification,
@@ -48,8 +48,7 @@ import {
    type Position,
    type ProtocolConnection,
    type PublishDiagnosticsParams,
-   type SemanticTokens,
-   type WorkspaceEdit
+   type SemanticTokens
 } from 'vscode-languageserver-protocol/node';
 
 /**
@@ -122,7 +121,7 @@ export interface NextAppliedEditOptions {
     * and needed for the same reason: one write can fan out to several pushes.
     */
    readonly fromIndex?: number;
-   /** Reject after this long. Defaults to the in-process publish timeout. */
+   /** Reject after this long. Defaults to the harness's own timeout, which differs by tier. */
    readonly timeoutMs?: number;
    /**
     * Additional predicate the edit must satisfy. The framework coalesces
@@ -131,42 +130,6 @@ export interface NextAppliedEditOptions {
     * with e.g. `edit => edit.text.includes('…')`.
     */
    readonly match?: (edit: AppliedEdit) => boolean;
-}
-
-/** Every URI a {@link WorkspaceEdit} addresses, in `documentChanges` then `changes` order. */
-function editedUris(edit: WorkspaceEdit): string[] {
-   const uris: string[] = [];
-   for (const change of edit.documentChanges ?? []) {
-      if ('textDocument' in change) {
-         uris.push(change.textDocument.uri);
-      } else if ('oldUri' in change) {
-         uris.push(change.oldUri, change.newUri);
-      } else {
-         uris.push(change.uri);
-      }
-   }
-   uris.push(...Object.keys(edit.changes ?? {}));
-   return uris;
-}
-
-/** Every text edit's `newText` in a {@link WorkspaceEdit}, concatenated in edit order. */
-function insertedText(edit: WorkspaceEdit): string {
-   const parts: string[] = [];
-   for (const change of edit.documentChanges ?? []) {
-      if ('edits' in change) {
-         for (const textEdit of change.edits) {
-            if ('newText' in textEdit) {
-               parts.push(textEdit.newText);
-            }
-         }
-      }
-   }
-   for (const textEdits of Object.values(edit.changes ?? {})) {
-      for (const textEdit of textEdits) {
-         parts.push(textEdit.newText);
-      }
-   }
-   return parts.join('');
 }
 
 /**
@@ -426,32 +389,7 @@ export function makeLspServerConnection(): LspServerConnection {
       }
    });
 
-   const appliedEdits: AppliedEdit[] = [];
-   /**
-    * Waiters armed by {@link LspServerConnection.nextAppliedEdit}, fanned out to
-    * from the ONE handler below — `vscode-jsonrpc` keeps a single handler per
-    * REQUEST type just as it does per notification type, so a second
-    * `onRequest` would displace this one and leave the server's `applyEdit`
-    * unanswered.
-    */
-   const appliedEditWaiters: Array<(edit: AppliedEdit) => boolean> = [];
-   let applyEditHandler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult = () => ({ applied: true });
-   const appliedEditSubscription = client.onRequest(ApplyWorkspaceEditRequest.type, (params: ApplyWorkspaceEditParams) => {
-      const edit: AppliedEdit = { params, uris: editedUris(params.edit), text: insertedText(params.edit) };
-      // Record BEFORE the handler runs, so a handler that rejects the edit or
-      // throws still leaves the push observable — the send is what the egress
-      // assertion is about.
-      appliedEdits.push(edit);
-      for (const waiter of [...appliedEditWaiters]) {
-         if (waiter(edit)) {
-            const at = appliedEditWaiters.indexOf(waiter);
-            if (at >= 0) {
-               appliedEditWaiters.splice(at, 1);
-            }
-         }
-      }
-      return applyEditHandler(params);
-   });
+   const appliedEditCapture = captureAppliedEdits(client, DEFAULT_DIAGNOSTICS_TIMEOUT_MS);
 
    let disposed = false;
 
@@ -459,7 +397,7 @@ export function makeLspServerConnection(): LspServerConnection {
       serverConnection,
       client,
       diagnostics,
-      appliedEdits,
+      appliedEdits: appliedEditCapture.appliedEdits,
       wireBytes: () => ({
          clientToServer: pair.clientToServer.bytes,
          serverToClient: pair.serverToClient.bytes,
@@ -575,51 +513,16 @@ export function makeLspServerConnection(): LspServerConnection {
          });
       },
 
-      nextAppliedEdit(uri: string, timeoutMsOrOptions?: number | NextAppliedEditOptions): Promise<AppliedEdit> {
-         const options: NextAppliedEditOptions =
-            typeof timeoutMsOrOptions === 'number' ? { timeoutMs: timeoutMsOrOptions } : (timeoutMsOrOptions ?? {});
-         const timeoutMs = options.timeoutMs ?? DEFAULT_DIAGNOSTICS_TIMEOUT_MS;
-         const { fromIndex, match } = options;
-         const matches = (edit: AppliedEdit): boolean => edit.uris.includes(uri) && (match?.(edit) ?? true);
-         if (fromIndex !== undefined) {
-            // Replay from the capture first, for the same reason
-            // `nextDiagnostics` does: the push may already have arrived, and a
-            // waiter only ever sees later ones.
-            const captured = appliedEdits.slice(Math.max(0, fromIndex)).find(matches);
-            if (captured) {
-               return Promise.resolve(captured);
-            }
-         }
-         return new Promise<AppliedEdit>((resolve, reject) => {
-            const waiter = (edit: AppliedEdit): boolean => {
-               if (!matches(edit)) {
-                  return false;
-               }
-               clearTimeout(timer);
-               resolve(edit);
-               return true;
-            };
-            const timer = setTimeout(() => {
-               const at = appliedEditWaiters.indexOf(waiter);
-               if (at >= 0) {
-                  appliedEditWaiters.splice(at, 1);
-               }
-               reject(new Error(`Timed out waiting for a workspace/applyEdit addressing ${uri}`));
-            }, timeoutMs);
-            appliedEditWaiters.push(waiter);
-         });
-      },
+      nextAppliedEdit: appliedEditCapture.nextAppliedEdit,
 
-      setApplyEditHandler(handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult): void {
-         applyEditHandler = handler;
-      },
+      setApplyEditHandler: appliedEditCapture.setApplyEditHandler,
 
       dispose(): void {
          if (disposed) {
             return;
          }
          disposed = true;
-         appliedEditSubscription.dispose();
+         appliedEditCapture.dispose();
          diagnosticsSubscription.dispose();
          client.dispose();
          serverConnection.dispose();
