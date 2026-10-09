@@ -237,6 +237,11 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * guarantee the class describes. Throws without a session
     * ({@link requireModelSession}). An override that serializes otherwise than
     * `ModelService.modelToText` overrides {@link normalizeTransition} alongside.
+    *
+    * A write that fails closes every document {@link createSecondaryDocument}
+    * created for it. Left open, a created document would stay in the
+    * diagram's session with the text it was created with, and the diagram's
+    * next save would write it to disk though no write landed in it.
     */
    protected async persist(
       model: MultiDocumentSourceModel<TPrimary>,
@@ -251,26 +256,43 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
          return { root: this._sourceRoot };
       }
       const session = this.requireModelSession();
-      if (primaryChanged) {
-         await this.openForWrite(session, this._sourceUri);
+      this.createdForWrite.clear();
+      try {
+         if (primaryChanged) {
+            await this.openForWrite(session, this._sourceUri);
+         }
+         for (const [uri] of changedSecondaries) {
+            await this.openForWrite(session, uri);
+         }
+         // Based after the opens, so a secondary created there is gated on the version it was created at.
+         const updates: ClientSessionWriteArgs<TransferElement>[] = primaryChanged
+            ? [{ uri: this._sourceUri, model: model.primary, baseVersion }]
+            : [];
+         for (const [uri, secondary] of changedSecondaries) {
+            updates.push({
+               uri,
+               model: secondary,
+               baseVersion: baseVersion === 'any' ? 'any' : (secondaryVersions?.[uri] ?? this.secondaryBaseVersion(uri))
+            });
+         }
+         const documents = await session.updateAll({ updates });
+         return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot };
+      } catch (error: unknown) {
+         for (const uri of this.createdForWrite) {
+            try {
+               await session.close(uri);
+            } catch (closeError: unknown) {
+               this.logger.warn(`Could not close ${uri}, created for a write that failed: ${String(closeError)}`);
+            }
+         }
+         throw error;
+      } finally {
+         this.createdForWrite.clear();
       }
-      for (const [uri] of changedSecondaries) {
-         await this.openForWrite(session, uri);
-      }
-      // Based after the opens, so a secondary created there is gated on the version it was created at.
-      const updates: ClientSessionWriteArgs<TransferElement>[] = primaryChanged
-         ? [{ uri: this._sourceUri, model: model.primary, baseVersion }]
-         : [];
-      for (const [uri, secondary] of changedSecondaries) {
-         updates.push({
-            uri,
-            model: secondary,
-            baseVersion: baseVersion === 'any' ? 'any' : (secondaryVersions?.[uri] ?? this.secondaryBaseVersion(uri))
-         });
-      }
-      const documents = await session.updateAll({ updates });
-      return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot };
    }
+
+   /** The documents {@link createSecondaryDocument} created for the {@link persist} under way. */
+   protected readonly createdForWrite = new Set<string>();
 
    /**
     * Whether `candidate` differs from the base projection of the same
@@ -309,6 +331,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     */
    protected async createSecondaryDocument(session: ClientSession<AstNode>, uri: string, text: string): Promise<void> {
       const created = await session.create(uri, text);
+      this.createdForWrite.add(uri);
       if (this._secondaryVersions.has(uri)) {
          this._secondaryVersions.set(uri, asModelVersion(created));
       }

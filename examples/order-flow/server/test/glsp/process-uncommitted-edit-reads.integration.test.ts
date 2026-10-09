@@ -22,7 +22,7 @@ import type { AstNode } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import type { DiagramNode, LayoutModel, ProcessModel, Transition } from '../../src/language-server/ast.js';
+import type { Branch, DiagramNode, Gateway, LayoutModel, ProcessModel, Transition } from '../../src/language-server/ast.js';
 import { WORKSPACE_FILES } from '../order-flow-harness.js';
 import {
    apply,
@@ -308,6 +308,35 @@ describe('the working copies a handler edits', () => {
       expect({ expected: expected !== undefined, observed }).toEqual({
          expected: true,
          observed: { refText: expected, toCopy: true, isCopy: true }
+      });
+   });
+
+   it('queries candidates from a copy and from a node created in it as from the built nodes', async () => {
+      const opened = await openDiagram();
+      const { diagram } = opened;
+      const targets = (node: AstNode): string[] | undefined => {
+         const info = diagram.state.referenceInfoOf(node, 'target');
+         return (
+            info &&
+            diagram.state
+               .candidateProviderFor(node)
+               ?.find(info)
+               .map(candidate => candidate.value)
+         );
+      };
+      const gatewayOf = (root: ProcessModel): Gateway => root.nodes.find(node => node.name === 'PaymentOk') as Gateway;
+      const built = targets(gatewayOf(builtProcessRoot(opened)).branches[0]);
+
+      const inside = await insideOperation(diagram, () => {
+         const gateway = gatewayOf(diagram.state.sourceRoot);
+         const created = { $type: 'Branch', $container: gateway, $containerProperty: 'branches', label: 'maybe' } as unknown as Branch;
+         gateway.branches.push(created);
+         return { copy: targets(gateway.branches[0]), created: targets(created) };
+      });
+
+      expect({ built, inside }).toEqual({
+         built: expect.arrayContaining(['Pick', 'Cancel']),
+         inside: { copy: built, created: built }
       });
    });
 
