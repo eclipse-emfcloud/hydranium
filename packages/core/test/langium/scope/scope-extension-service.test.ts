@@ -7,12 +7,19 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
-import { type AstNode, EMPTY_SCOPE, type LangiumDocument, MapScope, type Scope } from '@hydranium/langium';
+import { afterEach, describe, expect, it } from 'vitest';
+import { type AstNode, type LangiumDocument } from '@hydranium/langium';
+import { Logger } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { type HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
-import { DefaultScopeExtensionService, type ScopeExtensionService } from '../../../src/langium/scope/scope-extension-service.js';
+import { type ServerLanguageServices } from '../../../src/langium/language-module.js';
+import {
+   DefaultScopeExtensionService,
+   type ScopeExtension,
+   type ScopeExtensionService
+} from '../../../src/langium/scope/scope-extension-service.js';
 import { type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
-import { makeFakeAstNode, makeFakeDescription, makeNoopLanguageServices } from '../../../src/testing/index.js';
+import { makeCapturingTracer, makeFakeAstNode, makeNoopLanguageServices, makeStubDocumentBuilder } from '../../../src/testing/index.js';
 
 /** Minimal stub for the typed-factory call sites the acceptor uses. */
 function fakeDescriptionsProvider(): HydraniumAstNodeDescriptionProvider {
@@ -32,19 +39,6 @@ function makeService(): ScopeExtensionService {
    return new DefaultScopeExtensionService(makeNoopLanguageServices({ workspace: { AstNodeDescriptionProvider: descriptions } }));
 }
 
-/**
- * Outer scope holding ONE description under `name`, typed `'Outer'` so a
- * collision can be attributed to a layer (extension descriptions are typed
- * `'Fake'`).
- *
- * Layering order is UNOBSERVABLE against `EMPTY_SCOPE`: with nothing in the
- * outer scope there is no name to shadow, so a query answers the same whether
- * the extension sits above or below. Only a colliding name pins the direction.
- */
-function outerScopeWith(name: string): Scope {
-   return new MapScope([makeFakeDescription(name, { type: 'Outer' })]);
-}
-
 function contextWithDocument(): AstNode {
    const document = { parseResult: { value: makeFakeAstNode({ $type: 'Root' }) } } as unknown as LangiumDocument;
    const context = makeFakeAstNode({ $type: 'Container' });
@@ -52,69 +46,45 @@ function contextWithDocument(): AstNode {
    return context;
 }
 
-describe('ScopeExtensionService — getLocalExtensionScope', () => {
-   it('returns outer scope unchanged when no extension applies to the reference type', () => {
-      const service = makeService();
-      service.register({
-         id: 'extra',
-         referenceTypes: ['SomeType'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.local({ node: makeFakeAstNode({ $type: 'Foo' }), name: 'foo', document: doc })
-      });
+function names(tier: readonly TieredAstNodeDescription[]): string[] {
+   return tier.map(description => description.name);
+}
 
-      const result = service.getLocalExtensionScope('OtherType', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).toBe(EMPTY_SCOPE);
-   });
-
-   it('layers local-tier descriptions on top of the outer scope when an extension applies', () => {
+describe('ScopeExtensionService — getDescriptions', () => {
+   it('runs each matching extension once per call', () => {
       const service = makeService();
+      let calls = 0;
       service.register({
-         id: 'extra',
+         id: 'both',
          referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.local({ node: makeFakeAstNode({ $type: 'TypeOne' }), name: 'syntheticSym', document: doc })
-      });
-
-      const result = service.getLocalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).not.toBe(EMPTY_SCOPE);
-      expect(result.getElement('syntheticSym')?.name).toBe('syntheticSym');
-   });
-
-   it('local-tier descriptions SHADOW a same-named outer description', () => {
-      // Pins the direction the test above cannot: against EMPTY_SCOPE, "on top"
-      // and "below" answer identically. Local sits above, so the extension wins.
-      const service = makeService();
-      service.register({
-         id: 'extra',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.local({ node: makeFakeAstNode({ $type: 'TypeOne' }), name: 'collide', document: doc })
-      });
-
-      const result = service.getLocalExtensionScope('TypeOne', contextWithDocument(), outerScopeWith('collide'));
-      expect(result.getElement('collide')?.type).toBe('Fake');
-   });
-
-   it('returns outer scope when extensions match the reference type but produce no descriptions', () => {
-      const service = makeService();
-      service.register({
-         id: 'extra',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: () => {
-            /* contributes nothing */
+         addDescriptions: (_ctx, _type, doc, accept) => {
+            calls++;
+            accept.local({ node: makeFakeAstNode({ $type: 'A' }), name: 'a', document: doc });
+            accept.universal({ node: makeFakeAstNode({ $type: 'B' }), name: 'b', document: doc });
          }
       });
 
-      const result = service.getLocalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).toBe(EMPTY_SCOPE);
+      service.getDescriptions('TypeOne', contextWithDocument());
+      expect(calls).toBe(1);
    });
 
-   it('does not call AstUtils.getDocument when no extension matches the reference type', () => {
-      // Pins the `extensionsForType.length === 0` early return: with no matching
-      // extension the collector must bail before resolving the context document.
-      // A context WITHOUT a `$document` makes AstUtils.getDocument throw, so the
-      // wrong branch is observable as a thrown error rather than an equivalent
-      // empty result.
+   it('splits the descriptions by tier', () => {
+      const service = makeService();
+      service.register({
+         id: 'both',
+         referenceTypes: ['TypeOne'],
+         addDescriptions: (_ctx, _type, doc, accept) => {
+            accept.local({ node: makeFakeAstNode({ $type: 'A' }), name: 'localSym', document: doc });
+            accept.universal({ node: makeFakeAstNode({ $type: 'B' }), name: 'stdSym', document: doc });
+         }
+      });
+
+      const result = service.getDescriptions('TypeOne', contextWithDocument());
+      expect(names(result.local)).toEqual(['localSym']);
+      expect(names(result.universal)).toEqual(['stdSym']);
+   });
+
+   it('answers no descriptions when no extension applies to the reference type', () => {
       const service = makeService();
       service.register({
          id: 'extra',
@@ -122,44 +92,41 @@ describe('ScopeExtensionService — getLocalExtensionScope', () => {
          addDescriptions: (_ctx, _type, doc, accept) =>
             accept.local({ node: makeFakeAstNode({ $type: 'Foo' }), name: 'foo', document: doc })
       });
-      const documentlessContext = makeFakeAstNode({ $type: 'Container' });
-      const result = service.getLocalExtensionScope('OtherType', documentlessContext, EMPTY_SCOPE);
-      expect(result).toBe(EMPTY_SCOPE);
+
+      const result = service.getDescriptions('OtherType', contextWithDocument());
+      expect(result.local).toHaveLength(0);
+      expect(result.universal).toHaveLength(0);
    });
 
-   it('routes a pushed pre-built local-tier description through the acceptor', () => {
-      // A pre-built description handed to `accept.push(...)` must land in the
-      // collected scope, not just the ones the factory methods synthesise.
+   it('does not resolve the context document when no extension matches the reference type', () => {
+      // A context WITHOUT a `$document` makes AstUtils.getDocument throw, so a
+      // missing early return shows as a thrown error rather than an equal result.
       const service = makeService();
-      const prebuilt = {
-         name: 'prebuiltSym',
-         tier: 'local',
-         type: 'Fake',
-         documentUri: undefined!,
-         path: '/'
-      } as unknown as TieredAstNodeDescription;
+      service.register({
+         id: 'extra',
+         referenceTypes: ['SomeType'],
+         addDescriptions: () => undefined
+      });
+
+      expect(() => service.getDescriptions('OtherType', makeFakeAstNode({ $type: 'Container' }))).not.toThrow();
+   });
+
+   it('routes a pushed pre-built description to its tier and drops one of another tier', () => {
+      const service = makeService();
+      const prebuilt = (name: string, tier: string) =>
+         ({ name, tier, type: 'Fake', documentUri: undefined!, path: '/' }) as unknown as TieredAstNodeDescription;
       service.register({
          id: 'prebuilt',
          referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, _doc, accept) => accept.push(prebuilt)
+         addDescriptions: (_ctx, _type, _doc, accept) => {
+            accept.push(prebuilt('prebuiltSym', 'local'));
+            accept.push(prebuilt('projectSym', 'project'));
+         }
       });
 
-      const result = service.getLocalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).not.toBe(EMPTY_SCOPE);
-      expect(result.getElement('prebuiltSym')?.name).toBe('prebuiltSym');
-   });
-
-   it('does not return universal-tier descriptions on the local query', () => {
-      const service = makeService();
-      service.register({
-         id: 'stdlib',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.universal({ node: makeFakeAstNode({ $type: 'Std' }), name: 'stdSym', document: doc })
-      });
-
-      const result = service.getLocalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).toBe(EMPTY_SCOPE);
+      const result = service.getDescriptions('TypeOne', contextWithDocument());
+      expect(names(result.local)).toEqual(['prebuiltSym']);
+      expect(result.universal).toHaveLength(0);
    });
 });
 
@@ -199,47 +166,87 @@ describe('ScopeExtensionService — contribution group consumption', () => {
    });
 });
 
-describe('ScopeExtensionService — getUniversalExtensionScope', () => {
-   it('layers universal-tier descriptions BELOW the outer scope when an extension applies', () => {
-      const service = makeService();
-      service.register({
-         id: 'stdlib',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.universal({ node: makeFakeAstNode({ $type: 'Std' }), name: 'stdSym', document: doc })
-      });
+describe('ScopeExtensionService — profiling', () => {
+   const level = Logger.getLevel();
+   afterEach(() => Logger.setLevel(level));
 
-      const result = service.getUniversalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).not.toBe(EMPTY_SCOPE);
-      expect(result.getElement('stdSym')?.name).toBe('stdSym');
+   /** A service over a stub builder, so the test starts and ends the builds. */
+   function makeProfiledService(create = (services: ServerLanguageServices) => new DefaultScopeExtensionService(services)) {
+      const { tracer, lines } = makeCapturingTracer(makeFakeClock());
+      const builder = makeStubDocumentBuilder();
+      const service = create(
+         makeNoopLanguageServices({
+            shared: { Tracer: tracer, workspace: { DocumentBuilder: builder } },
+            workspace: { AstNodeDescriptionProvider: descriptions },
+            LanguageMetaData: { languageId: 'test' }
+         })
+      );
+      service.register({ id: 'probe', referenceTypes: ['TypeOne'], addDescriptions: () => undefined });
+      const profileLines = () => lines.map(line => line.message).filter(message => message.includes('[profile scope-extension '));
+      return { service, builder, profileLines };
+   }
+
+   it('reports each extension when a build ends, counting every call', () => {
+      const { service, builder, profileLines } = makeProfiledService();
+      Logger.setLevel('debug');
+
+      service.getDescriptions('TypeOne', contextWithDocument());
+      service.getDescriptions('TypeOne', contextWithDocument());
+      expect(profileLines()).toHaveLength(0);
+
+      builder.fireBuildEnded({ completed: true });
+      // Count and self-time only: a share of the window would count the time
+      // between calls, which a report spanning more than one call includes.
+      expect(profileLines()).toEqual([expect.stringMatching(/^\[profile scope-extension test\] probe ×2 [^%\s]+$/)]);
    });
 
-   it('universal-tier descriptions are SHADOWED BY a same-named outer description', () => {
-      // The mirror of the local shadowing case, and the assertion that makes
-      // "BELOW" mean something: the outer scope wins the collision. Without it,
-      // inverting the layering order in getUniversalExtensionScope goes unnoticed.
-      const service = makeService();
-      service.register({
-         id: 'stdlib',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.universal({ node: makeFakeAstNode({ $type: 'Std' }), name: 'collide', document: doc })
-      });
+   it('reports when builds that threw have drained', () => {
+      const { service, builder, profileLines } = makeProfiledService();
+      Logger.setLevel('debug');
 
-      const result = service.getUniversalExtensionScope('TypeOne', contextWithDocument(), outerScopeWith('collide'));
-      expect(result.getElement('collide')?.type).toBe('Outer');
+      service.getDescriptions('TypeOne', contextWithDocument());
+      builder.fireBuildEnded({ completed: false });
+      expect(profileLines().filter(message => message.includes('probe ×1'))).toHaveLength(1);
    });
 
-   it('does not return local-tier descriptions on the universal query', () => {
-      const service = makeService();
-      service.register({
-         id: 'extra',
-         referenceTypes: ['TypeOne'],
-         addDescriptions: (_ctx, _type, doc, accept) =>
-            accept.local({ node: makeFakeAstNode({ $type: 'TypeOne' }), name: 'localSym', document: doc })
-      });
+   it('reports the calls made before a build starts apart from the build', () => {
+      const { service, builder, profileLines } = makeProfiledService();
+      Logger.setLevel('debug');
 
-      const result = service.getUniversalExtensionScope('TypeOne', contextWithDocument(), EMPTY_SCOPE);
-      expect(result).toBe(EMPTY_SCOPE);
+      service.getDescriptions('TypeOne', contextWithDocument());
+      builder.fireOnUpdate([], []);
+      service.getDescriptions('TypeOne', contextWithDocument());
+      builder.fireBuildEnded({ completed: true });
+
+      expect(profileLines().filter(message => message.includes('probe ×'))).toEqual([
+         expect.stringContaining('probe ×1'),
+         expect.stringContaining('probe ×1')
+      ]);
+   });
+
+   it('profiles the extensions an override of extensionsFor chooses', () => {
+      class ChoosingService extends DefaultScopeExtensionService {
+         protected override extensionsFor(referenceType: string, context: AstNode): ScopeExtension[] {
+            return super.extensionsFor(referenceType, context).filter(extension => extension.id !== 'skipped');
+         }
+      }
+      const { service, builder, profileLines } = makeProfiledService(services => new ChoosingService(services));
+      let skippedCalls = 0;
+      service.register({ id: 'skipped', referenceTypes: ['TypeOne'], addDescriptions: () => void skippedCalls++ });
+      Logger.setLevel('debug');
+
+      service.getDescriptions('TypeOne', contextWithDocument());
+      builder.fireBuildEnded({ completed: true });
+      expect(skippedCalls).toBe(0);
+      expect(profileLines()).toEqual([expect.stringContaining('probe ×1')]);
+   });
+
+   it('reports nothing at the default info level', () => {
+      const { service, builder, profileLines } = makeProfiledService();
+      Logger.setLevel('info');
+
+      service.getDescriptions('TypeOne', contextWithDocument());
+      builder.fireBuildEnded({ completed: true });
+      expect(profileLines()).toHaveLength(0);
    });
 });

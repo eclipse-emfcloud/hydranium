@@ -39,8 +39,9 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
 import { type HydraniumDocumentRegistry } from '../workspace/langium-documents.js';
+import { FallbackScope } from './fallback-scope.js';
 import { type ScopeExtensionService } from './scope-extension-service.js';
-import { isTieredDescription } from './scoped-ast-node-description.js';
+import { type TieredAstNodeDescription, isTieredDescription } from './scoped-ast-node-description.js';
 
 /**
  * Construction-time options for {@link HydraniumScopeProvider}. Extends
@@ -214,8 +215,9 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     */
    protected override getGlobalScope(referenceType: string, context: ReferenceInfo): Scope {
       const projectChain = this.createGlobalScope(referenceType, context);
-      const withUniversal = this.layerUniversalExtension(referenceType, context, projectChain);
-      return this.layerLocalExtension(referenceType, context, withUniversal);
+      const extensions = this.scopeExtensionService.getDescriptions(referenceType, context.container);
+      const withUniversal = this.layerUniversalExtension(extensions.universal, projectChain, referenceType, context);
+      return this.layerLocalExtension(extensions.local, withUniversal, referenceType, context);
    }
 
    /**
@@ -250,22 +252,32 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
-    * Layer scope-extension `local`-tier descriptions on top of `inner`.
-    * Returns `inner` unchanged when no extension contributes for the
-    * reference type (zero-cost common path).
+    * Layer the scope extensions' `local`-tier `descriptions` on top of
+    * `inner`, through {@link createScope}. Returns `inner` unchanged when there
+    * are none.
     */
-   protected layerLocalExtension(referenceType: string, context: ReferenceInfo, inner: Scope): Scope {
-      return this.scopeExtensionService.getLocalExtensionScope(referenceType, context.container, inner);
+   protected layerLocalExtension(
+      descriptions: readonly TieredAstNodeDescription[],
+      inner: Scope,
+      _referenceType: string,
+      _context: ReferenceInfo
+   ): Scope {
+      return descriptions.length === 0 ? inner : this.createScope(descriptions, inner);
    }
 
    /**
-    * Layer scope-extension `universal`-tier descriptions BELOW `inner`
-    * (extensions appear last in the chain, shadowed by inner). Returns
-    * `inner` unchanged when no extension contributes for the reference
-    * type.
+    * Layer the scope extensions' `universal`-tier `descriptions` below
+    * `inner`, which shadows them, through {@link createScope} and a
+    * {@link FallbackScope}, so `inner` keeps its own lookup. Returns `inner`
+    * unchanged when there are none.
     */
-   protected layerUniversalExtension(referenceType: string, context: ReferenceInfo, inner: Scope): Scope {
-      return this.scopeExtensionService.getUniversalExtensionScope(referenceType, context.container, inner);
+   protected layerUniversalExtension(
+      descriptions: readonly TieredAstNodeDescription[],
+      inner: Scope,
+      _referenceType: string,
+      _context: ReferenceInfo
+   ): Scope {
+      return descriptions.length === 0 ? inner : new FallbackScope(inner, this.createScope(descriptions));
    }
 
    /**

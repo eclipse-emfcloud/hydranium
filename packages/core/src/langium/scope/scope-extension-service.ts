@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type AstNode, AstUtils, type LangiumDocument, MapScope, type Scope, StreamScope, stream } from '@hydranium/langium';
+import { type AstNode, AstUtils, type LangiumDocument } from '@hydranium/langium';
 import { type Disposable } from 'vscode-languageserver';
-import { type Tracer } from '@hydranium/protocol';
+import { Format, Logger, type ProfileRecord, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerLanguageServices } from '../language-module.js';
 import { Registry, type RegistryItem } from '../../util/registry.js';
@@ -49,8 +49,7 @@ export interface ScopeDescriptionAcceptor {
     * descriptions are constructed ahead of time, to avoid per-query
     * allocation. The pushed description's `tier` must be `'local'` or
     * `'universal'`; a description of any other tier is silently dropped,
-    * because the per-tier query methods only return descriptions matching
-    * the tier they were asked for.
+    * because {@link ScopeExtensionDescriptions} holds only those two.
     */
    push(description: TieredAstNodeDescription): void;
 }
@@ -87,37 +86,31 @@ export interface ScopeExtension extends RegistryItem {
    addDescriptions(context: AstNode, referenceType: string, document: LangiumDocument, accept: ScopeDescriptionAcceptor): void;
 }
 
+/** The scope-extension descriptions for one reference, split by tier. */
+export interface ScopeExtensionDescriptions {
+   readonly local: readonly TieredAstNodeDescription[];
+   readonly universal: readonly TieredAstNodeDescription[];
+}
+
 /**
  * Public contract for the per-language scope-extension service. Extends
  * the {@link ScopeExtensionRegistry} (the imperative `register` surface
- * contributions use) with the per-tier query methods called cross-class
- * from `HydraniumScopeProvider`'s `layerLocalExtension` /
- * `layerUniversalExtension` helpers, which layer scope-extension
- * contributions around the cached project chain.
- *
- * Adopter overrides go through {@link DefaultScopeExtensionService}; the
- * interface keeps the public API stable while internals
- * (`collectExtensionDescriptions` walk) stay `protected` on the default
- * class.
+ * contributions use) with the query `HydraniumScopeProvider` builds its
+ * extension tiers from.
  */
 export interface ScopeExtensionService extends ScopeExtensionRegistry {
    /**
-    * Layer this language's `local`-tier scope-extension descriptions on
-    * top of `outerScope` for the given reference type. Returns
-    * `outerScope` unchanged when no extension contributes a `local`-tier
-    * description for the type (zero-cost common path).
+    * Run every extension registered for `referenceType` once against
+    * `context`, and answer its descriptions by tier. A caller that needs
+    * both tiers takes them from one call: a call per tier runs every
+    * extension twice.
     */
-   getLocalExtensionScope(referenceType: string, context: AstNode, outerScope: Scope): Scope;
-   /**
-    * Layer this language's `universal`-tier scope-extension descriptions
-    * BELOW `outerScope` for the given reference type. Returns `outerScope`
-    * unchanged when no extension contributes a `universal`-tier
-    * description for the type.
-    */
-   getUniversalExtensionScope(referenceType: string, context: AstNode, outerScope: Scope): Scope;
+   getDescriptions(referenceType: string, context: AstNode): ScopeExtensionDescriptions;
 }
 
 export type ScopeExtensionServiceOptions = LogNameOptions;
+
+const NO_DESCRIPTIONS: ScopeExtensionDescriptions = { local: [], universal: [] };
 
 /**
  * Default {@link ScopeExtensionService} implementation. Per-language
@@ -128,13 +121,19 @@ export type ScopeExtensionServiceOptions = LogNameOptions;
  * separate from the query-time scope-resolution concern (which only reads).
  *
  * Lives in the per-language `references` group alongside `ScopeProvider`,
- * which consumes the per-tier query methods ({@link getLocalExtensionScope}
- * / {@link getUniversalExtensionScope}). Designed as a base class; adopters
+ * which consumes {@link getDescriptions}. Designed as a base class; adopters
  * extend it and call `register` in their constructor.
+ *
+ * At `debug`, each extension's calls and self-time go into one profile
+ * session, reported when a build starts and when it ends. A report thus
+ * covers one build, validation included, or the calls made between two
+ * builds, such as a reference picker's.
  */
 export class DefaultScopeExtensionService implements ScopeExtensionService {
    protected readonly scopeExtensions = new Registry<ScopeExtension>();
    protected readonly tracer: Tracer;
+   /** Open from the first profiled call until {@link reportProfile}. */
+   protected profileSession?: ProfileSession;
 
    constructor(
       protected readonly services: ServerLanguageServices,
@@ -150,6 +149,10 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
       for (const contribution of Object.values(contributions)) {
          contribution.registerScopeExtensions(this);
       }
+      // Optional for the same reason: a stub tree may carry no builder.
+      const builder = services.shared.workspace.DocumentBuilder;
+      builder?.onUpdate(() => this.reportProfile());
+      builder?.onBuildEnded(() => this.reportProfile());
    }
 
    /**
@@ -162,46 +165,58 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
       return this.scopeExtensions.register(extension);
    }
 
-   getLocalExtensionScope(referenceType: string, context: AstNode, outerScope: Scope): Scope {
-      const local = this.collectExtensionDescriptions(referenceType, context, 'local');
-      if (local.length === 0) {
-         return outerScope;
-      }
-      return new StreamScope(stream(local), outerScope);
-   }
-
-   getUniversalExtensionScope(referenceType: string, context: AstNode, outerScope: Scope): Scope {
-      const universal = this.collectExtensionDescriptions(referenceType, context, 'universal');
-      if (universal.length === 0) {
-         return outerScope;
-      }
-      return new StreamScope(outerScope.getAllElements(), new MapScope(universal));
-   }
-
    /**
-    * Walk this language's registered scope extensions matching
-    * `referenceType` and collect descriptions of the requested `tier`.
-    * `push`-ed descriptions of other tiers are silently dropped here —
-    * the per-tier query methods only return descriptions matching their
-    * tier. (`local` and `universal` are the only acceptor entry points;
-    * `push` is the escape hatch for pre-built descriptions and is the
-    * only path that could carry other tiers.)
+    * Holds the profile wrap, which an override would have to copy; to change
+    * which extensions run, override {@link extensionsFor}.
     */
-   protected collectExtensionDescriptions(
-      referenceType: string,
-      context: AstNode,
-      tier: 'local' | 'universal'
-   ): TieredAstNodeDescription[] {
-      const extensionsForType = this.scopeExtensions.all().filter(extension => extension.referenceTypes.includes(referenceType));
+   getDescriptions(referenceType: string, context: AstNode): ScopeExtensionDescriptions {
+      const extensionsForType = this.extensionsFor(referenceType, context);
       if (extensionsForType.length === 0) {
-         return [];
+         return NO_DESCRIPTIONS;
       }
       const document = AstUtils.getDocument(context);
       const collected: TieredAstNodeDescription[] = [];
       const accept = createScopeDescriptionAcceptor(collected, this.services.workspace.AstNodeDescriptionProvider);
+      const session = Logger.isLevelEnabled('debug') ? (this.profileSession ??= this.tracer.profile('scope-extension')) : undefined;
       for (const extension of extensionsForType) {
-         extension.addDescriptions(context, referenceType, document, accept);
+         if (session) {
+            session.scope(extension.id, () => extension.addDescriptions(context, referenceType, document, accept));
+         } else {
+            extension.addDescriptions(context, referenceType, document, accept);
+         }
       }
-      return collected.filter(description => description.tier === tier);
+      return {
+         local: collected.filter(description => description.tier === 'local'),
+         universal: collected.filter(description => description.tier === 'universal')
+      };
+   }
+
+   /** The extensions that run for one reference: by default, those registered for `referenceType`. */
+   protected extensionsFor(referenceType: string, _context: AstNode): ScopeExtension[] {
+      return this.scopeExtensions.all().filter(extension => extension.referenceTypes.includes(referenceType));
+   }
+
+   /**
+    * Report the profile session, if one is open, and start the next one fresh:
+    * one line per extension, its calls and self-time. Not a share of the
+    * session's time, which runs from the first call to the report and so takes
+    * in whatever happened between the calls.
+    */
+   protected reportProfile(): void {
+      const session = this.profileSession;
+      this.profileSession = undefined;
+      for (const record of session?.records() ?? []) {
+         this.tracer.debug(this.formatProfileRecord(record));
+      }
+   }
+
+   /**
+    * The log line of one extension's {@link reportProfile} entry. It names the
+    * language: each has its own session, and an extension id is unique only
+    * within its language.
+    */
+   protected formatProfileRecord(record: ProfileRecord): string {
+      const language = this.services.LanguageMetaData.languageId;
+      return `[profile scope-extension ${language}] ${record.id} ×${record.count} ${Format.elapsed(record.selfMs)}`;
    }
 }

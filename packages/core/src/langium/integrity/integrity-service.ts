@@ -157,9 +157,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    protected readonly tracer: Tracer;
    /**
     * The framework document builder, used to re-parse + re-link a document in place after a
-    * Linked-phase correction (see {@link resyncDocument}). The framework binds
-    * `shared.workspace.DocumentBuilder` to {@link HydraniumDocumentBuilder}; the narrowing
-    * cast surfaces its single-document phase runner.
+    * Linked-phase correction (see {@link resyncDocument}).
     */
    protected readonly documentBuilder: HydraniumDocumentBuilder;
 
@@ -170,7 +168,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       this.textDocuments = services.shared.workspace.TextDocuments;
       this.fileSystemProvider = services.shared.workspace.FileSystemProvider;
       this.tracer = services.shared.Tracer.for(options.logName ?? 'Integrity').trace('instantiated');
-      this.documentBuilder = services.shared.workspace.DocumentBuilder as HydraniumDocumentBuilder;
+      this.documentBuilder = services.shared.workspace.DocumentBuilder;
       this.syncMode = options.syncMode ?? 'silent';
 
       // Read the language's IntegrityRuleContribution group and let each

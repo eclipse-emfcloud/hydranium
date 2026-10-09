@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Clock, SystemClock } from '@hydranium/protocol';
 import * as fsp from 'node:fs/promises';
 
 /**
@@ -37,6 +38,7 @@ export const RENAME_BUDGET_MS = 10_000;
 export interface RenameOverOpenReadersOptions {
    readonly rename?: (from: string, to: string) => Promise<void>;
    readonly budgetMs?: number;
+   readonly clock?: Clock;
 }
 
 /**
@@ -60,18 +62,21 @@ export async function renameOverOpenReaders(
    options: RenameOverOpenReadersOptions = {}
 ): Promise<void> {
    const rename = options.rename ?? fsp.rename;
-   const deadline = Date.now() + (options.budgetMs ?? RENAME_BUDGET_MS);
+   const clock = options.clock ?? new SystemClock();
+   const deadline = clock.now() + (options.budgetMs ?? RENAME_BUDGET_MS);
    for (let attempt = 0; ; attempt++) {
       try {
          await rename(staging, destination);
          return;
       } catch (err: unknown) {
          const code = err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
-         if (code === undefined || !RENAME_CONTENTION_CODES.has(code) || Date.now() >= deadline) {
+         if (code === undefined || !RENAME_CONTENTION_CODES.has(code) || clock.now() >= deadline) {
             throw err;
          }
          // Backs off to keep a long contention window from spinning, capped so
          // a late attempt still lands promptly once the handle is released.
+         // Not `clock.setTimer`: it unrefs its timer, so a process with only
+         // this write pending could exit mid-backoff.
          await new Promise(resolve => setTimeout(resolve, Math.min(2 ** attempt, 50)));
       }
    }

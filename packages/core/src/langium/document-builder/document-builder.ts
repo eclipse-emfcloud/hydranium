@@ -139,6 +139,16 @@ export interface WaitUntilOptions {
    readonly rejectWhenStuck?: boolean;
 }
 
+/** What {@link HydraniumDocumentBuilder.onBuildEnded} tells a listener. */
+export interface BuildEndedEvent {
+   /**
+    * `true` once a build ran every phase, validating or not; `false` once the
+    * lock has drained after builds that threw, cancelled or failed, which
+    * share one event.
+    */
+   readonly completed: boolean;
+}
+
 /**
  * One locked build {@link HydraniumDocumentBuilder.scheduleUpdate} queued,
  * which later requests merge into while it waits and join while it runs.
@@ -261,7 +271,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    /** Registered through {@link onDocumentPhaseDelivered}, by phase. */
    protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, (document: LangiumDocument, version: number) => void>();
    /** Registered through {@link onBuildEnded}. */
-   protected readonly buildEndedListeners = new Set<(drained: boolean) => void>();
+   protected readonly buildEndedListeners = new Set<(event: BuildEndedEvent) => void>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
    /** Resolved per call: the sync service reaches this builder. */
@@ -326,17 +336,29 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    }
 
    /**
-    * Call `listener` with `drained` false once a build has run every phase
-    * ({@link buildDocuments}), and true once the lock has drained after a
-    * build that threw ({@link checkWaitsOnceDrained}); builds that throw
-    * before that drain share one call, so this does not count builds. A
-    * listener runs synchronously, inside the build or inside that check's lock
-    * read. A throw fails the finished build; in the read it skips the
-    * listeners after it and surfaces only as an unhandled rejection.
+    * Call `listener` when a build ends: once it has run every phase, which
+    * Langium's `onBuildPhase` cannot tell for a build that validates nothing,
+    * and once the lock has drained after builds that threw. Builds that throw
+    * before that drain share one call, so this does not count builds.
+    *
+    * A listener runs synchronously, inside the build or inside the lock read
+    * that waits for the drain, so it must not wait on a build. One that
+    * throws is logged and skipped; the build and the other listeners go on.
     */
-   protected onBuildEnded(listener: (drained: boolean) => void): Disposable {
+   onBuildEnded(listener: (event: BuildEndedEvent) => void): Disposable {
       this.buildEndedListeners.add(listener);
       return Disposable.create(() => this.buildEndedListeners.delete(listener));
+   }
+
+   /** Tell every {@link buildEndedListeners} entry, each in isolation. */
+   protected notifyBuildEnded(event: BuildEndedEvent): void {
+      for (const listener of [...this.buildEndedListeners]) {
+         try {
+            listener(event);
+         } catch (error: unknown) {
+            this.tracer.error(`A build-ended listener failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+         }
+      }
    }
 
    /**
@@ -524,15 +546,15 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                     }, 'awaitDocumentState.skipsValidation')
                  )
                : Disposable.create(() => undefined);
-         const buildEnded = (drained: boolean): void => {
+         const buildEnded = ({ completed }: BuildEndedEvent): void => {
             if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
                cleanup();
                resolve(uri);
-            } else if (drained ? this.activeSession === undefined : this.isOrphaned(document, state)) {
+            } else if (completed ? this.isOrphaned(document, state) : this.activeSession === undefined) {
                // No build is left to carry the document to `state`. Either
                // check fails only while an unlocked build still runs; that
                // build carries the document or ends here too.
-               requeue(drained ? 'build ended early' : 'build ended short of the target');
+               requeue(completed ? 'build ended short of the target' : 'build ended early');
             }
          };
          const buildDisposable = this.onBuildEnded(buildEnded);
@@ -784,14 +806,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       cancelToken: CancellationToken
    ): Promise<void> {
       await super.buildDocuments(documents, options, cancelToken);
-      for (const listener of [...this.buildEndedListeners]) {
-         listener(false);
-      }
+      this.notifyBuildEnded({ completed: true });
    }
 
    /**
     * After a build that threw, tell the {@link buildEndedListeners}, with
-    * `drained` set, from a {@link WorkspaceLock} read: it runs once no write
+    * `completed` false, from a {@link WorkspaceLock} read: it runs once no write
     * runs or is queued, so no locked build is left that could still carry a
     * waited-on document. A cancelled build is usually followed by its
     * canceller's, but a write that builds nothing, such as a release build
@@ -806,9 +826,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.drainCheckQueued = true;
       void this.workspaceLock.read(() => {
          this.drainCheckQueued = false;
-         for (const listener of [...this.buildEndedListeners]) {
-            listener(true);
-         }
+         this.notifyBuildEnded({ completed: false });
       });
    }
 
