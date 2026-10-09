@@ -85,8 +85,8 @@ display language in LSP `initialize`, so one switch changes the editor and the
 server's messages together. A headless caller passes `locale` in the options of
 `initializeWorkspaceProgrammatically` or `buildWorkspaceProgrammatically`, as a
 language tag such as `de-CH`; a POSIX spelling such as `de_DE`, as an
-environment variable holds it, matches no catalogue. A Theia backend serves every window at once, so it holds
-no locale and renders nothing itself.
+environment variable holds it, matches no catalogue. A Theia backend serves
+every window at once, so it holds no locale and renders nothing itself.
 
 ## What stays English
 

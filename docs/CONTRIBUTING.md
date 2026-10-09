@@ -17,9 +17,9 @@ The design behind what the adopter pages under
 - [**Client sessions**](contributing/design/client-sessions.md) — the full
   contract of a session on each head: when a write answers, how a reconnect
   restores, how editor saves and the release grace work.
-- [**The four document layers**](contributing/design/document-layers.md) — what the user
-  typed, what Langium built from it, what in-process consumers get, what
-  crosses the wire, and why the last two are different types.
+- [**The four document layers**](contributing/design/document-layers.md) — what
+  the user typed, what Langium built from it, what in-process consumers get,
+  what crosses the wire, and why the last two are different types.
 - [**Service placement and composition**](contributing/design/service-placement.md)
   — why each service sits on the shared or the per-language tier, and why
   composition has no framework layer over Langium's.
@@ -182,10 +182,11 @@ project's license: `MIT`.
 This project is hosted by the Eclipse Foundation, so contributing to it carries
 one requirement beyond that.
 
-- **Sign the [Eclipse Contributor Agreement](https://www.eclipse.org/legal/eca/).**
-  It is signed once, against an Eclipse Foundation account, and covers every
-  Eclipse project. The `eclipsefdn/eca` check resolves the author address of
-  each commit in a pull request to an Eclipse account and reports whether that
-  account has signed, so use the same address on the account as on your
-  commits — a mismatch is the usual reason a signatory's pull request is still
-  blocked. The check's status page lists the addresses it resolved.
+- **Sign the
+  [Eclipse Contributor Agreement](https://www.eclipse.org/legal/eca/).** It is
+  signed once, against an Eclipse Foundation account, and covers every Eclipse
+  project. The `eclipsefdn/eca` check resolves the author address of each commit
+  in a pull request to an Eclipse account and reports whether that account has
+  signed, so use the same address on the account as on your commits — a mismatch
+  is the usual reason a signatory's pull request is still blocked. The check's
+  status page lists the addresses it resolved.

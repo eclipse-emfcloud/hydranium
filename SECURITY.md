@@ -1,20 +1,28 @@
 # Security Policy
 
-This Eclipse Foundation Project adheres to the [Eclipse Foundation Vulnerability Reporting Policy](https://www.eclipse.org/security/policy/).
+This Eclipse Foundation Project adheres to the
+[Eclipse Foundation Vulnerability Reporting Policy](https://www.eclipse.org/security/policy/).
 
 ## How To Report a Vulnerability
 
-If you think you have found a vulnerability in this repository, please report it to us through coordinated disclosure.
+If you think you have found a vulnerability in this repository, please report it
+to us through coordinated disclosure.
 
-**Please do not report security vulnerabilities through public issues, discussions, or pull requests.**
+**Please do not report security vulnerabilities through public issues,
+discussions, or pull requests.**
 
-Instead, please create a [confidential issue](https://gitlab.eclipse.org/security/vulnerability-reports/-/issues/new?issuable_template=new_vulnerability) in the Eclipse Foundation Vulnerability Reporting Tracker.
+Instead, please create a
+[confidential issue](https://gitlab.eclipse.org/security/vulnerability-reports/-/issues/new?issuable_template=new_vulnerability)
+in the Eclipse Foundation Vulnerability Reporting Tracker.
 
-You can find more information about reporting and disclosure at the [Eclipse Foundation Security page](https://www.eclipse.org/security/).
+You can find more information about reporting and disclosure at the
+[Eclipse Foundation Security page](https://www.eclipse.org/security/).
 
-Please include as much of the information listed below as you can to help us better understand and resolve the issue:
+Please include as much of the information listed below as you can to help us
+better understand and resolve the issue:
 
-- The type of issue (e.g., prototype pollution, path traversal, or arbitrary code execution)
+- The type of issue (e.g., prototype pollution, path traversal, or arbitrary
+  code execution)
 - Affected package(s) and version(s)
 - Impact of the issue, including how an attacker might exploit it
 - Step-by-step instructions to reproduce the issue
@@ -27,13 +35,15 @@ This information will help us triage your report more quickly.
 ## Supported Versions
 
 Hydranium is **alpha and pre-v0**, and publishes to npm only as `1.0.0-next`
-prereleases, one on every merge to `main` that can change a published package. There are no stable release lines, and therefore no
-maintained older versions: fixes land on `main` and ship in the next release.
+prereleases, one on every merge to `main` that can change a published package.
+There are no stable release lines, and therefore no maintained older versions:
+fixes land on `main` and ship in the next release.
 
-Until the first stable release, every prerelease carries the `latest` dist-tag, and
-all `@hydranium/*` packages version in lockstep, so a fix is delivered by taking
-the current release of the whole set rather than by backporting to a branch. See
-[`docs/adopting/status.md`](docs/adopting/status.md) for the versioning policy.
+Until the first stable release, every prerelease carries the `latest` dist-tag,
+and all `@hydranium/*` packages version in lockstep, so a fix is delivered by
+taking the current release of the whole set rather than by backporting to a
+branch. See [`docs/adopting/status.md`](docs/adopting/status.md) for the
+versioning policy.
 
 ## Scope
 

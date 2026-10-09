@@ -10,11 +10,11 @@ Heads: GLSP · LSP · data
 
 The framework supplies the lifecycle around a diagram, but the adopter owns the
 diagram language, GModel factory, source storage, operation handlers, and
-configuration. `AbstractHydraniumGlspDiagramModule` is the per-diagram seam;
-the app module is process-wide. The recording command turns an AST mutation into
-a shared-model update, so the LSP and data heads observe the same write. See
-[GLSP server](../../packages/glsp-server/README.md) and [Host in a browser](host-in-a-browser.md)
-for host-specific bring-up.
+configuration. `AbstractHydraniumGlspDiagramModule` is the per-diagram seam; the
+app module is process-wide. The recording command turns an AST mutation into a
+shared-model update, so the LSP and data heads observe the same write. See
+[GLSP server](../../packages/glsp-server/README.md) and
+[Host in a browser](host-in-a-browser.md) for host-specific bring-up.
 
 ## Steps
 

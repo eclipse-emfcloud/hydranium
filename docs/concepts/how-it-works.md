@@ -38,7 +38,8 @@ coordinate only through the shared workspace, so yours needs no protocol to the
 others.
 
 Add heads to the one process; do not start a second process on the same
-workspace: [one process writes a workspace](../adopting/status.md#one-process-writes-a-workspace).
+workspace:
+[one process writes a workspace](../adopting/status.md#one-process-writes-a-workspace).
 
 ## The shared workspace
 

@@ -10,8 +10,8 @@
 
 /**
  * The documentation gate: relative links and anchors resolve, every page is
- * reachable from an index, and versions, dates, measurements, history and line
- * references do not spread through prose.
+ * reachable from an index, prose is wrapped, and versions, dates, measurements,
+ * history and line references do not spread through prose.
  *
  * Rot and unreachable pages are held by a ratchet, not a ban: the baseline
  * records today's count per page and category, a rise fails, and a fall fails
@@ -128,6 +128,31 @@ export function anchorsOf(text: string): Set<string> {
    return anchors;
 }
 
+const WRAP_COLUMN = 80;
+const LINE_PREFIX = /^\s*(?:>\s*)*(?:[-*+]\s+|\d+[.)]\s+)?/;
+const UNBREAKABLE = /!?\[[^\]]*\]\([^)]*\)|`+[^`]*`+/g;
+
+/**
+ * Prose lines past the wrap column that could be broken. A line may run long
+ * only when, after its list or quote marker, it is one unbreakable piece: a
+ * link, a code span or a single word. Tables, headings, HTML and comment
+ * blocks are not prose.
+ */
+export function overlongLines(text: string): number[] {
+   const overlong: number[] = [];
+   let inComment = false;
+   for (const { line, text: raw } of proseLines(text)) {
+      if (inComment || raw.trimStart().startsWith('<!--')) {
+         inComment = !raw.includes('-->');
+         continue;
+      }
+      if (raw.length <= WRAP_COLUMN || /^\s*(?:\||#|<)/.test(raw)) continue;
+      const content = raw.replace(LINE_PREFIX, '').replace(UNBREAKABLE, piece => piece.replace(/\s/g, '_'));
+      if (/\s/.test(content.trimEnd())) overlong.push(line);
+   }
+   return overlong;
+}
+
 /** Relative link targets in prose; code spans and fenced code are text, not links. */
 export function linksOf(text: string): { line: number; target: string }[] {
    const links: { line: number; target: string }[] = [];
@@ -234,6 +259,26 @@ function runSelfTests(): boolean {
       { name: 'a relative link is found', passed: linksOf('[x](../a.md#b)\n')[0]?.target === '../a.md#b' },
       { name: 'a reference definition is found', passed: linksOf('[x]: ../a.md\n')[0]?.target === '../a.md' },
       { name: 'a footnote is not a link', passed: linksOf('[^1]: Capitalized terms\n').length === 0 },
+      { name: 'a long line of words is over-long', passed: overlongLines(`${'word '.repeat(20)}\n`).join() === '1' },
+      { name: 'words before a long link are over-long', passed: overlongLines(`See [the page](${LONG_TARGET}).\n`).join() === '1' },
+      { name: 'a long link alone may run long', passed: overlongLines(`- [The page title](${LONG_TARGET}).\n`).length === 0 },
+      { name: 'a long code span alone may run long', passed: overlongLines(`  \`npx ${'flag '.repeat(18)}\`\n`).length === 0 },
+      {
+         name: 'tables, headings, HTML, comments and fences are not prose',
+         passed:
+            overlongLines(
+               [
+                  `| ${'cell '.repeat(20)} |`,
+                  `## ${'word '.repeat(20)}`,
+                  `<img alt="${'word '.repeat(20)}">`,
+                  '<!--',
+                  'word '.repeat(20),
+                  '-->'
+               ]
+                  .concat(['```', 'word '.repeat(20), '```'])
+                  .join('\n')
+            ).length === 0
+      },
       ...ROT_PATTERNS.map(({ category }) => ({
          name: `a ${category} hit is counted`,
          passed: (rotCounts('docs/probe.md', ROT_FIRES[category]).get(category) ?? 0) > 0
@@ -280,6 +325,9 @@ const ROT_FIRES: Record<Exclude<Category, 'unreachable'>, string> = {
    history: 'This used to write the whole workspace.',
    'line-reference': 'As set up in scratch-workspace.ts:88.'
 };
+
+/** A link target too long to fit the wrap column on its own. */
+const LONG_TARGET = `https://example.org/${'segment/'.repeat(10)}page.md#anchor`;
 
 /** Near misses that must count as nothing, each a shape the docs use for the present. */
 const ROT_SILENT = [
@@ -328,6 +376,14 @@ for (const [page, text] of texts) {
       }
    }
    linkGraph.set(page, targets);
+}
+
+for (const [page, text] of texts) {
+   if (ROT_EXEMPT.has(page) || page === SCAFFOLD_README) continue;
+   for (const line of overlongLines(text)) {
+      failed = true;
+      console.error(`✗ ${page}:${line}: prose runs past column ${WRAP_COLUMN} — wrap it; only a lone link, code span or word may run long`);
+   }
 }
 
 const current: Counts = {};
