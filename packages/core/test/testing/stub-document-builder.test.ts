@@ -229,6 +229,20 @@ describe('makeStubDocumentBuilder — phase and update dispatch', () => {
 
       expect(seen).toEqual([[URI_ONE.toString(), `-${URI_TWO.toString()}`]]);
    });
+
+   it('goes on past a build-ended listener that throws, then rethrows its error', () => {
+      const builder = makeStubDocumentBuilder();
+      const seen: boolean[] = [];
+      builder.onBuildEnded(() => {
+         throw new Error('listener bug');
+      });
+      builder.onBuildEnded(event => seen.push(event.completed));
+
+      // The real builder logs the error; the stub has no logger, so the test
+      // that fired the event is where the error has to surface.
+      expect(() => builder.fireBuildEnded({ completed: true })).toThrow('listener bug');
+      expect(seen).toEqual([true]);
+   });
 });
 
 describe('makeStubDocumentBuilder — the members it declares but does not implement', () => {

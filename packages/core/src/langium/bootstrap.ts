@@ -311,16 +311,18 @@ export function warnOnUnexpectedBindings(shared: LangiumSharedServices, language
  *   dispatch every build-phase pass and drive AST enrichment, and
  *   registers the framework integrity passes itself. The per-language
  *   feature services it routes to (`ast.AstExtensionService` +
- *   `integrity.IntegrityService`, plus `references.ScopeExtensionService`
- *   read by the scope provider) hold the registries and the logic but own
+ *   `integrity.IntegrityService`) hold the registries and the logic but own
  *   no listeners, so they need not be eager: each language's services
- *   construct lazily when the orchestrator (or scope provider) first
- *   reaches them, and their constructors register that language's rules /
- *   extensions just-in-time.
- * - **`profilers.LangiumProfiler`** — self-registers a `Validated`
- *   BuildPhasePass that flushes the aggregated parse/link/validate profile
- *   once per build. No production cost (the profiler is trace-gated), but
- *   the pass must be registered up front.
+ *   construct lazily when the orchestrator first reaches them, and their
+ *   constructors register that language's rules / extensions just-in-time.
+ *   `references.ScopeExtensionService`, read by the scope provider, does
+ *   subscribe to the builder, but only to report its own calls, so
+ *   constructing it at its first call misses none.
+ * - **`profilers.LangiumProfiler`** — subscribes to
+ *   `documentBuilder.onBuildEnded` to flush the aggregated
+ *   parse/link/validate profile once per build. No production cost (the
+ *   profiler is trace-gated), but the listener must be attached before the
+ *   first build ends.
  * - **`workspace.CstResidencyService`** — self-registers a `Validated`
  *   BuildPhasePass that sheds the CST of closed documents. The framework
  *   default strategy is `always-keep`, so the pass runs but sheds nothing

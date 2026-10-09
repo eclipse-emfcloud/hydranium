@@ -17,7 +17,17 @@ import {
    SyntheticStep,
    type SyntheticSource
 } from '@hydranium/protocol';
-import { type AstNode, type AstReflection, MapScope, type Scope, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   type AstNodeDescription,
+   type AstReflection,
+   EMPTY_SCOPE,
+   MapScope,
+   type ReferenceInfo,
+   type Scope,
+   type ScopeOptions,
+   URI
+} from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
@@ -48,7 +58,7 @@ const STUB_TYPE_META: Record<string, { name: string; properties: Record<string, 
  * virtual hooks (`resolveSyntheticSource`, `resolveRootElement`,
  * `resolveElementByName`), not the scope chain itself.
  */
-function makeStubServices(): HydraniumLanguageServices {
+function makeStubServices(scopeExtensionService: unknown = {}): HydraniumLanguageServices {
    const documentBuilderStub = {
       onUpdate: () => Disposable.EMPTY,
       onBuildPhase: () => Disposable.EMPTY
@@ -63,7 +73,7 @@ function makeStubServices(): HydraniumLanguageServices {
       LanguageMetaData: { languageId: 'stub-language', fileExtensions: ['.stub'] },
       references: {
          NameProvider: { getName: () => undefined, getNameNode: () => undefined },
-         ScopeExtensionService: {}
+         ScopeExtensionService: scopeExtensionService
       },
       workspace: {
          AstNodeDescriptionProvider: {
@@ -359,10 +369,7 @@ describe('HydraniumScopeProvider', () => {
       return {
          references: {
             NameProvider: { getName: () => undefined, getNameNode: () => undefined, nameSeparator: '.' },
-            ScopeExtensionService: {
-               getLocalExtensionScope: (_t: string, _c: AstNode, outer: Scope) => outer,
-               getUniversalExtensionScope: (_t: string, _c: AstNode, outer: Scope) => outer
-            }
+            ScopeExtensionService: { getDescriptions: () => ({ local: [], universal: [] }) }
          },
          workspace: {
             AstNodeLocator: { getAstNode: () => undefined },
@@ -496,5 +503,86 @@ describe('HydraniumScopeProvider', () => {
          // that walks a declared list finds it present and empty.
          expect((result as AstNode & { entries?: unknown[] }).entries).toEqual([]);
       });
+   });
+});
+
+describe('HydraniumScopeProvider — extension tiers', () => {
+   /** Answers a fixed project scope, so only the extension layering is under test. */
+   class ExtensionLayeringProvider extends HydraniumScopeProvider {
+      projectScope: Scope = EMPTY_SCOPE;
+      createScopeCalls = 0;
+
+      protected override createGlobalScope(): Scope {
+         return this.projectScope;
+      }
+
+      protected override createScope(elements: Iterable<AstNodeDescription>, outerScope?: Scope, options?: ScopeOptions): Scope {
+         this.createScopeCalls++;
+         return super.createScope(elements, outerScope, options);
+      }
+
+      globalScope(): Scope {
+         const context = { reference: { $refText: 'name' }, container: makeFakeAstNode({ $type: 'Container' }), property: 'ref' };
+         return this.getGlobalScope('Fake', context as unknown as ReferenceInfo);
+      }
+   }
+
+   function extensionDescription(name: string): TieredAstNodeDescription {
+      return makeFakeDescription(name, { type: 'Extension' }) as unknown as TieredAstNodeDescription;
+   }
+
+   function makeProvider(local: string[], universal: string[]) {
+      const asked = { count: 0 };
+      const provider = new ExtensionLayeringProvider(
+         makeStubServices({
+            getDescriptions: () => {
+               asked.count++;
+               return { local: local.map(extensionDescription), universal: universal.map(extensionDescription) };
+            }
+         })
+      );
+      return { provider, asked };
+   }
+
+   it('collects the extensions once for both tiers', () => {
+      const { provider, asked } = makeProvider(['localSym'], ['stdSym']);
+      provider.globalScope();
+      expect(asked.count).toBe(1);
+   });
+
+   it('puts the local tier above the project scope, built through createScope', () => {
+      const { provider } = makeProvider(['collide'], []);
+      provider.projectScope = new MapScope([makeFakeDescription('collide', { type: 'Project' })]);
+      expect(provider.globalScope().getElement('collide')?.type).toBe('Extension');
+      expect(provider.createScopeCalls).toBe(1);
+   });
+
+   it('puts the universal tier below the project scope', () => {
+      const { provider } = makeProvider([], ['collide', 'stdSym']);
+      provider.projectScope = new MapScope([makeFakeDescription('collide', { type: 'Project' })]);
+      const scope = provider.globalScope();
+      expect(scope.getElement('collide')?.type).toBe('Project');
+      expect(scope.getElement('stdSym')?.type).toBe('Extension');
+   });
+
+   it('builds the universal tier through createScope as well', () => {
+      const { provider } = makeProvider([], ['stdSym']);
+      provider.globalScope();
+      expect(provider.createScopeCalls).toBe(1);
+   });
+
+   it('resolves two universal descriptions of one name to the first, as the local tier does', () => {
+      const universal = [
+         makeFakeDescription('dup', { type: 'First' }) as unknown as TieredAstNodeDescription,
+         makeFakeDescription('dup', { type: 'Second' }) as unknown as TieredAstNodeDescription
+      ];
+      const provider = new ExtensionLayeringProvider(makeStubServices({ getDescriptions: () => ({ local: [], universal }) }));
+      expect(provider.globalScope().getElement('dup')?.type).toBe('First');
+   });
+
+   it('returns the project scope itself when no extension contributes', () => {
+      const { provider } = makeProvider([], []);
+      provider.projectScope = new MapScope([makeFakeDescription('only', { type: 'Project' })]);
+      expect(provider.globalScope()).toBe(provider.projectScope);
    });
 });

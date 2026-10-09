@@ -23,6 +23,7 @@ import type { ProjectManager } from './project/project-manager.js';
 import type { ExtendedServiceRegistry } from './service-registry.js';
 import type { DocumentUriPolicy } from './workspace/document-uri-policy.js';
 import type { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
+import type { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
 import type { AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 
 /**
@@ -94,6 +95,10 @@ export interface ServerSharedServicesMinimal<TProject extends Project = Project>
       // only through this narrowing — a scope provider querying a URI before
       // the file exists is the caller that needs it.
       /* override */ LangiumDocuments: HydraniumDocumentRegistry;
+      // Same, for the builder: only the framework's has `onBuildEnded`, which a
+      // per-build report needs because Langium's phases stay silent for a
+      // build that validates nothing.
+      /* override */ DocumentBuilder: HydraniumDocumentBuilder;
       ProjectManager: ProjectManager<TProject>;
       SelfSaveRegistry: SelfSaveRegistry;
       BuildPipelineIntegration: BuildPipelineIntegration;

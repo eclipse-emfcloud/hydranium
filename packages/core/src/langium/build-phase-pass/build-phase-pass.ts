@@ -102,7 +102,7 @@ export function groupDocumentsByLanguage<TLanguage extends LangiumCoreServices>(
  * Registry handed to a {@link BuildPhasePassContribution}. Implemented by the
  * `BuildPhasePassService`; doubles
  * as the low-level imperative API the framework uses to self-register its own
- * passes (integrity, the Langium profiler flush).
+ * passes (integrity, CST residency).
  */
 export interface BuildPhasePassRegistry {
    register(pass: BuildPhasePass): Disposable;

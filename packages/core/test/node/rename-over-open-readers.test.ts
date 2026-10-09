@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
 import { RENAME_CONTENTION_CODES, renameOverOpenReaders } from '../../src/node/rename-over-open-readers.js';
 
@@ -35,17 +36,26 @@ describe('renameOverOpenReaders', () => {
    for (const code of RENAME_CONTENTION_CODES) {
       it(`retries past a transient ${code} and resolves`, async () => {
          const stub = failing(2, code);
-         await expect(renameOverOpenReaders('from', 'to', { rename: stub.rename, budgetMs: 1_000 })).resolves.toBeUndefined();
+         // A clock that never moves, so no runner is slow enough to spend the budget.
+         const clock = makeFakeClock();
+         await expect(renameOverOpenReaders('from', 'to', { rename: stub.rename, budgetMs: 1_000, clock })).resolves.toBeUndefined();
          expect(stub.calls()).toBe(3);
       });
    }
 
    it('rethrows the last failure once the budget is spent, rather than hanging', async () => {
       const stub = failing(Number.MAX_SAFE_INTEGER, 'EPERM');
-      await expect(renameOverOpenReaders('from', 'to', { rename: stub.rename, budgetMs: 25 })).rejects.toThrow(/EPERM/);
-      // More than one call is the whole claim: a budget that rethrew on the
-      // first failure would pass a bare "it rejects" assertion.
-      expect(stub.calls()).toBeGreaterThan(1);
+      const clock = makeFakeClock();
+      // Each attempt takes 10ms of virtual time: those ending at 10 and 20
+      // are inside the 25ms budget, the one ending at 30 is not.
+      const rename = async (): Promise<void> => {
+         clock.advance(10);
+         await stub.rename();
+      };
+      await expect(renameOverOpenReaders('from', 'to', { rename, budgetMs: 25, clock })).rejects.toThrow(/EPERM/);
+      // Exactly three is the whole claim: a budget that rethrew on the first
+      // failure would pass a bare "it rejects" assertion.
+      expect(stub.calls()).toBe(3);
    });
 
    it('rethrows an errno outside the contention set immediately', async () => {
