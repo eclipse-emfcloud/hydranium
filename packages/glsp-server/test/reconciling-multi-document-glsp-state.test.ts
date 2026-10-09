@@ -80,8 +80,12 @@ interface Harness {
    readonly sessionCalls: string[];
    /** URI whose next write set fails with a `ConflictError`, once. */
    conflictOn: string | undefined;
-   /** Error the next write set fails with, once. */
+   /** Error the next write set fails with, once, before anything applies. */
    failNextWrite: Error | undefined;
+   /** Error the next write set fails with, once, after applying every text, as a failed rebuild does. */
+   failNextWriteAfterApply: Error | undefined;
+   /** Whether another client writes a created document before its creator resumes. */
+   writeAfterCreate: boolean;
    nextUpdatedRoot: TestRoot;
    /** Roots `ModelService.validated` answers with, by URI. Absent → rejects. */
    readonly validated: Map<string, TestRoot>;
@@ -130,6 +134,22 @@ class CreatingSecondaryState extends TestMultiState {
    }
 }
 
+/** Creates every secondary it writes, and closes each one a failed write created. */
+@injectable()
+class AlwaysClosingState extends CreatingSecondaryState {
+   protected override closesCreatedDocument(): boolean {
+      return true;
+   }
+}
+
+/** Creates every secondary it writes, with a close rule that throws. */
+@injectable()
+class ThrowingRuleState extends CreatingSecondaryState {
+   protected override closesCreatedDocument(): boolean {
+      throw new Error('rule broke');
+   }
+}
+
 /** Forces secondary writes through the hook. */
 @injectable()
 class ForcedSecondaryState extends TestMultiState {
@@ -147,6 +167,8 @@ function makeHarness(): Harness {
       sessionCalls: [],
       conflictOn: undefined,
       failNextWrite: undefined,
+      failNextWriteAfterApply: undefined,
+      writeAfterCreate: false,
       nextUpdatedRoot: makeRoot('updated'),
       validated: new Map(),
       store: new Map(),
@@ -235,11 +257,15 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
       async open(uri: string): Promise<void> {
          harness.sessionCalls.push(`open ${uri}`);
       },
+      async close(uri: string): Promise<void> {
+         harness.sessionCalls.push(`close ${uri}`);
+      },
       async create(uri: string, text: string): Promise<number> {
          harness.sessionCalls.push(`create ${uri}`);
          harness.store.set(uri, { version: 5, text });
-         // Another client's write, landing before the creator resumes.
-         queueMicrotask(() => harness.store.set(uri, { version: 6, text: 'theirs' }));
+         if (harness.writeAfterCreate) {
+            queueMicrotask(() => harness.store.set(uri, { version: 6, text: 'theirs' }));
+         }
          return 5;
       },
       async updateAll(args: { updates: UpdateEntry[] }): Promise<{ root: TestRoot }[]> {
@@ -254,6 +280,14 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
          if (conflicted) {
             harness.conflictOn = undefined;
             throw new ConflictError(conflicted.uri, asModelVersion(1), 2);
+         }
+         const afterApply = harness.failNextWriteAfterApply;
+         harness.failNextWriteAfterApply = undefined;
+         if (afterApply) {
+            for (const update of args.updates) {
+               harness.store.set(update.uri, { version: (harness.store.get(update.uri)?.version ?? 0) + 1, text: 'written' });
+            }
+            throw afterApply;
          }
          return args.updates.map(update => ({ root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri) }));
       }
@@ -457,6 +491,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
       it('gates a secondary created for the write on the version it was created at', async () => {
          const harness = makeHarness();
+         harness.writeAfterCreate = true;
          seed(harness, DIAGRAM_URI, 'diagram', 4);
          const state = createState(harness, CreatingSecondaryState);
          state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
@@ -472,6 +507,111 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll']);
          expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual([5]);
+      });
+
+      it('closes a secondary it created for a write that fails', async () => {
+         // Left open, the created document would be written by the diagram's next save.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness, CreatingSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('disk full');
+         expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll', `close ${SEMANTIC_URI}`]);
+      });
+
+      it('keeps a created secondary open when the write set fails after applying, so the text written to it stays', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWriteAfterApply = new Error('no document after the build');
+         const state = createState(harness, CreatingSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('no document after the build');
+         expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll']);
+      });
+
+      it('closes what an override of the close rule accepts, though the write set failed after applying', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWriteAfterApply = new Error('no document after the build');
+         const state = createState(harness, AlwaysClosingState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('no document after the build');
+         expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll', `close ${SEMANTIC_URI}`]);
+      });
+
+      it('keeps the write error when the close rule throws, and warns', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness, ThrowingRuleState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('disk full');
+         expect(harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`))).toHaveLength(1);
+      });
+
+      it('keeps the write error when closing the created secondary fails, and warns', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness, CreatingSecondaryState);
+         // As a disposed session does: throw at once, not reject.
+         (state.modelSession as unknown as { close(uri: string): Promise<void> }).close = () => {
+            throw new Error('session disposed');
+         };
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('disk full');
+         expect(harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`))).toHaveLength(1);
       });
 
       it('keeps the primary based on the root it holds when a secondary-only write follows a foreign build of the primary', async () => {
@@ -646,6 +786,8 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             )
          ).rejects.toThrow('disk full');
          expect(harness.updateAllCalls).toHaveLength(1);
+         // A document the write only opened is not the write's to close.
+         expect(harness.sessionCalls.filter(call => call.startsWith('close'))).toEqual([]);
       });
 
       it('refuses to write without a session, rather than writing under an id it does not hold', async () => {
