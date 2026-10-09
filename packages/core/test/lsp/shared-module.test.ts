@@ -112,11 +112,11 @@ describe('createLspServerSharedModule', () => {
       expect(files.providerFor(URI.parse('file:///a.a'))).toBeInstanceOf(DefaultEmptyFileSystemProvider);
    });
 
-   it('replaces server-core NoopLogger with a real one on the Logger slot', () => {
+   it('replaces core NoopLogger with a real one on the Logger slot', () => {
       // Without this binding the framework's Logger implementation, the
       // `HYDRANIUM_LOG_LEVEL` / `HYDRANIUM_LOG_FILE` env baselines, the file
       // tee and the `hydranium-cli --log-level` flag are all unwired:
-      // server-core defaults `Logger` to `NoopLogger`, so the head is silent
+      // core defaults `Logger` to `NoopLogger`, so the head is silent
       // and the env is never even read (it is read in `LspLogger`'s
       // constructor).
       expect(composeShared().Logger).toBeInstanceOf(LspLogger);

@@ -36,11 +36,9 @@ import { Diagnostic } from 'vscode-languageserver-protocol';
  * put it: an encoder projecting that payload reads `diagnostic.data`, so the
  * narrower type made the identity and the companion mutually exclusive.
  *
- * The identity lands in both `code` and `data.hydranium` on purpose. `code` is
- * what survives to the editor surface; Theia's converter drops `data` before the
- * squiggle, so a parameterised diagnostic falls back to the server's English
- * there while any adopter-owned surface can still render the parameterised form
- * from the marker store.
+ * The identity lands in both `code` and `data.hydranium` on purpose: Theia's
+ * converter drops `data` before the squiggle, so `code` is what survives to the
+ * editor surface.
  *
  * `DiagnosticInfo` must be Langium's own type: a `Parameters<ValidationAcceptor>[2]`
  * shortcut compiles but loses the `property?: Properties<N>` relation. The `data`

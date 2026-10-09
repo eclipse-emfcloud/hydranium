@@ -114,6 +114,19 @@ guard. Upstream types are guarded in upstream style
 (`ChangeBoundsOperation.is`). Prefer a guard to a structural cast, which
 asserts a shape nobody checks; nothing lints this.
 
+**`as*` casts, `to*` converts.** `asFoo(x)` returns its argument unchanged
+under another type, a brand or a mutable view (`asCanonicalUri`, `asMutable`),
+and checks nothing; `toFoo(x)` computes a new value of another type
+(`toLanguageClientUri`, `toTransfer`). A reader can then tell from the name
+whether a call does work or only asserts a type nobody checked.
+
+**`Client` is any client; `LanguageClient` is the LSP textual one.** A member
+name that says `Client` takes a `clientId` or spans every client
+(`isOpenInAnyClient`, `onClientClosed`); one specific to the LSP textual
+client, its shadow, its `applyEdit` channel or its URI space, says
+`LanguageClient` (`isOpenInLanguageClient`, `setLanguageClientText`), so a
+reader never has to guess which client a bare `Client` means.
+
 **`*Protocol`** names a typed multi-method interface the framework owns that
 lowers method by method to JSON-RPC, which is the data head's. Fragments carry
 the role (`DocumentServerProtocol`, `DocumentClientProtocol`), compositions

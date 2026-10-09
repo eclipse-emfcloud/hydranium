@@ -45,8 +45,11 @@ export const CST_RESIDENCY_PASS_PRIORITY = 1_000_000;
  *   "off" toggle.
  * - `{ kind: 'shed-closed-when-idle', idleMs }`: shed a closed document's CST
  *   once it has been idle (not in any build) for `idleMs`, keeping the AST
- *   resident. Open documents are always kept. `idleMs: 0` sheds as soon as a
- *   document is closed (a pure close-triggered threshold of this strategy).
+ *   resident. Open documents are always kept. The timer starts when a build
+ *   includes the document, so `idleMs: 0` sheds a closed document on the tick
+ *   after each such build. A shed document that re-enters a build is re-parsed
+ *   in full, so a window shorter than the gap between a document's builds
+ *   re-parses a closed document on every build it rides in.
  */
 export type CstResidencyStrategy = { readonly kind: 'always-keep' } | { readonly kind: 'shed-closed-when-idle'; readonly idleMs: number };
 

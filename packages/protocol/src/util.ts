@@ -146,12 +146,6 @@ export function asMutable<T>(item: T): Mutable<T> {
    return item;
 }
 
-/** Type-guard variant: narrows `item` to `Mutable<T> | undefined` if `guard` accepts it. */
-export function toMutable<T>(item: unknown, guard: TypeGuard<T>): item is Mutable<T> | undefined;
-export function toMutable<T>(item: unknown, guard?: TypeGuard<T>): item is Mutable<T> | undefined {
-   return guard ? guard(item) : true;
-}
-
 /**
  * Wrap `text` in `quoteChar`, escaping interior occurrences with `replaceChar`.
  *

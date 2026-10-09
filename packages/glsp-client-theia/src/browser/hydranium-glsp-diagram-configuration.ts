@@ -22,7 +22,9 @@ import { NoOpExternalMarkerManager } from './diagram-only-marker-manager.js';
  * **When to suppress.** A head with a co-resident LSP that publishes its
  * diagnostics over standard LSP `publishDiagnostics` would otherwise list each
  * error twice: GLSP's `TheiaMarkerManager` pushes the *same* errors again under
- * a different marker owner, and Theia shows the union across owners. The GLSP
+ * a different marker owner, and Theia shows the union across owners. One shared
+ * owner would not merge them either: each write replaces that owner's markers
+ * for the file, so the two heads would overwrite each other's. The GLSP
  * path is also open-diagram-scoped (markers clear when the diagram closes), so
  * for such a head it cannot reproduce the LSP head's persistent, cross-file
  * Problems entries — it is only ever a flickering duplicate. A graphical-only

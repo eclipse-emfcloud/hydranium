@@ -13,7 +13,7 @@
  * breaks adopter implementations or violates the documented invariants, the
  * file fails to typecheck and the runtime assertions are never reached.
  *
- * They live in server-core rather than beside the protocol package's own suite
+ * They live in core rather than beside the protocol package's own suite
  * because the fake implementation is built with `makeFakeAstNode` from
  * `@hydranium/core/testing`, and protocol cannot depend on core without
  * inverting the package graph.
