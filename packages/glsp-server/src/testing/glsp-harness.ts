@@ -175,10 +175,11 @@ export interface GlspHarness<TState extends AbstractHydraniumGlspState<AstNode, 
    /** Send an action to the server as `{ clientId, action }`. Fire-and-forget (GLSP `process` is `void`). */
    dispatch(action: Action): void;
    /**
-    * Resolve with the next captured action whose `kind` matches — an
-    * already-captured-but-unconsumed match resolves immediately, otherwise
-    * waits for the next arrival. Rejects after `timeoutMs` (default 2000) so
-    * a missing action fails fast instead of hanging.
+    * Resolve with the next action whose `kind` matches and that arrived after
+    * the last {@link dispatch}, or since {@link start} before any. One already
+    * captured and unconsumed resolves immediately, otherwise the next arrival
+    * wins. An earlier action is read from {@link actions}. Rejects after
+    * `timeoutMs` (default 2000) so a missing action fails fast.
     */
    nextAction<T extends Action = Action>(kind: string, timeoutMs?: number): Promise<T>;
    /**
@@ -198,7 +199,8 @@ export interface GlspHarness<TState extends AbstractHydraniumGlspState<AstNode, 
    openDocument(sourceUri: string, timeoutMs?: number): Promise<Action>;
    /**
     * Resolve with the next action that publishes a model — the settling point
-    * after an operation, since a successful operation re-submits.
+    * after an operation, since a successful operation re-submits. Matches as
+    * {@link nextAction} does, only after the last dispatch.
     *
     * Kind-agnostic for the same reason as {@link openDocument}. Set
     * `rejectOnTimeout: false` to ask whether a submission happened *at all*.
@@ -259,6 +261,8 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
 
    const actions: Action[] = [];
    const consumed = new WeakSet<Action>();
+   // Where the last dispatch fell in `actions`; a wait matches only from here.
+   let dispatchedAt = 0;
    const waiters: PendingWaiter[] = [];
 
    const captureProxy: GLSPClientProxy = {
@@ -276,8 +280,9 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
    };
 
    /**
-    * Resolve with the first unconsumed action matching any of `kinds` — one
-    * already captured resolves immediately, otherwise the next arrival wins.
+    * Resolve with the first unconsumed action matching any of `kinds` since the
+    * last dispatch — one already captured resolves immediately, otherwise the
+    * next arrival wins.
     *
     * `rejectOnTimeout` is what lets a caller distinguish the two questions a
     * test asks. `true` (the default) is "this must happen", and a timeout is a
@@ -287,7 +292,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
     * `ActionDispatcher.requestUntil(action, timeoutMs, rejectOnTimeout)`.
     */
    function waitFor(kinds: ReadonlyArray<string>, timeoutMs: number, rejectOnTimeout: boolean): Promise<Action | undefined> {
-      const existing = actions.find(action => kinds.includes(action.kind) && !consumed.has(action));
+      const existing = actions.find((action, index) => index >= dispatchedAt && kinds.includes(action.kind) && !consumed.has(action));
       if (existing) {
          consumed.add(existing);
          return Promise.resolve(existing);
@@ -309,8 +314,19 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
                   // Distinguishing "nothing happened" from "something else
                   // happened" is the difference between a five-minute hunt and a
                   // one-line diagnosis.
-                  const seen = actions.map(captured => captured.kind);
-                  const context = seen.length === 0 ? 'no actions were captured at all' : `captured since start: ${seen.join(', ')}`;
+                  // Split at the last dispatch, since a wait matches only what
+                  // came after it: an earlier match is no answer to this one.
+                  const kindsIn = (from: number, to?: number): string =>
+                     actions
+                        .slice(from, to)
+                        .map(captured => captured.kind)
+                        .join(', ') || 'nothing';
+                  const context =
+                     actions.length === 0
+                        ? 'no actions were captured at all'
+                        : dispatchedAt === 0
+                          ? `captured since start: ${kindsIn(0)}`
+                          : `captured before the last dispatch, which a wait does not match: ${kindsIn(0, dispatchedAt)}; since: ${kindsIn(dispatchedAt)}`;
                   reject(
                      new Error(
                         `makeGlspHarness: no ${kinds.map(kind => `'${kind}'`).join(' / ')} action within ${timeoutMs}ms — ${context}`
@@ -397,6 +413,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
       },
 
       dispatch(action: Action): void {
+         dispatchedAt = actions.length;
          server.process({ clientId: clientSessionId, action });
       },
 
@@ -408,6 +425,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
          if (!state) {
             throw new Error('makeGlspHarness: openDocument() is only valid after start()');
          }
+         dispatchedAt = actions.length;
          server.process({
             clientId: clientSessionId,
             action: RequestModelAction.create({ options: { [SOURCE_URI_ARG]: sourceUri } })

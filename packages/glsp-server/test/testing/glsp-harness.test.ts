@@ -46,6 +46,7 @@ import { type AstNode } from '@hydranium/langium';
 import { DefaultModelLedger, type ElementKeyProvider, type ServerSharedServices } from '@hydranium/core';
 import { makeStubServiceRegistry } from '@hydranium/core/testing';
 import { ReconcilingConflictResolver } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { HydraniumGlspIndex } from '../../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../../src/state/hydranium-shared-core-services.js';
@@ -362,6 +363,24 @@ describe('makeGlspHarness', () => {
          await harness.nextAction(UpdateModelAction.KIND);
 
          expect(harness.state.sourceRoot.nodes.length).toBe(before + 1);
+      } finally {
+         harness.dispose();
+      }
+   });
+
+   it('waits only for an action that arrived after the last dispatch', async () => {
+      const harness = makeFixtureHarness();
+      try {
+         await harness.start();
+         harness.dispatch(RequestModelAction.create());
+         await waitFor(() => harness.actions.some(action => SetModelAction.is(action)));
+
+         harness.dispatch(CreateNodeOperation.create(TEST_NODE_TYPE));
+         // The load's setModel arrived before this dispatch, so it is no answer to it.
+         await expect(harness.nextModelSubmission()).resolves.toMatchObject({ kind: UpdateModelAction.KIND });
+         await expect(harness.nextAction(SetModelAction.KIND, 50)).rejects.toThrow(
+            /no 'setModel' action within 50ms — captured before the last dispatch, which a wait does not match: .*setModel.*; since: .*updateModel/
+         );
       } finally {
          harness.dispose();
       }
