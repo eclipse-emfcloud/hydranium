@@ -10,8 +10,9 @@
 import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable } from 'inversify';
-import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, URI } from '@hydranium/langium';
+import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, type ReferenceInfo, URI } from '@hydranium/langium';
 import {
+   buildAstNode,
    type ClientSession,
    type HydraniumScopeProvider,
    type LanguageTarget,
@@ -31,7 +32,7 @@ import {
    TIMED_OUT,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
-import { type OperationTransition, openOperationOf, workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
+import { type OperationTransition, openOperationOf } from '../command/hydranium-glsp-operation-command.js';
 import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -338,6 +339,42 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
+    * A candidate query for `property` of `node`, to pass to
+    * `candidateProviderFor(node).find`. It is asked from the built node, and
+    * for a node the operation created from a stand-in of its type under the
+    * built containers it sits in, one per created level: a scope reads local
+    * names off every container up the chain, so anchoring higher drops them.
+    * A protocol context cannot express this: an element source resolves only
+    * through a `resolveElementByName` override, and through the index only
+    * for the nodes it exports. `undefined` for a node in no document and no
+    * copy, such as one not attached yet.
+    */
+   referenceInfoOf(node: AstNode, property: string): ReferenceInfo | undefined {
+      const operation = openOperationOf(this);
+      const created: AstNode[] = [];
+      let current: AstNode | undefined = node;
+      while (current && this.builtNodeOf(current) === current && operation?.workingUriOf(current) !== undefined) {
+         created.unshift(current);
+         current = current.$container;
+      }
+      if (!current) {
+         return undefined;
+      }
+      let container = this.builtNodeOf(current);
+      if (!AstUtils.findRootNode(container).$document) {
+         return undefined;
+      }
+      for (const level of created) {
+         container = buildAstNode(this.sharedServices.AstReflection, level.$type, {
+            $container: container,
+            $containerProperty: level.$containerProperty,
+            $containerIndex: level.$containerIndex
+         });
+      }
+      return { reference: { $refText: '', ref: undefined }, container, property };
+   }
+
+   /**
     * The built node of `node`, or of its nearest container that has one: a
     * node the operation created has no built node, but its container's
     * document and project are its own.
@@ -422,11 +459,15 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * diagnostic. The fallback covers the genuinely unroutable case, a synthetic
     * node not yet attached to a document, where the diagram's own language is
     * the only defensible answer.
+    *
+    * A node routes through {@link HydraniumGlspIndex.languageServicesFor}, so
+    * an override of the index's routing applies here too.
     */
    languageServicesFor(target: LanguageTarget | undefined): ServerLanguageServices | undefined {
-      // A copy node has no `$document`; without its copy's URI it routes to the diagram's language.
-      const workingUri = isAstNode(target) ? workingUriOfCopy(target) : undefined;
-      return this.sharedServices.ServiceRegistry.getServicesFor(workingUri ?? target) ?? this.diagramLanguage;
+      if (isAstNode(target)) {
+         return this.index.languageServicesFor(target) ?? this.diagramLanguage;
+      }
+      return this.sharedServices.ServiceRegistry.getServicesFor(target) ?? this.diagramLanguage;
    }
 
    /**

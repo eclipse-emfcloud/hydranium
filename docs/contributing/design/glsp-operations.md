@@ -33,6 +33,14 @@ same operation is named as built, and a target created in it is named without
 a project. The `ReferenceBuilder` called on a copy node directly loses the
 projects and the target's language.
 
+`modelState.referenceInfoOf(node, property)` asks a candidate query from the
+built node in-process, and for a node the operation created, from a stand-in
+of its type under the built containers it sits in. A scope reads local names
+off every container up the chain, so a query anchored higher, at the document
+or a named ancestor, misses them. A protocol `ReferenceContext` cannot carry
+that chain: an element source resolves only through a `resolveElementByName`
+override, and through the index only for the nodes it exports.
+
 ## What runs again on undo and redo
 
 A side effect a command carries outside the model — a command that does not

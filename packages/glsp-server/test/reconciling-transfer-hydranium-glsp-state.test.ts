@@ -666,6 +666,68 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       expect(asked.map(source => source === built)).toEqual([true]);
    });
 
+   it('queries candidates from the built node of a copy, and from a created node under the built nodes it sits in', async () => {
+      const state = createState(makeHarness());
+      const built = makeFakeAstNode<TestRoot>({
+         $type: 'TestRoot',
+         label: 'r',
+         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+         members: []
+      });
+      const item = makeFakeAstNode<AstNode>({
+         $type: 'Item',
+         name: 'a',
+         $container: built,
+         $containerProperty: 'members',
+         $containerIndex: 0,
+         children: []
+      });
+      (built as unknown as { members: AstNode[] }).members.push(item);
+      state.setSourceRoot('file:///a.a', built);
+      (state as unknown as { sharedServices: { AstReflection: unknown } }).sharedServices.AstReflection = {
+         getTypeMetaData: () => undefined
+      };
+      type Copy = AstNode & { members: Copy[]; children: Copy[] };
+      // Each container up to the root, so a chain that skips one shows.
+      const chainOf = (node: AstNode | undefined): unknown[] => {
+         const chain: unknown[] = [];
+         for (let current = node; current; current = current.$container) {
+            chain.push(
+               current === built ? 'built root' : current === item ? 'built item' : `${current.$type}:${current.$containerProperty}`
+            );
+         }
+         return chain;
+      };
+      let observed: unknown;
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const copy = state.sourceRoot as unknown as Copy;
+         const copyItem = copy.members[0];
+         const created = makeFakeAstNode<Copy>({ $type: 'Item', $container: copy, $containerProperty: 'members', children: [] });
+         copy.members.push(created);
+         const nested = makeFakeAstNode<Copy>({ $type: 'Item', $container: copyItem, $containerProperty: 'children', children: [] });
+         copyItem.children.push(nested);
+         const deep = makeFakeAstNode<Copy>({ $type: 'Leaf', $container: nested, $containerProperty: 'children' });
+         nested.children.push(deep);
+         // Built by the handler and not yet attached anywhere.
+         const loose = makeFakeAstNode<AstNode>({ $type: 'Item' });
+         const infoOf = (node: AstNode): unknown => {
+            const info = state.referenceInfoOf(node, 'target');
+            return info && { property: info.property, chain: chainOf(info.container) };
+         };
+         observed = { copy: infoOf(copyItem), created: infoOf(created), nested: infoOf(nested), deep: infoOf(deep), loose: infoOf(loose) };
+         return undefined;
+      });
+
+      expect(observed).toEqual({
+         copy: { property: 'target', chain: ['built item', 'built root'] },
+         created: { property: 'target', chain: ['Item:members', 'built root'] },
+         nested: { property: 'target', chain: ['Item:children', 'built item', 'built root'] },
+         deep: { property: 'target', chain: ['Leaf:children', 'Item:children', 'built item', 'built root'] },
+         loose: undefined
+      });
+   });
+
    it('runs the next exclusive call after one that threw', async () => {
       const state = createState(makeHarness());
       const failed = state.runExclusive(() => {
@@ -712,6 +774,15 @@ function memberOf(root: AstNode, $type: string): AstNode {
 }
 
 describe('the copy nodes of an operation', () => {
+   it('take their language from the index, so an override of its routing reaches the state too', () => {
+      const state = createState(makeHarness());
+      const routed = { LanguageMetaData: { languageId: 'routed' } } as unknown as ReturnType<typeof state.languageServicesFor>;
+      const index = state.index as unknown as { languageServicesFor(node?: AstNode): unknown };
+      index.languageServicesFor = () => routed;
+
+      expect(state.languageServicesFor(makeFakeAstNode<AstNode>({ $type: 'Item' }))).toBe(routed);
+   });
+
    it('answer every node-routed seam as the built node they were copied from, on the primary and a foreign-language secondary', async () => {
       const harness = makeHarness();
       const state = createState(harness);
@@ -748,7 +819,8 @@ describe('the copy nodes of an operation', () => {
          findId: state.index.findId(node),
          createId: state.index.createId(node),
          resolves: state.index.findSemanticElement(state.index.findId(node) ?? '') !== undefined,
-         language: state.languageServicesFor(node)?.LanguageMetaData.languageId
+         language: state.languageServicesFor(node)?.LanguageMetaData.languageId,
+         indexLanguage: state.index.languageServicesFor(node)?.LanguageMetaData.languageId
       });
       const built = { primary: seams(primaryItem), foreign: seams(foreignItem) };
       let copied: unknown;

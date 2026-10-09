@@ -68,7 +68,10 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    - A node of the copy belongs to no document. Pass
      `modelState.builtNodeOf(node)` to anything that looks a document up: a
      scope, reference candidates, a qualified name.
-   - Build references with `modelState.referenceTo(target, source)`.
+   - Build references with `modelState.referenceTo(target, source)`, and ask
+     for reference candidates with
+     `modelState.referenceInfoOf(node, property)`, passed to
+     `modelState.candidateProviderFor(node).find`.
    - One gesture is one operation. Combine edits in a `CompoundOperation`,
      and never dispatch an operation and await it from a GModel factory, a
      submit or an undo: the two wait for each other forever.
@@ -175,8 +178,10 @@ has open.
 
 If the extra file may not exist yet, as on the first drag in a diagram that was
 never laid out, override `openForWrite` and create it there with
-`createSecondaryDocument`: a write never creates a file. The order-flow
-example's `OrderFlowGlspState` does this for its `.layout` file.
+`createSecondaryDocument`: a write never creates a file. If the write then
+fails, the diagram closes the file again, so a failed operation leaves none
+behind. The order-flow example's `OrderFlowGlspState` does this for its
+`.layout` file.
 
 Each extra file is checked against the version it had when the diagram last
 read its main file. To write over whatever another client did to it instead,

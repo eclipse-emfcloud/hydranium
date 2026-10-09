@@ -235,6 +235,9 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
       async open(uri: string): Promise<void> {
          harness.sessionCalls.push(`open ${uri}`);
       },
+      async close(uri: string): Promise<void> {
+         harness.sessionCalls.push(`close ${uri}`);
+      },
       async create(uri: string, text: string): Promise<number> {
          harness.sessionCalls.push(`create ${uri}`);
          harness.store.set(uri, { version: 5, text });
@@ -474,6 +477,51 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          expect(harness.updateAllCalls.flat().map(update => update.baseVersion)).toEqual([5]);
       });
 
+      it('closes a secondary it created for a write that fails', async () => {
+         // Left open, the created document would be written by the diagram's next save.
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness, CreatingSecondaryState);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('disk full');
+         expect(harness.sessionCalls).toEqual([`create ${SEMANTIC_URI}`, 'updateAll', `close ${SEMANTIC_URI}`]);
+      });
+
+      it('keeps the write error when closing the created secondary fails, and warns', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 4);
+         harness.failNextWrite = new Error('disk full');
+         const state = createState(harness, CreatingSecondaryState);
+         // As a disposed session does: throw at once, not reject.
+         (state.modelSession as unknown as { close(uri: string): Promise<void> }).close = () => {
+            throw new Error('session disposed');
+         };
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         await expect(
+            state.updateSourceModel(
+               {
+                  primary: { $type: 'TestRoot', label: 'diagram' },
+                  secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 's' } as TestPrimary }
+               },
+               asModelVersion(4)
+            )
+         ).rejects.toThrow('disk full');
+         expect(harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`))).toHaveLength(1);
+      });
+
       it('keeps the primary based on the root it holds when a secondary-only write follows a foreign build of the primary', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 4);
@@ -646,6 +694,8 @@ describe('ReconcilingMultiDocumentGlspState', () => {
             )
          ).rejects.toThrow('disk full');
          expect(harness.updateAllCalls).toHaveLength(1);
+         // A document the write only opened is not the write's to close.
+         expect(harness.sessionCalls.filter(call => call.startsWith('close'))).toEqual([]);
       });
 
       it('refuses to write without a session, rather than writing under an id it does not hold', async () => {

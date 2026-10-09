@@ -10,7 +10,7 @@
 import type { ClientSession } from '@hydranium/core';
 import { type MultiDocumentSourceModel, ReconcilingMultiDocumentGlspState } from '@hydranium/glsp-server';
 import { type AstNode, URI } from '@hydranium/langium';
-import { type BaseVersion, type ModelVersion, type TransferElement } from '@hydranium/protocol';
+import { type TransferElement } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
@@ -119,12 +119,6 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
    }
 
    /**
-    * Whether the write under way created the layout file, so a write that then
-    * fails can close it again.
-    */
-   protected createdLayout = false;
-
-   /**
     * Create the layout file, holding an empty layout, when the write set
     * reaches a process that has none; every other document is opened as the
     * base class opens it.
@@ -146,32 +140,8 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
       const text = await serializer.serializeTransfer(this.projectRoot(this.createLayoutRoot()));
       try {
          await this.createSecondaryDocument(session, uri, text);
-         this.createdLayout = true;
       } catch {
          await super.openForWrite(session, uri);
-      }
-   }
-
-   /**
-    * Close a layout file this write created when the write fails: left open,
-    * the empty layout would stay in the diagram's session and its next save
-    * would write it to disk, though no write of the diagram ever landed in it.
-    */
-   protected override async persist(
-      model: OrderFlowSourceModel,
-      baseVersion: BaseVersion,
-      secondaryVersions?: Readonly<Record<string, ModelVersion>>
-   ): Promise<{ root: ProcessModel }> {
-      this.createdLayout = false;
-      try {
-         return await super.persist(model, baseVersion, secondaryVersions);
-      } catch (error: unknown) {
-         if (this.createdLayout) {
-            await this.modelSession?.close(this.layoutUri);
-         }
-         throw error;
-      } finally {
-         this.createdLayout = false;
       }
    }
 }
