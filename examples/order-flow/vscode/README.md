@@ -26,6 +26,9 @@ hosts cannot drift on `documentSelector` or the file watcher.
 | the `.process` diagram editor    | [`process-diagram-editor.ts`](src/process-diagram-editor.ts), [`process-diagram-server.ts`](src/process-diagram-server.ts), [`webview/diagram.ts`](src/webview/diagram.ts) |
 | the two webview bundles          | [`esbuild.mjs`](esbuild.mjs)                                                                                                                  |
 | what the extension contributes   | `contributes` in [`package.json`](package.json)                                                                                               |
+| the extension-host tests         | [`test/host/`](test/host/), [`.vscode-test.mjs`](.vscode-test.mjs)                                                                            |
+| the webview end-to-end tests     | [`test/e2e/`](test/e2e/), [`playwright.config.mts`](playwright.config.mts)                                                                    |
+| the pinned VS Code build         | [`test/vscode-version.mts`](test/vscode-version.mts), [`scripts/install-vscode.mts`](scripts/install-vscode.mts)                              |
 
 ## What it contributes
 
@@ -106,8 +109,8 @@ downloaded into `.vscode-test/` on first use, on a scratch copy of
 `../workspace`. They read the built `out/` and the packages it loads, so run
 `build:all` first, and without a display prefix them with `xvfb-run -a`.
 Neither is in `check`; CI runs both in its `e2e (vscode)` job, after
-`npm run test:e2e:install` has downloaded the build with retries. Once it is
-cached, neither tier makes a request to VS Code's update server.
+this package's `test:e2e:install` has downloaded the build with retries. Once
+it is cached, neither tier makes a request to VS Code's update server.
 
 - **`test:host`** runs `test/host` with Mocha inside the extension host,
   through `@vscode/test-cli` and `.vscode-test.mjs`. It sees what the extension
