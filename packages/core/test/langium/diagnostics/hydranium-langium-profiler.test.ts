@@ -8,9 +8,9 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DefaultTracer, Disposable, Logger, type LogLevel, NoopLogger, SystemClock } from '@hydranium/protocol';
+import { DefaultTracer, Logger, type LogLevel, NoopLogger, SystemClock } from '@hydranium/protocol';
 import { HydraniumLangiumProfiler } from '../../../src/langium/diagnostics/hydranium-langium-profiler.js';
-import { makeNoopSharedServices } from '../../../src/testing/index.js';
+import { makeNoopSharedServices, makeStubDocumentBuilder } from '../../../src/testing/index.js';
 
 type CapturedLine = { level: LogLevel; component?: string; message: string };
 
@@ -38,27 +38,19 @@ class CapturingLogger extends NoopLogger {
 }
 
 /**
- * Build a profiler over a capturing tracer plus a `BuildPhasePassService` stub
- * whose registered Validated-phase pass `run` is captured, so a test can trigger
- * the end-of-build flush via {@link fireValidated}.
+ * Build a profiler over a capturing tracer and a stub builder, so a test can end
+ * a build and trigger the flush via {@link endBuild}.
  */
-function makeProfiler(): { profiler: HydraniumLangiumProfiler; lines: CapturedLine[]; fireValidated: () => void } {
+function makeProfiler(): { profiler: HydraniumLangiumProfiler; lines: CapturedLine[]; endBuild: (completed?: boolean) => void } {
    const lines: CapturedLine[] = [];
    const logger = new CapturingLogger(undefined, lines);
-   let validatedCallback: () => void = () => undefined;
+   const builder = makeStubDocumentBuilder();
    const services = makeNoopSharedServices({
       Tracer: new DefaultTracer(logger, new SystemClock()),
-      workspace: {
-         BuildPhasePassService: {
-            register: (pass: { run: () => void }) => {
-               validatedCallback = pass.run;
-               return Disposable.EMPTY;
-            }
-         }
-      }
+      workspace: { DocumentBuilder: builder }
    });
    const profiler = new HydraniumLangiumProfiler(services);
-   return { profiler, lines, fireValidated: () => validatedCallback() };
+   return { profiler, lines, endBuild: (completed = true) => builder.fireBuildEnded({ completed }) };
 }
 
 /** Run a complete profiling task with the given sub-tasks (each measured once). */
@@ -106,7 +98,7 @@ describe('HydraniumLangiumProfiler', () => {
    });
 
    it('aggregates records across documents into one breakdown per category on flush', () => {
-      const { profiler, lines, fireValidated } = makeProfiler();
+      const { profiler, lines, endBuild } = makeProfiler();
       Logger.setLevel('trace');
 
       // Two "documents" of the same grammar, each measuring ruleA once.
@@ -116,7 +108,7 @@ describe('HydraniumLangiumProfiler', () => {
       expect(profiler.getRecords('parsing').toArray()).toHaveLength(2);
       expect(lines.filter(line => line.component === 'LangiumProfiler :: parsing')).toHaveLength(0);
 
-      fireValidated();
+      endBuild();
 
       const parsing = lines.filter(line => line.component === 'LangiumProfiler :: parsing');
       expect(parsing.length).toBeGreaterThan(0);
@@ -129,15 +121,26 @@ describe('HydraniumLangiumProfiler', () => {
       expect(profiler.getRecords('parsing').toArray()).toHaveLength(0);
    });
 
+   it('flushes once the lock drains after builds that threw', () => {
+      const { profiler, lines, endBuild } = makeProfiler();
+      Logger.setLevel('trace');
+
+      runTask(profiler, 'my-grammar', ['ruleA']);
+      endBuild(false);
+
+      expect(lines.some(line => line.component === 'LangiumProfiler :: parsing' && line.message.includes('my-grammar.ruleA'))).toBe(true);
+      expect(profiler.getRecords('parsing').toArray()).toHaveLength(0);
+   });
+
    it('never writes to the raw console (stdio-safe) — no console.table/info/log', () => {
-      const { profiler, fireValidated } = makeProfiler();
+      const { profiler, endBuild } = makeProfiler();
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
       const consoleTable = vi.spyOn(console, 'table').mockImplementation(() => undefined);
       Logger.setLevel('trace');
 
       runTask(profiler, 'my-grammar', ['ruleA']);
-      fireValidated();
+      endBuild();
 
       expect(consoleLog).not.toHaveBeenCalled();
       expect(consoleInfo).not.toHaveBeenCalled();
@@ -148,9 +151,9 @@ describe('HydraniumLangiumProfiler', () => {
    });
 
    it('flushing an empty window is a no-op', () => {
-      const { lines, fireValidated } = makeProfiler();
+      const { lines, endBuild } = makeProfiler();
       Logger.setLevel('trace');
-      fireValidated();
+      endBuild();
       expect(lines.filter(line => line.component?.startsWith('LangiumProfiler ::'))).toHaveLength(0);
    });
 });

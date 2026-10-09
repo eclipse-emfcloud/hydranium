@@ -752,6 +752,59 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
+   describe('onBuildEnded', () => {
+      class EndingBuilder extends HydraniumDocumentBuilder {
+         constructor(logger: Logger) {
+            super(makeStubServices(logger), { logLevel: 'off' });
+         }
+         /** Run a build over no documents: every phase, and no `onBuildPhase` notification. */
+         completeBuild(): Promise<void> {
+            return this.buildDocuments([], {}, CancellationToken.None);
+         }
+         /** Stand in for a build that threw. */
+         failBuild(): void {
+            this.checkWaitsOnceDrained();
+         }
+         drained(): Promise<void> {
+            return this.workspaceLock.read(() => undefined);
+         }
+      }
+
+      it('tells a listener a build completed, one that validated nothing included', async () => {
+         const builder = new EndingBuilder(makeNoopLogger());
+         const events: boolean[] = [];
+         builder.onBuildEnded(event => events.push(event.completed));
+
+         await builder.completeBuild();
+         expect(events).toEqual([true]);
+      });
+
+      it('tells a listener once the lock drains after builds that threw, once for several', async () => {
+         const builder = new EndingBuilder(makeNoopLogger());
+         const events: boolean[] = [];
+         builder.onBuildEnded(event => events.push(event.completed));
+
+         builder.failBuild();
+         builder.failBuild();
+         await builder.drained();
+         expect(events).toEqual([false]);
+      });
+
+      it('logs a listener that throws, and goes on with the build and the other listeners', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const builder = new EndingBuilder(logger);
+         const events: boolean[] = [];
+         builder.onBuildEnded(() => {
+            throw new Error('listener bug');
+         });
+         builder.onBuildEnded(event => events.push(event.completed));
+
+         await expect(builder.completeBuild()).resolves.toBeUndefined();
+         expect(events).toEqual([true]);
+         expect(lines.filter(line => line.level === 'error' && line.message.includes('listener bug'))).toHaveLength(1);
+      });
+   });
+
    describe('awaitDocumentState — liveness of the replaced rejection', () => {
       // Langium rejects when the workspace has already passed the requested
       // state without carrying the document along; this class waits instead,

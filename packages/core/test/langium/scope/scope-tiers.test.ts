@@ -31,10 +31,7 @@ function makeLanguageServices(shared: unknown): HydraniumLanguageServices {
    return {
       references: {
          NameProvider: { getName: () => undefined, getNameNode: () => undefined, nameSeparator: '.' },
-         ScopeExtensionService: {
-            getLocalExtensionScope: (_t: string, _c: AstNode, outer: Scope) => outer,
-            getUniversalExtensionScope: (_t: string, _c: AstNode, outer: Scope) => outer
-         }
+         ScopeExtensionService: { getDescriptions: () => ({ local: [], universal: [] }) }
       },
       workspace: {
          AstNodeLocator: { getAstNode: () => undefined },
