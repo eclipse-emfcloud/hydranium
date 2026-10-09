@@ -31,6 +31,24 @@ const BASELINE_FILE = 'scripts/check-docs-baseline.json';
 /** Top-level trees that hold templates, tooling or private notes rather than documentation. */
 const OUT_OF_SCOPE_TREES = new Set(['.changeset', '.github', '.claude', 'internal']);
 
+/**
+ * Our own agent skills are documentation and are checked; the tool finds them,
+ * so no index has to reach them. A skill vendored through `skills-lock.json` is
+ * someone else's text, pinned by hash, so it stays out.
+ */
+const SKILLS = '.claude/skills/';
+
+function isSkill(page: string): boolean {
+   return page.startsWith(SKILLS);
+}
+
+function vendoredSkills(): Set<string> {
+   const lock = join(REPO_ROOT, 'skills-lock.json');
+   if (!existsSync(lock)) return new Set();
+   const { skills = {} } = JSON.parse(readFileSync(lock, 'utf-8')) as { skills?: Record<string, unknown> };
+   return new Set(Object.keys(skills));
+}
+
 /** Where a reader starts; a page neither reaches is invisible. */
 const INDEXES = ['README.md', 'docs/README.md'];
 
@@ -86,12 +104,15 @@ const HTML_TARGET = /(?:href|src)="([^"]+)"/g;
 const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 const HTML_ANCHOR = /<a\s+(?:id|name)="([^"]+)"/g;
 
-/** Lines outside fenced code, with their 1-based numbers. */
+/** Lines outside fenced code and a leading YAML front matter, with their 1-based numbers. */
 function proseLines(text: string): { line: number; text: string }[] {
    const lines: { line: number; text: string }[] = [];
    let inFence = false;
+   let inFrontMatter = text.startsWith('---\n');
    text.split('\n').forEach((line, index) => {
-      if (FENCE.test(line)) {
+      if (inFrontMatter) {
+         inFrontMatter = index === 0 || line !== '---';
+      } else if (FENCE.test(line)) {
          inFence = !inFence;
       } else if (!inFence) {
          lines.push({ line: index + 1, text: line });
@@ -232,8 +253,11 @@ function listPages(): string[] {
       cwd: REPO_ROOT,
       encoding: 'utf-8'
    });
+   const vendored = vendoredSkills();
    return [...new Set(stdout.split('\0').filter(Boolean))]
-      .filter(file => !OUT_OF_SCOPE_TREES.has(file.split('/')[0]))
+      .filter(file =>
+         isSkill(file) ? !vendored.has(file.slice(SKILLS.length).split('/')[0]) : !OUT_OF_SCOPE_TREES.has(file.split('/')[0])
+      )
       .filter(file => existsSync(join(REPO_ROOT, file)))
       .sort();
 }
@@ -261,6 +285,10 @@ function runSelfTests(): boolean {
       { name: 'a footnote is not a link', passed: linksOf('[^1]: Capitalized terms\n').length === 0 },
       { name: 'a long line of words is over-long', passed: overlongLines(`${'word '.repeat(20)}\n`).join() === '1' },
       { name: 'words before a long link are over-long', passed: overlongLines(`See [the page](${LONG_TARGET}).\n`).join() === '1' },
+      {
+         name: 'front matter is not prose, and what follows it is',
+         passed: overlongLines(`---\ndescription: ${'word '.repeat(20)}\n---\n\n${'word '.repeat(20)}\n`).join() === '5'
+      },
       { name: 'a long link alone may run long', passed: overlongLines(`- [The page title](${LONG_TARGET}).\n`).length === 0 },
       { name: 'a long code span alone may run long', passed: overlongLines(`  \`npx ${'flag '.repeat(18)}\`\n`).length === 0 },
       {
@@ -387,7 +415,7 @@ for (const [page, text] of texts) {
 }
 
 const current: Counts = {};
-for (const page of unreachable(pages, page => linkGraph.get(page) ?? [])) current[page] = { unreachable: 1 };
+for (const page of unreachable(pages, page => linkGraph.get(page) ?? []).filter(page => !isSkill(page))) current[page] = { unreachable: 1 };
 for (const [page, text] of texts) {
    for (const [category, count] of rotCounts(page, text, peersOf(page))) {
       current[page] = { ...current[page], [category]: count };

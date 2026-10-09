@@ -183,9 +183,11 @@ rest. Versions appear only in
 the manifest field. Name a default's constant or option, never its value.
 Measurements belong in [`perf-baseline.md`](perf-baseline.md). No history: the
 story belongs in the commit. Every page is reachable from `README.md` or
-`docs/README.md`. `check:docs` fails a dead link or anchor and holds
-unreachable pages and these rot patterns to `scripts/check-docs-baseline.json`,
-which may only fall.
+`docs/README.md`, except an agent skill under `.claude/skills/`, which the tool
+finds; a skill vendored through `skills-lock.json` is someone else's text and
+exempt. `check:docs` fails a dead link or anchor and holds unreachable pages
+and these rot patterns to `scripts/check-docs-baseline.json`, which may only
+fall.
 
 **Every page has one audience.** The root README is for evaluators: what
 Hydranium is, the demo, and the two ways on. Adopter pages
