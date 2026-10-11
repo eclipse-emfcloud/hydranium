@@ -266,7 +266,7 @@ export interface ServerAddedSharedServices<
        * `onBuildPhase` sibling of the per-node `AstExtensionService`
        * (`onDocumentPhase`) and `IntegrityService`. {@link BuildPipelineIntegration}
        * drives it from its phase listeners; the framework self-registers its
-       * integrity passes and the Langium profiler flush into it, and adopters
+       * integrity and CST-residency passes into it, and adopters
        * contribute via the shared {@link ServerAddedSharedServices.buildPhasePasses}
        * group. A single priority space orders framework and adopter passes
        * against one another deterministically.
@@ -581,7 +581,7 @@ export function createServerSharedModule(
       },
       // Empty default so `services.buildPhasePasses` always resolves (Langium
       // throws on access to an unbound slot). The framework's own integrity /
-      // profiler passes self-register imperatively, not here.
+      // CST-residency passes self-register imperatively, not here.
       buildPhasePasses: {},
       // Empty default so `services.additionalDocuments` always resolves.
       additionalDocuments: {},

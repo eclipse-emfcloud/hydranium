@@ -27,7 +27,7 @@ import { type BuildPhasePass, type BuildPhasePassRegistry } from './build-phase-
  * per-language work (integrity) fans out by language *inside* its pass. This
  * also keeps one priority space per phase across framework and adopter passes,
  * which is the point — `runPasses` orders the framework's integrity and
- * profiler-flush passes against adopter passes deterministically.
+ * CST-residency passes against adopter passes deterministically.
  */
 export interface BuildPhasePassService extends BuildPhasePassRegistry {
    /**

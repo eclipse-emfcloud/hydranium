@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 export * from './ast-node-description-provider.js';
+export * from './fallback-scope.js';
 export * from './reference-builder.js';
 export * from './reference-candidate-provider.js';
 export * from './hydranium-scope-computation.js';

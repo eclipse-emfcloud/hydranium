@@ -19,7 +19,7 @@ import {
    type WorkspaceLock
 } from '@hydranium/langium';
 import { type CancellationToken, Disposable } from 'vscode-languageserver';
-import { HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
+import { type BuildEndedEvent, HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -77,7 +77,7 @@ export interface StubWaitUntilGate {
 export interface StubDocumentBuilder
    extends
       Pick<DocumentBuilder, 'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'>,
-      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate' | 'finalBuildState'> {
+      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate' | 'finalBuildState' | 'onBuildEnded'> {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
     * two overloads (`(state, cancelToken?): Promise<void>` and
@@ -107,6 +107,13 @@ export interface StubDocumentBuilder
     * looking wired.
     */
    fireBuildPhase(state: DocumentState, built: LangiumDocument[], cancelToken?: CancellationToken): void;
+   /**
+    * Synchronously fire every {@link HydraniumDocumentBuilder.onBuildEnded}
+    * listener with `event`. As in the real builder, one that throws does not
+    * stop the others; the real builder logs the error, and this stub, having
+    * no logger, rethrows the first one once all have run.
+    */
+   fireBuildEnded(event: BuildEndedEvent): void;
    /**
     * Hold the next {@link waitUntil} call. The returned handle releases it;
     * the call's return value resolves on the next tick after `resolve` runs.
@@ -152,6 +159,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
    const deliveredListeners = new Map<DocumentState, Array<(document: LangiumDocument, version: number) => void>>();
    const buildPhaseListeners = new Map<DocumentState, DocumentBuildListener[]>();
    const onUpdateListeners: DocumentUpdateListener[] = [];
+   const buildEndedListeners: Array<(event: BuildEndedEvent) => void> = [];
    const gates: Array<{ take(release: () => void): void }> = [];
    const updateCalls: RecordedBuilderCall<[URI[], URI[]]>[] = [];
    const waitUntilCalls: RecordedBuilderCall<[DocumentState, URI | undefined]>[] = [];
@@ -258,6 +266,28 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
             reraise(listener(changed, deleted));
          }
       },
+      onBuildEnded(listener: (event: BuildEndedEvent) => void) {
+         buildEndedListeners.push(listener);
+         return Disposable.create(() => {
+            const idx = buildEndedListeners.indexOf(listener);
+            if (idx >= 0) {
+               buildEndedListeners.splice(idx, 1);
+            }
+         });
+      },
+      fireBuildEnded(event: BuildEndedEvent) {
+         const failures: unknown[] = [];
+         for (const listener of buildEndedListeners.slice()) {
+            try {
+               listener(event);
+            } catch (error: unknown) {
+               failures.push(error);
+            }
+         }
+         if (failures.length > 0) {
+            throw failures[0];
+         }
+      },
       onBuildPhase(state: DocumentState, listener: DocumentBuildListener) {
          const list = buildPhaseListeners.get(state) ?? [];
          list.push(listener);
@@ -317,6 +347,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
          phaseListeners.clear();
          deliveredListeners.clear();
          onUpdateListeners.length = 0;
+         buildEndedListeners.length = 0;
          gates.length = 0;
          updateCalls.length = 0;
          waitUntilCalls.length = 0;

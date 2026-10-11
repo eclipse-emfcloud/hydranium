@@ -8,14 +8,7 @@
  ********************************************************************************/
 
 import { Format, Logger, type Tracer } from '@hydranium/protocol';
-import {
-   DefaultLangiumProfiler,
-   DocumentState,
-   MultiMap,
-   type ProfilingCategory,
-   type ProfilingRecord,
-   ProfilingTask
-} from '@hydranium/langium';
+import { DefaultLangiumProfiler, MultiMap, type ProfilingCategory, type ProfilingRecord, ProfilingTask } from '@hydranium/langium';
 import { type LogNameOptions } from './logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 
@@ -29,17 +22,7 @@ export interface LangiumProfilerOptions extends LogNameOptions {
     * {@link DefaultLangiumProfiler}) to Langium's full set when omitted.
     */
    readonly activeCategories?: Set<ProfilingCategory>;
-   /**
-    * Priority of the per-build flush pass at the `Validated` phase. The flush is
-    * normally the only pass at `Validated`, so order is immaterial; the option
-    * exists for symmetry with the other framework passes. Default
-    * {@link PROFILER_FLUSH_PASS_PRIORITY}.
-    */
-   readonly flushPriority?: number;
 }
-
-/** Default priority of the profiler's per-build flush pass (see {@link LangiumProfilerOptions.flushPriority}). */
-export const PROFILER_FLUSH_PASS_PRIORITY = 0;
 
 /**
  * Framework adapter over Langium's {@link DefaultLangiumProfiler} that is
@@ -54,9 +37,8 @@ export const PROFILER_FLUSH_PASS_PRIORITY = 0;
  *    task identifier), so the per-document records carry no distinguishing
  *    information anyway. We instead accumulate records in {@link records} and
  *    {@link flush} one breakdown per category — self-time and invocation counts
- *    summed per `$type` across the whole build — on the terminal `Validated`
- *    build phase (self-registered in the constructor). One report per build, not
- *    one per file.
+ *    summed per `$type` across the whole build — when the build ends
+ *    (subscribed in the constructor). One report per build, not one per file.
  *  - **Transport safety.** The stock per-record dump uses `console.table`, which
  *    is NOT in the set `patchConsole` reroutes; under `vscode-languageserver`'s
  *    `--stdio` transport `process.stdout` *is* the JSON-RPC channel, so the
@@ -74,8 +56,8 @@ export const PROFILER_FLUSH_PASS_PRIORITY = 0;
  *    restart. Langium's own `start`/`stop` category selection still applies *on
  *    top of* the trace gate.
  *
- * Registered eagerly (see `DEFAULT_EAGER_SERVICES`) so its `Validated`-phase
- * flush pass is registered before the first build. Gives the per-grammar-rule /
+ * Registered eagerly (see `DEFAULT_EAGER_SERVICES`) so its flush is
+ * subscribed before the first build. Gives the per-grammar-rule /
  * per-`$type` parse/link/validate self-time the framework's own
  * `ServerTracer` / `ProfileSession` passes
  * cannot produce (those cover the framework's passes *outside* Langium's
@@ -88,16 +70,11 @@ export class HydraniumLangiumProfiler extends DefaultLangiumProfiler {
    constructor(services: ServerSharedServicesMinimal, options: LangiumProfilerOptions = {}) {
       super(options.activeCategories);
       this.tracer = services.Tracer.for(options.logName ?? 'LangiumProfiler').trace('instantiated');
-      // Flush once per build on the terminal phase rather than once per document.
-      // By `Validated`, every parse/link/validate record for the batch is in.
-      // Registered as a build-phase pass (not a direct onBuildPhase listener) so
-      // every framework + adopter build-phase reaction shares one dispatcher.
-      services.workspace.BuildPhasePassService.register({
-         id: 'framework:langium-profiler:flush',
-         state: DocumentState.Validated,
-         priority: options.flushPriority ?? PROFILER_FLUSH_PASS_PRIORITY,
-         run: () => this.flush()
-      });
+      // Flush once per build when it ends rather than once per document. Not at
+      // a `Validated` pass: that phase stays silent for a build that validates
+      // nothing, the workspace's initial one among them, and the records would
+      // then wait for a build that does.
+      services.workspace.DocumentBuilder.onBuildEnded(() => this.flush());
    }
 
    /**
@@ -142,14 +119,13 @@ export class HydraniumLangiumProfiler extends DefaultLangiumProfiler {
    /**
     * Emit one aggregated breakdown per category — self-time and invocation
     * counts summed per `<languageId>.<$type>` across every record collected
-    * this build — then clear the window. Self-registered as a `Validated`-phase
-    * build pass, so it fires once per build, not per document. Pass explicit
-    * categories to flush a subset; defaults to all.
+    * this build — then clear the window. Called when a build ends, so it fires
+    * once per build, not per document. Pass explicit categories to flush a
+    * subset; defaults to all.
     *
     * `flush` is the sole reset point: because it clears each flushed category,
-    * memory is bounded per completed build. A build cancelled before `Validated`
-    * leaves its partial records to roll into the next build's flush (slightly
-    * inflated counts, self-correcting) rather than accumulating without bound.
+    * memory is bounded per build. Builds that throw share one flush, once the
+    * lock has drained after them.
     */
    flush(...categories: ProfilingCategory[]): void {
       const toFlush = categories.length > 0 ? categories : ALL_CATEGORIES;

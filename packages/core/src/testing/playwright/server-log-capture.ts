@@ -83,6 +83,10 @@ export interface CaptureServerLogOptions {
     *
     * The server's own threshold is left alone: it governs what the client sees,
     * not the file, and the setting replaces it within moments of startup.
+    *
+    * The server runs every path guarded on a level this admits, its debug
+    * profiling included, so a timing run captured at a level that admits debug
+    * measures that work too.
     */
    level?: LogThreshold;
 }
