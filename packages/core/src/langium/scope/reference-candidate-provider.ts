@@ -102,9 +102,9 @@ export interface ResolvedCandidate {
 export interface ReferenceCandidateProvider {
    /**
     * UI-facing entry point: returns the candidate scope's elements as
-    * {@link ReferenceCandidate}s.
+    * {@link ReferenceCandidate}s. Accepts what {@link getCandidateScope} does.
     */
-   find(ctx: ReferenceContext): ReferenceCandidate[];
+   find(ctx: ReferenceContext | ReferenceInfo): ReferenceCandidate[];
 
    /**
     * Build a ranked + deduped scope for candidate selection at the
@@ -202,7 +202,7 @@ export class DefaultReferenceCandidateProvider implements ReferenceCandidateProv
       return this.services.shared.ServiceRegistry?.getServicesFor(target)?.references.NameProvider ?? this.nameProvider;
    }
 
-   find(ctx: ReferenceContext): ReferenceCandidate[] {
+   find(ctx: ReferenceContext | ReferenceInfo): ReferenceCandidate[] {
       const scope = this.getCandidateScope(ctx);
       return scope.elementScope
          .getAllElements()

@@ -146,10 +146,19 @@ export class HydraniumGlspIndex extends GModelIndex {
     * {@link indexSourceRoot} needs no per-node lookup and does not pay for one.
     */
    protected elementKeyProviderFor(node?: AstNode): ElementKeyProvider | undefined {
+      return this.languageServicesFor(node)?.references.ElementKeyProvider;
+   }
+
+   /**
+    * The language services owning `node`, falling back to the diagram's
+    * language for a node that routes nowhere. A per-language lookup an index
+    * subclass adds goes through this, so an operation's copy of a node from
+    * another document reaches that document's language, as its built node does.
+    */
+   languageServicesFor(node?: AstNode): ServerLanguageServices | undefined {
       // A copy node has no `$document`; it routes by its working root's URI.
       const route = node === undefined ? undefined : workingUriOfCopy(node);
-      const language = this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage;
-      return language?.references.ElementKeyProvider;
+      return this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage;
    }
 
    /** Return the GModel id assigned to `node`, falling back to a fresh `fallback_<uuid>`. */

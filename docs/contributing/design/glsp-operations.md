@@ -19,9 +19,9 @@ every reader shares.
 
 Nodes of a working copy have no `$document`, so a transfer encoder hook sees no
 `context.uri` while it projects them, and a lookup that reads a node's document
-— a scope, reference candidates, or the project a name is qualified in — throws
-or answers for no document. `modelState.builtNodeOf(node)` answers the built
-node for such lookups, while the handler keeps editing the copy.
+— a scope, or the project a name is qualified in — throws or answers for no
+document. `modelState.builtNodeOf(node)` answers the built node for such
+lookups, while the handler keeps editing the copy.
 
 ## References into the copy
 
@@ -32,6 +32,12 @@ built target and the source's nearest built container: a target renamed in the
 same operation is named as built, and a target created in it is named without
 a project. The `ReferenceBuilder` called on a copy node directly loses the
 projects and the target's language.
+
+`modelState.referenceInfoOf(node, property)` asks a candidate query from the
+built node in-process, and for a node the operation created, from a stand-in
+of its type under the built containers it sits in. A scope reads local names
+off every container up the chain, so a query anchored higher, at the document
+or a named ancestor, misses them.
 
 ## What runs again on undo and redo
 

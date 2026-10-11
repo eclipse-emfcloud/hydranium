@@ -10,8 +10,9 @@
 import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable } from 'inversify';
-import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, URI } from '@hydranium/langium';
+import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, type ReferenceInfo, URI } from '@hydranium/langium';
 import {
+   buildAstNode,
    type ClientSession,
    type HydraniumScopeProvider,
    type LanguageTarget,
@@ -31,7 +32,7 @@ import {
    TIMED_OUT,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
-import { type OperationTransition, openOperationOf, workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
+import { type OperationTransition, openOperationOf } from '../command/hydranium-glsp-operation-command.js';
 import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
 import { type HydraniumGlspIndex } from './hydranium-glsp-index.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
@@ -296,9 +297,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * The built node `node` was copied from during an operation; `node` itself
     * for a built node, for a node the operation created, and outside one.
     *
-    * A copy has no `$document`, so a lookup that reads its document, scope,
-    * reference candidates or project throws or answers for no document.
-    * Handlers pass the built node there and keep editing the copy.
+    * A copy has no `$document`, so a lookup that reads its document, scope or
+    * project throws or answers for no document. Handlers pass the built node
+    * there and keep editing the copy. A candidate query takes
+    * {@link referenceInfoOf} instead, since a created node has no built node.
     */
    builtNodeOf<T extends AstNode>(node: T): T {
       return openOperationOf(this)?.builtNodeOf(node) ?? node;
@@ -335,6 +337,36 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
                  source === undefined ? undefined : this.builtContextOf(source)
               );
       return refText === undefined ? undefined : { ref: target, $refText: refText };
+   }
+
+   /**
+    * A candidate query for `property` of `node`, to pass to
+    * `candidateProviderFor(node)?.find`. It is asked from the built node, and
+    * for a node the operation created from a stand-in of its type under the
+    * built containers it sits in, one per created level: a scope reads local
+    * names off every container up the chain, so anchoring higher drops them.
+    * A protocol context cannot express this: an element source resolves only
+    * through a `resolveElementByName` override, and through the index only
+    * for the nodes it exports. `undefined` for a node in no document and no
+    * copy, such as one not attached yet.
+    */
+   referenceInfoOf(node: AstNode, property: string): ReferenceInfo | undefined {
+      let container = this.builtContextOf(node);
+      if (!AstUtils.findRootNode(container).$document) {
+         return undefined;
+      }
+      const created: AstNode[] = [];
+      for (let level: AstNode | undefined = node; level && this.builtNodeOf(level) !== container; level = level.$container) {
+         created.unshift(level);
+      }
+      for (const level of created) {
+         container = buildAstNode(this.sharedServices.AstReflection, level.$type, {
+            $container: container,
+            $containerProperty: level.$containerProperty,
+            $containerIndex: level.$containerIndex
+         });
+      }
+      return { reference: { $refText: '', ref: undefined }, container, property };
    }
 
    /**
@@ -411,8 +443,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * The language services owning `target` — an AST node (routed by its
-    * document), a URI, or a URI string — falling back to
-    * {@link diagramLanguage} when `target` routes nowhere.
+    * document), a URI, or a URI string — falling back, for a node, to the
+    * language the index read from the diagram's root, and otherwise to
+    * {@link diagramLanguage}, when `target` routes nowhere.
     *
     * Use this wherever the thing being named, keyed or completed may live in
     * another document than the diagram. Two registered languages are free to
@@ -422,11 +455,15 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * diagnostic. The fallback covers the genuinely unroutable case, a synthetic
     * node not yet attached to a document, where the diagram's own language is
     * the only defensible answer.
+    *
+    * A node routes through {@link HydraniumGlspIndex.languageServicesFor}, so
+    * an override of the index's routing applies here too.
     */
    languageServicesFor(target: LanguageTarget | undefined): ServerLanguageServices | undefined {
-      // A copy node has no `$document`; without its copy's URI it routes to the diagram's language.
-      const workingUri = isAstNode(target) ? workingUriOfCopy(target) : undefined;
-      return this.sharedServices.ServiceRegistry.getServicesFor(workingUri ?? target) ?? this.diagramLanguage;
+      if (isAstNode(target)) {
+         return this.index.languageServicesFor(target) ?? this.diagramLanguage;
+      }
+      return this.sharedServices.ServiceRegistry.getServicesFor(target) ?? this.diagramLanguage;
    }
 
    /**
