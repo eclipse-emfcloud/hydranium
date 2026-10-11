@@ -130,8 +130,8 @@ export interface MessageRelay extends Disposable {
  * buffers; the hand-off then swaps listeners and replays within one turn of the
  * event loop, which is what makes it impossible for a message to be both
  * buffered and forwarded, or to arrive between the two. Replay is FIFO because
- * order is load-bearing — a `getModelDocument` that overtook its own
- * `openModelDocument` would answer against an unopened document.
+ * order is load-bearing — an `updateModelDocument` that overtook its own
+ * `openModelDocument` would be refused with `DocumentNotOpenError`.
  * `@hydranium/client-theia`'s `AbstractSocketForwardingConnectionHandler` carries the
  * same fix for the Theia channel transport.
  */

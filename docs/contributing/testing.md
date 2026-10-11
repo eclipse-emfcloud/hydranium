@@ -115,6 +115,39 @@ of the ways that happen have nothing to do with the test:
   `@hydranium/*` to built `lib`, so editing `src` without rebuilding changes
   nothing the run can see.
 
+Others are the test's own:
+
+- **The fixture lacks the hazard's precondition.** `watchModelDocument` takes
+  its dedup baseline from a document already in `LangiumDocuments`, so a
+  redundant event after a watch can only happen for a document the workspace
+  walk never loaded; a sample workspace loads every file and cannot show it.
+  Ask what makes the bug possible, and check the fixture has that state.
+- **The environment supplies the precondition**, so the control reddens on one
+  machine while the assertion cannot fail on any other. `makeScratchWorkspace`
+  resolves its root for a temp directory reached through a symlink, as on
+  macOS; where `tmpdir()` is already real, removing the resolve stays green.
+  Build the precondition inside the test, or say at the assertion what guards
+  it.
+- **The observable was sampled after the event it meant to exclude.** A
+  write's phase notification goes out during the build the write awaits, so it
+  reaches the client before the response, and a delta taken after the `await`
+  already holds it. Take the baseline before the call, or count absolutely.
+- **The wait matched a different occurrence**, which shows as a test passing
+  alone and failing in the full gate. An operation, undo, redo, save and
+  external rebuild all send `SetDirtyStateAction`; wait on its `reason`, or on
+  the observable itself, not on the action's kind.
+- **The property cannot move the assertion.** `getModelDocument` builds a
+  document nobody opened, so asserting that a replayed open and get both
+  answered holds in either order; assert the order itself.
+- **The observable is a cached projection that survives the fault.** While a
+  document is structurally broken, the GLSP head keeps the graph the client
+  already has, so a count read off the diagram does not change with a parse
+  failure; the diagnostics and the diagram status do.
+- **The break landed on a source the build regenerates.** An example server's
+  `test` script runs against its checked-in generated parser, and only `build`
+  runs `generate`, so a `.langium` edit changes nothing a package-local run
+  sees. Regenerate before reading the verdict, or break hand-written code.
+
 The mutation audit asks the same question over a whole package. It finds
 assertions that were never load-bearing; it does not replace the control on the
 test in front of you.
