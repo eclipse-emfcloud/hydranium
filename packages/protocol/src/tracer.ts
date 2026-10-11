@@ -181,15 +181,10 @@ export class DefaultTracer implements Tracer {
          const suffix = this.timingSuffix(status, elapsed, options);
          this.logger[logLevel](`${label} [#${id} ${status}, ${Format.elapsed(elapsed)}${currentExtras()}${suffix}]`);
          if (status === 'failed') {
-            // The timing line above sits at `logLevel`, which may be below the
-            // active threshold — and on its own it never carries *why* the op
-            // failed. Surface the error at warn so the failure is never silent,
-            // with the stack at debug. Cancellations are normal control flow.
-            const detail = error instanceof Error ? error.message : String(error);
-            this.logger.warn(`${label} [#${id}] failed: ${detail}`);
-            if (error instanceof Error && error.stack) {
-               this.logger.debug(error.stack);
-            }
+            // Reporting the failure is the caller's, who receives it: a line at
+            // warn here would exist only while `logLevel` is enabled.
+            const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+            this.logger.debug(`${label} [#${id}] failed: ${detail}`);
          }
       };
       let result: T;

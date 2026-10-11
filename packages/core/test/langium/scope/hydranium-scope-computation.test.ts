@@ -7,12 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
    type AstNode,
    type AstNodeDescription,
    type AstNodeDescriptionProvider,
    type AstNodeLocator,
+   DefaultScopeComputation,
    type LangiumCoreServices,
    type LangiumDocument,
    MultiMap,
@@ -335,6 +336,25 @@ describe('HydraniumScopeComputation — collectLocalSymbols profiling', () => {
       expect(symbols.has).toBeDefined();
       const profileLines = lines.map(line => line.message).filter(message => message.includes('[profile scope-local'));
       expect(profileLines.some(message => message.includes('TypeOne ×2'))).toBe(true);
+   });
+
+   it("collects through Langium's walk at debug level too", async () => {
+      const baseWalk = vi.spyOn(DefaultScopeComputation.prototype, 'collectLocalSymbols');
+      const { tracer } = makeCapturingTracer(makeFakeClock());
+      const services = makeLocalSymbolServices(
+         makeNameProviderStub(node => (node as FakeNode).name),
+         tracer
+      );
+      const computation = new HydraniumScopeComputation(services as never);
+      Logger.setLevel('debug');
+
+      try {
+         await computation.collectLocalSymbols(makeContainerDocument());
+
+         expect(baseWalk).toHaveBeenCalledOnce();
+      } finally {
+         baseWalk.mockRestore();
+      }
    });
 
    it('delegates to the base walk with no profiling at the default info level', async () => {

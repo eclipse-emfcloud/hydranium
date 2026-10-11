@@ -10,15 +10,13 @@
 import {
    type AstNode,
    type AstNodeDescription,
-   AstUtils,
    DefaultScopeComputation,
-   interruptAndCheck,
    type LangiumDocument,
    type LocalSymbols,
-   MultiMap,
+   type MultiMap,
    UriUtils
 } from '@hydranium/langium';
-import { Logger, type Tracer } from '@hydranium/protocol';
+import { Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { HydraniumLanguageServices } from '../language-module.js';
@@ -35,8 +33,9 @@ import { type HydraniumAstNodeDescriptionProvider } from './ast-node-description
  *   `NameProvider.getName` defaults to the workspace-unique
  *   `getProjectQualifiedName`. Routing the local-symbols pass through
  *   `getName` would put qualified names in the per-document symbol map
- *   and break within-document bare-name references. {@link addLocalSymbol}
- *   bypasses the default and calls {@link NameProvider.getOwnName}
+ *   and break within-document bare-name references.
+ *   {@link addLocalSymbolByOwnName} bypasses the default and calls
+ *   {@link NameProvider.getOwnName}
  *   directly so local symbols stay keyed by bare names regardless of
  *   what `getName` returns.
  *
@@ -55,7 +54,7 @@ import { type HydraniumAstNodeDescriptionProvider } from './ast-node-description
  *
  * Performance: piggybacks on the existing single AST walk Langium does
  * for local-symbol collection — the AST-extension dispatch and the
- * own-name read both happen in `addLocalSymbol`, no extra traversal.
+ * own-name read both happen in `addLocalSymbolByOwnName`, no extra traversal.
  * The exported-symbol pass reads both name tiers once per node, no
  * duplicated walks.
  */
@@ -70,38 +69,30 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
       this.tracer = services.shared.Tracer.for(options.logName ?? 'ScopeComputation').trace('instantiated');
    }
 
+   /** The session {@link addLocalSymbol} records into while a `debug`-level walk runs. */
+   protected localSymbolsProfile: ProfileSession | undefined;
+
    /**
-    * Local-symbol collection with optional per-`$type` self-time profiling.
-    *
-    * Langium's default walks the full AST and calls {@link addLocalSymbol} per
-    * node. At the default `info` level this delegates straight to `super` (zero
-    * cost). At `debug` it reproduces the same walk under a `ProfileSession`
-    * so each `$type`'s contribution to the heaviest scope-computation pass is
-    * aggregated and reported line-based — the walk is gated rather than the
-    * per-node `scope`, since `ProfileSession.scope` is not itself level-gated.
-    *
-    * The instance carries no profiling state: the session is local to the call,
-    * which is safe because Langium's document builder runs `collectLocalSymbols`
-    * strictly one document at a time (`runCancelable`'s sequential `for…await`).
+    * Langium's local-symbol walk, with per-`$type` self-time profiling at
+    * `debug`. The walk is Langium's at every level: a copy run only at `debug`
+    * would drift from the one every other level runs. Overlapping builds share
+    * the session and blur each other's report.
     */
    override async collectLocalSymbols(document: LangiumDocument, cancelToken?: CancellationToken): Promise<LocalSymbols> {
       if (!Logger.isLevelEnabled('debug')) {
          return super.collectLocalSymbols(document, cancelToken);
       }
-      // Faithfully reproduces Langium's local-symbol walk (root's full-AST stream
-      // → addLocalSymbol per node) under a session. The MultiMap conforms to
-      // LocalSymbols. interruptAndCheck only when a token is supplied (the base
-      // defaults to CancellationToken.None, a no-op token).
-      const rootNode = document.parseResult.value;
-      const symbols = new MultiMap<AstNode, AstNodeDescription>();
-      const session = this.tracer.profile(`scope-local ${UriUtils.basename(document.uri)}`);
-      for (const node of AstUtils.streamAllContents(rootNode)) {
-         if (cancelToken) {
-            await interruptAndCheck(cancelToken);
+      const profile = this.tracer.profile(`scope-local ${UriUtils.basename(document.uri)}`);
+      this.localSymbolsProfile = profile;
+      let symbols: LocalSymbols;
+      try {
+         symbols = await super.collectLocalSymbols(document, cancelToken);
+      } finally {
+         if (this.localSymbolsProfile === profile) {
+            this.localSymbolsProfile = undefined;
          }
-         session.scope(node.$type, () => this.addLocalSymbol(node, document, symbols));
       }
-      session.report('debug');
+      profile.report('debug');
       return symbols;
    }
 
@@ -218,6 +209,16 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
       return this.services.shared.workspace.ProjectManager.getProject(document.uri)?.id;
    }
 
+   /** {@link addLocalSymbolByOwnName}, timed per `$type` while {@link localSymbolsProfile} is set. */
+   protected override addLocalSymbol(node: AstNode, document: LangiumDocument, symbols: MultiMap<AstNode, AstNodeDescription>): void {
+      const profile = this.localSymbolsProfile;
+      if (profile) {
+         profile.scope(node.$type, () => this.addLocalSymbolByOwnName(node, document, symbols));
+      } else {
+         this.addLocalSymbolByOwnName(node, document, symbols);
+      }
+   }
+
    /**
     * Bypasses Langium's `super.addLocalSymbol` (which would key the
     * local-symbols map by `nameProvider.getName(node)`, qualified by
@@ -233,7 +234,7 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
     * extension `compute` callbacks fire after this `addLocalSymbol` pass
     * completes for the whole document.
     */
-   protected override addLocalSymbol(node: AstNode, document: LangiumDocument, symbols: MultiMap<AstNode, AstNodeDescription>): void {
+   protected addLocalSymbolByOwnName(node: AstNode, document: LangiumDocument, symbols: MultiMap<AstNode, AstNodeDescription>): void {
       const container = node.$container;
       if (!container) {
          return;
