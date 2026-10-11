@@ -93,6 +93,34 @@ describe('DefaultTracer.time short-circuit', () => {
    });
 });
 
+describe('DefaultTracer.time failure', () => {
+   afterEach(() => Logger.setLevel('info'));
+
+   function makeFailingRun(): { run: Promise<unknown>; warn: ReturnType<typeof vi.spyOn>; lines: string[] } {
+      const lines: string[] = [];
+      const logger = new CapturingLogger(undefined, lines);
+      const warn = vi.spyOn(logger, 'warn');
+      const tracer = new DefaultTracer(logger, makeFakeClock());
+      return { run: tracer.time('op', () => Promise.reject(new Error('boom')), 'info', { logAfterMs: 0 }), warn, lines };
+   }
+
+   it('leaves reporting a failure to the caller, who receives it', async () => {
+      Logger.setLevel('info');
+      const { run, warn } = makeFailingRun();
+
+      await expect(run).rejects.toThrow('boom');
+      expect(warn).not.toHaveBeenCalled();
+   });
+
+   it('records the failure with its stack at debug', async () => {
+      Logger.setLevel('debug');
+      const { run, lines } = makeFailingRun();
+
+      await expect(run).rejects.toThrow('boom');
+      expect(lines.some(line => /^op \[#\d+\] failed: Error: boom\n\s+at /.test(line))).toBe(true);
+   });
+});
+
 describe('DefaultTracer.startTimer short-circuit', () => {
    afterEach(() => Logger.setLevel('info'));
 

@@ -475,8 +475,9 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
 
    /**
     * Keys the scope by {@link NameProvider.getOwnName} instead of Langium's
-    * `getName`. Same correction `HydraniumScopeComputation.addLocalSymbol`
-    * makes to the local-symbols pass, for the same reason: `getName` defaults
+    * `getName`. Same correction
+    * `HydraniumScopeComputation.addLocalSymbolByOwnName` makes to the
+    * local-symbols pass, for the same reason: `getName` defaults
     * to the project-qualified form here, so the base would key a member scope
     * by the fully qualified `Container.member` while the reference text after
     * the dot is the bare `member` — and nothing reports the mismatch, because

@@ -471,8 +471,8 @@ export class DefaultNameProvider implements NameProvider {
     * qualified names.
     *
     * **Within-document references stay keyed by bare names** via
-    * `HydraniumScopeComputation.addLocalSymbol`, which explicitly calls
-    * {@link getOwnName} when populating the local-symbols map (bypassing
+    * `HydraniumScopeComputation.addLocalSymbolByOwnName`, which explicitly
+    * calls {@link getOwnName} when populating the local-symbols map (bypassing
     * Langium's default that goes through this `getName`). The
     * separation lets `getName` carry the workspace-unique form for the
     * linker without forcing qualified names into the per-document
