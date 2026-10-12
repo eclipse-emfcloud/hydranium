@@ -282,7 +282,10 @@ export interface ModelService<
    snapshot(uri: string): AstDocument<TAst, TDiagnostic> | undefined;
    /**
     * The text a session's write of `model` to `uri` applies: a textual model
-    * as given, a structured one rewritten and serialised.
+    * as given, a structured one rewritten and serialised. Also the text to
+    * create a document with: for a `uri` with no text the trivia preservers
+    * still run, so it gets their defaults, such as
+    * `DocumentEndingPreserver.DEFAULT_ENDING`.
     */
    modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string>;
    getDocument(uri: string): LangiumDocument | undefined;
@@ -997,6 +1000,10 @@ export class DefaultModelService<
     * unary normalisation is just a rewrite that ignores `previous`, as
     * `NormalizeEmptyStringsContribution` does. The chain is empty by
     * default, so this is a no-op for adopters that register none.
+    *
+    * The serialised text then takes the trivia of the text it replaces, or of
+    * an empty one when `uri` has none, so a created document gets the
+    * preservers' defaults rather than the serializer's bare output.
     */
    async modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string> {
       if (typeof model === 'string') {
@@ -1009,10 +1016,10 @@ export class DefaultModelService<
       // about to replace rather than whatever a concurrent build left behind.
       let document = this.services.workspace.LangiumDocuments.getDocument(target);
       if (trivia !== undefined && document === undefined) {
-         const source = await this.textToTakeTriviaFrom(uri, target);
-         if (source !== undefined) {
-            document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
-         }
+         // With no text, an empty one: every preserver still runs, so a created
+         // document takes the defaults a blank one gets.
+         const source = (await this.textToTakeTriviaFrom(uri, target)) ?? '';
+         document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
       }
       const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
       const serialized = await this.serialize(uri, rewritten);
@@ -1348,7 +1355,10 @@ export class DefaultModelService<
    /**
     * The text a write into a document not yet built should take its trivia
     * from: the store's, which a write always has, since it writes only a
-    * document its client has open.
+    * document its client has open. `undefined` when the store holds no text
+    * for `uri`: a document not yet created, or a file on disk that the
+    * workspace has not read and no client has open. The preservers then run
+    * over empty text, as for a created document; no answer skips them.
     */
    protected async textToTakeTriviaFrom(uri: string, _target: URI): Promise<string | undefined> {
       return this.services.workspace.TextDocuments.get(uri)?.getText();

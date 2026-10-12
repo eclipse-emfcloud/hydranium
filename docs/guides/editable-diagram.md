@@ -178,10 +178,12 @@ has open.
 
 If the extra file may not exist yet, as on the first drag in a diagram that was
 never laid out, override `openForWrite` and create it there with
-`createSecondaryDocument`: a write never creates a file. If the write then
-fails before it lands, the diagram closes the file again, so the failed
-operation leaves no new file behind. The order-flow example's
-`OrderFlowGlspState` does this for its `.layout` file.
+`createSecondaryDocument`: a write never creates a file. Make the file's first
+text from an empty model with `ModelService.modelToText`, so it gets the
+ending a write would give it. If the write then fails before it lands, the
+diagram closes the file again, so the failed operation leaves no new file
+behind. The order-flow example's `OrderFlowGlspState` does this for its
+`.layout` file.
 
 Each extra file is checked against the version it had when the diagram last
 read its main file. To write over whatever another client did to it instead,

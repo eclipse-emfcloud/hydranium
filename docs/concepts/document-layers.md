@@ -267,7 +267,10 @@ What survives:
 
 - **Comments and the trailing whitespace.** The `trivia` preservers carry them
   over from the document being overwritten. They are registered per language
-  by default; an empty registry switches preservation off.
+  by default; an empty registry switches preservation off. A document created
+  from a model, or one that was blank, ends with the default ending,
+  `DocumentEndingPreserver.DEFAULT_ENDING` unless a subclass changes it, in
+  the line terminator of the body.
 - **Only comments tied to exactly one node.** A comment is dropped when its
   node has no identity from the `NameProvider`, when two siblings share one,
   or when the write deleted the node. Reordering a list can drop its members'
