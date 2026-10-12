@@ -33,7 +33,7 @@ import {
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
-import { CancellationToken, Disposable } from 'vscode-languageserver';
+import { type ApplyWorkspaceEditResult, CancellationToken, Disposable } from 'vscode-languageserver';
 import { AstDocument } from '../../documents/ast-document-manager.js';
 import { isClientGoneError } from '../../util/connection-liveness.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -71,8 +71,12 @@ import {
  */
 export const MODEL_UPDATE_EDIT = defineMessage('hydranium/core/model-update-edit', 'Update Model');
 
-/** Max time {@link DefaultModelService.settleSave} waits for the build to settle and the sync chain to drain. */
-const SAVE_SETTLE_TIMEOUT_MS = 10_000;
+/**
+ * Max time {@link ModelService.settleLanguageClient} waits. A save answers up to
+ * this long after its persist, so a client timing out one save's answer must
+ * allow it plus the persist.
+ */
+const LANGUAGE_CLIENT_SETTLE_TIMEOUT_MS = 10_000;
 
 /**
  * Constructor options for {@link ModelService}. All fields are optional,
@@ -289,6 +293,15 @@ export interface ModelService<
     */
    modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string>;
    getDocument(uri: string): LangiumDocument | undefined;
+   /**
+    * Resolve once the document's build has settled and the language client
+    * has answered the push of its text, applied or refused and logged, so a
+    * save answering after it does not race that push. Does not wait again for
+    * a push an earlier settle timed out on and the client has not answered
+    * since. Never rejects: past its bound it warns and resolves, and a failed
+    * wait is logged and resolves.
+    */
+   settleLanguageClient(uri: string, cancelToken?: CancellationToken): Promise<void>;
 
    /**
     * Fires as a document reaches the filter's phase, `Validated` by default.
@@ -389,6 +402,13 @@ export class DefaultModelService<
     */
    protected readonly syncChains = new Map<string, Promise<void>>();
    protected readonly pendingSync = new Map<string, string>();
+   /**
+    * The sync chains a settle timed out on, until the client answers their
+    * push. A later settle does not wait on one meanwhile: GLSP runs a diagram's
+    * saves one at a time, so each would add the full bound and a queued save
+    * outlast its client's timeout.
+    */
+   protected readonly timedOutSyncChains = new WeakSet<Promise<void>>();
 
    /** The live sessions this service started, by client id, for {@link getSession}. */
    protected readonly sessions = new Map<string, ClientSession<TAst, TDiagnostic, TTransfer>>();
@@ -836,40 +856,50 @@ export class DefaultModelService<
     * Wait for the document at `uri` to reach the integrity-settled landmark,
     * building a root behind its text as {@link ensureDocumentState} does, and
     * drain any in-flight write-path applyEdit sync chain (see {@link syncChains})
-    * so every language client reflects the latest content before a save returns.
-    * No-op tail for headless adopters — `syncChains` is empty without an LSP
-    * client. Bounded by {@link SAVE_SETTLE_TIMEOUT_MS} so a hung build, or an
-    * applyEdit reverse-RPC deadlock, can't freeze the caller; it returns rather
-    * than throwing, warning on timeout. A failed wait is logged at `error`, at
-    * `debug` when cancelled and at `warn` when the document is gone.
+    * so the language client has answered the push of the latest content before
+    * this returns; a push it refused twice is logged, not retried. No-op tail
+    * for headless adopters — `syncChains` is empty without an LSP client.
+    * Bounded at 10 s so a hung build, or an applyEdit reverse-RPC deadlock,
+    * can't freeze the caller; it returns rather than throwing, warning on
+    * timeout. A failed wait is logged at `error`, at `debug` when cancelled and
+    * at `warn` when the document is gone.
     *
-    * Adopters with a save flow that must converge editor + disk before returning
-    * (e.g. a dual form/code editor that would otherwise show a content-conflict
-    * dialog on rapid save) call this after their `save`.
+    * The framework's save handlers call this after their persist; an adopter's
+    * own save path that answers a client calls it after its `save` too.
     */
-   protected async settleSave(uri: string, cancelToken?: CancellationToken): Promise<void> {
+   async settleLanguageClient(uri: string, cancelToken?: CancellationToken): Promise<void> {
       const canonical = this.uriPolicy.canonicalUri(uri);
       const key = UriUtils.toUri(canonical).toString();
       // One race over both waits, so the bound is one deadline for the pair;
-      // a race per wait would let the save take twice the bound.
+      // a race per wait would let the caller wait twice the bound.
+      let awaitedChain: Promise<void> | undefined;
       const settled = (async (): Promise<void> => {
          await this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken, { sync: true });
-         await this.syncChains.get(key);
+         const chain = this.syncChains.get(key);
+         if (chain && this.timedOutSyncChains.has(chain)) {
+            this.tracer.withUri(key).debug('Language client settle not waiting again for a push the client has not answered');
+            return;
+         }
+         awaitedChain = chain;
+         await chain;
       })();
       // The settle ends a failed wait, so it logs it, at one level whether the wait failed inside the bound or after it.
       const reportFailedWait = (error: unknown, when: string): void => {
          const tracer = this.tracer.withUri(key);
          if (isOperationCancelled(error)) {
-            tracer.debug(`Save settle cancelled ${when}`);
+            tracer.debug(`Language client settle cancelled ${when}`);
          } else if (!this.services.workspace.LangiumDocuments.hasDocument(UriUtils.toUri(canonical))) {
-            tracer.warn(`Save settle failed ${when}; the document is gone. ${describeErrorWithStack(error)}`);
+            tracer.warn(`Language client settle failed ${when}; the document is gone. ${describeErrorWithStack(error)}`);
          } else {
-            tracer.error(`Save settle failed ${when}. ${describeErrorWithStack(error)}`);
+            tracer.error(`Language client settle failed ${when}. ${describeErrorWithStack(error)}`);
          }
       };
       try {
-         if ((await this.services.Clock.raceTimer(settled, SAVE_SETTLE_TIMEOUT_MS)) === TIMED_OUT) {
-            this.tracer.withUri(key).warn(`Save settle exceeded ${SAVE_SETTLE_TIMEOUT_MS}ms — returning anyway`);
+         if ((await this.services.Clock.raceTimer(settled, LANGUAGE_CLIENT_SETTLE_TIMEOUT_MS)) === TIMED_OUT) {
+            this.tracer.withUri(key).warn(`Language client settle exceeded ${LANGUAGE_CLIENT_SETTLE_TIMEOUT_MS}ms — returning anyway`);
+            if (awaitedChain) {
+               this.timedOutSyncChains.add(awaitedChain);
+            }
             // The race has settled, so a later failure of the wait, such as a given-up sync build, reaches no one else.
             void settled.catch((error: unknown) => reportFailedWait(error, 'after the timeout'));
          }
@@ -1054,13 +1084,13 @@ export class DefaultModelService<
       // build. Route by client registration (presence questions — both
       // predicates canonicalize internally, so a divergent open path still
       // resolves to the same record), but key the outbound sync by this
-      // CANONICAL URI — the same key `settleSave` looks the chain up under —
-      // so a save-settle can drain the in-flight applyEdit. The canonical→client-URI
+      // CANONICAL URI — the same key `settleLanguageClient` looks the chain up
+      // under — so a settle can drain the in-flight applyEdit. The canonical→client-URI
       // translation (a symlinked path the client opened, or a dual-open fan-out)
       // happens at the `applyEditToLanguageClient` egress, where the text store maps
       // the canonical key to the recorded language-client URI(s); driving the chain
-      // in client space here would key it under a URI `settleSave` never computes, so
-      // the drain would miss for a divergent open path.
+      // in client space here would key it under a URI `settleLanguageClient`
+      // never computes, so the drain would miss for a divergent open path.
       if (this.services.workspace.TextDocuments.isOpenInLanguageClient(document.textDocument.uri)) {
          this.syncOpenDocument(document.textDocument.uri, document.textDocument.getText());
       }
@@ -1132,7 +1162,19 @@ export class DefaultModelService<
          this.pendingSync.delete(uri);
          try {
             const textDocuments = this.services.workspace.TextDocuments;
-            let result = await textDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
+            // An answer, or a failure, ends a hang a settle timed out on, so the
+            // chain's later pushes are waited for again.
+            const push = async (): Promise<ApplyWorkspaceEditResult | undefined> => {
+               try {
+                  return await textDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
+               } finally {
+                  const chain = this.syncChains.get(uri);
+                  if (chain) {
+                     this.timedOutSyncChains.delete(chain);
+                  }
+               }
+            };
+            let result = await push();
             if (result?.applied === false && !this.pendingSync.has(uri) && textDocuments.get(uri)?.getText() === text) {
                // The push is addressed at the client's last known version, so a
                // rejection normally means the client's buffer moved while the
@@ -1156,7 +1198,7 @@ export class DefaultModelService<
                // other text: the keystroke that made the client refuse replaced it,
                // and re-pushing would overwrite that keystroke in the editor.
                uriLogger.debug(`Re-pushing a full replace after the language client refused applyEdit`);
-               result = await textDocuments.applyEditToLanguageClient(uri, text, { label: this.editLabel() });
+               result = await push();
                if (result?.applied === false) {
                   uriLogger.warn(`Language client rejected the full-replace retry too — client content is stale`);
                }

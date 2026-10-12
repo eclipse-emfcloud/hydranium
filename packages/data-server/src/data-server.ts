@@ -220,8 +220,9 @@ export interface DataServerOptions extends LogNameOptions {
     * `Validated` when {@link GetModelDocumentArgs.includeDiagnostics} is set.
     * A write (`updateModelDocument` / `updateModelDocuments` /
     * `saveModelDocument`) answers once its document is validated, as a
-    * session's write does. This option controls only the async notification
-    * phase.
+    * session's write does; a save then also waits for
+    * `ModelService.settleLanguageClient`. This option controls only the async
+    * notification phase.
     *
     * Default: `DocumentState.Validated` — validation is the last builder
     * phase and produces the full diagnostic set, so subscription events fired
@@ -753,11 +754,13 @@ export class DataServer<
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
       const astDocument = await this.requireSession(args.clientId).save(this.toSessionWrite(args));
+      await this.modelService.settleLanguageClient(args.uri);
       return { ...this.encodeDocument(astDocument), persisted: astDocument.persisted };
    }
 
    async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
       const version = await this.requireSession(args.clientId).persist({ uri: args.uri, baseVersion: args.baseVersion });
+      await this.modelService.settleLanguageClient(args.uri);
       const astDocument = await this.modelService.ensureDocumentState(args.uri, this.services.workspace.DocumentBuilder.finalBuildState());
       return { ...this.encodeDocument(astDocument), persisted: { version } };
    }

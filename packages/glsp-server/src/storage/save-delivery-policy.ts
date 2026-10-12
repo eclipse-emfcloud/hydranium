@@ -24,7 +24,12 @@
  * update path, per operation, where the diagram authors.
  */
 export type SaveDeliveryPolicy =
-   /** Await the write and propagate any failure to the GLSP save action. The default. */
+   /**
+    * Await the write and the language client's settle, and propagate any
+    * failure to the GLSP save action. The default. A language client that
+    * does not answer holds the first such save, and the diagram's queued
+    * actions, for the settle bound; saves after it do not wait for it again.
+    */
    | { kind: 'await' }
    /**
     * Fire-and-forget, logging and swallowing every failure. Correct when a

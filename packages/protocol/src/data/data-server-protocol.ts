@@ -141,10 +141,13 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
 
    /**
     * Write a document as the session `clientId`, which must have it open, and
-    * persist it to disk. The response is the latest build of the document,
-    * with the version of the text written in `persisted`. Save semantics
-    * depend on the filesystem-provider wiring; rejection paths surface as
-    * awaited promise rejections.
+    * persist it to disk. The response is the build of the text written, with
+    * its version in `persisted`, sent once the language client has answered
+    * the push of that text, applied or refused, or a server-side bound on
+    * that wait passes; it does not wait again for a push that wait already
+    * gave up on and the client has not answered since. Save semantics depend
+    * on the filesystem-provider wiring; rejection paths surface as awaited
+    * promise rejections.
     */
    saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
 
@@ -154,7 +157,9 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * unsaved text keeps its formatting. `baseVersion` is checked in the step
     * that takes the text, so text that moved on fails with a `ConflictError`
     * code. The saved event names this session, whoever wrote the text.
-    * Responds as {@link saveModelDocument} does.
+    * Answers after the same language-client wait as {@link saveModelDocument},
+    * with the document's latest build, read after that wait, so another
+    * session's write during it shows; `persisted` carries the version written.
     */
    persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
 
