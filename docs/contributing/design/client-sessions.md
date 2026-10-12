@@ -109,6 +109,26 @@ that closes without awaiting its save gets the `DocumentNotOpenError` code.
 A participant that only follows a document uses `connection.watchDocument`,
 since an open would hold the document for as long as it follows.
 
+A deletion of a document's file closes every session's open of it, and the
+session forgets the document at once, its unsaved writes with it, and unwatches
+it. It does not wait for its calls in flight, as a close does: a restore in that
+wait would re-open the file that is gone. It unwatches rather than closes,
+because the server keeps the watch of a deleted file, and a close could end a
+re-open of a re-created file still in flight. The connection hears the deletion
+only when its client binds `onDocumentDeleted`. A document that went while the
+connection was down, deleted or released with no file behind it, reaches the
+session as no deletion: its restore finds the re-open failing and a read of it
+answering without a model, and forgets it the same way. No one else learns of
+that loss, so unsaved text the document took with it, written since its last
+save or never saved since the session created it, goes into the
+`DATA_SESSION_UNSAVED_LOST` report; a deletion the session heard is only
+logged, since the client hears it too.
+
+An answer counts only for the open its call was sent under. One that arrives
+after a close or a deletion ended that open records nothing, even when the
+document is open again by then: a check that the document is open would take
+an edit made before a deletion as unsaved text of the re-created file.
+
 After a reconnect the connection registers each session again under its id and
 resume token, and the session re-opens, re-watches, and puts back what it wrote
 since each document's last save. It decides by text, not version: a revert
@@ -136,9 +156,10 @@ another client's edit. A document that cannot be re-opened is reported with
 again; a write that fails for another reason is reported the same way but kept,
 so the next restore decides again. A write based on `'any'` has no base, so it
 is reported rather than written again. The session drops a document's record
-on its own save, a close, the document turning clean, and another client
-writing over it while the connection holds, so the report covers only what the
-drop cost.
+on its own save, a close, the deletion of its file, the document turning clean,
+and another client writing over it while the connection holds, so the report
+covers only what the drop cost. A document closed or deleted while a restore
+runs is neither restored nor reported.
 
 ### In Theia
 
