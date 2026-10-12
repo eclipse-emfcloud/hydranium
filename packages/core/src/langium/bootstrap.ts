@@ -10,7 +10,7 @@
 import { type Logger } from '@hydranium/protocol';
 import { type LangiumSharedCoreServices } from '@hydranium/langium';
 import { type LangiumServices, type LangiumSharedServices } from '@hydranium/langium/lsp';
-import type { ServerSharedServicesMinimal } from './shared-services.js';
+import type { ServerSharedServices } from './module.js';
 import { collectProducibleTypes } from './language-types.js';
 import { assertSingleLangiumCopy } from './single-langium-copy.js';
 import { DefaultAstDocumentManager } from '../documents/ast-document-manager.js';
@@ -327,17 +327,24 @@ export function warnOnUnexpectedBindings(shared: LangiumSharedServices, language
  *   BuildPhasePass that sheds the CST of closed documents. The framework
  *   default strategy is `always-keep`, so the pass runs but sheds nothing
  *   until an adopter configures a shedding strategy.
+ * - **`workspace.AstDocumentManager`** — subscribes to the build pipeline
+ *   and the text store to track opens, deletions and each build's causes.
+ * - **`model.ModelService`** — subscribes to the settled document phase to
+ *   bring the language client up to date. A tree without an LSP `initialize`,
+ *   such as a headless init, may not resolve it before the first build.
  *
  * Consumers with no additional eager targets can omit the third argument
  * to {@link bootstrapLangium} — the parameter default is this exact set.
  * Adopters needing extra eager targets spread this constant into their own
  * array and append their accessors.
  */
-export const DEFAULT_EAGER_SERVICES: ReadonlyArray<(services: ServerSharedServicesMinimal) => unknown> = [
+export const DEFAULT_EAGER_SERVICES: ReadonlyArray<(services: ServerSharedServices) => unknown> = [
    services => services.workspace.ProjectManager,
    services => services.workspace.BuildPipelineIntegration,
    services => services.profilers.LangiumProfiler,
-   services => services.workspace.CstResidencyService
+   services => services.workspace.CstResidencyService,
+   services => services.workspace.AstDocumentManager,
+   services => services.model.ModelService
 ];
 
 /**
@@ -387,7 +394,7 @@ export const DEFAULT_EAGER_SERVICES: ReadonlyArray<(services: ServerSharedServic
  * registers every language before validating slots or constructing the
  * eager set.
  */
-export function bootstrapLangium<TShared extends LangiumSharedServices & ServerSharedServicesMinimal, TLang extends LangiumServices>(
+export function bootstrapLangium<TShared extends LangiumSharedServices & ServerSharedServices, TLang extends LangiumServices>(
    shared: TShared,
    language: TLang,
    eagerlyConstructedServices: ReadonlyArray<(services: TShared) => unknown> = DEFAULT_EAGER_SERVICES
@@ -420,22 +427,18 @@ export function bootstrapLangium<TShared extends LangiumSharedServices & ServerS
  *  4. {@link assertReflectionCoversLanguages} runs **once**, on the one
  *     shared `AstReflection`.
  *  5. Eager accessors run **once**, after all registrations. They take
- *     the shared tier, and the framework's eager set is shared-tier only
- *     (`ProjectManager`, `BuildPipelineIntegration`, `LangiumProfiler`,
- *     `CstResidencyService`) — `BuildPipelineIntegration` in particular
- *     routes per document URI to each language's `IntegrityService` /
- *     `AstExtensionService`, so it must be constructed knowing all of
- *     them. Running the set per language would attach its
- *     `documentBuilder` listeners N times and enforce each phase N times.
+ *     the shared tier, and the framework's eager set is shared-tier only —
+ *     `BuildPipelineIntegration` in particular routes per document URI to
+ *     each language's `IntegrityService` / `AstExtensionService`, so it
+ *     must be constructed knowing all of them. Running the set per language
+ *     would attach its `documentBuilder` listeners N times and enforce each
+ *     phase N times.
  *
  * Throws when `languages` is empty: a shared tier with no registered
  * language never validates its slots, which silently defers a
  * composition error to the first build.
  */
-export function bootstrapLangiumLanguages<
-   TShared extends LangiumSharedServices & ServerSharedServicesMinimal,
-   TLang extends LangiumServices
->(
+export function bootstrapLangiumLanguages<TShared extends LangiumSharedServices & ServerSharedServices, TLang extends LangiumServices>(
    shared: TShared,
    languages: ReadonlyArray<TLang>,
    eagerlyConstructedServices: ReadonlyArray<(services: TShared) => unknown> = DEFAULT_EAGER_SERVICES
