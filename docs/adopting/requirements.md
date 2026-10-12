@@ -99,6 +99,63 @@ Set one of:
 `"Node16"` reads `exports` too, but `module: "Node16"` rejects a CommonJS file
 that imports an ES-module `@hydranium/*` package (TS1479).
 
+### Tools that resolve imports their own way
+
+Some tools resolve with their own settings rather than your `tsconfig.json`.
+They miss every specifier reachable only through `exports`, which `tsc`
+resolves: each `@hydranium/<pkg>/<name>` subpath, and `vscode-jsonrpc` even at
+its root.
+
+**ts-jest** cannot load TypeScript 7, the compiler `init` declares. Keep it for
+`tsc` and give ts-jest TypeScript 6's API under the name `typescript`:
+
+```json
+{
+  "devDependencies": {
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  }
+}
+```
+
+ts-jest loads `typescript` from the directory Jest runs in first. In a
+workspace whose root declares TypeScript 7, put the same pair in the root's
+`devDependencies`, or run Jest from the member (`npm test -w <member>`).
+
+On its CommonJS path, ts-jest replaces `Node16`, `NodeNext` and `Bundler`
+with `Node10`, which ignores `exports`, unless it is 29.4.11 or later on
+TypeScript 6 with `moduleResolution` set, as above. Otherwise its type-check
+reports `TS2307` for each of them. Either:
+
+- run ts-jest 29.4.11 or later on TypeScript 6, or on the pair above, with
+  `moduleResolution` set;
+- or set `diagnostics: false` in the ts-jest options and keep `tsc` as your
+  type-check.
+
+A Jest test on the CommonJS path also cannot load an ES-module package, which
+is every `@hydranium/*` package except `@hydranium/protocol` and the Theia
+client packages: it fails with `Must use import to load ES Module`. Run Jest
+under `node --experimental-vm-modules`, and either:
+
+- use Jest 30.4 or later on Node 24.9 or later;
+- or switch Jest to its ESM mode, with `extensionsToTreatAsEsm: ['.ts']` and
+  ts-jest's `useESM`. From Jest 30.4, ts-jest reports no type errors there.
+
+**eslint-plugin-import** resolves through `eslint-import-resolver-node`, so
+`import/no-unresolved` reports each of them with
+`Unable to resolve path to module`. In your ESLint `settings`, either:
+
+- install `eslint-import-resolver-typescript` and set
+  `'import/resolver': { typescript: true }`, which reads `exports`;
+- or set
+  `'import/resolver': { node: { engines: false, exportsCategory: 'require-esm' } }`,
+  the `exports` rules of the Node floor above. eslint-plugin-import brings
+  `eslint-import-resolver-node` 0.3.10, the first release that reads them.
+  0.4.0, which you install yourself
+  (`npm i -D eslint-import-resolver-node@0.4.0`), needs no setting: it reads
+  them from your `engines.node`, which `init` sets. On 0.4.0,
+  `exportsCategory` without `engines: false` resolves nothing.
+
 ### Why `vscode-jsonrpc@8` is not a way out
 
 Every protocol release in the Langium chain pins a 9.x exactly, so installing
