@@ -87,6 +87,10 @@ export interface YamlSerializerOptions extends AbstractSerializerOptions {
  * points. YAML's one addition is unquoted-terminal emission, handled by its
  * {@link serializeCustomValue} override driven by
  * {@link YamlSerializerOptions.unquotedProperties}.
+ *
+ * The grammar, not a YAML parser, reads its quoted strings back, so a control
+ * character without a short escape is written raw, which a strict YAML parser
+ * such as js-yaml refuses.
  */
 export class YamlSerializer<TAst extends AstNode = AstNode, TTransfer extends TransferElement = TransferElement> extends AbstractSerializer<
    TAst,

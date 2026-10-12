@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import type { AstReflection } from '@hydranium/langium';
+import { type AstReflection, ValueConverter } from '@hydranium/langium';
 import type { HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { YamlSerializer, type YamlSerializerOptions } from '../../../src/langium/serialization/yaml-serializer.js';
 import { makeFakeReflection, makeNoopTracer } from '../../../src/testing/index.js';
@@ -147,8 +147,69 @@ describe('YamlSerializer', () => {
       });
    });
 
+   describe('string quoting', () => {
+      // Langium's default `STRING` terminal, read through its default value converter.
+      const stringTerminal = /^(?:"(\\.|[^"\\])*"|'(\\.|[^'\\])*')$/;
+      const readBack = (quoted: string): string | undefined =>
+         stringTerminal.test(quoted) ? ValueConverter.convertString(quoted) : undefined;
+      const serializer = buildYaml(YamlSerializer, {
+         reflection: makeFakeReflection({ TypeOne: { ref: { referenceType: 'TypeTwo' } } }),
+         propertyOrder: new Map([['TypeOne', ['name', 'ref']]]),
+         unquotedProperties: new Set(),
+         inlineSerializedTypes: new Set(),
+         referenceWrapperTypes: new Map()
+      });
+
+      // Each short escape sits between letters: a blank string is skipped, not written.
+      it.each(['say "hi"', 'C:\\temp', 'a\u0001b', 'a\bb', 'a\fb', 'a\nb', 'a\rb', 'a\tb', 'a\vb', 'a\0b'])(
+         'writes %j as a primitive and as a reference that the default STRING terminal reads back',
+         async value => {
+            const text = await serializer.serializeAst({ $type: 'TypeOne', name: value, ref: value } as never);
+            const quoted = text.split('\n').map(line => line.slice(line.indexOf(': ') + 2));
+            expect(quoted.map(readBack)).toEqual([value, value]);
+         }
+      );
+
+      it("escapes only the backslash, the quote and the converter's short escapes", async () => {
+         // A raw control character also survives the round trip, so only the exact text pins each escape.
+         const text = await serializer.serializeAst({ $type: 'TypeOne', name: 'a"\\\u0001\u00e9\b\f\n\r\t\v\0' } as never);
+         expect(text).toBe('name: "a\\"\\\\\u0001\u00e9\\b\\f\\n\\r\\t\\v\\0"');
+      });
+
+      it('reads the escape table through the subclass', async () => {
+         class EscapesTab extends YamlSerializer {
+            protected static override readonly STRING_ESCAPES: ReadonlyMap<string, string> = new Map([['\t', '\\u0009']]);
+         }
+         const escapesTab = buildYaml(EscapesTab, {
+            reflection: makeFakeReflection({ TypeOne: {} }),
+            propertyOrder: new Map([['TypeOne', ['name']]]),
+            unquotedProperties: new Set(),
+            inlineSerializedTypes: new Set(),
+            referenceWrapperTypes: new Map()
+         });
+         expect(await escapesTab.serializeAst({ $type: 'TypeOne', name: 'a\t"b' } as never)).toBe('name: "a\\u0009"b"');
+      });
+
+      it('quotes primitives, references and reference arrays through an overridden formatString', async () => {
+         class SingleQuoted extends YamlSerializer {
+            protected override formatString(value: string): string {
+               return `'${value}'`;
+            }
+         }
+         const singleQuoted = buildYaml(SingleQuoted, {
+            reflection: makeFakeReflection({ TypeOne: { ref: { referenceType: 'TypeTwo' }, refs: { referenceType: 'TypeTwo' } } }),
+            propertyOrder: new Map([['TypeOne', ['name', 'ref', 'refs']]]),
+            unquotedProperties: new Set(),
+            inlineSerializedTypes: new Set(),
+            referenceWrapperTypes: new Map()
+         });
+         const node = { $type: 'TypeOne', name: 'a', ref: 'b', refs: ['c'] };
+         expect(await singleQuoted.serializeAst(node as never)).toBe("name: 'a'\nref: 'b'\nrefs:\n  - 'c'");
+      });
+   });
+
    describe('unquoted properties', () => {
-      it('emits unquoted enum-like values without JSON.stringify', async () => {
+      it('emits unquoted enum-like values without quotes', async () => {
          const serializer = buildYaml(YamlSerializer, {
             reflection: makeFakeReflection({ Card: {} }),
             propertyOrder: new Map([['Card', ['kind']]]),

@@ -123,6 +123,39 @@ describe('JsonSerializer', () => {
       });
    });
 
+   describe('string quoting', () => {
+      const value = 'say "hi" C:\\temp\u0001\v\0';
+
+      it.each([
+         ['string', value],
+         ['object-wrapper', { $ref: value }]
+      ] as const)('keeps JSON escapes under %s references, so a JSON parser reads every string back', async (encoding, ref) => {
+         const serializer = buildJson(JsonSerializer, {
+            reflection: makeFakeReflection({ TypeOne: { ref: { referenceType: 'TypeTwo' } } }),
+            propertyOrder: new Map([['TypeOne', ['name', 'ref']]]),
+            referenceWrapperTypes: new Map(),
+            referenceEncoding: encoding
+         });
+         const text = await serializer.serializeAst({ $type: 'TypeOne', name: value, ref: value } as never);
+         expect(JSON.parse(text)).toEqual({ name: value, ref });
+      });
+
+      it('quotes primitives and wrapped references through an overridden formatString', async () => {
+         class Uppercased extends JsonSerializer {
+            protected override formatString(text: string): string {
+               return super.formatString(text.toUpperCase());
+            }
+         }
+         const serializer = buildJson(Uppercased, {
+            reflection: makeFakeReflection({ TypeOne: { ref: { referenceType: 'TypeTwo' } } }),
+            propertyOrder: new Map([['TypeOne', ['name', 'ref']]]),
+            referenceWrapperTypes: new Map()
+         });
+         const text = await serializer.serializeAst({ $type: 'TypeOne', name: 'a', ref: 'b' } as never);
+         expect(JSON.parse(text)).toEqual({ name: 'A', ref: { $ref: 'B' } });
+      });
+   });
+
    describe('arrays', () => {
       it('serializes a primitive array as a pretty JSON array', async () => {
          const serializer = buildJson(JsonSerializer, {

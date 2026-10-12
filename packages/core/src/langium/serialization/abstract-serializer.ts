@@ -100,8 +100,11 @@ export interface AbstractSerializerOptions extends LogNameOptions {
  * **Extension points** (override in a subclass):
  * - {@link serializeReferenceText} — extract the textual form of a
  *   cross-reference; defaults to the value's `$refText`.
+ * - {@link formatString} — quote a string, as a primitive or a reference, for
+ *   the grammar's string terminal; the one override for a grammar whose
+ *   terminal or value converter differs from Langium's default.
  * - {@link formatReferenceValue} — format a cross-reference value for emission;
- *   defaults to `JSON.stringify`.
+ *   defaults to {@link formatString}.
  * - {@link serializeCustomValue} — type-specific serialization for values
  *   that don't fit the generic paths. Runs after all reference detection, so
  *   references never reach this hook. Returns `undefined` to fall through to
@@ -114,6 +117,25 @@ export abstract class AbstractSerializer<
    TAst extends AstNode = AstNode,
    TTransfer extends TransferElement = TransferElement
 > implements Serializer<TAst, TTransfer> {
+   /**
+    * The escapes {@link formatString} writes, read through the subclass, so a
+    * grammar adding one overrides this table alone. Langium's
+    * `ValueConverter.convertString` decodes the short escapes here and reads
+    * any other escaped character as itself, which is how `\\` and `\"` read
+    * back, and why a `\u` escape would read back as `u`.
+    */
+   protected static readonly STRING_ESCAPES: ReadonlyMap<string, string> = new Map([
+      ['\\', '\\\\'],
+      ['"', '\\"'],
+      ['\b', '\\b'],
+      ['\f', '\\f'],
+      ['\n', '\\n'],
+      ['\r', '\\r'],
+      ['\t', '\\t'],
+      ['\v', '\\v'],
+      ['\0', '\\0']
+   ]);
+
    protected readonly reflection: AstReflection;
    protected readonly tracer: Tracer;
 
@@ -407,29 +429,42 @@ export abstract class AbstractSerializer<
    }
 
    /**
-    * Format a cross-reference value for emission. Defaults to `JSON.stringify`.
-    * Override to apply language-specific reference quoting — e.g. an
-    * id-reference formatter that mirrors the grammar's id convention.
+    * Format a cross-reference value for emission. Defaults to
+    * {@link formatString}. Override to apply language-specific reference
+    * quoting — e.g. an id-reference formatter that mirrors the grammar's id
+    * convention.
     *
     * Returns {@link MaybePromise} so adopters with async formatting needs
     * (remote schema lookup, external canonical-id resolution) can return a
     * `Promise<string>`. Sync overrides remain valid.
     */
    protected formatReferenceValue(value: string): MaybePromise<string> {
-      return JSON.stringify(value);
+      return this.formatString(value);
    }
 
    /**
-    * Format a primitive value (string, number, boolean) for emission. Defaults
-    * to `JSON.stringify`, which quotes strings, formats numbers/booleans, and
-    * is valid both as a YAML scalar and a JSON value.
+    * Format a primitive value (string, number, boolean) for emission. A string
+    * goes through {@link formatString}, any other value through
+    * `JSON.stringify`.
     *
     * Returns {@link MaybePromise} so adopters with async formatting needs
     * (e.g. delegating to `prettier.format` for a specific value class) can
     * return a `Promise<string>`.
     */
    protected formatPrimitive(value: unknown): MaybePromise<string> {
-      return JSON.stringify(value);
+      return typeof value === 'string' ? this.formatString(value) : JSON.stringify(value);
+   }
+
+   /**
+    * Quote a string, as a primitive or a reference, for its reader: the
+    * grammar's string terminal and value converter. Defaults to the inverse of
+    * Langium's default `STRING` terminal and converter: double quotes, `\` and
+    * `"` escaped, the converter's short escapes, every other character as it
+    * is. A grammar with another terminal or converter overrides this.
+    */
+   protected formatString(value: string): string {
+      const escapes = (this.constructor as typeof AbstractSerializer).STRING_ESCAPES;
+      return `"${Array.from(value, char => escapes.get(char) ?? char).join('')}"`;
    }
 
    /**
