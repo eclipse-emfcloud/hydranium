@@ -63,7 +63,7 @@ describe('order-flow .layout validation', () => {
       );
    });
 
-   it('reports nothing for a layout with one entry per node — the control on the row above', async () => {
+   it('reports nothing for a layout with one entry per node, as the control for the row above', async () => {
       const { diagnostics } = await validateLayoutWith([]);
 
       expect(diagnostics).toEqual([]);

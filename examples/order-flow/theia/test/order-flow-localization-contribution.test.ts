@@ -43,7 +43,7 @@ function makeRegistry(provider: LocalizationProvider): LocalizationRegistry {
    return registry;
 }
 
-describe('the German localization contribution', () => {
+describe('OrderFlowLocalizationContribution', () => {
    let provider: LocalizationProvider;
 
    beforeEach(async () => {

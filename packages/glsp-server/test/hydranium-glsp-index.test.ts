@@ -181,7 +181,7 @@ describe('HydraniumGlspIndex', () => {
       });
    });
 
-   describe('findId / doFindId hook', () => {
+   describe('findId and the doFindId hook', () => {
       it('returns the ElementKeyProvider local id when available', () => {
          const node = makeAstNode();
          const { index } = createIndex(new Map([[node, 'n1']]));
@@ -312,7 +312,7 @@ describe('HydraniumGlspIndex', () => {
       });
    });
 
-   describe('registerElementId / findElementIds', () => {
+   describe('registerElementId and findElementIds', () => {
       // Keyed by the element's stable id, so the represented node must resolve one.
       it('returns the ids registered as representing an element', () => {
          const node = makeAstNode();

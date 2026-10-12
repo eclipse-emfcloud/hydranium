@@ -186,7 +186,7 @@ class TransitiveProjectManager extends TestProjectManager {
 // Discovery
 // ============================================================
 
-describe('AbstractProjectManager — discovery', () => {
+describe('AbstractProjectManager discovery', () => {
    it('parses descriptors, populates registry, resolves ready, emits added event', async () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);
@@ -219,7 +219,7 @@ describe('AbstractProjectManager — discovery', () => {
       expect(mgr.events).toEqual([]);
    });
 
-   it('discovery is fail-soft — invalid descriptors log and others continue', async () => {
+   it('keeps discovery fail-soft, so invalid descriptors log and others continue', async () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);
       mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
@@ -249,7 +249,7 @@ describe('AbstractProjectManager — discovery', () => {
 // Queries
 // ============================================================
 
-describe('AbstractProjectManager — membership queries', () => {
+describe('AbstractProjectManager membership queries', () => {
    let stubs: Stubs;
    let mgr: TestProjectManager;
 
@@ -327,7 +327,7 @@ describe('AbstractProjectManager — membership queries', () => {
       expect(mgr.getVisibleProjects('does-not-exist')).toEqual([]);
    });
 
-   it('isVisible: cross-project visible via dependencies', async () => {
+   it('isVisible holds across projects via dependencies', async () => {
       stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B]);
       const transitive = new TestProjectManager(stubs);
       transitive.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
@@ -337,17 +337,17 @@ describe('AbstractProjectManager — membership queries', () => {
       expect(transitive.isVisible('B@1', 'A@1')).toBe(true);
    });
 
-   it('isVisible: cross-project not visible without dependency', () => {
+   it('isVisible does not hold across projects without a dependency', () => {
       expect(mgr.isVisible('A@1', 'B@1')).toBe(false);
    });
 
-   it('isVisible: self gating via selfVisible flag', () => {
+   it('isVisible gates a project seeing itself via the selfVisible flag', () => {
       expect(mgr.isVisible('A@1', 'A@1')).toBe(false); // default
       expect(mgr.isVisible('A@1', 'A@1', true)).toBe(true);
       expect(mgr.isVisible('A@1', 'A@1', false)).toBe(false);
    });
 
-   it('isVisible: unknown source returns false regardless of selfVisible', () => {
+   it('isVisible returns false for an unknown source regardless of selfVisible', () => {
       expect(mgr.isVisible('does-not-exist', 'A@1')).toBe(false);
       expect(mgr.isVisible('does-not-exist', 'does-not-exist', true)).toBe(false);
    });
@@ -357,7 +357,7 @@ describe('AbstractProjectManager — membership queries', () => {
 // Incremental updates
 // ============================================================
 
-describe('AbstractProjectManager — incremental updates', () => {
+describe('AbstractProjectManager incremental updates', () => {
    it('ignores a virtual descriptor URI on build update (a virtual document is never a descriptor)', async () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);
@@ -557,7 +557,7 @@ describe('AbstractProjectManager — incremental updates', () => {
 // Listener registration / disposal
 // ============================================================
 
-describe('AbstractProjectManager — onProjectsChanged', () => {
+describe('AbstractProjectManager.onProjectsChanged', () => {
    it('listener fires on registry change and dispose stops it', async () => {
       const stubs = makeStubs([URI_DESCRIPTOR_A]);
       const mgr = new TestProjectManager(stubs);
@@ -597,7 +597,7 @@ describe('AbstractProjectManager — onProjectsChanged', () => {
 // isUnqualifiedProjectReference / isSingleProject
 // ============================================================
 
-describe('AbstractProjectManager — isUnqualifiedProjectReference', () => {
+describe('AbstractProjectManager.isUnqualifiedProjectReference', () => {
    it('true when the owning project uses the unqualified-reference sentinel', async () => {
       const stubs = makeStubs([URI_DESCRIPTOR_A, URI_MEMBER_A1]);
       const mgr = new TestProjectManager(stubs);
@@ -632,7 +632,7 @@ describe('AbstractProjectManager — isUnqualifiedProjectReference', () => {
    });
 });
 
-describe('AbstractProjectManager — isSingleProject', () => {
+describe('AbstractProjectManager.isSingleProject', () => {
    it('true with zero projects', () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);
@@ -717,7 +717,7 @@ function makeFsStubs(tree: FsTree): Stubs {
    return { ...stubs, fileSystemProvider };
 }
 
-describe('AbstractProjectManager — default FS descriptor walk', () => {
+describe('AbstractProjectManager default FS descriptor walk', () => {
    const ROOT = 'file:///ws';
 
    it('walks recursively and collects descriptor files', async () => {
@@ -830,7 +830,7 @@ describe('AbstractProjectManager — default FS descriptor walk', () => {
 // getProject closest-ancestor selection
 // ============================================================
 
-describe('AbstractProjectManager — getProject closest-ancestor', () => {
+describe('AbstractProjectManager.getProject closest ancestor', () => {
    const OUTER_DESC = URI.parse('file:///ws/project.a');
    const INNER_DESC = URI.parse('file:///ws/inner/project.a');
    const INNER_MEMBER = URI.parse('file:///ws/inner/Element.a');
@@ -897,7 +897,7 @@ describe('AbstractProjectManager — getProject closest-ancestor', () => {
 // getAffectedProjects default transitive cascade (reverse dep walk)
 // ============================================================
 
-describe('AbstractProjectManager — default getAffectedProjects cascade', () => {
+describe('AbstractProjectManager.getAffectedProjects default cascade', () => {
    it('walks the dependency graph transitively in reverse', async () => {
       // C → B → A. A change to A must cascade to B and C through the default
       // getAffectedProjects fixpoint loop (no override).
@@ -953,7 +953,7 @@ describe('AbstractProjectManager — default getAffectedProjects cascade', () =>
 // getVisibleProjects cycle-safety (collectVisibleProjects visited guard)
 // ============================================================
 
-describe('AbstractProjectManager — getVisibleProjects cycles', () => {
+describe('AbstractProjectManager.getVisibleProjects cycles', () => {
    it('handles a dependency cycle without infinite recursion or duplicates', async () => {
       // A → B → A. collectVisibleProjects' visited guard must stop the recursion.
       const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B]);
@@ -985,7 +985,7 @@ describe('AbstractProjectManager — getVisibleProjects cycles', () => {
 // emit listener-snapshot isolation (the .slice() in emit)
 // ============================================================
 
-describe('AbstractProjectManager — emit snapshot isolation', () => {
+describe('AbstractProjectManager.emit snapshot isolation', () => {
    it('a listener that registers another listener during emit does not fire it for the same event', async () => {
       const stubs = makeStubs([URI_DESCRIPTOR_A]);
       const mgr = new TestProjectManager(stubs);
@@ -1010,7 +1010,7 @@ describe('AbstractProjectManager — emit snapshot isolation', () => {
 // onBuildUpdate: invalid descriptor drops a previously-valid project
 // ============================================================
 
-describe('AbstractProjectManager — descriptor becomes invalid', () => {
+describe('AbstractProjectManager when a descriptor becomes invalid', () => {
    it('drops a project whose descriptor no longer parses', async () => {
       const stubs = makeStubs([URI_DESCRIPTOR_A, URI_MEMBER_A1]);
       const mgr = new TestProjectManager(stubs);
@@ -1042,7 +1042,7 @@ class CustomConceptManager extends TestProjectManager {
    }
 }
 
-describe('AbstractProjectManager — change logging', () => {
+describe('AbstractProjectManager change logging', () => {
    it('logs Add/Update with the default concept name and ws-relative location on discovery', async () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);

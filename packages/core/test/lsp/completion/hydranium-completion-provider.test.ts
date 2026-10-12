@@ -279,7 +279,7 @@ describe('HydraniumCompletionProvider comment suppression', () => {
    });
 });
 
-describe('HydraniumCompletionProvider fillCompletionItem token upgrade', () => {
+describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
    // Single line whose second `Element` token spans offsets 21..28, with a
    // space at 28 for the "cursor is not inside a token" case, a `:` at 19 for
    // the "cursor on punctuation" case, and `extends` at 29..36 so a widened

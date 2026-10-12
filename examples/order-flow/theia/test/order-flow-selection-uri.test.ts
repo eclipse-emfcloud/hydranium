@@ -65,7 +65,7 @@ describe('orderFlowUriOf', () => {
       expect(orderFlowUriOf({ getResourceUri: () => undefined })).toBeUndefined();
    });
 
-   it.each([undefined, null, {}, [], 'a string', 42])('declines the unrelated selection %o', selection => {
+   it.each([undefined, null, {}, [], 'a string', 42])('declines the unrelated selection %s', selection => {
       expect(orderFlowUriOf(selection)).toBeUndefined();
    });
 

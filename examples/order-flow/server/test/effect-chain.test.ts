@@ -59,7 +59,7 @@ function candidates(harness: OrderFlowHarness, effect: Write | Read, property: '
       .toArray();
 }
 
-describe('order-flow effect chain — the nested cross-grammar reference', () => {
+describe('order-flow effect chain through the nested cross-grammar reference', () => {
    it('resolves entity, field and enum literal of `writes Order.status = PAID`', async () => {
       const harness = await makeWorkspaceHarness();
       const write = writeOf(taskNamed(documentFor<ProcessModel>(harness, 'orders/fulfillment.process').parseResult.value, 'Pay'));

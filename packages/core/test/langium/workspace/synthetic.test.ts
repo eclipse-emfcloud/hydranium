@@ -58,7 +58,7 @@ describe('isSyntheticNode', () => {
       expect(isSyntheticNode(makeFakeAstNode<FakeNode>({ $type: 'X', children: [] }))).toBe(false);
    });
 
-   it('returns false for nodes carrying $synthetic: false (explicit non-synthetic)', () => {
+   it('returns false for nodes carrying `$synthetic: false` (explicit non-synthetic)', () => {
       const node = makeFakeAstNode<FakeNode>({ $type: 'X', children: [] });
       (node as { $synthetic?: boolean }).$synthetic = false;
       expect(isSyntheticNode(node)).toBe(false);

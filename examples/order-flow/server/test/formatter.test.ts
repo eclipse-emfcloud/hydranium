@@ -86,7 +86,7 @@ describe('order-flow formatter', () => {
       expect(await format(harness, 'entity Empty {}', '.domain')).toBe('entity Empty {}');
    });
 
-   it('is idempotent — formatting canonical output changes nothing', async () => {
+   it('is idempotent, so formatting canonical output changes nothing', async () => {
       const canonical = ['process Fulfillment for Order {', '   task Pay', '      writes Order.status = PAID', '}'].join('\n');
       expect(await format(harness, canonical, '.process')).toBe(canonical);
    });

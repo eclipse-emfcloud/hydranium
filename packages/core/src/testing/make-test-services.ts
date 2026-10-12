@@ -169,7 +169,7 @@ export interface MakeTestServicesOptions<
     *
     * **Default: no `ServiceRegistry` slot at all.** Binding an empty registry
     * by default would silently change behaviour for the tests that rely on the
-    * slot being absent — `ModelService.rewriteModel` optional-chains it
+    * slot being absent — `DefaultModelService.rewriteModel` optional-chains it
     * precisely for those bundles — so a registry appears only when a test asks
     * for one.
     */

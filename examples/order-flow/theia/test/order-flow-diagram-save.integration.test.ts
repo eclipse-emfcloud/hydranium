@@ -84,7 +84,7 @@ afterEach(() => {
    scratch = undefined;
 });
 
-describe('GLSP’s saveable on the order-flow diagram', () => {
+describe('GLSPSaveable on the order-flow diagram', () => {
    it('settles a save of a drag on the save’s own dirty state', async () => {
       scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-diagram-save-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem }, {});

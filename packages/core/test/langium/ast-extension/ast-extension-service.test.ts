@@ -51,7 +51,7 @@ function makeService(): AstExtensionService {
    return new DefaultAstExtensionService(makeNoopLanguageServices());
 }
 
-describe('AstExtensionService — extendNode', () => {
+describe('AstExtensionService.extendNode', () => {
    it('runs only registrations whose `nodeFilter` matches the node', () => {
       const service = makeService();
       const fooCalls: AstNode[] = [];
@@ -77,7 +77,7 @@ describe('AstExtensionService — extendNode', () => {
       expect(barCalls).toEqual([]);
    });
 
-   it('dispatches in priority order — lower runs first', () => {
+   it('dispatches in priority order, lower first', () => {
       const service = makeService();
       const calls: string[] = [];
 
@@ -129,7 +129,7 @@ describe('AstExtensionService — extendNode', () => {
    });
 });
 
-describe('AstExtensionService — extendDocument', () => {
+describe('AstExtensionService.extendDocument', () => {
    it('refresh runs the matching registration against every node in the document', () => {
       const service = makeService();
       const refreshCalls: string[] = [];
@@ -292,7 +292,7 @@ describe('AstExtensionService — extendDocument', () => {
    });
 });
 
-describe('AstExtensionService — extendDocument cancellation', () => {
+describe('AstExtensionService.extendDocument cancellation', () => {
    it('skips the refresh walk for documents arriving with an already-cancelled token', () => {
       const service = makeService();
       const calls: string[] = [];
@@ -314,7 +314,7 @@ describe('AstExtensionService — extendDocument cancellation', () => {
    });
 });
 
-describe('AstExtensionService — disposal', () => {
+describe('AstExtensionService disposal', () => {
    it('removes the registration so subsequent dispatches skip it', () => {
       const service = makeService();
       const calls: string[] = [];
@@ -341,7 +341,7 @@ describe('AstExtensionService — disposal', () => {
    });
 });
 
-describe('AstExtensionService — extendDocument profiling', () => {
+describe('AstExtensionService.extendDocument profiling', () => {
    afterEach(() => Logger.setLevel('info'));
 
    it('profiles per-registration self-time and reports it line-based at debug level', () => {
@@ -374,7 +374,7 @@ describe('AstExtensionService — extendDocument profiling', () => {
    });
 });
 
-describe('AstExtensionService — contribution group consumption', () => {
+describe('AstExtensionService contribution group consumption', () => {
    it('reads `services.ast.extensions` and calls each contribution at construction', () => {
       const calls: string[] = [];
       const ext = (id: string) => ({
@@ -423,7 +423,7 @@ describe('AstExtensionService — contribution group consumption', () => {
 });
 
 describe('setHiddenProperty', () => {
-   it('assigns a non-enumerable own property — invisible to Object.keys / for-in', () => {
+   it('assigns a non-enumerable own property, invisible to Object.keys and for-in', () => {
       const target: { _hidden?: number; visible?: number } = { visible: 1 };
       setHiddenProperty(target, '_hidden', 42);
 
@@ -442,7 +442,7 @@ describe('setHiddenProperty', () => {
       expect(Object.getOwnPropertyNames(target)).toContain('_hidden');
    });
 
-   it('is writable and configurable — subsequent calls overwrite cleanly', () => {
+   it('is writable and configurable, so subsequent calls overwrite cleanly', () => {
       const target: { _hidden?: number } = {};
       setHiddenProperty(target, '_hidden', 1);
       setHiddenProperty(target, '_hidden', 2);

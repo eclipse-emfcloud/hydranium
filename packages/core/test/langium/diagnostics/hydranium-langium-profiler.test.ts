@@ -132,7 +132,7 @@ describe('HydraniumLangiumProfiler', () => {
       expect(profiler.getRecords('parsing').toArray()).toHaveLength(0);
    });
 
-   it('never writes to the raw console (stdio-safe) — no console.table/info/log', () => {
+   it('never writes to the raw console (stdio-safe), with no console.table/info/log', () => {
       const { profiler, endBuild } = makeProfiler();
       const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);

@@ -18,15 +18,15 @@ import { describe, expect, it } from 'vitest';
 import { buildReflectDriverArgs, runReflect } from '../src/commands/reflect.js';
 
 describe('reflect', () => {
-   it('buildReflectDriverArgs: emits --services and omits --json when unset', () => {
+   it('buildReflectDriverArgs emits --services and omits --json when unset', () => {
       expect(buildReflectDriverArgs({ servicesModule: './svc.js' })).toEqual(['--services', './svc.js']);
    });
 
-   it('buildReflectDriverArgs: appends --json when set', () => {
+   it('buildReflectDriverArgs appends --json when set', () => {
       expect(buildReflectDriverArgs({ servicesModule: './svc.js', json: true })).toEqual(['--services', './svc.js', '--json']);
    });
 
-   it('buildReflectDriverArgs: forwards --out-file, which the driver and not the parent writes', () => {
+   it('buildReflectDriverArgs forwards --out-file, which the driver and not the parent writes', () => {
       // Forwarded rather than handled here: the parent inherits the child's
       // stdio, so a parent-side write would have to re-capture a stream it
       // already gave away.
@@ -38,7 +38,7 @@ describe('reflect', () => {
       ]);
    });
 
-   it('runReflect: spawns the driver (no --expose-gc) with the forwarded args and no workspace', async () => {
+   it('runReflect spawns the driver (no --expose-gc) with the forwarded args and no workspace', async () => {
       let captured: string[] = [];
       await runReflect({
          servicesModule: './svc.js',
@@ -53,7 +53,7 @@ describe('reflect', () => {
       expect(captured.slice(-3)).toEqual(['--services', './svc.js', '--json']);
    });
 
-   it('runReflect: a non-zero child exit sets the process exit code', async () => {
+   it('runReflect sets the process exit code on a non-zero child exit', async () => {
       const previous = process.exitCode;
       await runReflect({ servicesModule: './svc.js', __spawnForTest: () => Promise.resolve(1) });
       expect(process.exitCode).toBe(1);

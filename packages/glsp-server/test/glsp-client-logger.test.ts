@@ -126,7 +126,7 @@ describe('GlspClientLogger', () => {
       });
    });
 
-   describe('enabled()', () => {
+   describe('enabled', () => {
       it('logs at info when level is info', () => {
          const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.info });
          expect(logger.testEnabled(LogLevel.info)).toBe(true);
@@ -146,7 +146,7 @@ describe('GlspClientLogger', () => {
       });
    });
 
-   describe('combine()', () => {
+   describe('combine', () => {
       const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.info });
       it('returns the bare message when there are no params', () => {
          expect(logger.testCombine('hello', [])).toBe('hello');
@@ -164,7 +164,7 @@ describe('GlspClientLogger', () => {
       });
    });
 
-   describe('formatParam()', () => {
+   describe('formatParam', () => {
       const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.info });
       it('returns empty string for unserialisable input (circular)', () => {
          const circular: { self?: unknown } = {};
@@ -173,7 +173,7 @@ describe('GlspClientLogger', () => {
       });
    });
 
-   describe('derive()', () => {
+   describe('derive', () => {
       it('preserves logLevel across derived loggers', () => {
          const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.debug });
          const child = logger.testDerive('Child');

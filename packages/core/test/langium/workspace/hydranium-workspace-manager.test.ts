@@ -132,7 +132,7 @@ function makeStubs(projectManager: ProjectManager): Stubs {
    return { services, resetCalls, knownDocs };
 }
 
-describe('HydraniumWorkspaceManager — phase-0 discovery', () => {
+describe('HydraniumWorkspaceManager phase-0 discovery', () => {
    /**
     * Exposes the REAL `performStartup`. A subclass that re-implemented it would
     * assert against its own body instead of the framework's: the ordering
@@ -193,7 +193,7 @@ describe('HydraniumWorkspaceManager — phase-0 discovery', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager — path-divergence probe', () => {
+describe('HydraniumWorkspaceManager path-divergence probe', () => {
    const LINK = 'file:///link/ws';
    const REAL = 'file:///real/ws';
    // realpath: the symlinked root resolves elsewhere; everything else is unchanged.
@@ -245,7 +245,7 @@ describe('HydraniumWorkspaceManager — path-divergence probe', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager — workspace log target', () => {
+describe('HydraniumWorkspaceManager workspace log target', () => {
    class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
       callResolveWorkspaceLogTarget(folders: WorkspaceFolder[]): void {
          this.resolveWorkspaceLogTarget(folders);
@@ -290,7 +290,7 @@ describe('HydraniumWorkspaceManager — workspace log target', () => {
  * `ServerLocale.accept` and this manager — for the reason `initialize`'s doc
  * gives. One of them passing says nothing about the other.
  */
-describe('HydraniumWorkspaceManager — the declared locale in the log', () => {
+describe('HydraniumWorkspaceManager declared locale in the log', () => {
    function initializeWith(locale: string | undefined): CapturedLine[] {
       const { tracer, lines } = makeCapturingTracer();
       const stubs = makeStubs(new FakeProjectManager());
@@ -332,7 +332,7 @@ describe('HydraniumWorkspaceManager — the declared locale in the log', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager — cascade rebuild', () => {
+describe('HydraniumWorkspaceManager cascade rebuild', () => {
    it('resets affected loaded documents to DocumentState.Changed on project change', () => {
       const projectManager = new FakeProjectManager();
       const stubs = makeStubs(projectManager);
@@ -382,7 +382,7 @@ describe('HydraniumWorkspaceManager — cascade rebuild', () => {
 // Additional documents
 // ============================================================
 
-describe('HydraniumWorkspaceManager — additional documents', () => {
+describe('HydraniumWorkspaceManager additional documents', () => {
    class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
       runLoadAdditionalDocuments(folders: WorkspaceFolder[], collector: (document: LangiumDocument) => void): Promise<void> {
          return this.loadAdditionalDocuments(folders, collector);
@@ -508,7 +508,7 @@ describe('HydraniumWorkspaceManager — additional documents', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager — wsRelativePath', () => {
+describe('HydraniumWorkspaceManager.wsRelativePath', () => {
    it('returns the path relative to the provided workspace', () => {
       const stubs = makeStubs(new FakeProjectManager());
       const mgr = new HydraniumWorkspaceManager(stubs.services);
@@ -531,7 +531,7 @@ describe('HydraniumWorkspaceManager — wsRelativePath', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager — a failed initial build', () => {
+describe('HydraniumWorkspaceManager after a failed initial build', () => {
    class FailingWorkspaceManager extends HydraniumWorkspaceManager {
       startupError: unknown;
 
@@ -634,7 +634,7 @@ describe('installOperationCancelledSuppression', () => {
 // Descriptor documents in the initial build
 // ============================================================
 
-describe('HydraniumWorkspaceManager — descriptor documents in the initial build', () => {
+describe('HydraniumWorkspaceManager descriptor documents in the initial build', () => {
    const DESCRIPTOR = URI.parse('file:///workspace/project.test');
    const MEMBER = URI.parse('file:///workspace/member.test');
 

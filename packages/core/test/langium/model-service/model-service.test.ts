@@ -253,7 +253,7 @@ describe('ModelService slow-warn', () => {
    });
 });
 
-describe('ModelService createSession', () => {
+describe('ModelService.createSession', () => {
    it('registers the id before it calls the factory, so a duplicate id builds no session', () => {
       const bundle = makeTestServices<FakeRoot>();
       bundle.modelService.createSession('test', 'client-1');
@@ -513,7 +513,7 @@ describe('ModelService.getDocument', () => {
    });
 });
 
-describe('ModelService symlink / canonical-URI divergence', () => {
+describe('ModelService symlink and canonical-URI divergence', () => {
    // The request path takes an external (client-facing) URI; the adopter's
    // `LangiumDocuments` keys by the resolved real path. The service must
    // canonicalize before looking the document up, or a symlinked URI resolves
@@ -555,7 +555,7 @@ describe('ModelService symlink / canonical-URI divergence', () => {
    });
 });
 
-describe('ModelService ensureDocumentState dispatch', () => {
+describe('ModelService.ensureDocumentState dispatch', () => {
    it('warm path (URI already loaded) waits without triggering a build', async () => {
       // Seeding the URI makes `LangiumDocuments.hasDocument` true → warm branch.
       const bundle = makeTestServices<FakeRoot>({
@@ -992,7 +992,7 @@ function buildSettling(clock?: FakeClock): {
 
 const SETTLE_BOUND_MS = 10_000;
 
-describe('ModelService settleSave', () => {
+describe('DefaultModelService.settleSave', () => {
    afterEach(() => {
       vi.useRealTimers();
    });
@@ -1151,7 +1151,7 @@ describe('ModelService LSP-client sync', () => {
       expect(bundle.textDocuments.staged).toEqual([]);
    });
 
-   it('re-syncs on every settle (self-healing) — not a one-shot enrolment', async () => {
+   it('re-syncs on every settle (self-healing), not as a one-shot enrolment', async () => {
       const bundle = buildSyncBundle({ open: true });
       bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
       await drainSync();
@@ -1283,7 +1283,7 @@ class RecordingModelService extends DefaultModelService<FakeRoot, AstDiagnostic,
    }
 }
 
-describe('ModelService modelToText serialize gating', () => {
+describe('ModelService.modelToText serialize gating', () => {
    function buildRecordingService(): {
       session: ClientSession<FakeRoot, AstDiagnostic, FakeRoot>;
       order: string[];
@@ -1348,8 +1348,10 @@ describe('ModelService per-state convenience methods', () => {
       { method: 'indexed', state: DocumentState.IndexedReferences },
       { method: 'validated', state: DocumentState.Validated }
    ];
+   // `[method, row]` tuples so `%s` renders the method bare; `$method` would quote it.
+   const casesByMethod = cases.map(entry => [entry.method, entry] as const);
 
-   it.each(cases)('$method waits at its named phase (warm path)', async ({ method, state }) => {
+   it.each(casesByMethod)('%s waits at its named phase (warm path)', async (_method, { method, state }) => {
       const bundle = makeTestServices<FakeRoot>({
          seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }]
       });
@@ -1358,7 +1360,7 @@ describe('ModelService per-state convenience methods', () => {
       expect(bundle.documentBuilder.waitUntilCalls[0].args[0]).toBe(state);
    });
 
-   it('routes through the warm/cold dispatch — warm call skips the build', async () => {
+   it('routes a warm call through the warm/cold dispatch and skips the build', async () => {
       // Representative method (`validated`): seeding the URI makes the warm
       // branch fire, so no `DocumentBuilder.update` is issued.
       const bundle = makeTestServices<FakeRoot>({
@@ -1368,7 +1370,7 @@ describe('ModelService per-state convenience methods', () => {
       expect(bundle.documentBuilder.updateCalls).toEqual([]);
    });
 
-   it('routes through the warm/cold dispatch — cold call triggers one build', async () => {
+   it('routes a cold call through the warm/cold dispatch and triggers one build', async () => {
       // No seedDocuments → cold branch → one `DocumentBuilder.update([uri], [])`.
       const bundle = makeTestServices<FakeRoot>();
       await bundle.modelService.validated(URI_A);
@@ -1418,7 +1420,7 @@ describe('ModelService update stopwatch allocation', () => {
    });
 });
 
-describe('ModelService toAstDocument absent-document envelope', () => {
+describe('DefaultModelService.toAstDocument absent-document envelope', () => {
    it('returns an envelope carrying the uri, a version no write matches, and no diagnostics', async () => {
       // No seedDocuments → LangiumDocuments.getDocument returns undefined.
       const bundle = makeTestServices<FakeRoot>();

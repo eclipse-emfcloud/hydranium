@@ -454,7 +454,7 @@ describe('LspLogger file-tee', () => {
  * to be enabled for diagnosis are exactly the ones that would have done the
  * damage, which is why every level is asserted rather than a sample.
  */
-describe('LspLogger console fallback (no LSP connection)', () => {
+describe('LspLogger console fallback without an LSP connection', () => {
    let stderrWrites: string[];
    let stdoutWrites: string[];
    const spies: Array<ReturnType<typeof vi.spyOn>> = [];

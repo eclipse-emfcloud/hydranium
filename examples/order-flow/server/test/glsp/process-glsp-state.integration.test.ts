@@ -13,12 +13,12 @@
  * save, and `reconcileSourceModelWrite` decides what happens to the user's edit.
  *
  * **Why this is not the framework's own unit test over again.** Those drive the
- * four outcomes by making a fake `ModelService.update` throw, which settles what
- * each branch DOES. What a stub cannot show is that the gate ever ARMS in a real
- * head: the base version travels from `setSourceRoot` through the recording
- * command's capture into the session's `updateAll`, and one stale link anywhere
- * along that chain turns every conflict into an ordinary write that silently
- * clobbers the other writer, with no error to show for it.
+ * four outcomes by making the stubbed session's `update` throw, which settles
+ * what each branch DOES. What a stub cannot show is that the gate ever ARMS in
+ * a real head: the base version travels from `setSourceRoot` through the
+ * recording command's capture into the session's `updateAll`, and one stale
+ * link anywhere along that chain turns every conflict into an ordinary write
+ * that silently clobbers the other writer, with no error to show for it.
  *
  * **The race is time-bounded in production, and these tests reproduce it as
  * such.** `HydraniumGlspStorage` reacts to a foreign rebuild by re-capturing the
@@ -166,7 +166,7 @@ function readFieldOf(diagram: OpenDiagram, taskName: string): string | undefined
    return task?.effects.filter(isRead)[0]?.field.$refText;
 }
 
-describe('order-flow .process glsp state — a foreign write between base and save', () => {
+describe('order-flow .process glsp state with a foreign write between base and save', () => {
    afterEach(() => {
       open?.harness.dispose();
       open = undefined;

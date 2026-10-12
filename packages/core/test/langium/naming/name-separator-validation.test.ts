@@ -82,7 +82,7 @@ describe('nameSeparatorCheck', () => {
       expect(diagnostics).toHaveLength(0);
    });
 
-   it('respects a configured separator: `::` flags `foo::bar` but accepts `foo.bar`', () => {
+   it('respects a configured separator, so `::` flags `foo::bar` but accepts `foo.bar`', () => {
       const check = nameSeparatorCheck(makeNameProvider({ nameSeparator: '::' }));
       const flagged = makeAcceptor();
       check(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'foo::bar' }), flagged.accept);
@@ -96,7 +96,7 @@ describe('nameSeparatorCheck', () => {
       expect(accepted.diagnostics).toHaveLength(0);
    });
 
-   it('reads the separator polymorphically — works against any NameProvider implementation', () => {
+   it('reads the separator polymorphically, working against any NameProvider implementation', () => {
       // The rule MUST take its separator from `nameProvider.nameSeparator`, not from a
       // hard-coded fallback. A minimal NameProvider stub that reports a non-default
       // separator must drive the check accordingly.
@@ -120,7 +120,7 @@ describe('nameSeparatorCheck', () => {
       expect(diagnostics[0].message).toMatch(/name separator '\/'/);
    });
 
-   it('skips empty-string names — no value to flag', () => {
+   it('skips empty-string names, which have no value to flag', () => {
       const check = nameSeparatorCheck(makeNameProvider());
       const { accept, diagnostics } = makeAcceptor();
       check(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: '' }), accept);

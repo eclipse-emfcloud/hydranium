@@ -330,7 +330,7 @@ const scenarios: Scenario[] = [
    }
 ];
 
-describe('HydraniumTextDocuments — what a push leaves behind, in every order its reply, echo and the editor can take', () => {
+describe('HydraniumTextDocuments push outcome in every order its reply, echo and the editor can take', () => {
    for (const scenario of scenarios) {
       for (const order of ['echo-first', 'reply-first'] as const) {
          it(`${scenario.name} (${order})`, async () => {
@@ -369,7 +369,7 @@ describe('HydraniumTextDocuments — what a push leaves behind, in every order i
    }
 });
 
-describe('HydraniumTextDocuments — the retry after a refusal', () => {
+describe('HydraniumTextDocuments retry after a refusal', () => {
    it('is a full replace, which lands even when the refusal was not about the version', async () => {
       const { docs, editorAt, pushes } = makeStore();
       const editor = editorAt(URI);
@@ -387,7 +387,7 @@ describe('HydraniumTextDocuments — the retry after a refusal', () => {
    });
 });
 
-describe('HydraniumTextDocuments — an answer that arrives after the editor reopened the document', () => {
+describe('HydraniumTextDocuments with an answer arriving after the editor reopened the document', () => {
    it('leaves the reopened buffer a diff baseline', async () => {
       const { docs, editorAt, pushes } = makeStore();
       const editor = editorAt(URI);
@@ -412,7 +412,7 @@ describe('HydraniumTextDocuments — an answer that arrives after the editor reo
    });
 });
 
-describe('HydraniumTextDocuments — a push fanned out to a file open under two URIs', () => {
+describe('HydraniumTextDocuments push fanned out to a file open under two URIs', () => {
    const REAL = 'file:///real/a.x';
    const LINK = 'file:///link/a.x';
    const toText = (uri: string | { toString(): string }): string => (typeof uri === 'string' ? uri : uri.toString());

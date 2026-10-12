@@ -136,7 +136,7 @@ describe('HydraniumDocumentValidator', () => {
          expect(result).toEqual({ validateNode: true, validateChildren: true });
       });
 
-      it('default skips nodes marked $synthetic: true', () => {
+      it('default skips nodes marked `$synthetic: true`', () => {
          const node = makeFakeAstNode({ $type: 'TypeTwo' });
          (node as { $synthetic?: boolean }).$synthetic = true;
          const validator = new TestValidator({ getAstNodePath: () => '/x' }, makeLogger());
@@ -152,7 +152,7 @@ describe('HydraniumDocumentValidator', () => {
          expect(validator.callValidateOptions(node)).toEqual({ validateNode: true, validateChildren: true });
       });
 
-      it('adopter override decides; predicate true skips both self and children', () => {
+      it('lets an adopter predicate that answers true skip both the node and its children', () => {
          const node = makeFakeAstNode({ $type: 'GeneratedRegion' });
          const validator = new TestValidator({ getAstNodePath: () => '/x' }, makeLogger(), n => n === node);
          expect(validator.callValidateOptions(node)).toEqual({ validateNode: false, validateChildren: false });

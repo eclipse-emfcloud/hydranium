@@ -521,9 +521,9 @@ export function describeAwaitPoints(name: string): void {
    if (!gesture) {
       throw new Error(`harness: no gesture named '${name}'`);
    }
-   describe(`await points of a diagram operation: ${name}`, () => {
+   describe(`await points of the diagram operation ${name}`, () => {
       it.each(PHASES)(
-         '%s: with the write failing, a failure at every cleanup step leaves the other steps reverted',
+         'leaves the other steps reverted on a failure at every cleanup step, with the write failing on %s',
          async phase => {
             const enumeration = await runOnce(gesture, phase, undefined, true);
             const cleanup = enumeration.points.filter(point => point.startsWith('rollback#') || point.startsWith('compensate#'));
@@ -542,7 +542,7 @@ export function describeAwaitPoints(name: string): void {
       );
 
       it.each(PHASES.flatMap(phase => VARIANTS.map(variant => [phase, variant] as const)))(
-         '%s: %s at every await point keeps the invariants',
+         'keeps the invariants on %s with %s at every await point',
          async (phase, variant) => {
             const enumeration = await runOnce(gesture, phase);
             expect(enumeration.violations).toEqual([]);

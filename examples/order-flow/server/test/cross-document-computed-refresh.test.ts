@@ -121,7 +121,7 @@ async function cascadeAfterDomainEdit(refreshCrossDocumentComputedScopes: boolea
    }
 }
 
-describe('order-flow AST extensions — a cross-document projection across a cascade', () => {
+describe('order-flow AST extensions projecting across documents through a cascade', () => {
    it('refreshes the projection when the referenced document changes', async () => {
       const { projected, linked } = await cascadeAfterDomainEdit(true);
 

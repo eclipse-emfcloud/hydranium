@@ -500,7 +500,7 @@ describe('YamlSerializer', () => {
    });
 
    describe('serializeTransfer default delegation', () => {
-      it('delegates to serializeAst — same output for structurally equivalent input', async () => {
+      it('delegates to serializeAst, giving the same output for structurally equivalent input', async () => {
          const serializer = buildYaml(YamlSerializer, {
             reflection: makeFakeReflection({ Person: {} }),
             propertyOrder: new Map([['Person', ['name', 'age']]]),

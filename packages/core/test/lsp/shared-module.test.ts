@@ -95,7 +95,7 @@ describe('createLspServerSharedModule', () => {
       expect(shared.lsp.DocumentUpdateHandler).toBeInstanceOf(AdopterHandler);
    });
 
-   it('dispatches the FileSystemProvider slot by scheme, keeping virtual: beside a contributed scheme', () => {
+   it('dispatches the FileSystemProvider slot by scheme, keeping `virtual:` beside a contributed scheme', () => {
       // The adopter path the docs prescribe: a provider deep-merged into the
       // group, next to the framework's own `virtual:` entry.
       const shared = composeShared({

@@ -20,7 +20,7 @@ describe('DefaultTextLedger.openingVersion', () => {
       expect(new DefaultTextLedger().openingVersion(KEY, 'a')).toBeUndefined();
    });
 
-   it('continues the record: the same version for the same text, one on for other text', () => {
+   it('continues the record, with the same version for the same text and one on for other text', () => {
       const ledger = new DefaultTextLedger();
       ledger.record(KEY, documentAt(3, 'a'));
       expect(ledger.openingVersion(KEY, 'a')).toBe(3);
@@ -48,7 +48,7 @@ describe('DefaultTextLedger.hashOf', () => {
    });
 });
 
-describe('DefaultTextLedger authors', () => {
+describe('DefaultTextLedger.authors', () => {
    it('answers the author of a version, else of the latest, until cleared', () => {
       const ledger = new DefaultTextLedger();
       ledger.setAuthor(KEY, 0, 'editor');

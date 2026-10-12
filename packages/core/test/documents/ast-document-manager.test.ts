@@ -94,7 +94,7 @@ function open(textDocuments: HydraniumTextDocuments, uri: string, version: numbe
    textDocuments.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version, text: '' } }, clientId);
 }
 
-describe('ModelService onModelUpdated over the real manager', () => {
+describe('ModelService.onModelUpdated over the real manager', () => {
    it('fires once with the rebuilt root and the attribution', () => {
       const { textDocuments, builder, models } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
@@ -137,7 +137,7 @@ describe('ModelService onModelUpdated over the real manager', () => {
    // builder cannot do, so such a test would assert an impossible sequence. The
    // unreachability is pinned against a real builder instead.
 
-   it('URI-gates: a phase fire for a different URI does not invoke the listener', () => {
+   it('gates by URI, so a phase fire for a different URI does not invoke the listener', () => {
       const { builder, models } = makeManagerHarness();
 
       const reasons: string[] = [];
@@ -168,7 +168,7 @@ describe('ModelService onModelUpdated over the real manager', () => {
    });
 });
 
-describe('AstDocumentManager attributeUpdate', () => {
+describe('AstDocumentManager.attributeUpdate', () => {
    const documentAt = (uri: string, version: number) =>
       makeFakeDocument<FakeRoot>(uri, makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'x' }), { version });
 
@@ -271,7 +271,7 @@ describe('AstDocumentManager attributeUpdate', () => {
    });
 });
 
-describe('ModelService onModelSaved over the real manager', () => {
+describe('ModelService.onModelSaved over the real manager', () => {
    it('fires for the subscribed URI carrying the saving client', async () => {
       const { textDocuments, models } = makeManagerHarness();
       // Save only fires onDidSave for a synced (opened) document.
@@ -311,7 +311,7 @@ describe('ModelService onModelSaved over the real manager', () => {
    });
 });
 
-describe('ModelService onClientClosed over the real store', () => {
+describe('ModelService.onClientClosed over the real store', () => {
    it('fires when the matching client closes the subscribed URI', () => {
       const { textDocuments, models } = makeManagerHarness();
       // Open in two clients so closing one still delivers an onDidClose event.
@@ -372,7 +372,7 @@ describe('ModelService onClientClosed over the real store', () => {
    });
 });
 
-describe('AstDocumentManager symlink / canonical-URI divergence', () => {
+describe('AstDocumentManager symlink and canonical-URI divergence', () => {
    // A subscriber opens a *symlinked* file (LINK_URI) while the build pipeline
    // and LangiumDocuments key the same file by its resolved real path
    // (REAL_URI). A canonicalizer that collapses both to the real path is what
@@ -480,7 +480,7 @@ describe('AstDocumentManager symlink / canonical-URI divergence', () => {
    });
 });
 
-describe('ModelService onModelSaved URI gating', () => {
+describe('ModelService.onModelSaved URI gating', () => {
    it('fires for a document saved before its first build, as an empty envelope', () => {
       // URI_B is opened in the text store but never registered in langiumDocs:
       // a document created and saved before it was built. Its watchers are
@@ -523,7 +523,7 @@ describe('ModelService onModelSaved URI gating', () => {
    });
 });
 
-describe('AstDocumentManager open / close lifecycle', () => {
+describe('AstDocumentManager open and close lifecycle', () => {
    it('open() creates a not-yet-open document and reports it open afterwards', async () => {
       // Kills the `if (this.isOpen(args.uri))` guard in open(): with the
       // guard forced true, a fresh URI would route to refreshContent (no create)
@@ -545,7 +545,7 @@ describe('AstDocumentManager open / close lifecycle', () => {
       expect(manager.isOpen(URI_B)).toBe(false);
    });
 
-   it('open() on an already-open URI is a no-op — no rebuild, no disk read', async () => {
+   it('open() on an already-open URI is a no-op, with no rebuild and no disk read', async () => {
       // An already-open `open()` must NOT fire a change event and must
       // NOT read from disk. `open()` is the RPC ensure-loaded call (also issued
       // by update()/save() and by additional clients attaching to the same URI);
@@ -601,7 +601,7 @@ describe('AstDocumentManager open / close lifecycle', () => {
       expect(textDocuments.isOpenInAnyClient(URI_B)).toBe(true);
    });
 
-   it('open() on a fresh URI fires exactly one rebuild — no re-entrant double-build', async () => {
+   it('open() on a fresh URI fires exactly one rebuild, with no re-entrant double-build', async () => {
       // Regression guard for the re-entrant double-build. The constructor wires
       // `textDocuments.onDidOpen -> this.open`, so a first open runs:
       // notifyDidOpenTextDocument (first client) fires onDidChangeContent
@@ -644,7 +644,7 @@ describe('AstDocumentManager open / close lifecycle', () => {
    });
 });
 
-describe('AstDocumentManager update', () => {
+describe('AstDocumentManager.update', () => {
    it('throws when updating a document that is not open', async () => {
       // Kills the `if (!this.isOpen(uri))` throw guard in update().
       const { manager } = makeManagerHarness();
@@ -661,7 +661,7 @@ describe('AstDocumentManager update', () => {
    });
 });
 
-describe('AstDocumentManager save', () => {
+describe('AstDocumentManager.save', () => {
    it('throws when saving a document that is not open', async () => {
       // Kills the `if (!document)` throw guard in save().
       const { manager } = makeManagerHarness();
@@ -729,7 +729,7 @@ describe('AstDocumentManager save', () => {
    });
 });
 
-describe('AstDocumentManager isOpen', () => {
+describe('AstDocumentManager.isOpen', () => {
    it('isOpen reflects open state for a URI', async () => {
       // Kills the `return false` / `return true` ConditionalExpression mutants
       // on isOpen.

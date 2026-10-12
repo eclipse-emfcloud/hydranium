@@ -122,34 +122,34 @@ describe('DefaultReferenceBuilder', () => {
       expect(builder.toProjectReference(member)).toEqual({ ref: member, $refText: 'projA.P.C' });
    });
 
-   it('toReference: same project resolves to document-qualified form', () => {
+   it('toReference resolves the same project to the document-qualified form', () => {
       const { builder, rootA } = buildBuilder();
       const source = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'S' });
       const target = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'T' });
       expect(builder.toReference(target, source)).toEqual({ ref: target, $refText: 'P.T' });
    });
 
-   it('toReference: different project, visible — resolves to project-qualified form', () => {
+   it('toReference resolves a different, visible project to the project-qualified form', () => {
       const { builder, rootA, rootB } = buildBuilder({ projA: ['projA', 'projB'], projB: ['projB'] });
       const source = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'S' });
       const target = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootB, name: 'T' });
       expect(builder.toReference(target, source)).toEqual({ ref: target, $refText: 'projB.Q.T' });
    });
 
-   it('toReference: different project, NOT visible — returns undefined', () => {
+   it('toReference returns undefined for a different project that is NOT visible', () => {
       const { builder, rootA, rootB } = buildBuilder({ projA: ['projA'], projB: ['projB'] });
       const source = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'S' });
       const target = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootB, name: 'T' });
       expect(builder.toReference(target, source)).toBeUndefined();
    });
 
-   it('toReference: undefined source — no visibility check, falls back to project-qualified', () => {
+   it('toReference falls back to project-qualified for an undefined source, with no visibility check', () => {
       const { builder, rootA } = buildBuilder();
       const target = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'T' });
       expect(builder.toReference(target, undefined)).toEqual({ ref: target, $refText: 'projA.P.T' });
    });
 
-   it('toReference: undefined target returns undefined', () => {
+   it('toReference returns undefined for an undefined target', () => {
       const { builder, rootA } = buildBuilder();
       const source = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: rootA, name: 'S' });
       expect(builder.toReference(undefined, source)).toBeUndefined();

@@ -61,7 +61,7 @@ describe('DefaultValidationContributionCollector', () => {
       expect(calls.sort()).toEqual(['adopter', 'framework']);
    });
 
-   it('threads checks through Langium ValidationRegistry — accumulating on same node type via MultiMap', async () => {
+   it('threads checks through Langium ValidationRegistry, accumulating on the same node type via MultiMap', async () => {
       // Two contributions both register a check for `TypeOne`. Langium's
       // ValidationRegistry stores entries in a MultiMap and `register` appends,
       // so both checks must fire — a collector that overwrote instead of

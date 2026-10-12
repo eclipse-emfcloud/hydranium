@@ -43,24 +43,24 @@ describe('summarizeChecks', () => {
 describe('skippedTitle', () => {
    it('annotates the check title with its skip reason so the test report shows why', () => {
       expect(skippedTitle({ title: 'completion', skipReason: 'no completionPosition' })).toBe(
-         'completion [skipped: no completionPosition]'
+         'completion (skipped, no completionPosition)'
       );
    });
 
    it('falls back to a placeholder reason when none was given', () => {
-      expect(skippedTitle({ title: 'mystery' })).toBe('mystery [skipped: no reason given]');
+      expect(skippedTitle({ title: 'mystery' })).toBe('mystery (skipped, no reason given)');
    });
 });
 
 describe('formatSummary', () => {
    it('names the suite and reports the ran-vs-skipped counts with each skipped reason', () => {
-      const text = formatSummary('conformance: data-server', {
+      const text = formatSummary('data-server conformance', {
          total: 3,
          ran: 2,
          skipped: [{ title: 'subscription echo', reason: 'opt-in' }]
       });
 
-      expect(text).toContain('conformance: data-server');
+      expect(text).toContain('data-server conformance');
       expect(text).toContain('2/3 ran');
       expect(text).toContain('1 skipped');
       expect(text).toContain('subscription echo');
@@ -68,7 +68,7 @@ describe('formatSummary', () => {
    });
 
    it('omits the skipped list when nothing was skipped', () => {
-      const text = formatSummary('conformance: lsp', { total: 4, ran: 4, skipped: [] });
+      const text = formatSummary('lsp conformance', { total: 4, ran: 4, skipped: [] });
 
       expect(text).toContain('4/4 ran');
       expect(text).not.toMatch(/skipped:/i);
@@ -89,9 +89,9 @@ describe('writeConformanceSummary', () => {
       const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
       const log = vi.spyOn(console, 'log').mockReturnValue(undefined);
 
-      writeConformanceSummary('conformance: demo: 1/2 ran, 1 skipped');
+      writeConformanceSummary('demo conformance: 1/2 ran, 1 skipped');
 
-      expect(stderr).toHaveBeenCalledExactlyOnceWith('conformance: demo: 1/2 ran, 1 skipped\n');
+      expect(stderr).toHaveBeenCalledExactlyOnceWith('demo conformance: 1/2 ran, 1 skipped\n');
       expect(log).not.toHaveBeenCalled();
    });
 
@@ -99,9 +99,9 @@ describe('writeConformanceSummary', () => {
       const log = vi.spyOn(console, 'log').mockReturnValue(undefined);
       vi.stubGlobal('process', undefined);
 
-      writeConformanceSummary('conformance: demo: 4/4 ran, 0 skipped');
+      writeConformanceSummary('demo conformance: 4/4 ran, 0 skipped');
 
-      expect(log).toHaveBeenCalledExactlyOnceWith('conformance: demo: 4/4 ran, 0 skipped');
+      expect(log).toHaveBeenCalledExactlyOnceWith('demo conformance: 4/4 ran, 0 skipped');
    });
 });
 
@@ -129,14 +129,14 @@ describe('emitConformanceSuite', () => {
          }
       };
 
-      emitConformanceSuite(runner, 'conformance: demo', [
+      emitConformanceSuite(runner, 'demo conformance', [
          { title: 'runs', body: () => undefined },
          { title: 'absent', skipReason: 'no fixture' }
       ]);
 
-      expect(describedSuite).toBe('conformance: demo');
+      expect(describedSuite).toBe('demo conformance');
       expect(tests).toEqual(['runs']);
-      expect(skips).toEqual(['absent [skipped: no fixture]']);
+      expect(skips).toEqual(['absent (skipped, no fixture)']);
       expect(afterAllRegistered).toBe(true);
    });
 });

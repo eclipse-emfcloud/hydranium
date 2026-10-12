@@ -146,7 +146,7 @@ function cstNodeCount(document: LangiumDocument): number {
    return (root.$cstNode ? 1 : 0) + (root.child?.$cstNode ? 1 : 0);
 }
 
-describe('CST shed on close — real ref-counting through the real close trigger', () => {
+describe('DefaultCstResidencyService.shed on close through real ref-counting and the real close trigger', () => {
    it('a document open in two clients sheds only after the LAST client closes', async () => {
       const { dispatches, pass, clock, document, open, close } = makeComposition();
 

@@ -105,6 +105,9 @@ const COMMANDS: ReadonlyArray<{
    { name: 'watch', flags: WATCH_FLAGS, help: WATCH_HELP, parse: args => parseWatchArgs(args, onError) }
 ];
 
+// `[name, row]` tuples so `%s` renders the name bare; `$name` would quote it.
+const COMMANDS_BY_NAME = COMMANDS.map(command => [command.name, command] as const);
+
 /**
  * The flags a help block DESCRIBES — an option line under `Options:`, not a
  * mention anywhere in the text.
@@ -124,11 +127,11 @@ describe('every subcommand documents its own flags', () => {
     * describes and the parser rejects is an invocation that fails for no visible
     * reason.
     */
-   it.each(COMMANDS)('$name: describes exactly the flags it accepts', ({ flags, help }) => {
+   it.each(COMMANDS_BY_NAME)('%s describes exactly the flags it accepts', (_name, { flags, help }) => {
       expect(describedFlags(help).sort()).toEqual([...flags].sort());
    });
 
-   it.each(COMMANDS)('$name: opens with its own usage line', ({ name, help }) => {
+   it.each(COMMANDS_BY_NAME)('%s opens with its own usage line', (_name, { name, help }) => {
       // Cheap, and it catches the failure mode these blocks invite: a help text
       // copied from a sibling and edited everywhere except its first line.
       expect(help[0]).toMatch(new RegExp(`^Usage: hydranium-cli ${name}(\\s|$)`));
@@ -209,7 +212,7 @@ function demandedInputs(parse: (args: string[]) => unknown): string[] {
  * not need and a script carries a flag it could drop.
  */
 describe('every subcommand marks the inputs it cannot run without', () => {
-   it.each(COMMANDS)('$name: marks exactly what its parser demands', ({ help, parse, demandsResolvedLate }) => {
+   it.each(COMMANDS_BY_NAME)('%s marks exactly what its parser demands', (_name, { help, parse, demandsResolvedLate }) => {
       const entries = optionEntries(help);
       const marked = [...entries]
          .filter(([, text]) => text.includes('(required)'))
@@ -236,7 +239,7 @@ describe('every subcommand marks the inputs it cannot run without', () => {
 });
 
 describe('the headless-harness subcommands', () => {
-   it('validate: takes the services module and the workspace, with both gates off by default', () => {
+   it('validate takes the services module and the workspace, with both gates off by default', () => {
       expect(parseValidateArgs(['--services', './services.js', EXISTING_DIR], onError)).toEqual({
          servicesModule: './services.js',
          workspace: EXISTING_DIR,
@@ -249,14 +252,14 @@ describe('the headless-harness subcommands', () => {
       });
    });
 
-   it('validate: demands --services and the workspace, naming its own help', () => {
+   it('validate demands --services and the workspace, naming its own help', () => {
       expect(() => parseValidateArgs(['/ws'], onError)).toThrow('Missing required option: --services (hydranium-cli validate --help)');
       expect(() => parseValidateArgs(['--services', 'M'], onError)).toThrow(
          'Missing required option: <workspace> (hydranium-cli validate --help)'
       );
    });
 
-   it('reflect and model-docs: take no workspace, and say so when given one', () => {
+   it('reflect and model-docs take no workspace, and say so when given one', () => {
       expect(parseReflectArgs(['--services', 'M', '--json'], onError)).toEqual({ servicesModule: 'M', json: true });
       expect(parseModelDocsArgs(['--services', 'M'], onError)).toEqual({ servicesModule: 'M' });
 
@@ -268,7 +271,7 @@ describe('the headless-harness subcommands', () => {
       );
    });
 
-   it('lint-grammar: accumulates --name-property, and leaves it absent when unused', () => {
+   it('lint-grammar accumulates --name-property, and leaves it absent when unused', () => {
       expect(
          parseLintGrammarArgs(['--services', 'M', '--name-property', 'id', '--name-property', 'label'], onError).nameProperties
       ).toEqual(['id', 'label']);
@@ -277,7 +280,7 @@ describe('the headless-harness subcommands', () => {
       expect(parseLintGrammarArgs(['--services', 'M'], onError).nameProperties).toBeUndefined();
    });
 
-   it('measure-memory: converts its numeric flags and refuses a non-numeric one', () => {
+   it('measure-memory converts its numeric flags and refuses a non-numeric one', () => {
       expect(
          parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--edits', '3', '--edit-docs', '10', '--settle', '750'], onError)
       ).toMatchObject({
@@ -290,7 +293,7 @@ describe('the headless-harness subcommands', () => {
       );
    });
 
-   it('measure-memory: records --snapshot as presence and its siblings as values', () => {
+   it('measure-memory records --snapshot as presence and its siblings as values', () => {
       expect(
          parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--snapshot', '--snapshot-path', '/tmp/a.heapsnapshot'], onError)
       ).toMatchObject({
@@ -300,7 +303,7 @@ describe('the headless-harness subcommands', () => {
       expect(parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR], onError).writeSnapshot).toBe(false);
    });
 
-   it('measure-memory: refuses a --profile typo in the PARENT, before anything is spawned', () => {
+   it('measure-memory refuses a --profile typo in the PARENT, before anything is spawned', () => {
       // The dimensions are only USED in the child, so the typo used to surface
       // after a process had been spawned and a whole head imported. Validating
       // here puts it with the numeric flags beside it, as a usage error.
@@ -313,7 +316,7 @@ describe('the headless-harness subcommands', () => {
       expect(parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR], onError).profile).toBeUndefined();
    });
 
-   it('measure-memory: refuses --log-file beside --profile, whose session log would replace it', () => {
+   it('measure-memory refuses --log-file beside --profile, whose session log would replace it', () => {
       expect(() => parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--profile', 'cpu', '--log-file', 'out.log'], onError)).toThrow(
          /--log-file cannot be combined with --profile/
       );
@@ -324,7 +327,7 @@ describe('the headless-harness subcommands', () => {
       });
    });
 
-   it('measure-memory: takes --json as presence, off by default', () => {
+   it('measure-memory takes --json as presence, off by default', () => {
       expect(parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--json'], onError).json).toBe(true);
       // `false` rather than absent, so the parent's argv builder reads a decision
       // rather than having to re-derive the default.
@@ -359,6 +362,7 @@ describe('the headless-harness subcommands', () => {
          { name: 'reflect', flags: REFLECT_FLAGS, parse: parseReflectArgs, tail: [] },
          { name: 'validate', flags: VALIDATE_FLAGS, parse: parseValidateArgs, tail: [EXISTING_DIR] }
       ];
+      const SERVICES_COMMANDS_BY_NAME = SERVICES_COMMANDS.map(command => [command.name, command] as const);
 
       it('covers the six of them, so no assertion below runs on a short list', () => {
          expect(SERVICES_COMMANDS.map(command => command.name)).toEqual([
@@ -371,7 +375,7 @@ describe('the headless-harness subcommands', () => {
          ]);
       });
 
-      it.each(SERVICES_COMMANDS)('$name: declares --log-level and narrows its value', ({ flags, parse, tail }) => {
+      it.each(SERVICES_COMMANDS_BY_NAME)('%s declares --log-level and narrows its value', (_name, { flags, parse, tail }) => {
          expect(flags).toContain('--log-level');
          expect(parse(['--services', 'M', ...tail, '--log-level', 'debug'], onError)).toMatchObject({ logLevel: 'debug' });
          // Absent rather than defaulted, so the parent leaves the child's
@@ -379,7 +383,7 @@ describe('the headless-harness subcommands', () => {
          expect(parse(['--services', 'M', ...tail], onError).logLevel).toBeUndefined();
       });
 
-      it.each(SERVICES_COMMANDS)('$name: declares --log-file and --log-file-level', ({ flags, parse, tail }) => {
+      it.each(SERVICES_COMMANDS_BY_NAME)('%s declares --log-file and --log-file-level', (_name, { flags, parse, tail }) => {
          expect(flags).toEqual(expect.arrayContaining(['--log-file', '--log-file-level']));
          // Resolved against the caller's directory, because the child may run
          // under `--cwd` and would put a relative log there.
@@ -394,15 +398,18 @@ describe('the headless-harness subcommands', () => {
          );
       });
 
-      it.each(SERVICES_COMMANDS)('$name: declares --import and hands its values to the runner in order', ({ flags, parse, tail }) => {
-         expect(flags).toContain('--import');
-         expect(parse(['--services', 'M', ...tail, '--import', 'tsx', '--import', './hook.mjs'], onError)).toMatchObject({
-            imports: ['tsx', './hook.mjs']
-         });
-         expect(parse(['--services', 'M', ...tail], onError).imports).toBeUndefined();
-      });
+      it.each(SERVICES_COMMANDS_BY_NAME)(
+         '%s declares --import and hands its values to the runner in order',
+         (_name, { flags, parse, tail }) => {
+            expect(flags).toContain('--import');
+            expect(parse(['--services', 'M', ...tail, '--import', 'tsx', '--import', './hook.mjs'], onError)).toMatchObject({
+               imports: ['tsx', './hook.mjs']
+            });
+            expect(parse(['--services', 'M', ...tail], onError).imports).toBeUndefined();
+         }
+      );
 
-      it.each(SERVICES_COMMANDS)('$name: refuses a level the protocol does not define', ({ parse, tail }) => {
+      it.each(SERVICES_COMMANDS_BY_NAME)('%s refuses a level the protocol does not define', (_name, { parse, tail }) => {
          // Thrown by the protocol package rather than reported through `onError`:
          // it owns the vocabulary, and the entry point's catch turns the throw
          // into the same message-and-exit.
@@ -412,7 +419,7 @@ describe('the headless-harness subcommands', () => {
       });
    });
 
-   it('ast-ground-truth: routes --out-file to the output file, defaulting to stdout', () => {
+   it('ast-ground-truth routes --out-file to the output file, defaulting to stdout', () => {
       expect(parseAstGroundTruthArgs(['--services', 'M', EXISTING_DIR, '--out-file', 'gt.json'], onError)).toEqual({
          servicesModule: 'M',
          workspace: EXISTING_DIR,
@@ -473,7 +480,7 @@ describe('the headless-harness subcommands', () => {
 });
 
 describe('the data-server subcommands', () => {
-   it('projects: splits --server and takes the shared spawn flags', () => {
+   it('projects splits --server and takes the shared spawn flags', () => {
       // The entry is ABSOLUTE here because `--cwd` is given: a relative one is a
       // usage error, since the child would resolve it against the new root.
       expect(parseProjectsArgs(['--server', 'node /srv/server.js --stdio', '--cwd', '/tmp/here', '--log-level', 'trace'], onError)).toEqual(
@@ -486,7 +493,7 @@ describe('the data-server subcommands', () => {
       );
    });
 
-   it('projects: takes the log-file flags and resolves the file against the caller', () => {
+   it('projects takes the log-file flags and resolves the file against the caller', () => {
       expect(
          parseProjectsArgs(['--server', 'node /srv/server.js', '--log-file', 'out.log', '--log-file-level', 'debug'], onError)
       ).toMatchObject({
@@ -495,11 +502,11 @@ describe('the data-server subcommands', () => {
       });
    });
 
-   it('projects: demands --server, naming its own help', () => {
+   it('projects demands --server, naming its own help', () => {
       expect(() => parseProjectsArgs([], onError)).toThrow('Missing required option: --server (hydranium-cli projects --help)');
    });
 
-   it('projects: refuses a token it has no option for, rather than ignoring it', () => {
+   it('projects refuses a token it has no option for, rather than ignoring it', () => {
       // The command declares nothing of its own, so there is no option list to
       // reject against — every stray token would otherwise be dropped in
       // silence, and a misspelt --cwd would read as a run that used the default.
@@ -511,7 +518,7 @@ describe('the data-server subcommands', () => {
       );
    });
 
-   it('save: keeps a literal --help as content instead of reading it as a help request', () => {
+   it('save keeps a literal --help as content instead of reading it as a help request', () => {
       // The one flag where a caller plausibly writes that text. Scanning the
       // whole argv made this print help and exit 0 — nothing saved, success
       // reported — so the parse must see the token in its value position.
@@ -522,7 +529,7 @@ describe('the data-server subcommands', () => {
       expect(helpRequested(['--server', 'node s.js', '--help'], SAVE_VALUE_FLAGS)).toBe(true);
    });
 
-   it('query: demands --uri and refuses an option it does not know', () => {
+   it('query demands --uri and refuses an option it does not know', () => {
       expect(parseQueryArgs(['--server', 'node s.js', '--uri', 'file:///a.x'], onError).uri).toBe('file:///a.x');
       expect(() => parseQueryArgs(['--server', 'node s.js'], onError)).toThrow(
          'Missing required option: --uri (hydranium-cli query --help)'
@@ -532,7 +539,7 @@ describe('the data-server subcommands', () => {
       );
    });
 
-   it('save: demands --uri and --content, and leaves --client-id to the runner', () => {
+   it('save demands --uri and --content, and leaves --client-id to the runner', () => {
       expect(
          parseSaveArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text', '--client-id', 'tester'], onError)
       ).toMatchObject({
@@ -546,7 +553,7 @@ describe('the data-server subcommands', () => {
       expect(parseSaveArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text'], onError).clientId).toBeUndefined();
    });
 
-   it('watch: demands --uri and carries no signal — that is the entry point to supply', () => {
+   it("watch demands --uri and carries no signal, which is the entry point's to supply", () => {
       const parsed = parseWatchArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--client-id', 'tester'], onError);
 
       expect(parsed).toMatchObject({ uri: 'file:///a.x', clientId: 'tester' });
@@ -685,15 +692,16 @@ describe('the hand-maintained value-flag lists match their parser', () => {
          lead: ['./x', '--grammar', 'G']
       }
    ];
+   const CASES_BY_NAME = CASES.map(entry => [entry.name, entry] as const);
 
-   it.each(CASES)('$name: every flag it calls value-taking demands a value', ({ flags, valueFlags, parse, lead }) => {
+   it.each(CASES_BY_NAME)('%s demands a value for every flag it calls value-taking', (_name, { flags, valueFlags, parse, lead }) => {
       for (const flag of valueFlags) {
          expect(flags, `${flag} is listed as value-taking but missing from the command's flag list`).toContain(flag);
          expect(() => parse([...lead, flag]), `${flag} is listed as value-taking but accepts none`).toThrow(`Missing value for ${flag}`);
       }
    });
 
-   it.each(CASES)('$name: every flag it omits is genuinely presence-only', ({ flags, valueFlags, parse, lead }) => {
+   it.each(CASES_BY_NAME)('%s omits only flags that are genuinely presence-only', (_name, { flags, valueFlags, parse, lead }) => {
       const presenceOnly = flags.filter(flag => !valueFlags.includes(flag));
       // An empty set would make this vacuous — both commands have at least one.
       expect(presenceOnly.length).toBeGreaterThan(0);

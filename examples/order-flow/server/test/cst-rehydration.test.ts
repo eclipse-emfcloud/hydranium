@@ -166,12 +166,13 @@ const GRAMMARS = [
    { label: '.process', pick: (fixture: RehydrationFixture): LangiumDocument => fixture.processDocument }
 ] as const;
 
-describe('CstResidencyService.rehydrate — identity-preserving CST graft', () => {
-   // `it.each` substitutes `$<prop>` from the case object, so a title may not
-   // spell `$cstNode` / `$refNode` — those render as `undefined`.
-   it.each(GRAMMARS)(
-      'restores every CST range, AST node identity, the CST→AST back-pointer and every reference range ($label)',
-      async ({ label, pick }) => {
+// `[label, row]` tuples so `%s` renders the label bare; `$label` would quote it.
+const GRAMMAR_ROWS = GRAMMARS.map(grammar => [grammar.label, grammar] as const);
+
+describe('CstResidencyService.rehydrate identity-preserving CST graft', () => {
+   it.each(GRAMMAR_ROWS)(
+      'restores every CST range, AST node identity, the CST→AST back-pointer and every reference range (%s)',
+      async (_label, { label, pick }) => {
          const fixture = await buildPair(`graft-${label.slice(1)}`);
          const document = pick(fixture);
 
@@ -246,7 +247,7 @@ describe('CstResidencyService.rehydrate — identity-preserving CST graft', () =
       }
    });
 
-   it.each(GRAMMARS)('is idempotent — a second call is a no-op and keeps the same CST ($label)', async ({ label, pick }) => {
+   it.each(GRAMMAR_ROWS)('is idempotent, a second call being a no-op that keeps the same CST (%s)', async (_label, { label, pick }) => {
       const fixture = await buildPair(`idempotent-${label.slice(1)}`);
       const document = pick(fixture);
       shedBoth(fixture);
@@ -284,7 +285,7 @@ describe('CstResidencyService.rehydrate — identity-preserving CST graft', () =
       expect(rangeKey(payName!)).toBe(payNameBefore);
    });
 
-   it('rehydrates ACROSS the grammar boundary — the .process NameProvider on a shed .domain target', async () => {
+   it('rehydrates ACROSS the grammar boundary, for the .process NameProvider on a shed .domain target', async () => {
       // The seam is per-language, the service is shared. An LSP request is
       // dispatched by the language of the REQUESTING document, so a
       // go-to-definition from `fulfillment.process` asks the `.process`

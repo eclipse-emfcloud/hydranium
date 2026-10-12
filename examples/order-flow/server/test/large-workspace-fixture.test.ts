@@ -112,7 +112,7 @@ afterAll(() => {
    }
 });
 
-describe('large-workspace generator — shape', () => {
+describe('generateLargeWorkspace shape', () => {
    let summary: LargeWorkspaceSummary;
    let root: string;
 
@@ -156,7 +156,7 @@ describe('large-workspace generator — shape', () => {
    });
 });
 
-describe('large-workspace generator — determinism', () => {
+describe('generateLargeWorkspace determinism', () => {
    it('reproduces the corpus byte for byte at the same seed, and changes it at another', () => {
       const first = readTree(generateLargeWorkspace({ root: scratchRoot('seed-a'), ...SMALL }).root);
       const second = readTree(generateLargeWorkspace({ root: scratchRoot('seed-b'), ...SMALL }).root);
@@ -172,7 +172,7 @@ describe('large-workspace generator — determinism', () => {
    });
 });
 
-describe('large-workspace generator — the server builds it', () => {
+describe('generateLargeWorkspace corpus the server builds', () => {
    let root: string;
 
    beforeAll(() => {
@@ -191,7 +191,7 @@ describe('large-workspace generator — the server builds it', () => {
    });
 });
 
-describe('large-workspace generator — the edges it exists to exercise', () => {
+describe('generateLargeWorkspace edges the corpus exists to exercise', () => {
    let shared: OrderFlowSharedServices;
    let root: string;
 

@@ -105,7 +105,7 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
 ];
 
 describe('the wizard argv round-trips through the parser', () => {
-   it.each(ANSWERS)('reproduces $label', ({ answers }) => {
+   it.each(ANSWERS.map(entry => [entry.label, entry] as const))('reproduces %s', (_label, { answers }) => {
       const parsed = parse(composeInitArgv(answers));
 
       expect(parsed.targetDir).toBe(answers.targetDir);
@@ -150,7 +150,7 @@ describe('parseInitArgs', () => {
    });
 });
 
-describe('the init help text', () => {
+describe('INIT_HELP', () => {
    /**
     * Help that drifts from the parser is worse than none: it reads as
     * authoritative, so a flag missing from it is a capability nobody finds.

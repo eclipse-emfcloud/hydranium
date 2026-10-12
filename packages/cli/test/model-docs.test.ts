@@ -18,11 +18,11 @@ import { describe, expect, it } from 'vitest';
 import { buildModelDocsDriverArgs, runModelDocs } from '../src/commands/model-docs.js';
 
 describe('model-docs', () => {
-   it('buildModelDocsDriverArgs: emits --services and the module', () => {
+   it('buildModelDocsDriverArgs emits --services and the module', () => {
       expect(buildModelDocsDriverArgs({ servicesModule: './svc.js' })).toEqual(['--services', './svc.js']);
    });
 
-   it('buildModelDocsDriverArgs: forwards --out-file when set, and nothing when not', () => {
+   it('buildModelDocsDriverArgs forwards --out-file when set, and nothing when not', () => {
       expect(buildModelDocsDriverArgs({ servicesModule: './svc.js', outFile: '/tmp/m.md' })).toEqual([
          '--services',
          './svc.js',
@@ -31,7 +31,7 @@ describe('model-docs', () => {
       ]);
    });
 
-   it('runModelDocs: spawns the driver (no --expose-gc) with the forwarded args', async () => {
+   it('runModelDocs spawns the driver (no --expose-gc) with the forwarded args', async () => {
       let captured: string[] = [];
       await runModelDocs({
          servicesModule: './svc.js',
@@ -45,7 +45,7 @@ describe('model-docs', () => {
       expect(captured.slice(-2)).toEqual(['--services', './svc.js']);
    });
 
-   it('runModelDocs: a non-zero child exit sets the process exit code', async () => {
+   it('runModelDocs sets the process exit code on a non-zero child exit', async () => {
       const previous = process.exitCode;
       await runModelDocs({ servicesModule: './svc.js', __spawnForTest: () => Promise.resolve(1) });
       expect(process.exitCode).toBe(1);

@@ -97,7 +97,7 @@ async function query(relativePath: string): Promise<{ uri: unknown; model: { roo
 
 describe('hydranium-cli over a real stdio data-server', () => {
    it(
-      'query: returns the document envelope, with the diagnostics the request asked for',
+      'query returns the document envelope, with the diagnostics the request asked for',
       async () => {
          // `audit-leak.domain` is the workspace's one intended error: it names a
          // declaration that its project cannot see. Asserting the MESSAGE, not
@@ -113,7 +113,7 @@ describe('hydranium-cli over a real stdio data-server', () => {
    );
 
    it(
-      'query: routes a second grammar over the same connection',
+      'query routes a second grammar over the same connection',
       async () => {
          // One DataServer serves all three languages, so the URI alone selects
          // the serializer. A single-grammar example cannot tell a correct router
@@ -130,7 +130,7 @@ describe('hydranium-cli over a real stdio data-server', () => {
    );
 
    it(
-      'save: persists the new text to disk and echoes the post-save envelope',
+      'save persists the new text to disk and echoes the post-save envelope',
       async () => {
          const relativePath = WORKSPACE_FILES.commerceCoreInternal;
          const before = readFileSync(path.join(scratch().root, relativePath), 'utf8');

@@ -130,7 +130,7 @@ async function released(services: ReturnType<typeof createOrderFlowServices>, ur
 }
 
 describe('the last close of a non-file document', () => {
-   it('removes an untitled: document the provider cannot serve, stale build and all', async () => {
+   it('removes an `untitled:` document the provider cannot serve, stale build and all', async () => {
       const { harness, services } = await boot();
       const documents = services.shared.workspace.LangiumDocuments;
       const handler = services.shared.lsp.DocumentUpdateHandler;
@@ -150,7 +150,7 @@ describe('the last close of a non-file document', () => {
       await waitFor(() => !documents.hasDocument(URI.parse(UNTITLED)), { timeoutMs: 2000, message: `${UNTITLED} stayed in the workspace` });
    });
 
-   it('rebuilds a virtual: built-in library the editor opens and closes, keeping every reference to it', async () => {
+   it('rebuilds a `virtual:` built-in library the editor opens and closes, keeping every reference to it', async () => {
       const { harness, services } = await boot();
       const documents = services.shared.workspace.LangiumDocuments;
       const rebuilt: string[] = [];
@@ -179,7 +179,7 @@ describe('the last close of a non-file document', () => {
       expect(unresolved()).toEqual([]);
    });
 
-   it('rebuilds a virtual: built-in library on a provider that knows nothing of virtual:', async () => {
+   it('rebuilds a `virtual:` built-in library on a provider that knows nothing of `virtual:`', async () => {
       const { harness, services } = await boot(undefined, DISK_ONLY_FILE_SYSTEM);
       const documents = services.shared.workspace.LangiumDocuments;
       const rebuilt: string[] = [];
@@ -200,7 +200,7 @@ describe('the last close of a non-file document', () => {
       expect(documents.getDocument(ORDER_FLOW_STDLIB_URI)?.textDocument.getText()).toBe(ORDER_FLOW_STDLIB_SOURCE);
    });
 
-   it('keeps the edit of a virtual: document after its close, since the provider serves the index’s text', async () => {
+   it('keeps the edit of a `virtual:` document after its close, since the provider serves the index’s text', async () => {
       const { harness, services } = await boot();
       const documents = services.shared.workspace.LangiumDocuments;
       const stdlib = ORDER_FLOW_STDLIB_URI.toString();
@@ -285,7 +285,7 @@ describe('a seeded document the bound provider cannot serve', () => {
       return lines.filter(line => line.level === 'warn' && line.message.includes('workspace.FileSystemProvider')).map(line => line.message);
    }
 
-   it('warns once at startup when the slot is rebound to a registry that sends virtual: to a host that knows nothing of it', async () => {
+   it('warns once at startup when the slot is rebound to a registry that sends `virtual:` to a host that knows nothing of it', async () => {
       const warnings = await startupWarnings({
          workspace: {
             FileSystemProvider: services => new HostOnlyFileSystemProviderRegistry(services, { host: new DiskOnlyFileSystemProvider() })

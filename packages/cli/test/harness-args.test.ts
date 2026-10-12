@@ -194,7 +194,7 @@ describe('resolveWorkspaceArgument', () => {
       expect(resolveWorkspaceArgument(empty, 'cmd-one', onError)).toBe(empty);
    });
 
-   it('converts a file: URI to a path, which the headless seams cannot do themselves', () => {
+   it('converts a `file:` URI to a path, which the headless seams cannot do themselves', () => {
       // They resolve a string workspace as a filesystem PATH, so an unconverted
       // URI becomes `<cwd>/file:/…` and reaches nothing — the same silent route
       // this check exists to close.

@@ -123,7 +123,7 @@ export interface LspConformanceOptions {
    readonly connect: () => LspConformanceDriver | Promise<LspConformanceDriver>;
    /** Per-language fixtures; the grammar-bearing checks run once per language. */
    readonly languages: ReadonlyArray<LanguageFixture>;
-   /** Suite title override. Default `'conformance: lsp'`. */
+   /** Suite title override. Default `'lsp conformance'`. */
    readonly suiteTitle?: string;
 }
 

@@ -121,7 +121,7 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
    };
 }
 
-describe('DataServerProtocol — type contract', () => {
+describe('DataServerProtocol type contract', () => {
    it('compiles a fake implementation against a custom AST root', async () => {
       const protocol = makeFakeProtocol();
       const doc = await protocol.getModelDocument({ uri: 'fake://doc' });
@@ -222,12 +222,12 @@ describe('DataServerProtocol — type contract', () => {
    });
 });
 
-describe('DATA_SERVER_PROTOCOL_METHODS + DATA_SERVER_PATH — wire constants', () => {
+describe('DATA_SERVER_PROTOCOL_METHODS and DATA_SERVER_PATH wire constants', () => {
    it('exposes a stable path identifier', () => {
       expect(DATA_SERVER_PATH).toBe('/hydranium/data-server');
    });
 
-   it('lists exactly the request methods on DataServerProtocol — array must not drift from the interface', () => {
+   it('lists exactly the request methods on DataServerProtocol, so the array cannot drift from the interface', () => {
       // Cross-checks both directions: every method in the array must be on the
       // interface (caught at compile time by the `as const satisfies` on the
       // array declaration), and every method on the interface must be in the

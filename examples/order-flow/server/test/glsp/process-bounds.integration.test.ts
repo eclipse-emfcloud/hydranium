@@ -157,7 +157,7 @@ describe('order-flow .process change-bounds', () => {
       expect(diagram.layoutText()).toContain('node Cancel at 700, 160 size 160, 60');
    });
 
-   it('CREATES the layout file for a process that has none', async () => {
+   it('creates the layout file for a process that has none', async () => {
       // `returns.process` has no `.layout` beside it, which is the state of
       // every hand-authored process before it is first opened in the editor.
       // This is the case that would silently drop the drag if the state did not

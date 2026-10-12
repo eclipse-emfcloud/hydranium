@@ -98,6 +98,54 @@ assert on the server's own outcome.
 5. **Green means the gate.** `npm run check` must pass in full; read its
    verdict as [The gate](../CONTRIBUTING.md#the-gate) describes.
 
+### Titling a test
+
+The CI job summary names each case by its full title, the `describe` titles
+joined by the runner with the `it` title last, so one rule keeps that table
+reading as one suite. A top-level `describe` takes one of these shapes:
+
+- **A unit**, spelled as code or the CLI spells it: `DataServer`,
+  `analyze-heap`, `hydranium-cli --version`. Several units are joined with
+  `and`, as in the scenario
+  `ProfileCapture and profileWorkload in a real inspector session`.
+- **A member**, as `Unit.member` without call parentheses, where the unit is
+  the class, interface or namespace the suite tests and has the member,
+  declared or inherited: `AstDocumentManager.save`, `AstDocument.create`. A
+  title takes this shape when its leading word is the member's code name,
+  spelled exactly, and the suite is about that member, whether it calls the
+  member directly or reaches it through a public path such as a constructor
+  option. English words that only describe a member, such as `text state`,
+  stay as written.
+- **A scenario**: the unit, units or member, a space, then lowercase words
+  naming the scenario: `ClientSession.create races`. A suite over several
+  members is a scenario on the unit: `ClientSession open and close`.
+- **A property**, as a lowercase statement, optionally about a named unit:
+  `the hand-maintained value-flag lists match their parser`,
+  `interpolate never throws`. An integration or end-to-end suite names its
+  system as a unit, `order-flow diagram in Theia`, or states the situation it
+  pins down, `a save followed by the last close`.
+
+Where no shape fits, a short lowercase noun phrase names what the suite
+covers, such as a module, a file or a group of units: `the German catalogue`.
+A nested `describe` names what it narrows to: a member, a function exported
+beside the unit, a scenario or a condition, without repeating the parent's
+words. An `it` title is one statement of the behaviour, starting lowercase
+unless it starts with a name; in a table of cases it may name the case it
+covers instead: `pure insert at start`. A test outside any `describe` is
+titled as if its file name were the `describe`. An `.each` title is read as
+it renders, with its row values filled in, and a rendered value appears bare,
+without quotes.
+
+No title carries a separator of its own: a dash set off by spaces, a semicolon
+or a colon, and in a `describe` title also parentheses, brackets or a comma
+that sets off a qualifier. The runner already joins the levels, so a second
+separator reads as another level. Code in a title goes in backticks, such as a
+`virtual:` scheme, and its punctuation is then no separator. A name keeps its
+own spelling, so `Logger`, `Save All` and `Ctrl+S` stay as they are.
+`check:test-titles` fails the gate on the separators, a colon outside
+backticks, a leading capital that is no name and a `$field` in an `.each`
+title; the shapes and the qualifier comma are left to review.
+
 ### A control that refuses to redden
 
 It is a result, not a nuisance: the test does not reach the path it claims to,

@@ -16,7 +16,7 @@ const FAKE: StubLanguageDescriptor = { languageId: 'fake', fileExtensions: ['.fa
 const OTHER: StubLanguageDescriptor = { languageId: 'other', fileExtensions: ['.other'], producedTypes: ['BaseType'] };
 
 describe('makeStubServiceRegistry', () => {
-   describe('routing — Langium ladder', () => {
+   describe('routing by the Langium ladder', () => {
       it('routes by file extension', () => {
          const registry = makeStubServiceRegistry([FAKE, OTHER]);
          expect(registry.getServices(URI.parse('file:///a.fake')).LanguageMetaData.languageId).toBe('fake');
@@ -128,7 +128,7 @@ describe('makeStubServiceRegistry', () => {
    });
 });
 
-describe('makeTestServices — languages option', () => {
+describe('makeTestServices languages option', () => {
    it('binds the stub registry on the ServiceRegistry slot', () => {
       const bundle = makeTestServices({ languages: [FAKE, OTHER] });
       expect(bundle.serviceRegistry).toBeDefined();
@@ -142,7 +142,7 @@ describe('makeTestServices — languages option', () => {
 
    it('leaves the slot ABSENT when no languages are declared', () => {
       // Deliberate: production paths that optional-chain `ServiceRegistry`
-      // (ModelService.rewriteModel) must keep seeing it missing, so the
+      // (DefaultModelService.rewriteModel) must keep seeing it missing, so the
       // default bundle's behaviour is unchanged by this option existing.
       const bundle = makeTestServices();
       expect(bundle.serviceRegistry).toBeUndefined();

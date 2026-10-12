@@ -43,15 +43,16 @@ export type TransferMode = 'full' | 'grammar';
 /**
  * Per-encode inputs threaded through the {@link TransferEncoder} walk and its
  * hooks. Created once per encode entry (see
- * {@link TransferEncoder.createEncodeContext}) and passed unchanged through
- * the recursion, so every hook invocation of one encode observes the same
- * inputs — unlike instance state, which two interleaving encodes would
+ * {@link DefaultTransferEncoder.createEncodeContext}) and passed unchanged
+ * through the recursion, so every hook invocation of one encode observes the
+ * same inputs — unlike instance state, which two interleaving encodes would
  * clobber.
  *
  * Adopters widen the context by overriding `createEncodeContext` with a
  * covariant return type and narrowing the hook parameter types accordingly
  * (TypeScript method bivariance admits the narrowing). An input that changes
- * the encoded output must also be folded into {@link TransferEncoder.rootCacheKey}.
+ * the encoded output must also be folded into
+ * {@link DefaultTransferEncoder.rootCacheKey}.
  */
 export interface EncodeContext {
    /** Property-set selection for this encode — see {@link TransferMode}. */
@@ -66,12 +67,12 @@ export interface EncodeContext {
 }
 
 /**
- * The non-root inputs {@link TransferEncoder.assembleTransferDocument} needs to
- * build a wire envelope. Both of the encoder's document paths narrow to this
- * before assembling — a built `LangiumDocument` (whose `uri` / `version` live on
- * its `textDocument`) and a server-internal `AstDocument` snapshot, which
- * satisfies the shape structurally — so the assembly seam has exactly one
- * implementation to override.
+ * The non-root inputs {@link DefaultTransferEncoder.assembleTransferDocument}
+ * needs to build a wire envelope. Both of the encoder's document paths narrow
+ * to this before assembling — a built `LangiumDocument` (whose `uri` /
+ * `version` live on its `textDocument`) and a server-internal `AstDocument`
+ * snapshot, which satisfies the shape structurally — so the assembly seam has
+ * exactly one implementation to override.
  *
  * `diagnostics` accepts either the wire shape (an already-projected
  * `TDiagnostic`, as a snapshot may carry) or a raw LSP {@link Diagnostic}; the

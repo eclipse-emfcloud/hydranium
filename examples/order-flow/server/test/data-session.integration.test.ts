@@ -464,7 +464,7 @@ function drop(head: Harness): void {
    head.dispose();
 }
 
-describe('DataSession restore against the real stack', () => {
+describe('DataSession.restore against the real stack', () => {
    it('reports a write based on any version that a revert took, and sends it nowhere', async () => {
       // The session is the document's only client, so ending it reverts the
       // document to disk.

@@ -36,7 +36,7 @@ import { makeStubSelfSaveRegistry, makeStubWritableFileSystem } from '../../src/
 const URI_A = URI.parse('file:///ws/a.fake');
 const URI_B = URI.parse('file:///ws/b.fake');
 
-describe('makeStubWritableFileSystem — the write record', () => {
+describe('makeStubWritableFileSystem write record', () => {
    it('records every write in call order, keyed by URI string', async () => {
       const fileSystem = makeStubWritableFileSystem();
       await fileSystem.writeFile(URI_A, 'first');
@@ -75,7 +75,7 @@ describe('makeStubWritableFileSystem — the write record', () => {
    });
 });
 
-describe('makeStubWritableFileSystem — the self-save notification, against the real SelfSaveRegistry', () => {
+describe('makeStubWritableFileSystem self-save notification against the real SelfSaveRegistry', () => {
    it('registers the fsPath and an mtime the real registry matches on', async () => {
       const stubRegistry = makeStubSelfSaveRegistry();
       const fileSystem = makeStubWritableFileSystem(stubRegistry);

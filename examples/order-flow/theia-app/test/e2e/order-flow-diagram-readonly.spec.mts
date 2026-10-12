@@ -39,7 +39,7 @@ function brokenProcessOverlay(): string {
    return overlay;
 }
 
-test.describe('Order-flow diagram opened over a broken document', () => {
+test.describe('order-flow diagram opened over a broken document', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

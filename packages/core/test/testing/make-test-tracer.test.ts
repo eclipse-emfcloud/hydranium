@@ -60,7 +60,7 @@ function messages(lines: readonly CapturedLine[]): string[] {
    return lines.map(line => line.message.replace(/#\d+/, '#N'));
 }
 
-describe('makeNoopTracer / makeNoopLogger — equivalence to the classes they name', () => {
+describe('makeNoopTracer and makeNoopLogger match the classes they name', () => {
    it('returns a DefaultTracer over a NoopLogger and a SystemClock', () => {
       const tracer = makeNoopTracer();
       const composed = tracer as unknown as { logger: unknown; clock: unknown };
@@ -85,7 +85,7 @@ describe('makeNoopTracer / makeNoopLogger — equivalence to the classes they na
    });
 });
 
-describe('makeCapturingLogger — the sink', () => {
+describe('makeCapturingLogger sink', () => {
    it('captures a line through the instance it returned', () => {
       const { logger, lines } = makeCapturingLogger();
       logger.info('direct');
@@ -124,7 +124,7 @@ describe('makeCapturingLogger — the sink', () => {
    });
 });
 
-describe('makeCapturingLogger — the process-wide threshold gate', () => {
+describe('makeCapturingLogger process-wide threshold gate', () => {
    it('drops a line below the active threshold and captures it once the level is raised', () => {
       const { logger, lines } = makeCapturingLogger();
 
@@ -151,7 +151,7 @@ describe('makeCapturingLogger — the process-wide threshold gate', () => {
    });
 });
 
-describe('makeCapturingTracer — the clock axis', () => {
+describe('makeCapturingTracer clock axis', () => {
    it('reports elapsed time from the clock it was given, not from wall time', () => {
       const clock = makeFakeClock();
       const { tracer, lines } = makeCapturingTracer(clock);

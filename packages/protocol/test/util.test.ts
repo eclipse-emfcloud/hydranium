@@ -38,7 +38,7 @@ describe('DisposableCollection', () => {
       expect(log).toEqual(['C', 'B', 'A']);
    });
 
-   it('dispose() is idempotent — second call is a no-op', () => {
+   it('dispose() is idempotent, a second call being a no-op', () => {
       const collection = new DisposableCollection();
       const log: string[] = [];
       collection.push(tracked(log, 'A'));
@@ -47,7 +47,7 @@ describe('DisposableCollection', () => {
       expect(log).toEqual(['A']);
    });
 
-   it('disposed getter reflects state — false before, true after dispose()', () => {
+   it('the disposed getter reflects state, false before dispose() and true after', () => {
       const collection = new DisposableCollection();
       expect(collection.disposed).toBe(false);
       collection.dispose();
@@ -109,7 +109,7 @@ describe('isPromiseLike', () => {
       expect(isPromiseLike(undefined as unknown as MaybePromise<void>)).toBe(false);
    });
 
-   it('preserves the sync fast path — no microtask when value is sync', async () => {
+   it('preserves the sync fast path, with no microtask when the value is sync', async () => {
       // A microtask queued BEFORE the expression is what makes the ordering
       // observable at all: two `order.push` statements in one async function
       // with nothing contending for the queue run in sequence whether or not

@@ -267,7 +267,7 @@ async function bootHeads(): Promise<Heads> {
    return heads;
 }
 
-describe('order-flow cross-head coherence (LSP + data + GLSP on one shared tree)', () => {
+describe('order-flow cross-head coherence of the LSP, data and GLSP heads on one shared tree', () => {
    afterEach(async () => {
       if (heads) {
          // Quiesce before tearing the shared LSP wire down: a head's edit can

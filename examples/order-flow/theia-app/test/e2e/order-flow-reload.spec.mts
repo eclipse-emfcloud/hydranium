@@ -62,7 +62,7 @@ async function reload(app: TheiaApp): Promise<void> {
  * Serial, because the second test reloads a page the first has already
  * reloaded, and reads the workspace the first left.
  */
-test.describe.serial('Order-flow in Theia across a page reload', () => {
+test.describe.serial('order-flow in Theia across a page reload', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

@@ -18,11 +18,11 @@ import { describe, expect, it } from 'vitest';
 import { buildLintGrammarDriverArgs, runLintGrammar } from '../src/commands/lint-grammar.js';
 
 describe('lint-grammar', () => {
-   it('buildLintGrammarDriverArgs: emits --services and omits optional flags when unset', () => {
+   it('buildLintGrammarDriverArgs emits --services and omits optional flags when unset', () => {
       expect(buildLintGrammarDriverArgs({ servicesModule: './svc.js' })).toEqual(['--services', './svc.js']);
    });
 
-   it('buildLintGrammarDriverArgs: repeats --name-property and appends --json/--strict', () => {
+   it('buildLintGrammarDriverArgs repeats --name-property and appends --json/--strict', () => {
       expect(buildLintGrammarDriverArgs({ servicesModule: './svc.js', nameProperties: ['name', 'id'], json: true, strict: true })).toEqual([
          '--services',
          './svc.js',
@@ -35,7 +35,7 @@ describe('lint-grammar', () => {
       ]);
    });
 
-   it('runLintGrammar: spawns the driver (no --expose-gc) with the forwarded args', async () => {
+   it('runLintGrammar spawns the driver (no --expose-gc) with the forwarded args', async () => {
       let captured: string[] = [];
       await runLintGrammar({
          servicesModule: './svc.js',
@@ -51,7 +51,7 @@ describe('lint-grammar', () => {
       expect(captured.slice(-5)).toEqual(['--services', './svc.js', '--name-property', 'id', '--strict']);
    });
 
-   it('runLintGrammar: a non-zero child exit (lint failed) sets the process exit code', async () => {
+   it('runLintGrammar sets the process exit code on a non-zero child exit (lint failed)', async () => {
       const previous = process.exitCode;
       await runLintGrammar({ servicesModule: './svc.js', __spawnForTest: () => Promise.resolve(1) });
       expect(process.exitCode).toBe(1);

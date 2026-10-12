@@ -152,7 +152,7 @@ async function writeBeforeOpen(docs: HydraniumTextDocuments<TextDocument>, holde
    await docs.applyEditToLanguageClient(URI, WRITTEN);
 }
 
-describe('HydraniumTextDocuments — a write while the editor has not opened the document', () => {
+describe('HydraniumTextDocuments write while the editor has not opened the document', () => {
    for (const [holderName, holder] of [
       ['another client holds the document', 'held'],
       ['the document was released', 'released']
@@ -190,7 +190,7 @@ describe('HydraniumTextDocuments — a write while the editor has not opened the
    });
 });
 
-describe('HydraniumTextDocuments — a seeded language-client text', () => {
+describe('HydraniumTextDocuments with a seeded language-client text', () => {
    for (const [name, otherHolder] of [
       ['the store opens the document with the editor', false],
       ['the editor joins another client', true]

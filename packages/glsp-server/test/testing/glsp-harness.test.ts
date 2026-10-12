@@ -400,7 +400,7 @@ describe('makeGlspHarness', () => {
       }
    });
 
-   it('dispose() is idempotent — the second call shuts the server down no further', async () => {
+   it('dispose() is idempotent, the second call shutting the server down no further', async () => {
       const harness = makeFixtureHarness();
       await harness.start();
       let shutdowns = 0;

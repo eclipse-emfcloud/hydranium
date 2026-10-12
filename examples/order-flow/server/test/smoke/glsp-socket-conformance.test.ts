@@ -169,7 +169,7 @@ const fulfillmentFixture: GlspFixture<Action, Driver> = {
 };
 
 runGlspConformance<Action, Driver>({
-   suiteTitle: 'conformance: glsp over a socket (order-flow lib/main.js)',
+   suiteTitle: 'order-flow glsp conformance over a socket to lib/main.js',
    connect,
    diagrams: [fulfillmentFixture]
 });

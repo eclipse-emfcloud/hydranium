@@ -50,7 +50,7 @@ function names(tier: readonly TieredAstNodeDescription[]): string[] {
    return tier.map(description => description.name);
 }
 
-describe('ScopeExtensionService — getDescriptions', () => {
+describe('ScopeExtensionService.getDescriptions', () => {
    it('runs each matching extension once per call', () => {
       const service = makeService();
       let calls = 0;
@@ -130,7 +130,7 @@ describe('ScopeExtensionService — getDescriptions', () => {
    });
 });
 
-describe('ScopeExtensionService — contribution group consumption', () => {
+describe('ScopeExtensionService contribution group consumption', () => {
    it('reads `services.references.scopes` and calls each contribution at construction', () => {
       const calls: string[] = [];
       const services = makeNoopLanguageServices({
@@ -166,7 +166,7 @@ describe('ScopeExtensionService — contribution group consumption', () => {
    });
 });
 
-describe('ScopeExtensionService — profiling', () => {
+describe('ScopeExtensionService profiling', () => {
    const level = Logger.getLevel();
    afterEach(() => Logger.setLevel(level));
 

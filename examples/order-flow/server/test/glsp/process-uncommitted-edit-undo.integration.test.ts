@@ -35,7 +35,7 @@ import {
    undoOrRedo
 } from './uncommitted-edit-harness.js';
 
-describe('the side effects of an operation, in order', () => {
+describe('the side effects of an operation in order', () => {
    /** A compound of a command that does not record and a recording one with a bridge, each logging into `log`. */
    function mixedCompound(diagram: Diagram, log: string[], ...rest: Command[]): CompoundCommand {
       const plain: Command = {
@@ -423,7 +423,7 @@ describe('undo and redo of an operation', () => {
       expect({ count: counter.count, layout: textOf(opened, layoutUri) === layoutBefore }).toEqual({ count: 1, layout: true });
    });
 
-   it('fails an undo whose bridge executes a recording command: steps already run are redone, nothing is written, the stack flushes', async () => {
+   it('fails an undo whose bridge executes a recording command, redoing the steps already run, writing nothing and flushing the stack', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       const create = createTask();
@@ -552,7 +552,7 @@ describe('undo and redo of an operation', () => {
       });
    });
 
-   it('opens an operation of its own for a recording command executed outside one: the built root is untouched until its one write', async () => {
+   it('opens an operation of its own for a recording command executed outside one, leaving the built root untouched until its one write', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       let builtPayXDuring: number | undefined;

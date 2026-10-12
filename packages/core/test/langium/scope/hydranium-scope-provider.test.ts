@@ -485,7 +485,7 @@ describe('HydraniumScopeProvider', () => {
       });
    });
 
-   describe('resolveSyntheticSource (default)', () => {
+   describe('resolveSyntheticSource by default', () => {
       it('builds a transient stub rooted at the loaded document parse root', () => {
          // With the document loaded the default must return a node carrying the requested
          // $type and the parse root as $container — both halves asserted, so neither the
@@ -506,7 +506,7 @@ describe('HydraniumScopeProvider', () => {
    });
 });
 
-describe('HydraniumScopeProvider — extension tiers', () => {
+describe('HydraniumScopeProvider extension tiers', () => {
    /** Answers a fixed project scope, so only the extension layering is under test. */
    class ExtensionLayeringProvider extends HydraniumScopeProvider {
       projectScope: Scope = EMPTY_SCOPE;

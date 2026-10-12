@@ -40,7 +40,7 @@ function harness() {
    return { ...bundle, models: bundle.modelService };
 }
 
-describe('ModelService onModelUpdated', () => {
+describe('ModelService.onModelUpdated', () => {
    it('serves every subscriber of a phase from one builder listener, with one shared event', () => {
       const { models, documentBuilder } = harness();
       const registered = vi.spyOn(documentBuilder, 'onDocumentPhase');

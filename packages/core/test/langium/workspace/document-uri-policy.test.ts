@@ -31,7 +31,7 @@ describe('DefaultDocumentUriPolicy', () => {
       expect(policy.canonicalUri(once)).toBe(once);
    });
 
-   it('loadUri treats every URI as loadable — returns it unchanged, never undefined', () => {
+   it('loadUri treats every URI as loadable, returning it unchanged and never undefined', () => {
       expect(policy.loadUri('file:///a/x.fake')?.toString()).toBe(UriUtils.toUri('file:///a/x.fake')?.toString());
    });
 });
@@ -74,11 +74,11 @@ describe('RealpathDocumentUriPolicy', () => {
       expect(makePolicy(realpath).loadUri(ABSENT)).toBeUndefined();
    });
 
-   it('degrades to the default when the provider has no realpath: canonicalUri normalizes', () => {
+   it('canonicalUri still normalizes when the provider has no realpath, as the default does', () => {
       expect(makePolicy(undefined).canonicalUri(LINK)).toBe(UriUtils.normalize(LINK));
    });
 
-   it('degrades to the default when the provider has no realpath: loadUri never returns undefined', () => {
+   it('loadUri never returns undefined when the provider has no realpath, as the default does', () => {
       // The existence signal must survive ONLY where realpath is present-and-absent;
       // with no realpath at all, loadUri is the optimistic default (never undefined).
       expect(makePolicy(undefined).loadUri(ABSENT)?.toString()).toBe(UriUtils.toUri(ABSENT)?.toString());
@@ -125,13 +125,13 @@ describe('findRealpathDivergence', () => {
 // identity rests on — fails here.
 documentUriPolicyConformance(
    { describe, it, expect },
-   'DefaultDocumentUriPolicy (via conformance kit)',
+   'DefaultDocumentUriPolicy through the conformance kit',
    () => new DefaultDocumentUriPolicy()
 );
 
 documentUriPolicyConformance(
    { describe, it, expect },
-   'RealpathDocumentUriPolicy (via conformance kit)',
+   'RealpathDocumentUriPolicy through the conformance kit',
    () =>
       new RealpathDocumentUriPolicy(
          makeNoopSharedServices({
@@ -168,7 +168,7 @@ documentUriPolicyConformance(
  * observe which of the tests it EMITS pass — running it with the real runner
  * would just report the whole file green either way.
  */
-describe('documentUriPolicyConformance — the suite it emits', () => {
+describe('documentUriPolicyConformance emitted suite', () => {
    interface EmittedTest {
       name: string;
       run(): void;

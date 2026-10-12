@@ -49,7 +49,7 @@ describe('isVirtualUri', () => {
       expect(isVirtualUri(virtualUri('foo'))).toBe(true);
    });
 
-   it('returns true for any URI with the virtual: scheme', () => {
+   it('returns true for any URI with the `virtual:` scheme', () => {
       expect(isVirtualUri(URI.parse('virtual:bare'))).toBe(true);
    });
 

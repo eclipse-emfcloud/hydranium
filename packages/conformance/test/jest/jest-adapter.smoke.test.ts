@@ -35,4 +35,4 @@ const fakeDriver: LspConformanceDriver = {
    dispose: () => undefined
 };
 
-runLspConformance({ connect: () => fakeDriver, languages: [], suiteTitle: 'conformance/jest adapter smoke' });
+runLspConformance({ connect: () => fakeDriver, languages: [], suiteTitle: 'jest runner adapter smoke' });

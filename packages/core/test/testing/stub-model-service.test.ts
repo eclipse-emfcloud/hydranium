@@ -77,7 +77,7 @@ function bundleWith(languages?: readonly StubLanguageDescriptor[]): ServerShared
    return makeTestServices<FakeRoot, AstDiagnostic, FakeRoot>(languages ? { languages: [...languages] } : {}).services;
 }
 
-describe('makeStubModelService — the serialize seam, against the real ModelService', () => {
+describe('makeStubModelService serialize seam against the real ModelService', () => {
    it('is the real ModelService with one hook replaced, not a look-alike', () => {
       const stub = makeStubModelService<FakeRoot, AstDiagnostic, FakeRoot>(bundleWith(), () => 'stub-text');
 
@@ -121,7 +121,7 @@ describe('makeStubModelService — the serialize seam, against the real ModelSer
    });
 });
 
-describe('makeStubModelService — option forwarding, against the real ModelService', () => {
+describe('makeStubModelService option forwarding against the real ModelService', () => {
    it('derives the same option-gated state as a real ModelService given the same options', () => {
       const services = bundleWith();
       const cases: readonly (ModelServiceOptions | undefined)[] = [

@@ -29,7 +29,7 @@ describe('Registry', () => {
          expect(registry.get('c')).toBeUndefined();
       });
 
-      it('throws on duplicate ids — silent overwrite would mask programming errors', () => {
+      it('throws on duplicate ids, since a silent overwrite would mask programming errors', () => {
          const registry = new Registry<TestItem>();
          registry.register({ id: 'a', value: 1 });
 
@@ -89,7 +89,7 @@ describe('Registry', () => {
       });
    });
 
-   describe('all — iteration order', () => {
+   describe('all iteration order', () => {
       it('preserves registration order when no priorities are set', () => {
          const registry = new Registry<TestItem>();
          registry.register({ id: 'a', value: 1 });
@@ -130,7 +130,7 @@ describe('Registry', () => {
          expect(registry.all().map(item => item.id)).toEqual(['lower', 'no-prio', 'higher']);
       });
 
-      it('caches the sorted list — repeated calls without mutation return the same reference', () => {
+      it('caches the sorted list, so repeated calls without mutation return the same reference', () => {
          // Not an implementation detail: consumers use the array reference as a
          // cache key for indexes they derive from it, so a version of `all` that
          // built a fresh array per call would make every such index rebuild on
@@ -144,7 +144,7 @@ describe('Registry', () => {
          expect(first).toBe(second); // identity, not just equality
       });
 
-      it('hands out a snapshot — a later register does not mutate an array already returned', () => {
+      it('hands out a snapshot, so a later register does not mutate an array already returned', () => {
          // The sorted list must be built from a COPY of the backing array. Sorting
          // `items` in place would make the cached snapshot and the backing array
          // the same object, so the next `register` would push into an array a

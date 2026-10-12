@@ -115,7 +115,7 @@ function names(descriptions: readonly AstNodeDescription[]): string[] {
    return descriptions.map(candidate => candidate.name);
 }
 
-describe('makeStubIndexManager — differential against HydraniumIndexManager', () => {
+describe('makeStubIndexManager differential against HydraniumIndexManager', () => {
    it('streams the same global index, in the same order, on both sides', async () => {
       const real = await realIndexManager();
       const stub = makeStubIndexManager(SEED);
@@ -186,7 +186,7 @@ describe('makeStubIndexManager — differential against HydraniumIndexManager', 
    });
 });
 
-describe('makeStubIndexManager — the divergences its doc comment declares', () => {
+describe('makeStubIndexManager divergences its doc comment declares', () => {
    it('matches nodeType exactly where the real manager applies isSubtype', async () => {
       const real = await realIndexManager();
       const stub = makeStubIndexManager(SEED);
@@ -220,7 +220,7 @@ describe('makeStubIndexManager — the divergences its doc comment declares', ()
    });
 });
 
-describe('makeStubIndexManager — the seeding surface it declares itself', () => {
+describe('makeStubIndexManager seeding surface it declares itself', () => {
    it('exposes descriptions as the live backing array, so a push is visible to queries', () => {
       const stub = makeStubIndexManager(SEED);
       stub.descriptions.push(description('Gamma', 'TypeTwo', URI_B));

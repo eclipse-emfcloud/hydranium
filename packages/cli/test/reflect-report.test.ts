@@ -40,12 +40,12 @@ const REFLECTION: GrammarReflection = {
 };
 
 describe('formatReflectionReport', () => {
-   it('json: emits the raw reflection', () => {
+   it('emits the raw reflection as json', () => {
       const output = formatReflectionReport(REFLECTION, { json: true });
       expect(JSON.parse(output)).toEqual(REFLECTION);
    });
 
-   it('markdown: renders languages, terminals, hierarchy, cross-refs and per-type tables', () => {
+   it('renders languages, terminals, hierarchy, cross-refs and per-type tables as markdown', () => {
       const output = formatReflectionReport(REFLECTION);
 
       expect(output).toContain('# Grammar reflection');
@@ -65,7 +65,7 @@ describe('formatReflectionReport', () => {
       expect(output).toContain('| entities |  | yes | yes |');
    });
 
-   it('markdown: notes the absence of cross-references and properties', () => {
+   it('notes the absence of cross-references and properties in markdown', () => {
       const output = formatReflectionReport({
          languages: [],
          types: [{ name: 'Empty', superTypes: [], directSubTypes: [], properties: [] }]

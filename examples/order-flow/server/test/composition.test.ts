@@ -27,7 +27,7 @@ import { OrderFlowProcessScopeProvider } from '../src/language-server/process-sc
 import { ProcessSerializer } from '../src/language-server/process-serializer.js';
 import { makeServices, workspaceUri } from './order-flow-harness.js';
 
-describe('order-flow composition — three grammars, one shared tier', () => {
+describe('order-flow composition of three grammars over one shared tier', () => {
    it('registers all three languages with distinct ids and file extensions', () => {
       const { shared } = makeServices();
 

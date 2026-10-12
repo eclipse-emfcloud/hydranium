@@ -305,6 +305,6 @@ for (const policy of policies) {
       // the claim is true. Without it the kit cannot tell an empty project list
       // apart from an unimplemented `getProjects` and reports skipped.
       expectsProjects: true,
-      suiteTitle: `conformance: data-server (order-flow, three grammars, ${policy.title})`
+      suiteTitle: `order-flow data-server conformance over three grammars with the ${policy.title}`
    });
 }

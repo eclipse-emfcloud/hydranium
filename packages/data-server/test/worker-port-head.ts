@@ -67,7 +67,7 @@ function makeWorkerHead() {
  * did not wait for it.
  */
 export function describeWorkerPortHead(runtime: 'browser' | 'node'): void {
-   describe(`DataServer over a worker port, under the ${runtime} runtime`, () => {
+   describe(`DataServer over a worker port under the ${runtime} runtime`, () => {
       beforeAll(async () => {
          // Runs before this await resumes only if the runtime queues it as a
          // microtask; a `setImmediate` would still be pending.

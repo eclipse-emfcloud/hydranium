@@ -142,7 +142,7 @@ describe.each<[string, () => RaceHarness]>([
       }
    ],
    [
-      'makeFakeClock',
+      'FakeClock',
       () => {
          const clock = makeFakeClock();
          return { clock, advance: ms => clock.advance(ms), pendingTimers: () => clock.pendingTimers() };
@@ -215,7 +215,7 @@ describe.each<[string, () => RaceHarness]>([
    });
 });
 
-describe('a clock extending SystemClock', () => {
+describe('SystemClock subclassed with its own setTimer', () => {
    it('rejects the race when its setTimer throws, and still handles a later rejection of the promise', async () => {
       const unhandled: unknown[] = [];
       const onUnhandled = (reason: unknown): void => {

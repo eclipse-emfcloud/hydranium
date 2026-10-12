@@ -96,7 +96,7 @@ describe('LangiumDocuments over three real grammars', () => {
    });
 });
 
-describe('LangiumDocuments failure reporting, through a real server', () => {
+describe('LangiumDocuments failure reporting through a real server', () => {
    let scratch: ScratchOrderFlowHarness | undefined;
 
    afterEach(() => {

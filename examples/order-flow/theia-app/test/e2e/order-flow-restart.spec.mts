@@ -120,7 +120,7 @@ async function expectLiveDataHead(app: TheiaApp, timeout: number): Promise<void>
    await expect(app.page.locator(`${PANEL} .diagnostics li`)).toHaveCount(0, { timeout });
 }
 
-test.describe.serial('Order-flow data connection across a language-server restart', { tag: '@restart' }, () => {
+test.describe.serial('order-flow data connection across a language-server restart', { tag: '@restart' }, () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

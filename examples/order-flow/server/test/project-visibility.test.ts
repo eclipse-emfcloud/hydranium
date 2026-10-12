@@ -62,7 +62,7 @@ function typeCandidates(harness: OrderFlowHarness, field: Field): string[] {
       .toArray();
 }
 
-describe('order-flow workspace — folder-scoped projects', () => {
+describe('order-flow workspace with folder-scoped projects', () => {
    it('discovers one project per folder from the .domain file carrying the project header', async () => {
       const harness = await makeWorkspaceHarness();
       const projects = harness.shared.workspace.ProjectManager;
@@ -119,7 +119,7 @@ describe('order-flow workspace — folder-scoped projects', () => {
    });
 });
 
-describe('order-flow visibility — the universal tier, via the stdlib', () => {
+describe('order-flow visibility of the universal tier through the stdlib', () => {
    it('exports stdlib declarations at tier universal, with no owning project', async () => {
       // The mechanism itself, asserted rather than inferred from the fact that
       // resolution happens to work. `Money` is the contrast: a project-owned
@@ -166,7 +166,7 @@ describe('order-flow visibility — the universal tier, via the stdlib', () => {
    });
 });
 
-describe('order-flow visibility — public declarations cross the project boundary', () => {
+describe('order-flow visibility of public declarations across the project boundary', () => {
    it('resolves commerce-core public declarations from orders', async () => {
       const harness = await makeWorkspaceHarness();
       const order = entityNamed(documentFor<DomainModel>(harness, 'orders/orders.domain').parseResult.value, 'Order');
@@ -220,7 +220,7 @@ describe('order-flow visibility — public declarations cross the project bounda
    });
 });
 
-describe('order-flow projects — a descriptor change', () => {
+describe('order-flow projects after a descriptor change', () => {
    it('takes effect in the build the edit starts', async () => {
       const { harness, workspace } = await makeScratchWorkspaceHarness();
       onTestFinished(() => workspace.dispose());

@@ -38,7 +38,7 @@ const LOADING_OVERLAY_CLASS = 'hydranium-diagram-loading';
 /** Logged by the GLSP server when a client connects to its socket. */
 const GLSP_CONNECTION_LINE = 'Starting GLSP server connection';
 
-test.describe.serial('Order-flow diagram across a language-server restart', { tag: '@restart' }, () => {
+test.describe.serial('order-flow diagram across a language-server restart', { tag: '@restart' }, () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

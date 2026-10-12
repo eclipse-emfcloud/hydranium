@@ -128,7 +128,7 @@ const AST_PHASES: readonly DocumentState[] = [
 // URI rather than reading its string form.
 const doc = (name: string): LangiumDocument => ({ uri: URI.parse(`file:///${name}`) }) as unknown as LangiumDocument;
 
-describe('BuildPipelineIntegration — listener wiring', () => {
+describe('BuildPipelineIntegration listener wiring', () => {
    it('attaches a build-phase pass dispatcher on every useful build phase', () => {
       const { builder } = setup();
       // Integrity is a registered pass dispatched via BuildPhasePassService, so
@@ -164,7 +164,7 @@ describe('BuildPipelineIntegration — listener wiring', () => {
    });
 });
 
-describe('BuildPipelineIntegration — routing', () => {
+describe('BuildPipelineIntegration routing', () => {
    it('routes the Parsed build phase to integrity.enforceBatch', () => {
       const { builder, integrityCalls } = setup();
       const documents = [doc('a'), doc('b')];
@@ -241,7 +241,7 @@ function setupMultiLanguage(): { builder: FakeDocumentBuilder; integrityCallsA: 
    return { builder, integrityCallsA, integrityCallsB };
 }
 
-describe('BuildPipelineIntegration — multi-grammar routing', () => {
+describe('BuildPipelineIntegration multi-grammar routing', () => {
    it('groups a mixed-language Parsed batch by language and enforces each group once', async () => {
       const { builder, integrityCallsA, integrityCallsB } = setupMultiLanguage();
       const docA1 = doc('a1.a');
@@ -257,7 +257,7 @@ describe('BuildPipelineIntegration — multi-grammar routing', () => {
    });
 });
 
-describe('BuildPipelineIntegration — foundational pass ordering', () => {
+describe('BuildPipelineIntegration foundational pass ordering', () => {
    it('runs the framework integrity pass before a default-priority adopter pass at the same state', async () => {
       const builder = new FakeDocumentBuilder();
       const order: string[] = [];

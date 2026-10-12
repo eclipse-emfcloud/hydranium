@@ -165,7 +165,7 @@ function runCli(args: readonly string[], options: { readonly cwd?: string } = {}
 
 describe('hydranium-cli binary against a real three-grammar head', () => {
    it(
-      "validate: exits non-zero and reports the workspace's one deliberate error",
+      "validate exits non-zero and reports the workspace's one deliberate error",
       async () => {
          const root = scratch(workspace, 'workspace').root;
          const run = await runCli(['validate', '--services', SERVICES_MODULE, root]);
@@ -184,7 +184,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'reflect: one reflection carries all three languages and the references between them',
+      'reflect emits one reflection carrying all three languages and the references between them',
       async () => {
          const run = await runCli(['reflect', '--services', SERVICES_MODULE]);
 
@@ -211,7 +211,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'model-docs: emits a language section and an indexed entry type per grammar',
+      'model-docs emits a language section and an indexed entry type per grammar',
       async () => {
          const run = await runCli(['model-docs', '--services', SERVICES_MODULE]);
 
@@ -230,7 +230,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'reflect: a TypeScript entry with no loader fails, and the failure names --import',
+      'reflect fails a TypeScript entry with no loader, naming --import in the failure',
       async () => {
          const run = await runCli(['reflect', '--services', path.resolve(HERE, '../src/services.ts')]);
 
@@ -244,7 +244,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'reflect: a TypeScript entry that fails under a registered --import gets no loader hint',
+      'reflect gives no loader hint for a TypeScript entry that fails under a registered --import',
       async () => {
          // An empty module registers no loader, so the entry still fails to load,
          // but a hint to pass `--import` would repeat the caller's own command.
@@ -260,7 +260,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'reflect: an --import given as a path, absolute or relative, registers the loader on every platform',
+      'reflect registers the loader on every platform for an --import given as a path, absolute or relative',
       async () => {
          // Windows is the case that matters: Node reads `C:\…` as a URL scheme and
          // `.\…` as a package name, so the CLI must hand both over as file URLs for
@@ -282,7 +282,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
    );
 
    it(
-      'generate-transfer-model: emits a well-formed transfer model from the real grammars',
+      'generate-transfer-model emits a well-formed transfer model from the real grammars',
       async () => {
          const outFile = path.join(scratch(outputDir, 'output directory').root, 'transfer-model.ts');
          const run = await runCli([
@@ -325,7 +325,7 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
  */
 describe('hydranium-cli binary dispatch', () => {
    it(
-      'no subcommand: prints usage and exits non-zero',
+      'prints usage and exits non-zero with no subcommand',
       async () => {
          const run = await runCli([]);
 
@@ -339,7 +339,7 @@ describe('hydranium-cli binary dispatch', () => {
    );
 
    it(
-      '--help: prints the same usage and exits zero',
+      'prints the same usage and exits zero for --help',
       async () => {
          const run = await runCli(['--help']);
 
@@ -352,7 +352,7 @@ describe('hydranium-cli binary dispatch', () => {
    );
 
    it(
-      'unknown subcommand: names it on stderr and exits non-zero',
+      'names an unknown subcommand on stderr and exits non-zero',
       async () => {
          const run = await runCli(['not-a-subcommand']);
 

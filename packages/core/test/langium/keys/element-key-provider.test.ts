@@ -97,7 +97,7 @@ describe('PositionalKeyProvider', () => {
       expect(provider.getElementKey(node)).toBe('/members@0/members@2');
    });
 
-   it('forwards the AstNodeLocator output verbatim — no rewriting', () => {
+   it('forwards the AstNodeLocator output verbatim, with no rewriting', () => {
       const provider = new PositionalKeyProvider(makeServices({ getAstNodePath: node => `path-for-${node.$type}` }) as never);
       const node = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', name: 'Element' });
       expect(provider.getElementKey(node)).toBe('path-for-TypeTwo');
@@ -170,7 +170,7 @@ describe('NameBasedKeyProvider', () => {
       expect(provider.getElementKey(node)).toBeUndefined();
    });
 
-   it('stops at the semantic root — does not fold a (named) container into the key', () => {
+   it('stops at the semantic root and does not fold a (named) container into the key', () => {
       // Wrapper is named so the walk WOULD prepend it if the semantic-root short-circuit
       // were skipped, but hasName(wrapper) is false so the child is classified as the
       // semantic root. Skipping the early return would yield 'Element1.Element2'.
@@ -231,7 +231,7 @@ describe('NameBasedKeyProvider', () => {
    });
 });
 
-describe('DefaultElementKeyProvider — framework default', () => {
+describe('DefaultElementKeyProvider as the framework default', () => {
    it('is aliased to NameBasedKeyProvider', () => {
       expect(DefaultElementKeyProvider).toBe(NameBasedKeyProvider);
    });
@@ -246,7 +246,7 @@ describe('DefaultElementKeyProvider — framework default', () => {
    });
 });
 
-describe('ElementKeyProvider — swap interface', () => {
+describe('ElementKeyProvider swapped for an adopter implementation', () => {
    /**
     * A plain object literal implementing {@link ElementKeyProvider} — no
     * framework base class anywhere in its prototype chain. This is the binding

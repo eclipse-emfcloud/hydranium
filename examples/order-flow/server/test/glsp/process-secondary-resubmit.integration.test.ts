@@ -208,7 +208,7 @@ function publishedPosition(action: Action, elementId: string): { x: number; y: n
    return find(action.newRoot)?.position;
 }
 
-describe('order-flow .process glsp storage — an edit to the layout SECONDARY', () => {
+describe('order-flow .process glsp storage after an edit to the layout secondary', () => {
    afterEach(() => {
       open?.harness.dispose();
       open = undefined;

@@ -156,7 +156,7 @@ export interface ServerAddedServices {
    serializer: {
       /**
        * Typed home for grammar-specific round-trip serialisers.
-       * `ModelService.serialize` resolves it via
+       * `DefaultModelService.serialize` resolves it via
        * `services.ServiceRegistry.getServices(uri).serializer.Serializer`, so
        * multi-grammar workspaces route to the right serializer per file. The
        * framework default throws a clear "no Serializer registered" error;

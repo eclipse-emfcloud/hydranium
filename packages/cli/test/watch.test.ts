@@ -150,7 +150,7 @@ describe('runWatch', () => {
       expect(harness.shutdownCalls.count).toBe(1);
    });
 
-   it('filters events by URI — notifications for other URIs are dropped', async () => {
+   it('filters events by URI, dropping notifications for other URIs', async () => {
       const harness = makeHarness();
       const written: string[] = [];
       const controller = new AbortController();

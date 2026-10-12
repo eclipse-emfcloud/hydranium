@@ -83,7 +83,7 @@ function entityNamed(document: LangiumDocument, name: string): Entity {
    return found;
 }
 
-describe('order-flow integrity — a Linked-phase repair and the scopes cached before it', () => {
+describe('order-flow integrity with a Linked-phase repair and the scopes cached before it', () => {
    it('leaves the global scope holding the entity node the repair discarded', async () => {
       const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
          extraLanguageModules: [{ integrity: { rules: { probeField: () => new ProbeFieldContribution() } } }]

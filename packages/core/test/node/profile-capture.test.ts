@@ -51,7 +51,7 @@ async function busyWorkload(): Promise<number> {
    return acc;
 }
 
-describe('summarizeGc (pure)', () => {
+describe('summarizeGc', () => {
    it('maps numeric V8 gc kinds to names and tallies count + pause per kind', () => {
       const summary = summarizeGc([
          { kind: 1, durationMs: 2 },
@@ -75,7 +75,7 @@ describe('summarizeGc (pure)', () => {
    });
 });
 
-describe('summarizeEventLoopDelay (pure)', () => {
+describe('summarizeEventLoopDelay', () => {
    it('converts histogram nanoseconds to milliseconds', () => {
       const eld = summarizeEventLoopDelay({
          count: 5,
@@ -91,7 +91,7 @@ describe('summarizeEventLoopDelay (pure)', () => {
    });
 });
 
-describe('formatProfileReport (pure)', () => {
+describe('formatProfileReport', () => {
    const fullReport: ProfileReport = {
       durationMs: 1230,
       cpuProfilePath: '/tmp/cpu-build.cpuprofile',
@@ -132,7 +132,7 @@ describe('formatProfileReport (pure)', () => {
    });
 });
 
-describe('ProfileCapture / profileWorkload (real inspector session)', () => {
+describe('ProfileCapture and profileWorkload in a real inspector session', () => {
    let dir: string;
    beforeAll(() => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydranium-profile-'));

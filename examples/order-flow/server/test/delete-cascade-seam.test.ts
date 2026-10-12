@@ -60,7 +60,7 @@ class OutOfTreeCascadeBuilder extends HydraniumDocumentBuilder {
    }
 }
 
-describe('order-flow delete cascade — the collectDeletedURIs seam', () => {
+describe('order-flow delete cascade through the collectDeletedURIs seam', () => {
    it('honours a URI the override adds from outside the deleted directory', async () => {
       const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-delete-cascade-' });
       try {

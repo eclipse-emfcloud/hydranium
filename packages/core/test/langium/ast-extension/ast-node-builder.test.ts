@@ -211,36 +211,36 @@ describe('makeAstNodeBuilder', () => {
       expect((node as AstNode & { $synthetic?: boolean }).$synthetic).toBe(true);
    });
 
-   test('extras: accepts arbitrary unchecked properties', () => {
+   test('accepts arbitrary unchecked properties as extras', () => {
       const node = astNode(FakeLeaf, { value: 1 }, { _customFlag: true, $debug: 'trace-id' });
       expect((node as unknown as { _customFlag: boolean })._customFlag).toBe(true);
       expect((node as unknown as { $debug: string }).$debug).toBe('trace-id');
    });
 
-   test('extras: undefined is a no-op', () => {
+   test('treats undefined extras as a no-op', () => {
       const node = astNode(FakeLeaf, { value: 1 }, undefined);
       expect(node).toEqual({ $type: 'FakeLeaf', value: 1 });
    });
 
-   test('extras: win over init on conflict (explicit override semantic)', () => {
+   test('lets extras win over init on conflict (explicit override semantic)', () => {
       // Conflict isn't expected in normal use but the resolution order is observable.
       const node = astNode(FakeLeaf, { value: 1 }, { value: 999 });
       expect(node.value).toBe(999);
    });
 
-   test('extras: do not pollute when not provided', () => {
+   test('does not pollute the node when no extras are provided', () => {
       const node = astNode(FakeLeaf, { value: 1 });
       expect(Object.keys(node).sort()).toEqual(['$type', 'value']);
    });
 
-   test('the constant drives $type — extras cannot accidentally rebind it', () => {
+   test('lets the constant drive $type, so extras cannot accidentally rebind it', () => {
       // The extras object can technically clobber $type, but the typed-init
       // signature does not include it, so the typed surface stays clean.
       const node = astNode(FakeLeaf, { value: 1 });
       expect(node.$type).toBe(FakeLeaf.$type);
    });
 
-   test('inference: return type resolved from TMap without an explicit generic', () => {
+   test('infers the return type from TMap without an explicit generic', () => {
       // Without the TMap-generic plumbing on `makeAstNodeBuilder`, TS would
       // infer the return type as `AstNode` and `.name` / `.value` access would
       // require a cast. The assertions below compile because TS resolved the

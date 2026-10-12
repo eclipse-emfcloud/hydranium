@@ -89,7 +89,7 @@ describe('collectGrammarReflection', () => {
       ]);
    });
 
-   it('reflects a language: id, extensions, entry rule, and terminals (name, pattern, hidden)', () => {
+   it("reflects a language's id, extensions, entry rule and terminals (name, pattern, hidden)", () => {
       const result = collectGrammarReflection(reflection({}), [
          language(
             'demo',

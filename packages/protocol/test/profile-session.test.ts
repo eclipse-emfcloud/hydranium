@@ -89,7 +89,7 @@ describe('DefaultProfileSession aggregation', () => {
    });
 });
 
-describe('DefaultProfileSession report', () => {
+describe('DefaultProfileSession.report', () => {
    afterEach(() => Logger.setLevel('info'));
 
    it('emits one line per id sorted by self-time descending', () => {

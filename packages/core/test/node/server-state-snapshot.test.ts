@@ -69,7 +69,7 @@ describe('formatServerState', () => {
       expect(snapshot).toContain('file:///x.other [form-editor, language-client]');
    });
 
-   it('renders an empty open-documents list as a zero count (still emitted — absence of pins is signal)', () => {
+   it('renders an empty open-documents list as a zero count (still emitted, since absence of pins is signal)', () => {
       nowSpy.mockReturnValue(1000);
       cpuSpy.mockReturnValue({ user: 0, system: 0 });
       eluSpy.mockReturnValue({ idle: 0, active: 0, utilization: 0 });

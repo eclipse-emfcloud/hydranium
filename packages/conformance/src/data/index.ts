@@ -111,7 +111,7 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
    readonly attach?: (
       driver: DataConformanceDriver<TTransfer, TDiagnostic>
    ) => DataConformanceDriver<TTransfer, TDiagnostic> | Promise<DataConformanceDriver<TTransfer, TDiagnostic>>;
-   /** Suite title override. Default `'conformance: data-server'`. */
+   /** Suite title override. Default `'data-server conformance'`. */
    readonly suiteTitle?: string;
 }
 

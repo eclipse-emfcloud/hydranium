@@ -898,7 +898,7 @@ describe('HydraniumGlspStorage', () => {
          expect(thrownError(servicesWithLocale('xx-AA')).message).toBe('AA: kein Dokument');
       });
 
-      it('sends the English when no locale matches — the control on the row above', () => {
+      it('sends the English when no locale matches, as the control for the row above', () => {
          // Same renderer, no locale: without this the assertion above would pass
          // against a renderer that was never consulted.
          expect(thrownError(servicesWithLocale(undefined)).message).toBe(SOURCE_URI_MISSING.text);
@@ -1043,7 +1043,7 @@ describe('HydraniumGlspStorage', () => {
       });
    });
 
-   describe('saveSourceModel — write set', () => {
+   describe('saveSourceModel write set', () => {
       it("persists the primary's stored text through the diagram's session, whatever version the store holds", async () => {
          const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve() });
          await storage.saveSourceModel(saveAction);
@@ -1138,7 +1138,7 @@ describe('HydraniumGlspStorage', () => {
       });
    });
 
-   describe('saveSourceModel — delivery policy', () => {
+   describe('saveSourceModel delivery policy', () => {
       it('defaults to awaiting the flush when no policy is bound', async () => {
          const { storage, persistMock } = createPolicyStorage({ persist: () => Promise.resolve() });
          const result = storage.saveSourceModel(saveAction);
@@ -1192,7 +1192,7 @@ describe('HydraniumGlspStorage', () => {
       });
    });
 
-   describe('saveSourceModel — dirty state', () => {
+   describe('saveSourceModel dirty state', () => {
       // GLSP's save handler sends the dirty state, reason save, once the save
       // settles, and GLSP's client keeps a dirty state only when it changes:
       // the save's own flip sent first, reason external, leaves the save's

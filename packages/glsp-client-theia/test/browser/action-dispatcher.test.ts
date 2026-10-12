@@ -263,7 +263,7 @@ describe('HydraniumGlspActionDispatcher.summarize defaults', () => {
       ).toBe('contextId=menu');
    });
 
-   it('Unknown action kinds summarise to empty string', () => {
+   it('unknown action kinds summarise to empty string', () => {
       expect(dispatcher.exposeSummarize({ kind: 'unknown-action' })).toBe('');
    });
 });

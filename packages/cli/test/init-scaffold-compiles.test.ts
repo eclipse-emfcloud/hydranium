@@ -106,9 +106,9 @@ function runTool(targetDir: string, packageName: string, command: string, args: 
 }
 
 describe('the emitted scaffold compiles', () => {
-   it.each(CASES)(
-      'generates and type-checks $label',
-      ({ name, heads, grammars }) => {
+   it.each(CASES.map(entry => [entry.label, entry] as const))(
+      'generates and type-checks %s',
+      (_label, { name, heads, grammars }) => {
          const targetDir = path.join(PACKAGE_ROOT, `out/scaffold-compiles-${name.toLowerCase()}`);
          try {
             fs.rmSync(targetDir, { recursive: true, force: true });

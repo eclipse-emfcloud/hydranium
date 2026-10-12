@@ -1551,7 +1551,7 @@ export class DataServer<
       const overlap = additionalMethods.filter(name => builtIn.includes(name));
       if (overlap.length > 0) {
          throw new Error(
-            `DataServer.additionalMethods overlaps with built-in data-server methods: ${overlap.join(', ')}. ` +
+            `DataServerOptions.additionalMethods overlaps with built-in data-server methods: ${overlap.join(', ')}. ` +
                'Adopter protocols must not redeclare framework method names; rename the adopter method or remove it from additionalMethods.'
          );
       }

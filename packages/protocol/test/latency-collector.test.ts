@@ -72,7 +72,7 @@ describe('LatencyCollector', () => {
    });
 });
 
-describe('LatencyCollector retention', () => {
+describe('LatencyCollector.retention', () => {
    it('defaults to keep-all so every sample is retained for exact percentiles', () => {
       const collector = new LatencyCollector();
       for (let ms = 1; ms <= 100; ms++) {
@@ -112,7 +112,7 @@ describe('LatencyCollector retention', () => {
    });
 });
 
-describe('formatLatencyReport (pure)', () => {
+describe('formatLatencyReport', () => {
    it('renders a ranked per-method latency line with count and percentiles', () => {
       const collector = new LatencyCollector();
       collector.record('completion', 80);

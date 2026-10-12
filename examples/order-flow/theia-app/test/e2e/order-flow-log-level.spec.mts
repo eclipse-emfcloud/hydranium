@@ -32,7 +32,7 @@ function warnLevelOverlay(): string {
    return overlay;
 }
 
-test.describe('Order-flow diagram with the server log level at warn', () => {
+test.describe('order-flow diagram with the server log level at warn', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

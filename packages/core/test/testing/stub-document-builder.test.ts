@@ -37,7 +37,7 @@ function document(uri: URI): LangiumDocument {
    return makeFakeDocument(uri, makeFakeAstNode({ $type: 'TypeOne' }));
 }
 
-describe('makeStubDocumentBuilder — signature conformance for the hand-declared waitUntil', () => {
+describe('makeStubDocumentBuilder signature conformance for the hand-declared waitUntil', () => {
    it('accepts no call the real member would reject', () => {
       // The assignment runs REAL → STUB, not the other way round. The real
       // member is an overload pair, and a single-signature function is
@@ -59,7 +59,7 @@ describe('makeStubDocumentBuilder — signature conformance for the hand-declare
    });
 });
 
-describe('makeStubDocumentBuilder — recording', () => {
+describe('makeStubDocumentBuilder recording', () => {
    it('records update arguments by reference, in call order', async () => {
       const builder = makeStubDocumentBuilder();
 
@@ -85,7 +85,7 @@ describe('makeStubDocumentBuilder — recording', () => {
    });
 });
 
-describe('makeStubDocumentBuilder — the waitUntil gate', () => {
+describe('makeStubDocumentBuilder waitUntil gate', () => {
    it('holds the call until resolve, and reports consumption while it is held', async () => {
       const builder = makeStubDocumentBuilder();
       const gate = builder.gateNextWaitUntil();
@@ -143,7 +143,7 @@ describe('makeStubDocumentBuilder — the waitUntil gate', () => {
    });
 });
 
-describe('makeStubDocumentBuilder — phase and update dispatch', () => {
+describe('makeStubDocumentBuilder phase and update dispatch', () => {
    it('fires only the listeners registered for the state being fired', () => {
       const builder = makeStubDocumentBuilder();
       const validated: string[] = [];
@@ -245,7 +245,7 @@ describe('makeStubDocumentBuilder — phase and update dispatch', () => {
    });
 });
 
-describe('makeStubDocumentBuilder — the members it declares but does not implement', () => {
+describe('makeStubDocumentBuilder members it declares but does not implement', () => {
    it('throws a named error rather than being undefined', () => {
       const builder = makeStubDocumentBuilder();
 
@@ -259,7 +259,7 @@ describe('makeStubDocumentBuilder — the members it declares but does not imple
    });
 });
 
-describe('makeStubDocumentBuilder — build-phase listeners', () => {
+describe('makeStubDocumentBuilder build-phase listeners', () => {
    it('delivers the whole batch to a build-phase listener, once', () => {
       const builder = makeStubDocumentBuilder();
       const batches: string[][] = [];
@@ -305,7 +305,7 @@ describe('makeStubDocumentBuilder — build-phase listeners', () => {
    });
 });
 
-describe('makeStubDocumentBuilder — reset', () => {
+describe('makeStubDocumentBuilder reset', () => {
    it('drops recorded calls, listeners and pending gates', async () => {
       const builder = makeStubDocumentBuilder();
       let phases = 0;

@@ -157,7 +157,7 @@ describe('ProfilingRun', () => {
       expect((await absent.finish()).environment.container).toBe(false);
    });
 
-   it('lets an explicit container: false win over the probe', async () => {
+   it('lets an explicit `container: false` win over the probe', async () => {
       // `??`, not `||`: an adopter that knows it is not containerised must be
       // able to say so even where the cgroup files exist.
       vi.mocked(fs.existsSync).mockImplementation(() => true);

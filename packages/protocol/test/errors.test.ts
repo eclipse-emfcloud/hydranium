@@ -125,7 +125,7 @@ describe('ConflictError', () => {
       expect(error.name).toBe('ConflictError');
    });
 
-   it('is a ResponseError subclass — survives JSON-RPC reconstruction', () => {
+   it('is a ResponseError subclass, so it survives JSON-RPC reconstruction', () => {
       const error = new ConflictError('file:///A.fake', asModelVersion(3), 5);
       expect(error).toBeInstanceOf(ResponseError);
    });
@@ -250,7 +250,7 @@ describe('DuplicateClientIdError', () => {
 });
 
 describe('ReservedClientIdError', () => {
-   it('carries no message identity: no end-user sentence is true for a host that picked a reserved id', () => {
+   it('carries no message identity, since no end-user sentence is true for a host that picked a reserved id', () => {
       const error = new ReservedClientIdError('integrity');
       expect(hasMessageIdentity(error.data)).toBe(false);
       expect(error.message).toContain('integrity');

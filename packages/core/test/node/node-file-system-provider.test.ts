@@ -454,7 +454,7 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
       // and `builtin:` for one it knows nothing about — the rule is the scheme
       // not being `file:`, not the scheme being recognised.
       for (const scheme of ['virtual', 'builtin']) {
-         it(`is reported absent under ${scheme}:, not present via the occupied path`, async () => {
+         it(`is reported absent under \`${scheme}:\`, not present via the occupied path`, async () => {
             const uri = masquerading(scheme);
             // Without this the assertions below are satisfied by an empty directory.
             expect(uri.fsPath).toBe(URI.file(occupiedPath).fsPath);
@@ -465,13 +465,13 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
             expect(await provider.exists(uri)).toBe(false);
          });
 
-         it(`refuses to stat under ${scheme}: rather than describing the occupant`, async () => {
+         it(`refuses to stat under \`${scheme}:\` rather than describing the occupant`, async () => {
             const uri = masquerading(scheme);
             expect(() => provider.statSync(uri)).toThrow();
             await expect(provider.stat(uri)).rejects.toThrow();
          });
 
-         it(`refuses to read under ${scheme}: rather than returning the occupant's content`, async () => {
+         it(`refuses to read under \`${scheme}:\` rather than returning the occupant's content`, async () => {
             const uri = masquerading(scheme);
             expect(() => provider.readFileSync(uri)).toThrow();
             await expect(provider.readFile(uri)).rejects.toThrow();
@@ -481,7 +481,7 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
             await expect(provider.readBinary(uri)).rejects.toThrow();
          });
 
-         it(`lists no children under ${scheme}: for a directory that does exist`, async () => {
+         it(`lists no children under \`${scheme}:\` for a directory that does exist`, async () => {
             const uri = URI.file(root).with({ scheme });
             // The directory really is populated, so an empty listing is the rule
             // firing rather than there being nothing to find.
@@ -492,7 +492,7 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
       }
    });
 
-   describe('an ordinary file: URI', () => {
+   describe('an ordinary `file:` URI', () => {
       it('still reads, stats and lists off disk', async () => {
          const uri = URI.file(occupiedPath);
          expect(provider.existsSync(uri)).toBe(true);
@@ -545,7 +545,7 @@ describe('DefaultFileSystemProvider write surface for URIs that name no disk loc
    // document with no disk backing, `https:` for a remote one, and `virtual:`
    // for the framework's own — the rule is the scheme not being `file:`.
    for (const scheme of ['memory', 'untitled', 'https', 'virtual']) {
-      it(`refuses to write under ${scheme}: and leaves nothing on disk`, async () => {
+      it(`refuses to write under \`${scheme}:\` and leaves nothing on disk`, async () => {
          const directory = join(root, `${scheme}-destination`);
          const target = join(directory, 'written.fake');
          const uri = URI.file(target).with({ scheme });
@@ -562,7 +562,7 @@ describe('DefaultFileSystemProvider write surface for URIs that name no disk loc
          expect(existsSync(directory)).toBe(false);
       });
 
-      it(`reports no mtime under ${scheme}: rather than the occupant's`, async () => {
+      it(`reports no mtime under \`${scheme}:\` rather than the occupant's`, async () => {
          const occupied = join(root, `${scheme}-occupied.fake`);
          writeFileSync(occupied, 'unrelated on-disk content');
          const uri = URI.file(occupied).with({ scheme });
@@ -572,7 +572,7 @@ describe('DefaultFileSystemProvider write surface for URIs that name no disk loc
       });
    }
 
-   describe('an ordinary file: URI', () => {
+   describe('an ordinary `file:` URI', () => {
       it('still writes, creating the parent directory', async () => {
          const target = join(root, 'real-destination', 'written.fake');
          await provider.writeFile(URI.file(target), 'content');

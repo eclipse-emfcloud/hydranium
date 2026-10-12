@@ -62,7 +62,7 @@ function realDocuments(): DefaultLangiumDocuments {
    return new DefaultLangiumDocuments(services);
 }
 
-describe('makeStubLangiumDocuments — differential against DefaultLangiumDocuments', () => {
+describe('makeStubLangiumDocuments differential against DefaultLangiumDocuments', () => {
    it('answers all as a Stream on both sides, in insertion order', async () => {
       const real = realDocuments();
       const stub = makeStubLangiumDocuments<FakeRoot>();
@@ -139,7 +139,7 @@ describe('makeStubLangiumDocuments — differential against DefaultLangiumDocume
    });
 });
 
-describe('makeStubLangiumDocuments — the seeding surface it declares itself', () => {
+describe('makeStubLangiumDocuments seeding surface it declares itself', () => {
    it('applies seeds at construction and exposes them through every read', () => {
       const stub = makeStubLangiumDocuments<FakeRoot>([{ uri: URI_A, root: fakeRoot('a') }]);
 

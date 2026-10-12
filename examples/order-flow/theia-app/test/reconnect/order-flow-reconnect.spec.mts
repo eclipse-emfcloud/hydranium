@@ -47,7 +47,7 @@ const OTHER_PROCESS_FILE = 'orders/returns.process';
 
 const proxy = flakyNetworkControlClient(CONTROL_URL);
 
-test.describe.serial('An order-flow model survives a reconnect', () => {
+test.describe.serial('an order-flow model survives a reconnect', () => {
    let app: TheiaApp;
 
    /** Collected for the whole run: a reordered or missing message surfaces as an

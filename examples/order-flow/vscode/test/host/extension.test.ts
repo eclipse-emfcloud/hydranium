@@ -66,7 +66,7 @@ function accepts(port: number): Promise<void> {
    });
 }
 
-describe('Order Flow extension in a VS Code host', () => {
+describe('order-flow extension in a VS Code host', () => {
    before(async () => {
       await vscode.commands.executeCommand('workbench.action.closeAllEditors');
    });

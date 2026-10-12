@@ -16,7 +16,7 @@ import * as serverCoreTesting from '../../src/testing/index.js';
  * verbatim — no manual curation that could go stale relative to Langium
  * upstream.
  */
-describe('@hydranium/core/testing — langium/test re-export', () => {
+describe('@hydranium/core/testing re-export of langium/test', () => {
    /**
     * The functions adopters most commonly reach for. If Langium renames or
     * removes any of them, this test fails — flagging that adopters need to

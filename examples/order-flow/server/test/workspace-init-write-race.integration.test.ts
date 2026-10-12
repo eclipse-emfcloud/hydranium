@@ -127,11 +127,14 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<
  *   still ends up validated.
  */
 const BARRIER_PHASES = [
-   { name: 'Linked (reference index never populated)', phase: DocumentState.Linked },
-   { name: 'IndexedReferences (non-validating options retained)', phase: DocumentState.IndexedReferences }
+   { name: 'Linked before the reference index is populated', phase: DocumentState.Linked },
+   { name: 'IndexedReferences with non-validating options retained', phase: DocumentState.IndexedReferences }
 ] as const;
 
-describe.each(BARRIER_PHASES)('a write that lands during workspace initialization, cancelled at $name', ({ phase }) => {
+// `[name, row]` tuples so `%s` renders the name bare; `$name` would quote it.
+const BARRIERS_BY_NAME = BARRIER_PHASES.map(barrier => [barrier.name, barrier] as const);
+
+describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initialization and is cancelled at %s', (_name, { phase }) => {
    it('still validates cross-grammar dependents, and leaves the readiness gate resolvable', async () => {
       const workspace: ScratchWorkspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-init-race-' });
       try {

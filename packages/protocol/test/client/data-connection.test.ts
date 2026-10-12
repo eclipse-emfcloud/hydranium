@@ -442,7 +442,7 @@ function serverUrisOf(session: DataSession<ProbeElement>): ReadonlyMap<string, s
 
 const of = (calls: readonly ServerCall[], ...methods: Method[]): ServerCall[] => calls.filter(call => methods.includes(call.method));
 
-describe('DataConnection lifecycle hooks', () => {
+describe('DataConnection.lifecycle hooks', () => {
    it('reports connecting then ready around the two waits', async () => {
       const pair = makeDuplexConnectionPair();
       recordingServer(pair.left, [], {});
@@ -633,7 +633,7 @@ describe('DataConnection.onDidCreateSession', () => {
    });
 });
 
-describe('DataConnection sessions', () => {
+describe('DataConnection.sessions', () => {
    it('stamps each session its own clientId on the wire', async () => {
       const { connection, calls, dispose } = harness();
       try {
@@ -835,7 +835,7 @@ describe('DataConnection sessions', () => {
       }
    });
 
-   it('creates a document and watches it; writes a set in one call', async () => {
+   it('creates a document, watches it and writes a set in one call', async () => {
       const { connection, calls, dispose } = harness();
       try {
          const panel = connection.createSession('panel', 'panel');
@@ -3150,7 +3150,7 @@ describe('DataSession disposal', () => {
    });
 });
 
-describe('DataSession restore and the dirty state', () => {
+describe('DataSession.restore and the dirty state', () => {
    /** The dirty flips `events` delivers, as `uri dirty`. */
    function dirtyFlips(events: DataEvents<ProbeElement>): string[] {
       const flips: string[] = [];

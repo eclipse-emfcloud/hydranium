@@ -246,7 +246,7 @@ const returnsFixture: GlspFixture<Action, Driver> = {
 };
 
 runGlspConformance<Action, Driver>({
-   suiteTitle: 'conformance: glsp (order-flow .process)',
+   suiteTitle: 'order-flow .process glsp conformance',
    connect,
    diagrams: [fulfillmentFixture, returnsFixture]
 });

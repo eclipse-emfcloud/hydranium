@@ -54,7 +54,7 @@ describe('captureBrowserRuntime', () => {
    });
 });
 
-describe('formatBrowserRuntime (pure)', () => {
+describe('formatBrowserRuntime', () => {
    it('renders the precise total in MB', () => {
       expect(formatBrowserRuntime({ source: 'measureUserAgentSpecificMemory', after: { totalBytes: 5 * 1024 * 1024 } })).toContain(
          '5.0 MB'
