@@ -224,13 +224,24 @@ export class JsonSerializer<TAst extends AstNode = AstNode, TTransfer extends Tr
     * encodings.
     */
    protected override formatReferenceValue(value: string): MaybePromise<string> {
+      const quoted = this.formatString(value);
       if (this.referenceEncoding === 'string') {
-         return JSON.stringify(value);
+         return quoted;
       }
       if (this.compact) {
-         return `{${JSON.stringify('$ref')}:${JSON.stringify(value)}}`;
+         return `{${JSON.stringify('$ref')}:${quoted}}`;
       }
-      return `{ ${JSON.stringify('$ref')}: ${JSON.stringify(value)} }`;
+      return `{ ${JSON.stringify('$ref')}: ${quoted} }`;
+   }
+
+   /**
+    * `JSON.stringify`, so the output stays valid JSON for other tools. The
+    * grammar reading it back needs a terminal and value converter that decode
+    * the `\u` escape JSON writes for a control character without a short
+    * escape; Langium's default converter reads `\u0001` as `u0001`.
+    */
+   protected override formatString(value: string): string {
+      return JSON.stringify(value);
    }
 
    protected composeObject(entries: readonly (readonly [string, string])[], indentationLevel: number): string {
