@@ -1193,6 +1193,30 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
+    * Record that `uri` was created from a session's text rather than read from
+    * its file: it has no disk baseline, so it is dirty until its first save,
+    * and {@link isUnsavedCreation} answers `true` until then. A no-op for a
+    * URI the store does not hold.
+    */
+   markCreated(uri: DocumentUri): void {
+      const key = this.documentKey(uri);
+      const document = this.__syncedDocuments.get(key);
+      if (document !== undefined) {
+         this.dirtyStateTracker.markCreated(key, document);
+      }
+   }
+
+   /**
+    * Whether `uri` was created from a session's text and the store has not
+    * seen its file since, by a save or a reload that found it. A baseline
+    * cleared because the file went missing does not count. `false` for a URI
+    * the store does not hold.
+    */
+   isUnsavedCreation(uri: DocumentUri): boolean {
+      return this.dirtyStateTracker.isUnsavedCreation(this.documentKey(uri));
+   }
+
+   /**
     * Read the file behind `uri` through its disk queue and take it as the
     * baseline. A file that cannot be read counts as none, the side that
     * leaves the document dirty, once `existsSettled` confirms it gone: a file

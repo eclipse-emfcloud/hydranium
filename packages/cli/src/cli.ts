@@ -13,6 +13,7 @@ import { describeError } from '@hydranium/protocol';
 import { readCliVersion } from './cli-version.js';
 import { runAnalyzeHeapCommand } from './commands/analyze-heap-args.js';
 import { runAstGroundTruthCommand } from './commands/ast-ground-truth-args.js';
+import { runDeleteCommand } from './commands/delete-args.js';
 import { runGenerateTransferModelCommand } from './commands/generate-transfer-model-args.js';
 import { runInitCommand } from './commands/init-args.js';
 import { InitWizardCancelled } from './commands/init-prompt.js';
@@ -45,6 +46,7 @@ const COMMANDS: Record<string, { readonly summary: string; readonly run: (args: 
       summary: "Tally a workspace's live-model $types (analyze-heap --validate input).",
       run: runAstGroundTruthCommand
    },
+   delete: { summary: 'Delete a document, its file included, via a data-server subprocess.', run: runDeleteCommand },
    'generate-transfer-model': {
       summary: 'Generate a transfer-model TypeScript file from a Langium AST.',
       run: runGenerateTransferModelCommand

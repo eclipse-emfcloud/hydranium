@@ -41,6 +41,7 @@ import { PROJECTS_FLAGS, PROJECTS_HELP, parseProjectsArgs } from '../src/command
 import { QUERY_FLAGS, QUERY_HELP, parseQueryArgs } from '../src/commands/query-args.js';
 import { REFLECT_FLAGS, REFLECT_HELP, parseReflectArgs } from '../src/commands/reflect-args.js';
 import { helpRequested, type UsageError } from '../src/commands/harness-args.js';
+import { DELETE_FLAGS, DELETE_HELP, parseDeleteArgs } from '../src/commands/delete-args.js';
 import { SAVE_FLAGS, SAVE_HELP, SAVE_VALUE_FLAGS, parseSaveArgs } from '../src/commands/save-args.js';
 import { VALIDATE_FLAGS, VALIDATE_HELP, parseValidateArgs } from '../src/commands/validate-args.js';
 import { WATCH_FLAGS, WATCH_HELP, parseWatchArgs } from '../src/commands/watch-args.js';
@@ -82,6 +83,7 @@ const COMMANDS: ReadonlyArray<{
       help: AST_GROUND_TRUTH_HELP,
       parse: args => parseAstGroundTruthArgs(args, onError)
    },
+   { name: 'delete', flags: DELETE_FLAGS, help: DELETE_HELP, parse: args => parseDeleteArgs(args, onError) },
    {
       name: 'generate-transfer-model',
       flags: GENERATE_TRANSFER_MODEL_FLAGS,
@@ -551,6 +553,17 @@ describe('the data-server subcommands', () => {
          'Missing required option: --content (hydranium-cli save --help)'
       );
       expect(parseSaveArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text'], onError).clientId).toBeUndefined();
+   });
+
+   it('delete demands --uri, and leaves --client-id to the runner', () => {
+      expect(parseDeleteArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--client-id', 'tester'], onError)).toMatchObject({
+         uri: 'file:///a.x',
+         clientId: 'tester'
+      });
+      expect(() => parseDeleteArgs(['--server', 'node s.js'], onError)).toThrow(
+         'Missing required option: --uri (hydranium-cli delete --help)'
+      );
+      expect(parseDeleteArgs(['--server', 'node s.js', '--uri', 'file:///a.x'], onError).clientId).toBeUndefined();
    });
 
    it("watch demands --uri and carries no signal, which is the entry point's to supply", () => {

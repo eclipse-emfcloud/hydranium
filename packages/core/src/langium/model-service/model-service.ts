@@ -94,6 +94,9 @@ export interface ModelServiceOptions extends LogNameOptions {
     * because a document no build will carry is re-queued through the lock, and
     * the re-queue waits for the holder to end.
     *
+    * A session's delete is refused that way on either value, since its builds
+    * always take the lock.
+    *
     * Every other facade build takes the lock on either value. Unlocked, it can
     * overlap another build of the same document: both run a full validation
     * pass that Langium appends, and a caller can be handed a version that an
@@ -301,6 +304,10 @@ export interface ModelService<
     * at `UNRECORDED_VERSION`, whose `root` is `undefined` despite its type.
     */
    onModelSaved(listener: (event: ModelSavedEvent<TAst, TDiagnostic>) => void, filter?: ModelEventFilter): Disposable;
+   /**
+    * Fires for every document a build removes, with the session whose
+    * `delete` removed it, as `AstDocumentManager.attributeDeletion` names it.
+    */
    onModelDeleted(listener: (event: ModelDeletedEvent) => void, filter?: ModelEventFilter): Disposable;
    /** Fires when a document's text starts or stops differing from its file. */
    onDirtyChanged(listener: (event: ModelDirtyChangedEvent) => void, filter?: ModelEventFilter): Disposable;
@@ -1218,7 +1225,7 @@ export class DefaultModelService<
          for (const deletedUri of deleted) {
             const uri = this.uriPolicy.canonicalUri(deletedUri.toString());
             if (this.matches(target, uri)) {
-               listener(Object.freeze({ uri }));
+               listener(Object.freeze({ uri, sourceClientId: this.services.workspace.AstDocumentManager.attributeDeletion(uri) }));
             }
          }
       });

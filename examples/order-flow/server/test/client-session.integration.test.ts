@@ -22,21 +22,25 @@ import {
    type ClientSessionPersistArgs,
    type ClientSessionWriteArgs,
    DefaultClientSession,
+   DefaultModelService,
    DocumentNotOpenError,
    DuplicateClientIdError,
    LANGUAGE_CLIENT_ID,
    RealpathDocumentUriPolicy,
+   ReentrantWriteLockError,
    ReservedClientIdError,
    type ServerSharedServices,
    SessionClosedError
 } from '@hydranium/core';
 import { type AstNode, DocumentState, URI } from '@hydranium/langium';
-import { asModelVersion, isConflictError, type TextVersion, type TransferElement } from '@hydranium/protocol';
-import { type CancellationToken } from 'vscode-languageserver';
+import { asModelVersion, isConflictError, type TextVersion, type TransferElement, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
+import { type CancellationToken, FileChangeType, type FileEvent } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 import { isDomainModel, isEntity } from '../src/language-server/ast.js';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
+import type { OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
+import { makeCapturingTracer } from '@hydranium/core/testing';
+import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness, WORKSPACE_FILES } from './order-flow-harness.js';
 
 const FILE = 'session.domain';
 const OTHER_FILE = 'session-other.domain';
@@ -512,6 +516,7 @@ describe('ClientSession open and close', () => {
          ['update', () => session.update({ uri, model: EDITED, baseVersion: 'any' })],
          ['save', () => session.save({ uri, model: EDITED, baseVersion: 'any' })],
          ['close', () => session.close(uri)],
+         ['delete', () => session.delete({ uri, baseVersion: 'any' })],
          ['withOpen', () => session.withOpen(uri, () => undefined)],
          ['isOwnEcho', () => session.isOwnEcho(session.clientId)]
       ];
@@ -746,6 +751,564 @@ describe('deletion closes a session open', () => {
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
       expect(session.openOptions(uri)).toBeUndefined();
       await expect(session.update({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+   });
+
+   it('names the unknown client on the deletion event of a file deleted outside any session', async () => {
+      const { harness, uri, path } = await boot();
+      const deletedBy: string[] = [];
+      harness.shared.model.ModelService.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      rmSync(path(FILE));
+      await harness.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
+
+      expect(deletedBy).toEqual([UNKNOWN_CLIENT_ID]);
+   });
+});
+
+describe('ClientSession.delete', () => {
+   /** Hold every file removal back until the returned release is called. */
+   function holdDeletes(harness: OrderFlowHarness): () => void {
+      const fileSystem = harness.shared.workspace.FileSystemProvider;
+      const deleteFile = fileSystem.deleteFile.bind(fileSystem);
+      let release = (): void => undefined;
+      const held = new Promise<void>(resolve => (release = resolve));
+      fileSystem.deleteFile = async target => {
+         await held;
+         return deleteFile(target);
+      };
+      return release;
+   }
+
+   it('removes the file and the document, and closes its open', async () => {
+      const { harness, uri, path } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+
+      await session.delete({ uri, baseVersion: asModelVersion(textDocuments.version(uri)) });
+
+      expect(existsSync(path(FILE))).toBe(false);
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+      expect(textDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it("closes every other session's open and names the deleting session on the deletion event", async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, bystander.clientId)).toBe(false);
+      await expect(bystander.update({ uri, model: EDITED, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      expect(deletedBy).toEqual([session.clientId]);
+   });
+
+   it("leaves the editor's open of the document alone", async () => {
+      const { harness, uri, path } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      textDocuments.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'domain', version: 1, text: CLEAN } });
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect(existsSync(path(FILE))).toBe(false);
+      expect(textDocuments.isOpenInClient(uri, LANGUAGE_CLIENT_ID)).toBe(true);
+      expect(textDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('refuses a stale base version and deletes nothing', async () => {
+      const { harness, uri, path } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const seen = asModelVersion(textDocuments.version(uri));
+      await session.update({ uri, model: EDITED, baseVersion: 'any' });
+
+      const refusal = await session.delete({ uri, baseVersion: seen }).then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect(isConflictError(refusal)).toBe(true);
+      expect(existsSync(path(FILE))).toBe(true);
+      expect(textDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+
+   it('refuses a document the session does not have open and deletes nothing', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      await models.createSession('bystander').open(uri);
+      const session = models.createSession('form');
+
+      await expect(session.delete({ uri, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentNotOpenError);
+      expect(existsSync(path(FILE))).toBe(true);
+   });
+
+   it('deletes a created document that was never saved', async () => {
+      const { harness, newUri, path } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.create(newUri, CLEAN);
+
+      await session.delete({ uri: newUri, baseVersion: 'any' });
+
+      expect(existsSync(path(NEW_FILE))).toBe(false);
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(newUri))).toBeUndefined();
+      expect(harness.shared.workspace.TextDocuments.isOpen(newUri)).toBe(false);
+   });
+
+   it('removes the document of a file that is already gone', async () => {
+      const { harness, uri, path } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      rmSync(path(FILE));
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('rejects and changes nothing when the file cannot be removed', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const deleted: string[] = [];
+      models.onModelDeleted(event => deleted.push(event.uri), { uri });
+      harness.shared.workspace.FileSystemProvider.deleteFile = () => Promise.reject(new Error('disk refused'));
+
+      await expect(session.delete({ uri, baseVersion: 'any' })).rejects.toThrow('disk refused');
+
+      expect(existsSync(path(FILE))).toBe(true);
+      expect(deleted).toEqual([]);
+      expect(textDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+      expect(textDocuments.isOpenInClient(uri, bystander.clientId)).toBe(true);
+      await bystander.update({ uri, model: EDITED, baseVersion: 'any' });
+      expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+
+   it("refuses another session's persist made while the file is being removed, so the file stays gone", async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const release = holdDeletes(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      const persisting = bystander.persist({ uri, baseVersion: 'any' });
+      release();
+
+      await expect(persisting).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await deleting;
+      expect(existsSync(path(FILE))).toBe(false);
+   });
+
+   it("refuses another session's update made while the file is being removed, so the document goes", async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const release = holdDeletes(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      const updating = bystander.update({ uri, model: EDITED, baseVersion: 'any' });
+      release();
+
+      await expect(updating).rejects.toBeInstanceOf(DocumentNotOpenError);
+      await deleting;
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, bystander.clientId)).toBe(false);
+   });
+
+   it('resolves once the document is removed, even when the build after the removal fails, and logs that failure', async () => {
+      const { tracer, lines } = makeCapturingTracer();
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [{ Tracer: () => tracer }]
+      });
+      const harness = scratch.harness;
+      const uri = scratch.workspace.uri(FILE);
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const scheduleUpdate = builder.scheduleUpdate.bind(builder);
+      builder.scheduleUpdate = async (changed, deleted, reason) => {
+         await scheduleUpdate(changed, deleted, reason);
+         throw new Error('build failed');
+      };
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect(existsSync(scratch.workspace.resolve(FILE))).toBe(false);
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+      expect(lines.filter(line => line.level === 'error' && line.message.includes('build failed'))).toHaveLength(1);
+   });
+
+   it.each([false, true])(
+      'refuses a delete from inside a write-lock holder and removes nothing, allowReentrantBuilds %s',
+      async allowReentrantBuilds => {
+         scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+            extraSharedModules: [
+               {
+                  model: {
+                     ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { allowReentrantBuilds })
+                  }
+               }
+            ]
+         });
+         const { harness, workspace } = scratch;
+         const uri = workspace.uri(FILE);
+         const session = harness.shared.model.ModelService.createSession('form');
+         await session.open(uri);
+
+         let refusal: unknown;
+         await harness.shared.workspace.WorkspaceLock.write(async () => {
+            refusal = await session.delete({ uri, baseVersion: 'any' }).then(
+               () => undefined,
+               (error: unknown) => error
+            );
+         });
+
+         expect({
+            refused: refusal instanceof ReentrantWriteLockError,
+            fileExists: existsSync(workspace.resolve(FILE)),
+            deleting: harness.shared.workspace.AstDocumentManager.isDeleting(uri),
+            open: harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)
+         }).toEqual({ refused: true, fileExists: true, deleting: false, open: true });
+      }
+   );
+
+   it("closes the deleting session's open when a change merged over the deletion keeps the document", async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      // A change requested before the deletion build starts, as a file
+      // watcher's late report of a save is, merges over the deletion.
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const scheduleUpdate = builder.scheduleUpdate.bind(builder);
+      builder.scheduleUpdate = (changed, deleted, reason) => {
+         const scheduled = scheduleUpdate(changed, deleted, reason);
+         if (deleted.length > 0) {
+            void scheduleUpdate([URI.parse(uri)], []);
+         }
+         return scheduled;
+      };
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect({
+         fileExists: existsSync(path(FILE)),
+         documentExists: harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri)) !== undefined,
+         deleterOpen: textDocuments.isOpenInClient(uri, session.clientId),
+         bystanderOpen: textDocuments.isOpenInClient(uri, bystander.clientId)
+      }).toEqual({ fileExists: false, documentExists: true, deleterOpen: false, bystanderOpen: true });
+   });
+});
+
+describe("a file watcher's late report of a session's delete", () => {
+   /**
+    * Report `changes` as a file watcher does, beside a change of `otherUri`,
+    * and resolve once the build carrying that change has run its update
+    * listeners, which is when a deletion it carries has closed its opens.
+    */
+   function reportBeside(harness: OrderFlowHarness, otherUri: string, changes: FileEvent[]): Promise<void> {
+      const other = URI.parse(otherUri).toString();
+      const updated = new Promise<void>(resolve => {
+         const listener = harness.shared.workspace.DocumentBuilder.onUpdate(changed => {
+            if (changed.some(uri => uri.toString() === other)) {
+               listener.dispose();
+               resolve();
+            }
+         });
+      });
+      harness.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
+         changes: [...changes, { uri: otherUri, type: FileChangeType.Changed }]
+      });
+      return updated;
+   }
+
+   it.each(['unsaved', 'saved'] as const)('leaves a document created again at the URI open, %s', async state => {
+      const { harness, uri, otherUri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      await session.delete({ uri, baseVersion: 'any' });
+      await session.create(uri, CLEAN);
+      if (state === 'saved') {
+         await session.persist({ uri, baseVersion: 'any' });
+      }
+      await models.validated(uri);
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      await reportBeside(harness, otherUri, [{ uri, type: FileChangeType.Deleted }]);
+
+      expect({
+         deletedBy,
+         open: harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId),
+         fileExists: existsSync(path(FILE))
+      }).toEqual({ deletedBy: [], open: true, fileExists: state === 'saved' });
+   });
+
+   it('still removes a document whose deletion the watcher reports after a change of its gone file', async () => {
+      const { harness, uri, otherUri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = models.createSession('form');
+      await session.open(uri);
+      await models.validated(uri);
+      rmSync(path(FILE));
+      // The change finds no file, so the document loses its disk baseline.
+      const turnedDirty = new Promise<void>(resolve => {
+         const listener = textDocuments.onDidChangeDirty(() => {
+            if (textDocuments.isDirty(uri)) {
+               listener.dispose();
+               resolve();
+            }
+         });
+      });
+      await reportBeside(harness, otherUri, [{ uri, type: FileChangeType.Changed }]);
+      await turnedDirty;
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      await reportBeside(harness, otherUri, [{ uri, type: FileChangeType.Deleted }]);
+
+      expect({ deletedBy, open: textDocuments.isOpenInClient(uri, session.clientId) }).toEqual({
+         deletedBy: [UNKNOWN_CLIENT_ID],
+         open: false
+      });
+   });
+
+   it('still removes a document no client holds once its file is deleted outside the server', async () => {
+      const { harness, uri, otherUri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      await models.validated(uri);
+      rmSync(path(FILE));
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      await reportBeside(harness, otherUri, [{ uri, type: FileChangeType.Deleted }]);
+
+      expect({ deletedBy, documentExists: harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri)) !== undefined }).toEqual({
+         deletedBy: [UNKNOWN_CLIENT_ID],
+         documentExists: false
+      });
+   });
+
+   it('still removes a document created again at the URI once its saved file is deleted outside the server', async () => {
+      const { harness, uri, otherUri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      await session.delete({ uri, baseVersion: 'any' });
+      await session.create(uri, CLEAN);
+      await session.persist({ uri, baseVersion: 'any' });
+      await models.validated(uri);
+      rmSync(path(FILE));
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+
+      await reportBeside(harness, otherUri, [{ uri, type: FileChangeType.Deleted }]);
+
+      expect({ deletedBy, open: harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId) }).toEqual({
+         deletedBy: [UNKNOWN_CLIENT_ID],
+         open: false
+      });
+   });
+});
+
+describe('ClientSession.delete and its dependents', () => {
+   it('credits the rebuild of the dependents to the deleting session', async () => {
+      scratch = await makeScratchWorkspaceHarness();
+      const { harness, workspace } = scratch;
+      const models = harness.shared.model.ModelService;
+      const uri = workspace.uri(WORKSPACE_FILES.ordersDomain);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const causes: string[] = [];
+      models.onModelUpdated(event => {
+         if (event.reason === 'rebuilt') {
+            causes.push(event.causedBy ?? 'no cause');
+         }
+      });
+
+      await session.delete({ uri, baseVersion: 'any' });
+
+      expect(causes.length).toBeGreaterThan(0);
+      expect(new Set(causes)).toEqual(new Set([session.clientId]));
+   });
+});
+
+describe('ClientSession.delete at each of its awaits', () => {
+   /** Hold the file removal back until the returned release is called; `reached` settles once it is held. */
+   function holdRemoval(harness: OrderFlowHarness): { reached: Promise<void>; release: () => void } {
+      const fileSystem = harness.shared.workspace.FileSystemProvider;
+      const deleteFile = fileSystem.deleteFile.bind(fileSystem);
+      let release = (): void => undefined;
+      let reach = (): void => undefined;
+      const reached = new Promise<void>(resolve => (reach = resolve));
+      const held = new Promise<void>(resolve => (release = resolve));
+      fileSystem.deleteFile = async target => {
+         reach();
+         await held;
+         return deleteFile(target);
+      };
+      return { reached, release };
+   }
+
+   it('refuses a second delete of the URI while one is under way, and keeps it marked until that one settles', async () => {
+      const { harness, uri } = await boot();
+      const manager = harness.shared.workspace.AstDocumentManager;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const { reached, release } = holdRemoval(harness);
+
+      const first = manager.delete(uri, session.clientId);
+      await reached;
+      await expect(manager.delete(uri, 'other')).rejects.toThrow(`Cannot delete ${uri}: a delete of it is under way`);
+      expect(manager.isDeleting(uri)).toBe(true);
+      release();
+      await first;
+
+      expect(manager.isDeleting(uri)).toBe(false);
+   });
+
+   it('rejects and changes nothing when the build of a document no build has reached yet fails', async () => {
+      const { harness, newUri } = await boot();
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.create(newUri, CLEAN);
+      const scheduleUpdate = builder.scheduleUpdate.bind(builder);
+      builder.scheduleUpdate = (changed, deleted, reason) =>
+         deleted.length === 0 ? Promise.reject(new Error('build refused')) : scheduleUpdate(changed, deleted, reason);
+
+      await expect(session.delete({ uri: newUri, baseVersion: 'any' })).rejects.toThrow('build refused');
+
+      builder.scheduleUpdate = scheduleUpdate;
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(newUri, session.clientId)).toBe(true);
+      await session.update({ uri: newUri, model: EDITED, baseVersion: 'any' });
+   });
+
+   it("refuses another session's write between the removal of the file and the build that removes the document", async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const bystander = models.createSession('bystander');
+      await bystander.open(uri);
+      const session = models.createSession('form');
+      await session.open(uri);
+      const scheduleUpdate = builder.scheduleUpdate.bind(builder);
+      let release = (): void => undefined;
+      const held = new Promise<void>(resolve => (release = resolve));
+      let reach = (): void => undefined;
+      const reached = new Promise<void>(resolve => (reach = resolve));
+      builder.scheduleUpdate = async (changed, deleted, reason) => {
+         if (deleted.length > 0) {
+            reach();
+            await held;
+         }
+         return scheduleUpdate(changed, deleted, reason);
+      };
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      await reached;
+      const writes = [bystander.update({ uri, model: EDITED, baseVersion: 'any' }), bystander.persist({ uri, baseVersion: 'any' })];
+      release();
+
+      for (const write of writes) {
+         await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
+      }
+      await deleting;
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+   });
+
+   it('completes a delete whose session closes the document while the file is being removed', async () => {
+      const { harness, uri, path } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const { reached, release } = holdRemoval(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      await reached;
+      await session.close(uri);
+      release();
+      await deleting;
+
+      expect(existsSync(path(FILE))).toBe(false);
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+   });
+
+   it('completes a delete whose session ends while the file is being removed, and leaves the URI free to create', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      const { reached, release } = holdRemoval(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      await reached;
+      session.dispose();
+      release();
+      await deleting;
+
+      expect(existsSync(path(FILE))).toBe(false);
+      await models.createSession('other').create(uri, EDITED);
+      expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+
+   it('closes an open another session made while the file was being removed', async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      const late = models.createSession('late');
+      const { reached, release } = holdRemoval(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      await reached;
+      await late.open(uri);
+      release();
+      await deleting;
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, late.clientId)).toBe(false);
+   });
+
+   it('reports one deletion, naming the deleting session, when a file watcher reports the file gone while it is being removed', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      const deletedBy: string[] = [];
+      models.onModelDeleted(event => deletedBy.push(event.sourceClientId), { uri });
+      const { reached, release } = holdRemoval(harness);
+
+      const deleting = session.delete({ uri, baseVersion: 'any' });
+      await reached;
+      rmSync(path(FILE));
+      await harness.shared.workspace.DocumentBuilder.update([], [URI.parse(uri)]);
+      release();
+      await deleting;
+
+      expect(deletedBy).toEqual([session.clientId]);
    });
 });
 

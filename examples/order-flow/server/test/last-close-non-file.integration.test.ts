@@ -35,7 +35,7 @@ import {
 } from '@hydranium/core/testing/node';
 import { type LangiumDocument, URI } from '@hydranium/langium';
 import { NodeFileSystemProvider } from '@hydranium/langium/node';
-import { writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Diagnostic } from 'vscode-languageserver-protocol';
@@ -69,6 +69,10 @@ const MEMORY_SOLO = `${MEMORY_ROOT}/solo.domain`;
 class DiskOnlyFileSystemProvider extends NodeFileSystemProvider implements WritableFileSystemProvider {
    async writeFile(uri: URI, content: string): Promise<void> {
       await writeFile(uri.fsPath, content);
+   }
+
+   async deleteFile(uri: URI): Promise<void> {
+      await rm(uri.fsPath, { force: true });
    }
 }
 

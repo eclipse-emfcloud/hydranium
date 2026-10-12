@@ -181,6 +181,15 @@ describe('PersistentFileSystemProvider writes', () => {
       expect(store.writes).toEqual([]);
    });
 
+   it('rejects a delete outside rootUri with a message that names no write', async () => {
+      const files = await restored(new RecordingStore());
+      const refusal = await files.deleteFile(URI.parse('file:///elsewhere/four.d')).then(
+         () => undefined,
+         (error: unknown) => (error instanceof Error ? error.message : String(error))
+      );
+      expect(refusal).toBe('file:///elsewhere/four.d is outside the store root file:///workspace/');
+   });
+
    it('mirrors the synchronous setFile too, without making the caller wait', async () => {
       const store = new RecordingStore();
       const files = await restored(store);
@@ -207,10 +216,32 @@ describe('PersistentFileSystemProvider writes', () => {
       expect(files.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('set one');
    });
 
+   it('mirrors deleteFile into the store before it resolves', async () => {
+      // Slower than any run of microtasks, so only a mirror that is awaited is done by the time the delete resolves.
+      class SlowStore extends RecordingStore {
+         override async remove(path: string): Promise<void> {
+            await flush();
+            return super.remove(path);
+         }
+      }
+      const store = new SlowStore({ 'gamma/three.c': 'created three' });
+      const files = await restored(store);
+      await files.deleteFile(URI.parse(`${ROOT}/gamma/three.c`));
+      expect(store.removals).toEqual(['gamma/three.c']);
+   });
+
+   it('rejects deleteFile when the store refuses, and keeps the file the store still holds', async () => {
+      const store = new RecordingStore({ 'gamma/three.c': 'created three' });
+      const files = await restored(store);
+      store.failure = new Error('QuotaExceededError');
+      await expect(files.deleteFile(URI.parse(`${ROOT}/gamma/three.c`))).rejects.toThrow('QuotaExceededError');
+      expect(files.readFileSync(URI.parse(`${ROOT}/gamma/three.c`))).toBe('created three');
+   });
+
    it('marks a deleted SEEDED file rather than dropping its entry', async () => {
       const store = new RecordingStore({ 'alpha/one.a': 'edited one' });
       const files = await restored(store);
-      files.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await files.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
       await flush();
       // The KEY survives with a marker in it. Dropping the entry — which is what
       // `remove` would do — is the shape that reads as correct and undoes itself
@@ -223,7 +254,7 @@ describe('PersistentFileSystemProvider writes', () => {
    it('keeps a deleted SEEDED file deleted across a restore', async () => {
       const store = new RecordingStore({ 'alpha/one.a': 'edited one' });
       const first = await restored(store);
-      first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
       await flush();
 
       const second = await restored(store);
@@ -241,7 +272,7 @@ describe('PersistentFileSystemProvider writes', () => {
       // document nobody edited.
       const store = new RecordingStore({ 'alpha/one.a': 'edited one' });
       const first = await restored(store);
-      first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
       await flush();
 
       const second = await restored(store);
@@ -255,7 +286,7 @@ describe('PersistentFileSystemProvider writes', () => {
       // workspace walk would descend into it.
       const store = new RecordingStore();
       const first = await restored(store);
-      first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
       await flush();
       const second = await restored(store);
       expect(second.existsSync(URI.parse(`${ROOT}/alpha`))).toBe(false);
@@ -264,7 +295,7 @@ describe('PersistentFileSystemProvider writes', () => {
    it('clears the marker when the file is written again', async () => {
       const store = new RecordingStore();
       const first = await restored(store);
-      first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
       await flush();
       await first.writeFile(URI.parse(`${ROOT}/alpha/one.a`), 'recreated one');
 
@@ -278,7 +309,7 @@ describe('PersistentFileSystemProvider writes', () => {
       // creates and deletes scratch files would grow the store forever.
       const store = new RecordingStore({ 'gamma/three.c': 'created three' });
       const files = await restored(store);
-      files.deleteFile(URI.parse(`${ROOT}/gamma/three.c`));
+      await files.deleteFile(URI.parse(`${ROOT}/gamma/three.c`));
       await flush();
       expect(store.removals).toEqual(['gamma/three.c']);
       expect(store.contents.has('gamma/three.c')).toBe(false);
@@ -291,7 +322,7 @@ describe('PersistentFileSystemProvider writes', () => {
       // next load, for exactly the paths normalisation exists to handle.
       const store = new RecordingStore();
       const files = await restored(store, { seed: { 'a b.a': 'seeded' } });
-      files.deleteFile(URI.parse(`${ROOT}/a b.a`));
+      await files.deleteFile(URI.parse(`${ROOT}/a b.a`));
       await flush();
       expect(store.removals).toEqual([]);
       expect(store.contents.get('a%20b.a')).toBeDefined();

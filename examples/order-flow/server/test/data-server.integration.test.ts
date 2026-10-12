@@ -28,13 +28,14 @@
  * `saveModelDocument` and because a rebuild runs the integrity rules.
  */
 
-import { TransferDocument } from '@hydranium/protocol';
+import { isConflictError, TransferDocument, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { DataServer, type DataServerOptions } from '@hydranium/data-server';
+import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium/core';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
-import { readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { isProcessModel, isTask } from '../src/language-server/generated-hydranium/transfer-model.js';
@@ -43,6 +44,7 @@ import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } f
 type OrderFlowTransfer = DomainModel | ProcessModel;
 
 const CLIENT_ID = 'data-server-test';
+const OTHER_ID = 'data-server-other';
 
 let workspace: ScratchWorkspace | undefined;
 let harness: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
@@ -57,12 +59,59 @@ interface DrivenHead {
    readonly services: OrderFlowHarness;
 }
 
+/** Shows which clients watch a URI. */
+class InspectingDataServer extends DataServer<OrderFlowTransfer> {
+   watchersOf(uri: string): string[] {
+      return [...(this.uriWatchRecords.get(this.canonicalKey(uri))?.watchers ?? [])];
+   }
+
+   /** How many watch keys the server keeps for `clientId`. */
+   keysKept(clientId: string): number {
+      return this.watchKeys.get(clientId)?.size ?? 0;
+   }
+}
+
+/**
+ * A data head over a scratch workspace holding `linked.domain` and a symlink
+ * to it, `link.domain`, under `RealpathDocumentUriPolicy`, which keys both
+ * spellings by the target while it exists.
+ */
+async function driveSymlinkedHead(): Promise<{ server: InspectingDataServer; link: string; target: string }> {
+   const scratch = await makeScratchWorkspaceHarness(
+      prepared => {
+         prepared.write('linked.domain', 'entity Solo {\n   a : string\n}\n');
+         symlinkSync(prepared.resolve('linked.domain'), prepared.resolve('link.domain'), 'file');
+      },
+      {
+         extraSharedModules: [{ workspace: { DocumentUriPolicy: (shared: ServerSharedServices) => new RealpathDocumentUriPolicy(shared) } }]
+      }
+   );
+   workspace = scratch.workspace;
+   const head = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
+      server: channel => new InspectingDataServer(channel, scratch.harness.shared)
+   });
+   harness = head;
+   if (!(head.server instanceof InspectingDataServer)) {
+      throw new Error('not an InspectingDataServer');
+   }
+   return { server: head.server, link: scratch.workspace.uri('link.domain'), target: scratch.workspace.uri('linked.domain') };
+}
+
+/** The clients `head`'s server, an {@link InspectingDataServer}, has watching `uri`. */
+function watchersOf(head: DrivenHead, uri: string): string[] {
+   const { server } = head.harness;
+   if (!(server instanceof InspectingDataServer)) {
+      throw new Error('not an InspectingDataServer');
+   }
+   return server.watchersOf(uri);
+}
+
 /** Boot both languages over a scratch workspace, put a real DataServer on a duplex pair, and register the client's session on it. */
-async function driveDataHead(options?: DataServerOptions): Promise<DrivenHead> {
+async function driveDataHead(options?: DataServerOptions, Server: typeof DataServer<OrderFlowTransfer> = DataServer): Promise<DrivenHead> {
    const { harness: services, workspace: scratch } = await makeScratchWorkspaceHarness();
    workspace = scratch;
    harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
-      server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared, options)
+      server: channel => new Server(channel, services.shared, options)
    });
    // Every document request acts as a session registered on the connection.
    await harness.proxy.createSession({ clientId: CLIENT_ID });
@@ -291,13 +340,122 @@ describe('order-flow data head', () => {
       // by the deletion would have to precede this response.
       await head.harness.proxy.getModelDocument({ uri: head.uri(WORKSPACE_FILES.returnsProcess) });
 
-      expect(head.harness.deletions.map(event => event.uri)).toEqual([uri]);
+      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
       // The deletion does NOT travel as an update. That silence is the builder's
       // own invariant rather than framework behaviour — it drops the document
       // before deriving the rebuild set — so no local edit can redden this line;
       // what it guards is a Langium upgrade that changes the invariant.
       expect(head.harness.events.length).toBe(afterUpdate);
       expect(head.services.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+   });
+
+   it("deletes a document, names the deleting session on the deletion, and releases only that session's watch", async () => {
+      const head = await driveDataHead(undefined, InspectingDataServer);
+      const uri = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const proxy = head.harness.proxy;
+      await proxy.createSession({ clientId: OTHER_ID });
+      for (const clientId of [CLIENT_ID, OTHER_ID]) {
+         await proxy.openModelDocument({ uri, clientId });
+         await proxy.watchModelDocument({ uri, clientId });
+      }
+
+      await proxy.deleteModelDocument({ uri, clientId: CLIENT_ID, baseVersion: 'any' });
+
+      expect(existsSync(URI.parse(uri).fsPath)).toBe(false);
+      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: CLIENT_ID }]);
+      expect(TransferDocument.isLoaded(await proxy.getModelDocument({ uri }))).toBe(false);
+      expect(watchersOf(head, uri)).toEqual([OTHER_ID]);
+   });
+
+   it("releases the deleting session's watch of a document it deleted through a symlink", async () => {
+      const { server, link, target } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      await proxy.createSession({ clientId: CLIENT_ID });
+      await proxy.openModelDocument({ uri: link, clientId: CLIENT_ID });
+      await proxy.watchModelDocument({ uri: link, clientId: CLIENT_ID });
+      expect(server.watchersOf(target)).toEqual([CLIENT_ID]);
+
+      await proxy.deleteModelDocument({ uri: link, clientId: CLIENT_ID, baseVersion: 'any' });
+
+      expect(existsSync(URI.parse(target).fsPath)).toBe(false);
+      expect(server.watchersOf(target)).toEqual([]);
+   });
+
+   it('releases a watch made through a symlink when it is unwatched or closed through it after the file is deleted', async () => {
+      const { server, link, target } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      for (const clientId of [CLIENT_ID, OTHER_ID, 'closer']) {
+         await proxy.createSession({ clientId });
+         await proxy.openModelDocument({ uri: link, clientId });
+         await proxy.watchModelDocument({ uri: link, clientId });
+      }
+      await proxy.deleteModelDocument({ uri: link, clientId: CLIENT_ID, baseVersion: 'any' });
+
+      await proxy.unwatchModelDocument({ uri: link, clientId: OTHER_ID });
+      await proxy.closeModelDocument({ uri: link, clientId: 'closer' });
+
+      expect(server.watchersOf(target)).toEqual([]);
+   });
+
+   it('releases the watch of a session that watched the target and deleted it through a symlink', async () => {
+      const { server, link, target } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      await proxy.createSession({ clientId: CLIENT_ID });
+      await proxy.openModelDocument({ uri: link, clientId: CLIENT_ID });
+      await proxy.watchModelDocument({ uri: target, clientId: CLIENT_ID });
+
+      await proxy.deleteModelDocument({ uri: link, clientId: CLIENT_ID, baseVersion: 'any' });
+
+      expect(server.watchersOf(target)).toEqual([]);
+      expect(server.keysKept(CLIENT_ID)).toBe(0);
+   });
+
+   it('forgets every spelling a client watched a document under once it unwatches one of them', async () => {
+      const { server, link, target } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      await proxy.watchModelDocument({ uri: link, clientId: CLIENT_ID });
+      await proxy.watchModelDocument({ uri: target, clientId: CLIENT_ID });
+
+      await proxy.unwatchModelDocument({ uri: link, clientId: CLIENT_ID });
+
+      expect(server.watchersOf(target)).toEqual([]);
+      expect(server.keysKept(CLIENT_ID)).toBe(0);
+   });
+
+   it('keeps no watch keys of a session once it has ended', async () => {
+      const { server, link } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      await proxy.createSession({ clientId: CLIENT_ID });
+      await proxy.watchModelDocument({ uri: link, clientId: CLIENT_ID });
+      expect(server.keysKept(CLIENT_ID)).toBe(1);
+
+      await proxy.closeSession({ clientId: CLIENT_ID });
+
+      expect(server.keysKept(CLIENT_ID)).toBe(0);
+   });
+
+   it("keeps the caller's open and watch when its delete conflicts", async () => {
+      const head = await driveDataHead(undefined, InspectingDataServer);
+      const uri = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const proxy = head.harness.proxy;
+      const opened = TransferDocument.assertLoaded(await proxy.openModelDocument({ uri, clientId: CLIENT_ID }));
+      await proxy.watchModelDocument({ uri, clientId: CLIENT_ID });
+      await proxy.updateModelDocument({
+         uri,
+         clientId: CLIENT_ID,
+         model: 'process Fulfillment for Order {\n   task Pay\n}',
+         baseVersion: 'any'
+      });
+
+      const refusal = await proxy.deleteModelDocument({ uri, clientId: CLIENT_ID, baseVersion: opened.model.version }).then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect(isConflictError(refusal)).toBe(true);
+      expect(existsSync(URI.parse(uri).fsPath)).toBe(true);
+      expect(watchersOf(head, uri)).toEqual([CLIENT_ID]);
+      expect(head.services.shared.workspace.TextDocuments.isOpenInClient(uri, CLIENT_ID)).toBe(true);
    });
 
    it('names a cascade-rebuilt document that nobody watches, which no other source can report', async () => {

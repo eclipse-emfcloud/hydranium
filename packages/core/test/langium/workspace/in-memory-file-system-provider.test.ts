@@ -141,9 +141,9 @@ describe('InMemoryFileSystemProvider directories', () => {
       expect(() => seeded().statSync(URI.parse(`${ROOT}/nowhere`))).toThrow(`No such file or directory: ${ROOT}/nowhere`);
    });
 
-   it('stops reporting a directory once its last file is deleted', () => {
+   it('stops reporting a directory once its last file is deleted', async () => {
       const files = seeded();
-      files.deleteFile(URI.parse(`${ROOT}/beta/three.b`));
+      await files.deleteFile(URI.parse(`${ROOT}/beta/three.b`));
       expect(files.existsSync(URI.parse(`${ROOT}/beta`))).toBe(false);
       expect(names(files.readDirectorySync(URI.parse(ROOT)))).toEqual([`${ROOT}/alpha`]);
    });
@@ -164,8 +164,14 @@ describe('InMemoryFileSystemProvider writes', () => {
       expect(files.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('replaced');
    });
 
-   it('deletes silently when nothing is there', () => {
-      expect(() => seeded().deleteFile(URI.parse(`${ROOT}/missing.a`))).not.toThrow();
+   it('refuses to delete a directory, and keeps the files under it', async () => {
+      const files = seeded();
+      await expect(files.deleteFile(URI.parse(`${ROOT}/beta`))).rejects.toThrow(`Cannot delete ${ROOT}/beta: it is a directory`);
+      expect(files.existsSync(URI.parse(`${ROOT}/beta`))).toBe(true);
+   });
+
+   it('deletes silently when nothing is there', async () => {
+      await expect(seeded().deleteFile(URI.parse(`${ROOT}/missing.a`))).resolves.toBeUndefined();
    });
 
    it('omits mtimeMs and realpath rather than stubbing them', () => {

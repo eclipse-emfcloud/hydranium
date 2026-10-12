@@ -53,6 +53,11 @@ const PERSIST = 'persisting writes the text a document holds as it is, and refus
 const TEXT_HASH = "a document's text hash is equal for equal text and differs for different text";
 const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
+const DELETE = 'deleting a saved document removes it';
+const DELETE_GATE = 'a delete on a stale base version conflicts and deletes nothing';
+const DELETE_OPEN = 'a session deletes only a document it has open';
+const DELETE_OTHERS = "a delete closes another session's open and names the deleting session";
+const DELETE_UNSAVED = 'a delete removes a created document never saved';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -129,12 +134,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the twenty-six checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-two checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(27);
+      expect(titles).toHaveLength(32);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -162,9 +167,14 @@ describe('the /data battery discriminates', () => {
          PERSIST,
          TEXT_HASH,
          LAST_CLOSE,
-         UNSAVED_CREATE
+         UNSAVED_CREATE,
+         DELETE,
+         DELETE_GATE,
+         DELETE_OPEN,
+         DELETE_OTHERS,
+         DELETE_UNSAVED
       ];
-      expect(matching(titles, covered)).toHaveLength(27);
+      expect(matching(titles, covered)).toHaveLength(32);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -181,7 +191,7 @@ describe('the /data battery discriminates', () => {
          // head that cannot report a whole one cannot be based on it either.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET, PERSIST]
+         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET, PERSIST, DELETE]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       {
@@ -199,16 +209,16 @@ describe('the /data battery discriminates', () => {
          // Also the gate, and necessarily: a head that stores no edit never
          // advances a version, so nothing a caller holds can go stale. And the
          // set check, whose current set carries an edit, and the dirty,
-         // text-hash, last-close and persist checks, whose second text is an
-         // edit.
+         // text-hash, last-close, persist and delete-gate checks, whose second
+         // text is an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE]
       },
       {
          label: 'a write accepted whatever version it claims',
          defects: { ungatedWrites: true },
-         expected: [CONFLICT_GATE, SET, PERSIST]
+         expected: [CONFLICT_GATE, SET, PERSIST, DELETE_GATE]
       },
       {
          // Also the dependent's credit, which the check reads off the update
@@ -253,19 +263,21 @@ describe('the /data battery discriminates', () => {
       },
       {
          // Also the close check: the new session under the ended one's id then
-         // writes by opening implicitly, which is what that check refuses.
+         // writes by opening implicitly, which is what that check refuses. And
+         // the delete checks, whose delete without an open and write after a
+         // delete open implicitly too.
          label: 'a session write opening its document implicitly',
          defects: { implicitSessionOpen: true },
-         expected: [SESSION_WRITE, CLOSE_SESSION, SESSION_SAVE, CONNECTION_END]
+         expected: [SESSION_WRITE, CLOSE_SESSION, SESSION_SAVE, CONNECTION_END, DELETE_OPEN, DELETE_OTHERS]
       },
       { label: 'a session close that leaves the document open', defects: { closeKeepsOpen: true }, expected: [SESSION_WRITE] },
       { label: 'opens that outlive their session', defects: { sessionOpensSurviveEnd: true }, expected: [CLOSE_SESSION] },
       { label: 'a create that replaces an existing document', defects: { createOverwrites: true }, expected: [CREATE] },
       {
-         // Also every check that goes on to write, save or close what it created.
+         // Also every check that goes on to write, save, close or delete what it created.
          label: 'a create that leaves the document closed',
          defects: { createLeavesClosed: true },
-         expected: [CREATE, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE]
+         expected: [CREATE, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE, DELETE, DELETE_GATE, DELETE_OTHERS, DELETE_UNSAVED]
       },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
@@ -290,16 +302,23 @@ describe('the /data battery discriminates', () => {
       { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },
       {
          // Also the text-hash check, which reads a URI with no document for
-         // the envelope that carries no hash.
+         // the envelope that carries no hash, and the delete checks, which
+         // read what they deleted.
          label: 'a read of a URI with no document that is refused',
          defects: { refusesUnknownRead: true },
-         expected: [TEXT_HASH, UNSAVED_CREATE]
+         expected: [TEXT_HASH, UNSAVED_CREATE, DELETE, DELETE_UNSAVED]
       },
       {
          label: 'a close reverting while another session has the document open',
          defects: { releaseOnAnyClose: true },
          expected: [LAST_CLOSE]
-      }
+      },
+      { label: 'a delete keeping a saved document', defects: { deleteKeepsSaved: true }, expected: [DELETE] },
+      { label: 'a delete keeping a document never saved', defects: { deleteKeepsUnsaved: true }, expected: [DELETE_UNSAVED] },
+      { label: 'a delete that ignores its base version', defects: { deleteUngated: true }, expected: [DELETE_GATE] },
+      { label: 'a delete of a document the session has not opened', defects: { deleteWithoutOpen: true }, expected: [DELETE_OPEN] },
+      { label: "a delete keeping other sessions' opens", defects: { deleteKeepsOtherOpens: true }, expected: [DELETE_OTHERS] },
+      { label: 'a deletion naming no client', defects: { deletionUnattributed: true }, expected: [DELETE_OTHERS] }
    ];
 
    for (const canary of canaries) {

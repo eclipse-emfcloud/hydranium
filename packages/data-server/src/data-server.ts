@@ -63,6 +63,7 @@ import {
    type CreateSessionArgs,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
+   type TransferDeleteDocumentArgs,
    type TransferPersistDocumentArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
@@ -460,6 +461,12 @@ export class DataServer<
    /** This connection's {@link DataServerUriWatchRecord} per canonical URI; see there for when a record lives. */
    protected readonly uriWatchRecords = new Map<string, DataServerUriWatchRecord>();
    /**
+    * Per client id, the key each URI it watched resolved to when it watched.
+    * An unwatch looks the key up here: once a file is gone, a symlink to it
+    * no longer resolves to the key the watch is under.
+    */
+   protected readonly watchKeys = new Map<string, Map<string, string>>();
+   /**
     * The live client sessions this connection registered, by client id. A
     * document request carrying one of these ids acts as that session; one
     * carrying any other id fails. A session leaves once it ends, so a
@@ -578,6 +585,7 @@ export class DataServer<
          this.endSession(clientId, session, cause);
       }
       this.uriWatchRecords.clear();
+      this.watchKeys.clear();
    }
 
    // ============================================================
@@ -633,6 +641,7 @@ export class DataServer<
    }
 
    protected dropWatches(clientId: string): void {
+      this.watchKeys.delete(clientId);
       for (const [uri, record] of this.uriWatchRecords) {
          if (record.watchers.delete(clientId)) {
             this.pruneUriWatchRecord(uri);
@@ -752,6 +761,21 @@ export class DataServer<
    }
 
    /**
+    * Delete the document through the session, then release the session's
+    * watch of it, as {@link closeModelDocument} does. Released only after the
+    * delete: one that fails leaves the session its open and its watch. Other
+    * sessions' watches survive, as for any deletion.
+    */
+   async deleteModelDocument(args: TransferDeleteDocumentArgs): Promise<void> {
+      const session = this.requireSession(args.clientId);
+      // Keyed before the delete: once the file is gone, a symlink to it no
+      // longer resolves to the key the watch is under.
+      const uri = this.canonicalKey(args.uri);
+      await session.delete({ uri: args.uri, baseVersion: args.baseVersion });
+      await this.unwatchModelDocument({ uri, clientId: args.clientId });
+   }
+
+   /**
     * Record a watch for `(uri, clientId)`. Subsequent phase events on `uri`
     * fan out to the wired `clientProxy.onDocumentUpdated`. The
     * bidirectional pattern means the event channel is the client
@@ -767,6 +791,8 @@ export class DataServer<
     */
    async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
       const uri = this.canonicalKey(args.uri);
+      const keys = this.watchKeys.get(args.clientId) ?? new Map<string, string>();
+      this.watchKeys.set(args.clientId, keys.set(args.uri, uri));
       const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
       this.uriWatchRecords.set(uri, record);
       record.watchers.add(args.clientId);
@@ -784,9 +810,22 @@ export class DataServer<
     * {@link watchModelDocument}. Idempotent — unwatching twice is a no-op.
     * Dispatch for `uri` stops once no watchers remain, and the emission
     * fingerprint goes with the last watcher (see {@link pruneUriWatchRecord}).
+    *
+    * A URI the client watched is unwatched under the key it resolved to then,
+    * from {@link watchKeys}, which still holds once its file is gone.
     */
    async unwatchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
-      const uri = this.canonicalKey(args.uri);
+      const keys = this.watchKeys.get(args.clientId);
+      const uri = keys?.get(args.uri) ?? this.canonicalKey(args.uri);
+      // Every spelling the client watched it under was this one watch.
+      keys?.forEach((key, spelling) => {
+         if (key === uri) {
+            keys.delete(spelling);
+         }
+      });
+      if (keys?.size === 0) {
+         this.watchKeys.delete(args.clientId);
+      }
       if (this.uriWatchRecords.get(uri)?.watchers.delete(args.clientId)) {
          this.pruneUriWatchRecord(uri);
       }
@@ -1295,7 +1334,8 @@ export class DataServer<
     *
     * The watchers SURVIVE: a recreated file resumes delivering to them with no
     * re-subscription, and a client that answers the deletion by closing
-    * releases the watch through `closeModelDocument` anyway.
+    * releases the watch through `closeModelDocument` anyway. A session that
+    * deleted the document has its own released by {@link deleteModelDocument}.
     */
    protected dispatchDeleteEvent(event: ModelDeletedEvent): void {
       const uri = this.canonicalKey(event.uri);
@@ -1307,7 +1347,7 @@ export class DataServer<
          record.sentVersion = undefined;
          this.pruneUriWatchRecord(uri);
       }
-      this.clientProxy.onDocumentDeleted({ uri });
+      this.clientProxy.onDocumentDeleted({ uri, sourceClientId: event.sourceClientId });
    }
 
    /** Fan out a save event for the document's URI, gated on the URI's watchers. */

@@ -24,6 +24,7 @@ import {
    isDuplicateClientIdError,
    isReservedClientIdError,
    isSessionClosedError,
+   randomUuid,
    ReferenceSource,
    SyntheticStep,
    SystemClock,
@@ -35,6 +36,7 @@ import {
 import type {
    DataServerProtocol,
    ReferenceServerProtocol,
+   TransferDocumentDeletedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent
 } from '@hydranium/protocol/data';
@@ -47,8 +49,8 @@ import { type LanguageFixture, resolveDeferred, resolveModel } from '../model.js
  * through its protocol-native proxy plus the captured client-side
  * notifications. The kit names only `@hydranium/protocol` types, so a
  * `DataServerHarness` satisfies the port structurally (it has `proxy` +
- * `events`, `builds` and `dispose`) with NO adapter. `extends Harness` gives the kit the
- * universal `dispose()` teardown.
+ * `events`, `builds`, `deletions` and `dispose`) with NO adapter.
+ * `extends Harness` gives the kit the universal `dispose()` teardown.
  *
  * The kit seeds documents purely through the proxy, as client sessions: it
  * registers one with `createSession`, opens the document, or creates it with
@@ -66,6 +68,8 @@ export interface DataConformanceDriver<
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
    /** Captured `onDocumentsBuilt` events, append order — the cascade check's observation target. */
    readonly builds: ReadonlyArray<TransferDocumentsBuiltEvent>;
+   /** Captured `onDocumentDeleted` events, append order. */
+   readonly deletions: ReadonlyArray<TransferDocumentDeletedEvent>;
    /**
     * The opt-in reference surface, when the head serves it.
     *
@@ -85,9 +89,8 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
     * adopter must initialise the workspace before returning, so `waitForReady`
     * resolves rather than hanging.
     *
-    * Some checks save documents beside each fixture's `valid`, and nothing in
-    * the protocol deletes a file, so give each check a workspace the kit may
-    * write to and throw away.
+    * Some checks save and delete documents beside each fixture's `valid`, so
+    * give each check a workspace the kit may write to and throw away.
     */
    readonly connect: () => DataConformanceDriver<TTransfer, TDiagnostic> | Promise<DataConformanceDriver<TTransfer, TDiagnostic>>;
    /** Per-language fixtures; the grammar-bearing checks run once per language. */
@@ -125,7 +128,7 @@ const SUBSCRIBER = 'conformance-subscriber';
  * earlier check failed before ending its session.
  */
 function sessionId(label = 'conformance-session'): string {
-   return `${label}#${globalThis.crypto.randomUUID()}`;
+   return `${label}#${randomUuid()}`;
 }
 
 /** Register a session under a fresh id labelled `label`, and answer the id. */
@@ -606,7 +609,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                await seed(driver, model);
                const clientId = await startSession(driver, 'conformance-session');
-               const createdUri = siblingOf(model.uri, 'conformance-created-');
+               const createdUri = siblingOf(model.uri, `conformance-created-${randomUuid()}-`);
 
                const created = await driver.proxy.createModelDocument({ uri: createdUri, clientId, text: model.text });
                const { model: createdModel } = TransferDocument.assertLoaded(created);
@@ -655,7 +658,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
             const driver = await connect();
             try {
                const model = resolveModel(valid);
-               const uri = siblingOf(model.uri, 'conformance-unsaved-');
+               const uri = siblingOf(model.uri, `conformance-unsaved-${randomUuid()}-`);
                const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                // Served before the close, so an envelope without a model after
@@ -679,6 +682,132 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       });
 
       checks.push({
+         title: `deleting a saved document removes it ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-deleted-${randomUuid()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, baseVersion: 'any' });
+
+               await driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: TransferDocument.assertLoaded(saved).model.version });
+
+               // Once the delete answers, with no wait: the protocol answers a
+               // URI with no document with an envelope that has no model.
+               const read = await driver.proxy.getModelDocument({ uri });
+               assert.ok(!TransferDocument.isLoaded(read), `${uri} was still served with a model after its delete answered`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a delete on a stale base version conflicts and deletes nothing ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-kept-${randomUuid()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               await driver.proxy.updateModelDocument({ uri, clientId, model: `${model.text}\n`, baseVersion: 'any' });
+
+               const stale = await rejectionOf(
+                  driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: TransferDocument.assertLoaded(created).model.version })
+               );
+
+               assert.ok(isConflictError(stale), `deleting ${uri} on a stale base version did not conflict: ${String(stale)}`);
+               TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a session deletes only a document it has open ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const seeder = await seed(driver, model);
+               const stranger = await startSession(driver, 'conformance-stranger');
+
+               const refusal = await rejectionOf(
+                  driver.proxy.deleteModelDocument({ uri: model.uri, clientId: stranger, baseVersion: 'any' })
+               );
+
+               assert.ok(isDocumentNotOpenError(refusal), `a delete without an open did not fail as not open: ${String(refusal)}`);
+               TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri: model.uri }));
+               await driver.proxy.closeSession({ clientId: stranger });
+               await driver.proxy.closeSession({ clientId: seeder });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a delete closes another session's open and names the deleting session ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-shared-${randomUuid()}-`);
+               const deleter = await startSession(driver, 'conformance-deleter');
+               await driver.proxy.createModelDocument({ uri, clientId: deleter, text: model.text });
+               await driver.proxy.saveModelDocument({ uri, clientId: deleter, model: model.text, baseVersion: 'any' });
+               const other = await openAs(driver, uri, 'conformance-other');
+
+               await driver.proxy.deleteModelDocument({ uri, clientId: deleter, baseVersion: 'any' });
+
+               const write = await rejectionOf(
+                  driver.proxy.updateModelDocument({ uri, clientId: other, model: model.text, baseVersion: 'any' })
+               );
+               assert.ok(isDocumentNotOpenError(write), `another session's open of ${uri} survived its delete: ${String(write)}`);
+               await waitFor(() => driver.deletions.some(event => event.uri === uri), {
+                  message: `no onDocumentDeleted event for ${uri} after its delete`
+               });
+               const told = driver.deletions.filter(event => event.uri === uri).map(event => event.sourceClientId);
+               assert.deepStrictEqual(told, [deleter], `the deletion of ${uri} named ${told.join(', ')}, not the deleting session`);
+               await driver.proxy.closeSession({ clientId: other });
+               await driver.proxy.closeSession({ clientId: deleter });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a delete removes a created document never saved ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-unsaved-deleted-${randomUuid()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+
+               await driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: 'any' });
+
+               const read = await driver.proxy.getModelDocument({ uri });
+               assert.ok(
+                  !TransferDocument.isLoaded(read),
+                  `${uri}, created and never saved, was still served with a model after its delete`
+               );
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
          title: `a document is dirty while its text differs from its file, and clean once saved ${tag}`,
          body: async () => {
             const driver = await connect();
@@ -686,7 +815,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                // Only `dirty` is asserted, so any second text serves.
                const unsaved = resolveDeferred(invalid.text);
-               const uri = siblingOf(model.uri, `conformance-saved-${globalThis.crypto.randomUUID()}-`);
+               const uri = siblingOf(model.uri, `conformance-saved-${randomUuid()}-`);
                const clientId = await startSession(driver, 'conformance-session');
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
 
@@ -725,7 +854,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // Trailing blank lines no serialiser writes, so a head that
                // persists a re-serialised model rather than the text shows.
                const held = `${model.text}\n\n`;
-               const uri = siblingOf(model.uri, `conformance-persisted-${globalThis.crypto.randomUUID()}-`);
+               const uri = siblingOf(model.uri, `conformance-persisted-${randomUuid()}-`);
                const writer = await startSession(driver, 'conformance-writer');
                const created = await driver.proxy.createModelDocument({ uri, clientId: writer, text: model.text });
                const written = await driver.proxy.updateModelDocument({ uri, clientId: writer, model: held, baseVersion: 'any' });
@@ -771,7 +900,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const model = resolveModel(valid);
                // Only the text is compared, so any second text serves.
                const other = resolveDeferred(invalid.text);
-               const uri = siblingOf(model.uri, `conformance-hashed-${globalThis.crypto.randomUUID()}-`);
+               const uri = siblingOf(model.uri, `conformance-hashed-${randomUuid()}-`);
                const clientId = await startSession(driver, 'conformance-session');
                const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                const edited = await driver.proxy.updateModelDocument({ uri, clientId, model: other, baseVersion: 'any' });
@@ -793,7 +922,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const read = await driver.proxy.getModelDocument({ uri });
                assert.strictEqual(read.text?.hash, restored.text?.hash, `a read of ${uri} hashed its text as ${String(read.text?.hash)}`);
                const absent = await driver.proxy.getModelDocument({
-                  uri: siblingOf(model.uri, `conformance-absent-${globalThis.crypto.randomUUID()}-`)
+                  uri: siblingOf(model.uri, `conformance-absent-${randomUuid()}-`)
                });
                assert.strictEqual(absent.text, undefined, `an envelope with no document carried text ${JSON.stringify(absent.text)}`);
                await driver.proxy.closeSession({ clientId });
@@ -961,7 +1090,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  try {
                     const model = resolveModel(valid);
                     const edited = resolveDeferred(edit.to);
-                    const uri = siblingOf(model.uri, `conformance-reverted-${globalThis.crypto.randomUUID()}-`);
+                    const uri = siblingOf(model.uri, `conformance-reverted-${randomUuid()}-`);
                     const writer = await startSession(driver, 'conformance-writer');
                     // Created with the edit, so that going back to the created
                     // text instead of the saved one shows.

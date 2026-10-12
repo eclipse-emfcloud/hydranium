@@ -167,7 +167,7 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
          // insertion order of a merged record.
          const uri = this.storeUri(path);
          if (content === TOMBSTONE) {
-            super.deleteFile(uri);
+            this.files.delete(this.fileKey(uri));
          } else {
             super.setFile(uri, content);
          }
@@ -202,9 +202,16 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
       await this.persist(uri, content);
    }
 
-   override deleteFile(uri: URI): void {
-      super.deleteFile(uri);
-      this.forget(uri).catch((error: unknown) => this.reportStoreFailure('forget', uri, error));
+   /**
+    * Mirror the deletion into the store and REJECT if it refuses, as
+    * {@link writeFile} does. The store goes first, so one that refuses leaves
+    * the file it still holds; a directory is refused before the store is asked.
+    */
+   override async deleteFile(uri: URI): Promise<void> {
+      if (!this.hasChildren(this.fileKey(uri))) {
+         await this.forget(uri);
+      }
+      await super.deleteFile(uri);
    }
 
    /** The absolute URI a store-space `path` addresses. */
@@ -245,7 +252,7 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
          return key;
       }
       if (!key.startsWith(this.storeRoot)) {
-         throw new Error(`Cannot persist ${uri.toString()}: outside the store root ${this.storeRoot}`);
+         throw new Error(`${uri.toString()} is outside the store root ${this.storeRoot}`);
       }
       return key.slice(this.storeRoot.length);
    }

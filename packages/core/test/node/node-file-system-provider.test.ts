@@ -683,3 +683,73 @@ describe('DefaultFileSystemProvider write surface for URIs that name no disk loc
       });
    });
 });
+
+describe('DefaultFileSystemProvider.deleteFile', () => {
+   let root: string;
+   let provider: DefaultFileSystemProvider;
+   let symlinkSupported = true;
+
+   beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), 'hydranium-delete-'));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      const probe = join(root, 'probe.fake');
+      writeFileSync(probe, '');
+      try {
+         symlinkSync(probe, join(root, 'probe-link.fake'), 'file');
+      } catch {
+         symlinkSupported = false;
+      }
+   });
+
+   afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+   });
+
+   it('removes the file and leaves its emptied parent directory in place', async () => {
+      const directory = join(root, 'emptied');
+      const target = join(directory, 'gone.fake');
+      mkdirSync(directory);
+      writeFileSync(target, 'content');
+
+      await provider.deleteFile(URI.file(target));
+
+      expect(existsSync(target)).toBe(false);
+      expect(readdirSync(directory)).toEqual([]);
+   });
+
+   it('resolves for a file that is already gone', async () => {
+      await expect(provider.deleteFile(URI.file(join(root, 'never-there.fake')))).resolves.toBeUndefined();
+   });
+
+   it('removes a symlink and leaves the file it points at', async context => {
+      context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+      const realFile = join(root, 'target.fake');
+      const link = join(root, 'link.fake');
+      writeFileSync(realFile, 'kept');
+      symlinkSync(realFile, link, 'file');
+
+      await provider.deleteFile(URI.file(link));
+
+      expect(existsSync(link)).toBe(false);
+      expect(readFileSync(realFile, 'utf8')).toBe('kept');
+   });
+
+   it('refuses to remove a directory', async () => {
+      const directory = join(root, 'a-directory');
+      mkdirSync(directory);
+
+      await expect(provider.deleteFile(URI.file(directory))).rejects.toThrow();
+      expect(statSync(directory).isDirectory()).toBe(true);
+   });
+
+   for (const scheme of ['memory', 'untitled', 'https', 'virtual']) {
+      it(`refuses to delete under \`${scheme}:\` and leaves the occupant of its path`, async () => {
+         const occupied = join(root, `${scheme}-occupied.fake`);
+         writeFileSync(occupied, 'unrelated on-disk content');
+         const uri = URI.file(occupied).with({ scheme });
+
+         await expect(provider.deleteFile(uri)).rejects.toThrow(`Cannot delete ${uri.toString()}`);
+         expect(existsSync(occupied)).toBe(true);
+      });
+   }
+});

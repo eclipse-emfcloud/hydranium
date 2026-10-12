@@ -92,6 +92,8 @@ export interface StubHydraniumTextDocuments extends Pick<
    | 'openedVersion'
    | 'onDidChangeDirty'
    | 'setDiskBaseline'
+   | 'markCreated'
+   | 'isUnsavedCreation'
 > {
    /**
     * Stub-tailored read accessor. Returns just the surface the framework's
@@ -173,6 +175,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    const key = (uri: string): CanonicalUri => uri as CanonicalUri;
    const documentReleased = new Emitter<DocumentReleasedEvent>();
    const baselines = new Map<string, string | undefined>();
+   const created = new Set<string>();
    const openedVersions = new Map<string, number>();
    const dirty = new Set<string>();
    const dirtyChanged = new Emitter<DocumentDirtyChangedEvent>();
@@ -329,8 +332,21 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
       setDiskBaseline(uri, text) {
          if (docs.has(uri)) {
             baselines.set(uri, text);
+            if (text !== undefined) {
+               created.delete(uri);
+            }
             refreshDirty(uri);
          }
+      },
+      markCreated(uri) {
+         if (docs.has(uri)) {
+            baselines.set(uri, undefined);
+            created.add(uri);
+            refreshDirty(uri);
+         }
+      },
+      isUnsavedCreation(uri) {
+         return created.has(uri);
       },
       openDocuments() {
          // From the registry that also answers `isOpenInClient`, which both
@@ -355,6 +371,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          docs.set(uri, { uri, version: 1, text, clientId });
          openedVersions.set(uri, 1);
          baselines.set(uri, text);
+         created.delete(uri);
       },
       seedOpenInLanguageClient(uri) {
          sessions.addOpen(key(uri), LANGUAGE_CLIENT_ID);
@@ -368,6 +385,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          const dropped = holder !== undefined && holder.clientId === clientId;
          if (dropped) {
             docs.delete(uri);
+            created.delete(uri);
          }
          const removed = sessions.removeOpen(key(uri), clientId);
          if (clientId === LANGUAGE_CLIENT_ID) {
@@ -393,6 +411,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
          appliedEdits.length = 0;
          staged.length = 0;
          baselines.clear();
+         created.clear();
          openedVersions.clear();
          dirty.clear();
          saveListeners.length = 0;

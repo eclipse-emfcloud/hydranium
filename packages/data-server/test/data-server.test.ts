@@ -27,7 +27,8 @@ import {
    type ReferenceContext,
    type ReferenceRequest,
    textHash,
-   type TransferDiagnostic
+   type TransferDiagnostic,
+   UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import type { ResponseError } from 'vscode-jsonrpc';
 import {
@@ -337,6 +338,10 @@ describe('DataServer', () => {
          [
             'persistModelDocument',
             (proxy: TestHarness['proxy']) => proxy.persistModelDocument({ uri: URI_A, clientId: unregistered, baseVersion: 'any' })
+         ],
+         [
+            'deleteModelDocument',
+            (proxy: TestHarness['proxy']) => proxy.deleteModelDocument({ uri: URI_A, clientId: unregistered, baseVersion: 'any' })
          ],
          ['closeModelDocument', (proxy: TestHarness['proxy']) => proxy.closeModelDocument({ uri: URI_A, clientId: unregistered })]
       ])('fails %s with the closed-session code and opens, writes and saves nothing', async (_method, request) => {
@@ -842,7 +847,10 @@ describe('DataServer', () => {
             bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_B), URI.parse(URI_A)]);
             await waitFor(() => deletions.length >= 2);
 
-            expect(deletions.map(event => event.uri)).toEqual([URI_B, URI_A]);
+            expect(deletions).toEqual([
+               { uri: URI_B, sourceClientId: UNKNOWN_CLIENT_ID },
+               { uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }
+            ]);
          } finally {
             pair.dispose();
          }

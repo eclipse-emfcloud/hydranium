@@ -116,6 +116,12 @@ export type DataSessionPersistArgs<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = DataSessionArgs<TServer['persistModelDocument']>;
 
+/** Delete a document through a session; the session supplies `clientId`. */
+export type DataSessionDeleteArgs<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionArgs<TServer['deleteModelDocument']>;
+
 /** The document a session hands back, carrying its server's diagnostic shape. */
 export type DataSessionDocument<
    TTransfer extends TransferElement,
@@ -254,10 +260,13 @@ export type DataSessionFactory<TTransfer extends TransferElement, TServer extend
  * passed its own could pass another participant's, and the server would
  * attribute the write and close the document accordingly.
  *
- * {@link closeDocument} and {@link dispose} first wait, up to
- * {@link settleBeforeCloseMs}, for this session's calls still in flight on the
- * URI, or on any URI for `dispose`: a save sent just before its close would
- * otherwise reach the server after it, and fail as not open.
+ * {@link closeDocument}, {@link deleteDocument} and {@link dispose} first wait,
+ * up to {@link settleBeforeCloseMs}, for this session's calls still in flight
+ * on the URI, or on any URI for `dispose`: a save sent just before its close
+ * would otherwise reach the server after it, and fail as not open. An open or
+ * create of a URI called while a close or delete of it is under way is sent
+ * once that has answered, so the server takes them in the order they were
+ * called.
  *
  * After the connection drops, the session registers again under the same id,
  * re-opens and re-watches what it had open, tells the client of their dirty
@@ -281,10 +290,10 @@ export class DataSession<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > implements Disposable {
    /**
-    * How long {@link closeDocument} and {@link dispose} wait for this session's
-    * calls in flight before closing anyway. Long, because the wait only runs
-    * out when a call hangs, and a close sent while a save is still running
-    * fails that save.
+    * How long {@link closeDocument}, {@link deleteDocument} and {@link dispose}
+    * wait for this session's calls in flight before going on anyway. Long,
+    * because the wait only runs out when a call hangs, and a close sent while
+    * a save is still running fails that save.
     */
    protected readonly settleBeforeCloseMs: number = 10_000;
    /**
@@ -307,6 +316,11 @@ export class DataSession<
     * under the open that is still being made.
     */
    protected readonly openings = new Map<string, Set<DataSessionOpening>>();
+   /**
+    * Per URI, the closes and deletes of it this session has under way, which
+    * an open or create called meanwhile waits for; see {@link trackEnding}.
+    */
+   protected readonly endings = new Map<string, Promise<unknown>>();
    /** Per URI written since its last save, what {@link restore} needs to write it again. */
    protected readonly unsavedWrites = new Map<string, DataSessionUnsavedWrite<TTransfer, TServer>>();
    /**
@@ -330,9 +344,9 @@ export class DataSession<
     * {@link forgetGoneDocument}.
     */
    protected readonly createdUris = new Set<string>();
-   /** Per URI, this session's calls still in flight on it, which a close waits for. */
+   /** Per URI, this session's calls still in flight on it, which a close or delete waits for. */
    protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
-   /** This session's saves still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
+   /** This session's saves, persists and deletes still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
    protected readonly savesInFlight = new Set<Promise<unknown>>();
    protected readonly disposeEmitter = new Emitter<void>();
    /**
@@ -524,17 +538,21 @@ export class DataSession<
     */
    async closeDocument(args: DataSessionCloseArgs<TTransfer, TServer>): Promise<void> {
       this.assertLive();
-      await this.settle(this.inFlight.get(args.uri));
-      // Forgotten before the close is sent, so a reconnect in between does not
-      // re-open a document the caller has closed. Every open of it under way
-      // by now is marked, even one called after this close, so it neither
-      // records it again nor is sent again.
-      this.openings.get(args.uri)?.forEach(opening => {
-         opening.closed = true;
+      // An open called after this close waits for it instead, see `trackOpen`.
+      const underWay = [...(this.openings.get(args.uri) ?? [])];
+      await this.trackEnding(args.uri, async () => {
+         await this.settle(this.inFlight.get(args.uri));
+         // Forgotten before the close is sent, so a reconnect in between does
+         // not re-open a document the caller has closed. Every open of it that
+         // was under way when the close was called is marked, so it neither
+         // records it again nor is sent again.
+         underWay.forEach(opening => {
+            opening.closed = true;
+         });
+         this.forgetDocument(args.uri);
+         const server = await this.connected();
+         await server.closeModelDocument({ ...args, clientId: this.clientId });
       });
-      this.forgetDocument(args.uri);
-      const server = await this.connected();
-      await server.closeModelDocument({ ...args, clientId: this.clientId });
    }
 
    /**
@@ -583,6 +601,11 @@ export class DataSession<
       args: DataSessionOpenArgs<TTransfer, TServer>,
       fn: (document: DataSessionDocument<TTransfer, TServer>) => MaybePromise<T>
    ): Promise<T> {
+      // Asked once the closes and deletes of the URI under way have answered:
+      // before, the session still counts as open a document they are ending.
+      for (let ending = this.endings.get(args.uri); ending; ending = this.endings.get(args.uri)) {
+         await ending;
+      }
       const alreadyOpen = this.hasOpen(args.uri);
       const document = await this.openDocument(args);
       try {
@@ -644,6 +667,39 @@ export class DataSession<
       return this.trackSave(args.uri, server => server.persistModelDocument({ ...args, clientId: this.clientId }));
    }
 
+   /**
+    * Delete `args.uri` as this session, at once: its file, then the document.
+    * The session must have `args.uri` open. Sent once this session's calls in
+    * flight on the URI have settled, as {@link closeDocument} is, and counted
+    * in {@link hasSavesInFlight} until it answers.
+    *
+    * The session forgets the document once the delete has succeeded: on
+    * hearing its own deletion, which the server sends before it answers, or
+    * on the answer, for a client that hears no deletions. A refused delete
+    * leaves the document open, as the server does.
+    */
+   deleteDocument(args: DataSessionDeleteArgs<TTransfer, TServer>): Promise<void> {
+      const deleting = this.trackEnding(args.uri, () =>
+         this.track([args.uri], async () => {
+            this.assertLive();
+            await this.settle(this.inFlight.get(args.uri));
+            const server = await this.connected();
+            const open = this.opens.get(args.uri);
+            await server.deleteModelDocument({ ...args, clientId: this.clientId });
+            // Still the open it was sent under: the deletion was not heard.
+            if (open && this.opens.get(args.uri) === open) {
+               open.deleted = true;
+               this.logger.withUri(args.uri).debug('Forgot the document: this session deleted it');
+               this.forgetDocument(args.uri);
+            }
+         })
+      );
+      this.savesInFlight.add(deleting);
+      const done = (): boolean => this.savesInFlight.delete(deleting);
+      deleting.then(done, done);
+      return deleting;
+   }
+
    /** Run a save or persist of `uri` and record what it answered as saved. */
    protected trackSave(
       uri: string,
@@ -686,9 +742,9 @@ export class DataSession<
    }
 
    /**
-    * Whether a save of this session has not answered yet. Synchronous, for a
-    * host whose exit veto must decide within the tick, such as Theia's
-    * `onWillStop`.
+    * Whether a save, persist or delete of this session has not answered yet.
+    * Synchronous, for a host whose exit veto must decide within the tick, such
+    * as Theia's `onWillStop`.
     */
    get hasSavesInFlight(): boolean {
       return this.savesInFlight.size > 0;
@@ -862,6 +918,10 @@ export class DataSession<
     * closed: the server keeps the watch, and a close could end a re-open of a
     * re-created file still in flight. Unsaved writes are logged, not
     * reported: the client hears the deletion too.
+    *
+    * This session's own deletion is neither unwatched nor logged as dropping
+    * unsaved text: its delete released the watch, and its caller chose to
+    * drop the text.
     */
    protected forgetDeletedDocument(event: TransferDocumentDeletedEvent): void {
       for (const [uri, open] of this.opens) {
@@ -869,6 +929,11 @@ export class DataSession<
             continue;
          }
          open.deleted = true;
+         if (this.isOwnEcho(event.sourceClientId)) {
+            this.logger.withUri(uri).debug('Forgot the document: this session deleted it');
+            this.forgetDocument(uri);
+            continue;
+         }
          this.forgetGoneDocument(uri);
          this.connected()
             .then(server => server.unwatchModelDocument({ uri, clientId: this.clientId }))
@@ -1258,7 +1323,11 @@ export class DataSession<
       return running;
    }
 
-   /** {@link track} an open of `uri`, kept in {@link openings} until it settles. */
+   /**
+    * {@link track} an open of `uri`, kept in {@link openings} until it settles,
+    * and sent once the closes and deletes of `uri` called before it have
+    * answered.
+    */
    protected trackOpen<T>(uri: string, call: (opening: DataSessionOpening) => Promise<T>): Promise<T> {
       const opening: DataSessionOpening = { closed: false };
       const openings = this.openings.get(uri) ?? new Set<DataSessionOpening>();
@@ -1269,9 +1338,26 @@ export class DataSession<
             this.openings.delete(uri);
          }
       };
-      const running = this.track([uri], () => call(opening));
+      const ending = this.endings.get(uri);
+      const running = this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening)));
       running.then(done, done);
       return running;
+   }
+
+   /**
+    * Run `end`, a close or delete of `uri`, kept in {@link endings} until it
+    * and every earlier one of `uri` have settled.
+    */
+   protected trackEnding(uri: string, end: () => Promise<void>): Promise<void> {
+      const ending = end();
+      const settled = Promise.allSettled([this.endings.get(uri), ending]);
+      this.endings.set(uri, settled);
+      void settled.then(() => {
+         if (this.endings.get(uri) === settled) {
+            this.endings.delete(uri);
+         }
+      });
+      return ending;
    }
 
    /** Wait until `calls` have settled, or {@link settleBeforeCloseMs} has passed. */

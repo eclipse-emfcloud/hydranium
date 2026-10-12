@@ -65,6 +65,8 @@ import type {
    CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   TransferDeleteDocumentArgs,
+   TransferDocumentDeletedEvent,
    TransferDocumentsBuiltEvent,
    TransferDocumentUpdatedEvent,
    TransferPersistDocumentArgs,
@@ -230,6 +232,18 @@ export interface CanaryDefects {
    readonly refusesUnknownRead?: boolean;
    /** Any close goes back to the file, even while another session has the document open. */
    readonly releaseOnAnyClose?: boolean;
+   /** A delete leaves a document whose save wrote a file. */
+   readonly deleteKeepsSaved?: boolean;
+   /** A delete leaves a document no save wrote, so it lives on in memory. */
+   readonly deleteKeepsUnsaved?: boolean;
+   /** A delete ignores its base version. */
+   readonly deleteUngated?: boolean;
+   /** A delete of a document the session has not opened goes through. */
+   readonly deleteWithoutOpen?: boolean;
+   /** A delete leaves other sessions' opens of the document in place. */
+   readonly deleteKeepsOtherOpens?: boolean;
+   /** A deletion is reported as the unknown client's, so the deleting session cannot tell it is its own. */
+   readonly deletionUnattributed?: boolean;
    /**
     * Not a defect: closing a connection ends its sessions only a moment later,
     * as a server behind a socket does once it has read the close.
@@ -257,6 +271,7 @@ export class CanaryDataServer {
    readonly events: TransferDocumentUpdatedEvent<CanaryRoot, TransferDiagnostic>[] = [];
    /** The canary provokes no cascade — it stores documents in a Map with no reference graph. */
    readonly builds: TransferDocumentsBuiltEvent[] = [];
+   readonly deletions: TransferDocumentDeletedEvent[] = [];
 
    private readonly documents = new Map<string, StoredDocument>();
    /** What each save wrote, by URI: the file a last close goes back to. */
@@ -562,6 +577,25 @@ export class CanaryDataServer {
       const text = this.documents.get(args.uri)?.text ?? '';
       this.disk.set(args.uri, this.defects.persistReformats ? text.trimEnd() : text);
       return this.savedEnvelope(args.uri);
+   }
+
+   async deleteModelDocument(args: TransferDeleteDocumentArgs): Promise<void> {
+      if (!this.defects.deleteWithoutOpen) {
+         this.assertSessionMayWrite(args.clientId, args.uri);
+      }
+      if (!this.defects.deleteUngated) {
+         this.assertBaseVersion(args.uri, args.baseVersion);
+      }
+      const saved = this.disk.delete(args.uri);
+      if (!(saved ? this.defects.deleteKeepsSaved : this.defects.deleteKeepsUnsaved)) {
+         this.documents.delete(args.uri);
+      }
+      for (const [clientId, opens] of this.sessions) {
+         if (clientId === args.clientId || !this.defects.deleteKeepsOtherOpens) {
+            opens.delete(args.uri);
+         }
+      }
+      this.deletions.push({ uri: args.uri, sourceClientId: this.defects.deletionUnattributed ? UNKNOWN_CLIENT_ID : args.clientId });
    }
 
    /** The answer to a save or persist: nothing writes between the take and the answer here, so the version written is the one stored. */

@@ -35,6 +35,7 @@ function makeStubProxy(
       updateModelDocument: () => Promise.reject(new Error('not exercised')),
       saveModelDocument: () => Promise.reject(new Error('not exercised')),
       persistModelDocument: () => Promise.reject(new Error('not exercised')),
+      deleteModelDocument: () => Promise.reject(new Error('not exercised')),
       watchModelDocument: () => Promise.reject(new Error('not exercised')),
       unwatchModelDocument: () => Promise.reject(new Error('not exercised')),
       getProjects: () => Promise.resolve(projects),

@@ -31,6 +31,7 @@ import {
    type DataServerProtocol,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
+   type TransferDeleteDocumentArgs,
    type TransferPersistDocumentArgs,
    type TransferSaveDocumentArgs,
    type WatchModelDocumentArgs,
@@ -100,6 +101,9 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
       },
       async persistModelDocument(args: TransferPersistDocumentArgs) {
          return { ...makeDocument(args.uri, FakeRoot.make('persisted')), persisted: { version: 1 } };
+      },
+      async deleteModelDocument(_args: TransferDeleteDocumentArgs) {
+         // Nothing to return: the deletion reaches clients as an event.
       },
       async watchModelDocument(_args: WatchModelDocumentArgs) {
          // Nothing to return: a watch is a dispatch-table entry, not a handle.

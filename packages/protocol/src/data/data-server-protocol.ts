@@ -27,6 +27,7 @@ import type {
    CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   TransferDeleteDocumentArgs,
    TransferPersistDocumentArgs,
    TransferSaveDocumentArgs,
    WatchModelDocumentArgs,
@@ -156,6 +157,21 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * Responds as {@link saveModelDocument} does.
     */
    persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
+
+   /**
+    * Delete a document the session `clientId` has open, at once: its file,
+    * then the document, as a deletion a file watcher reports removes it. Every
+    * session's open of it closes and every client hears
+    * {@link DocumentClientProtocol.onDocumentDeleted} naming this session; the
+    * session's own watch is released, as {@link closeModelDocument} releases
+    * it. `baseVersion` is checked in the step that marks the document for
+    * deletion, so text that moved on fails with a `ConflictError` code. A file
+    * already gone deletes only the document; a file that cannot be removed
+    * fails the call and changes nothing. Resolves once the build that removes
+    * the document has run; a read then answers the URI without a model, unless
+    * an editor still has it open, whose buffer the document is built from.
+    */
+   deleteModelDocument(args: TransferDeleteDocumentArgs): Promise<void>;
 
    /**
     * Start watching `(uri, clientId)`. The server starts dispatching

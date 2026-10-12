@@ -127,7 +127,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       // by clearing its cache must not also see it as content it should render.
       events.onDidUpdateDocument(() => updates++);
 
-      events.onDocumentDeleted({ uri: 'file:///widgets/gauge.widget' });
+      events.onDocumentDeleted({ uri: 'file:///widgets/gauge.widget', sourceClientId: 'unknown' });
 
       expect(deleted).toEqual(['file:///widgets/gauge.widget']);
       expect(updates).toBe(0);

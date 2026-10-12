@@ -46,6 +46,9 @@ export interface ClientSessionWriteArgs<TTransfer> {
 /** What a session's `persist` writes: the text the store holds for `uri`. */
 export type ClientSessionPersistArgs = Omit<ClientSessionWriteArgs<never>, 'model'>;
 
+/** What a session's `delete` removes: the document at `uri`, at the version it was based on. */
+export type ClientSessionDeleteArgs = Omit<ClientSessionWriteArgs<never>, 'model'>;
+
 /** What a session's `updateAll` writes, all or none. */
 export interface ClientSessionUpdateAllArgs<TTransfer> {
    updates: ClientSessionWriteArgs<TTransfer>[];
@@ -55,11 +58,13 @@ export interface ClientSessionUpdateAllArgs<TTransfer> {
  * One participant's handle on the documents it works on, started by
  * `ModelService.createSession`.
  *
- * The session writes only what it has open: `update`, `save` and `persist`
- * fail with `DocumentNotOpenError` unless this session has the URI open in the
- * synchronous step that applies or takes the text, so a write either lands
- * while the document is open or fails. A document stays open until this
- * session closes it, the session ends, or the file is deleted.
+ * The session writes only what it has open: `update`, `save`, `persist` and
+ * `delete` fail with `DocumentNotOpenError` unless this session has the URI
+ * open in the synchronous step that applies or takes the text, or marks the
+ * document for deletion, so a write either lands while the document is open or
+ * fails. They fail the same way while any session's `delete` of the URI is
+ * under way. A document stays open until this session closes it, the session
+ * ends, or the file is deleted.
  *
  * One open per URI, without reference counting: opening a URI the session
  * already has open changes nothing, and one `close` ends it.
@@ -123,6 +128,22 @@ export interface ClientSession<
     * session, also when another client wrote the text.
     */
    persist(args: ClientSessionPersistArgs): Promise<TextVersion>;
+   /**
+    * Delete `args.uri` at once: its file, then the document, as a deletion a
+    * file watcher reports removes it. Every session's open of it closes, the
+    * editor's stays, and the deletion event names this session. Resolves once
+    * the build that removes the document has run. `args.baseVersion` is gated
+    * as {@link persist} gates it; a file already gone deletes only the
+    * document, and one that cannot be removed fails the call, deleting nothing.
+    * The file removed is the one the store keys the document by: under
+    * `RealpathDocumentUriPolicy`, a symlink's target rather than the link.
+    *
+    * A change requested before that build starts, by the editor or a file
+    * watcher, keeps the document, and only this session's open of it closes.
+    * From inside a build the call fails with `ReentrantWriteLockError`,
+    * whatever `ModelServiceOptions.allowReentrantBuilds` says.
+    */
+   delete(args: ClientSessionDeleteArgs): Promise<void>;
    /** Close this session's open of `uri`, at once. A no-op when it does not have `uri` open. */
    close(uri: string): Promise<void>;
    /**
@@ -258,6 +279,11 @@ export class DefaultClientSession<
       return this.closeDocument(uri);
    }
 
+   delete(args: ClientSessionDeleteArgs): Promise<void> {
+      this.assertLive();
+      return this.deleteDocument(args);
+   }
+
    withOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T> {
       this.assertLive();
       return this.runWithOpen(uri, fn);
@@ -289,9 +315,10 @@ export class DefaultClientSession<
       }
    }
 
-   /** Throw `DocumentNotOpenError` unless this session has `uri` open. */
+   /** Throw `DocumentNotOpenError` unless this session has `uri` open and no delete of it is under way. */
    protected assertOpen(uri: string): void {
-      if (!this.services.workspace.TextDocuments.isOpenInClient(uri, this.clientId)) {
+      const workspace = this.services.workspace;
+      if (!workspace.TextDocuments.isOpenInClient(uri, this.clientId) || workspace.AstDocumentManager.isDeleting(uri)) {
          throw new DocumentNotOpenError(uri, this.clientId);
       }
    }
@@ -465,6 +492,20 @@ export class DefaultClientSession<
       this.assertOpen(uri);
       this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri));
       return this.services.workspace.AstDocumentManager.save(uri, this.clientId);
+   }
+
+   /**
+    * Delete `args.uri` under this session's id. The open check and the
+    * `baseVersion` gate sit in the same synchronous step as the manager's
+    * mark, which refuses every later write of the URI: an await between them
+    * lets another client's write land after the gate, and the delete then
+    * discards text this session never saw.
+    */
+   protected async deleteDocument(args: ClientSessionDeleteArgs): Promise<void> {
+      const uri = this.canonicalKey(args.uri);
+      this.assertOpen(uri);
+      this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri));
+      return this.services.workspace.AstDocumentManager.delete(uri, this.clientId);
    }
 
    protected async closeDocument(uri: string): Promise<void> {
