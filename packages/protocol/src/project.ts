@@ -40,7 +40,10 @@
  * adopter-specific extension carried transparently through the typed
  * surface. The framework imposes no format on extension fields — they
  * ride on the JSON-RPC envelope as additional properties when crossing
- * the wire.
+ * the wire. A client receives a project's own enumerable fields as JSON: a
+ * getter or a method does not cross, and a class instance in a field arrives
+ * as a plain object, so the project type a client protocol declares holds the
+ * data fields alone.
  */
 export interface Project {
    /**
