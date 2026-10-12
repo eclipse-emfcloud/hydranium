@@ -16,6 +16,7 @@ import {
    type DataServerProtocol,
    type DiagnosticOf,
    type ProjectOf,
+   type TransferDocumentDeletedEvent,
    type TransferDocumentDirtyChangedEvent,
    type TransferDocumentUpdatedEvent
 } from '../data';
@@ -139,6 +140,8 @@ export class DataConnection<
    protected readonly dirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
    /** Backs each session's {@link DataSessionHost.onDidUpdateDocument}. */
    protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>>();
+   /** Backs each session's {@link DataSessionHost.onDidDeleteDocument}. */
+   protected readonly documentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
    /**
     * Per id {@link watchDocument} watches under, the URI it watches, which
     * {@link generationReady} sends again to every later generation until the
@@ -229,7 +232,9 @@ export class DataConnection<
             restoreDirty: event => this.restoreDirty(event),
             forgetDirty: uri => this.dirtyStates.delete(uri),
             onDidChangeDirty: this.dirtyChangedEmitter.event,
-            onDidUpdateDocument: this.documentUpdatedEmitter.event
+            onDidUpdateDocument: this.documentUpdatedEmitter.event,
+            onDidDeleteDocument: this.documentDeletedEmitter.event,
+            logger: this.logger.for('DataSession').with(id)
          },
          label
       );
@@ -294,8 +299,9 @@ export class DataConnection<
     * The client, with its `onDocumentDirtyChanged` passing through
     * {@link deliverDirty} first, so {@link dirtyStates} holds what the server
     * told it, and every session hears it through {@link dirtyChangedEmitter};
-    * and with its `onDocumentUpdated` heard by every session through
-    * {@link documentUpdatedEmitter} first. Every other bound method forwards
+    * and with its `onDocumentUpdated` and `onDocumentDeleted` heard by every
+    * session through {@link documentUpdatedEmitter} and
+    * {@link documentDeletedEmitter} first. Every other bound method forwards
     * to the client unchanged, and one the client lacks stays absent, so the
     * binding still refuses it.
     */
@@ -303,7 +309,8 @@ export class DataConnection<
       const client = this.client as unknown as Record<string, unknown>;
       const hearsDirty = typeof client.onDocumentDirtyChanged === 'function';
       const hearsUpdates = typeof client.onDocumentUpdated === 'function';
-      if (!hearsDirty && !hearsUpdates) {
+      const hearsDeletions = typeof client.onDocumentDeleted === 'function';
+      if (!hearsDirty && !hearsUpdates && !hearsDeletions) {
          return this.client;
       }
       const target: Record<string, unknown> = {};
@@ -323,6 +330,13 @@ export class DataConnection<
          const forward = target.onDocumentUpdated as (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>) => void;
          target.onDocumentUpdated = (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>): void => {
             this.documentUpdatedEmitter.fire(event);
+            forward(event);
+         };
+      }
+      if (hearsDeletions) {
+         const forward = target.onDocumentDeleted as (event: TransferDocumentDeletedEvent) => void;
+         target.onDocumentDeleted = (event: TransferDocumentDeletedEvent): void => {
+            this.documentDeletedEmitter.fire(event);
             forward(event);
          };
       }
@@ -478,6 +492,7 @@ export class DataConnection<
       this.reconnectEmitter.dispose();
       this.dirtyChangedEmitter.dispose();
       this.documentUpdatedEmitter.dispose();
+      this.documentDeletedEmitter.dispose();
       super.dispose();
    }
 }

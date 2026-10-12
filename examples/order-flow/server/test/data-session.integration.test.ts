@@ -50,8 +50,8 @@ import type {
    WatchModelDocumentArgs
 } from '@hydranium/protocol/data';
 import { Emitter, type Event } from 'vscode-jsonrpc';
-import type { CancellationToken } from 'vscode-languageserver';
-import { readFileSync } from 'node:fs';
+import { type CancellationToken, FileChangeType } from 'vscode-languageserver';
+import { readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -813,6 +813,133 @@ describe('DataConnection.watchDocument against the real stack', () => {
          await (await connection.connected()).getModelDocument({ uri });
 
          expect(updated.length).toBe(heard);
+      } finally {
+         connection.dispose();
+         servers.forEach(server => server.dispose());
+         pairs.forEach(pair => pair.dispose());
+         port.dispose();
+      }
+   });
+});
+
+describe('DataSession.openDocument against the real stack', () => {
+   it('keeps the open the session had when the watch of a repeat open fails', async () => {
+      // The server holds one open per session and URI, so a close after the
+      // failed watch would end the open the session already had.
+      const { services, uri, connect } = await boot();
+      const head = connect();
+      const session = sessionOver(() => head, []);
+      await session.openDocument({ uri });
+      head.server.afterWatch = () => Promise.reject(new Error('watch refused'));
+
+      await expect(session.openDocument({ uri })).rejects.toThrow(/watch refused/);
+
+      expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, 'form#restore')).toBe(true);
+      await session.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
+   });
+});
+
+/** Tells whether a client watches a URI. */
+class WatchProbeServer extends DataServer<DomainModel> {
+   isWatching(uri: string, clientId: string): boolean {
+      return this.uriWatchRecords.get(this.canonicalKey(uri))?.watchers.has(clientId) ?? false;
+   }
+}
+
+describe('DataSession when its document is deleted', () => {
+   it('forgets the document and releases its watch, so a reconnect re-opens nothing', async () => {
+      const { services, uri, path } = await boot();
+      const pairs: DuplexConnectionPair[] = [];
+      const servers: WatchProbeServer[] = [];
+      const port = makeFakeDataPort({
+         connect: () => {
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            servers.push(new WatchProbeServer(pair.left, services.shared));
+            return pair.right;
+         }
+      });
+      const connection = new DataConnectionWithEvents<DomainModel>(port);
+      const deleted: string[] = [];
+      connection.events.onDidDeleteDocument(event => deleted.push(event.uri));
+      const session = connection.createSession('form');
+      try {
+         await session.openDocument({ uri });
+
+         // As the editor's file watcher reports it.
+         rmSync(path(FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });
+         await waitFor(() => !servers[0].isWatching(uri, session.clientId), { message: 'the session kept its watch' });
+
+         port.fireDispose();
+         await session.connected();
+
+         expect(port.reported.map(report => report.message.code)).toEqual([]);
+         expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+      } finally {
+         connection.dispose();
+         servers.forEach(server => server.dispose());
+         pairs.forEach(pair => pair.dispose());
+         port.dispose();
+      }
+   });
+
+   it.each([
+      ['its file was deleted after a write, reporting the write lost', { created: false, written: true }],
+      ['its file was deleted with nothing unsaved, reporting nothing', { created: false, written: false }],
+      ['it was created and written but never saved, reporting it lost', { created: true, written: true }],
+      ['it was created and never saved, reporting it lost', { created: true, written: false }]
+   ])('forgets a document that is gone once it reconnects after the release grace, when %s', async (_case, { created, written }) => {
+      const { services, uri, newUri, path } = await boot(GRACE_MS);
+      const target = created ? newUri : uri;
+      const pairs: DuplexConnectionPair[] = [];
+      const servers: DataServer<DomainModel>[] = [];
+      let reconnectGate: Promise<void> | undefined;
+      const port = makeFakeDataPort({
+         connect: async () => {
+            await reconnectGate;
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            servers.push(new DataServer<DomainModel>(pair.left, services.shared));
+            return pair.right;
+         }
+      });
+      const connection = new DataConnectionWithEvents<DomainModel>(port);
+      const session = connection.createSession('form');
+      try {
+         if (created) {
+            await session.createDocument({ uri: target, text: CLEAN });
+         } else {
+            await session.openDocument({ uri: target });
+         }
+         if (written) {
+            await session.updateDocument({ uri: target, model: EDITED, baseVersion: 'any' });
+         }
+
+         // Held, so the session cannot reconnect before the document is gone.
+         let reconnect!: () => void;
+         reconnectGate = new Promise(resolve => (reconnect = resolve));
+         servers[0].dispose('lost');
+         pairs[0].dispose();
+         port.fireDispose();
+         if (!created) {
+            rmSync(path(FILE));
+            services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
+               changes: [{ uri: target, type: FileChangeType.Deleted }]
+            });
+         }
+         await outlastGrace();
+         await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, {
+            message: 'the document never left'
+         });
+         reconnect();
+         await session.connected();
+
+         const lost = created || written;
+         expect(port.reported.map(report => report.message.code)).toEqual(lost ? [DATA_SESSION_UNSAVED_LOST.code] : []);
+         expect(port.reported.map(report => report.message.params)).toEqual(lost ? [{ uris: target }] : []);
+         expect(services.shared.workspace.TextDocuments.isOpenInClient(target, session.clientId)).toBe(false);
       } finally {
          connection.dispose();
          servers.forEach(server => server.dispose());
