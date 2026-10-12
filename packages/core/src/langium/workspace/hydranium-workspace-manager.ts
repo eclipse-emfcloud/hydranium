@@ -257,17 +257,18 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
     * Warn when a seeded additional document's URI matches no registered
     * language.
     *
-    * Such a document is added to the workspace and indexed, but every
-    * per-language service is resolved per URI — so scope computation, naming,
-    * validation and serialisation all fail to route to it, and it contributes
-    * nothing to the scopes it was written to populate. Nothing else reports
-    * this: the document exists, so no lookup errors, it is simply inert.
+    * Every per-language service is resolved per URI, so the workspace cannot
+    * load such a document: adding it throws, and the startup build fails
+    * with an error naming only the extension, not the document. This
+    * line names the document and the fix first.
     *
-    * The usual cause is a `virtualUri` with no file extension:
-    * `virtualUri(contributor)` yields `virtual:<contributor>`, and routing has
-    * nothing to match on — there is no extension, and a virtual document is
-    * never open in `TextDocuments`, so the declared-languageId rung cannot
-    * serve it either. The convention is to end the URI with a registered
+    * The usual cause is a `fromModel` or `fromStringInLanguage` document
+    * under a `virtualUri` with no file extension: `virtualUri(contributor)`
+    * yields `virtual:<contributor>`, and routing has nothing to match on —
+    * there is no extension, and a virtual document is never open in
+    * `TextDocuments`, so the declared-languageId rung cannot serve it either.
+    * A `fromString` document under such a URI never gets here: its parse
+    * throws first. The convention is to end the URI with a registered
     * extension by passing it as the last segment,
     * `virtualUri(contributor, 'name.<ext>')`.
     */
@@ -277,9 +278,8 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
       }
       const extensions = this.languageRegistry.all.flatMap(language => language.LanguageMetaData.fileExtensions);
       this.tracer.warn(
-         `Additional document '${document.uri.toString()}' matches no registered language, so every per-language ` +
-            'service (scope computation, naming, validation, serialization) will fail to route to it and it will ' +
-            `contribute nothing to scopes. End its URI with a registered file extension (${extensions.join(', ')}); ` +
+         `Additional document '${document.uri.toString()}' matches no registered language, so the workspace ` +
+            `cannot load it and the startup build fails. End its URI with a registered file extension (${extensions.join(', ')}); ` +
             'for a virtual document that means passing it as the last segment, `virtualUri(contributor, "name.<ext>")`.'
       );
    }

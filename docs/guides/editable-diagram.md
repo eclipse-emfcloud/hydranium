@@ -63,6 +63,8 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    `sourceRoot` inside a `HydraniumGlspRecordingCommand`: the operation works
    on a copy nobody else sees, writes the change once when it completes, and
    undo and redo apply that one change. The rules that keep it working:
+   - Resolve nodes in `createCommand` or in the command: both run inside the
+     operation, so a node of the diagram's document resolves to the copy.
    - Edit another document through `modelState.workingRootOf(uri)`, never
      through a root read from the model service.
    - A node of the copy belongs to no document. Pass
@@ -71,7 +73,10 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    - Build references with `modelState.referenceTo(target, source)`, and ask
      for reference candidates with
      `modelState.referenceInfoOf(node, property)`, passed to
-     `modelState.candidateProviderFor(node)?.find`.
+     `modelState.candidateProviderFor(node)?.find`. For a node not created
+     yet, as in a palette, pass a stand-in from `buildAstNode` whose
+     `$container` and `$containerProperty` name the container and property
+     it would join, without adding it there.
    - One gesture is one operation. Combine edits in a `CompoundOperation`,
      and never dispatch an operation and await it from a GModel factory, a
      submit or an undo: the two wait for each other forever.

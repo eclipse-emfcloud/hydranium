@@ -210,6 +210,11 @@ export interface GlspHarness<TState extends AbstractHydraniumGlspState<AstNode, 
     * LIGHT fidelity: seed the state's source root directly via
     * `setSourceRoot`, bypassing source-model storage. Valid only after
     * {@link start}.
+    *
+    * A test of a provider that reads `builtNodeOf` or `referenceTo` outside
+    * an operation seeds the real state here rather than stub them. They answer as in production
+    * for a root with a `$document` in a project; without one, `referenceTo`
+    * names a target as in no project, unchecked for visibility.
     */
    seedSourceRoot(uri: string, root: Parameters<TState['setSourceRoot']>[1]): void;
 

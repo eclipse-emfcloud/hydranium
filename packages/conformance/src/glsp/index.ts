@@ -110,8 +110,10 @@ export interface GlspCreateOperationSpec<TAction, TDriver extends GlspConformanc
 /**
  * Per-diagram-type GLSP fixture, generic over the adopter action type and the
  * concrete driver. The `prepare` hook covers both fidelities: LIGHT seeds a
- * source root directly (`driver.seedSourceRoot(...)`); FAITHFUL no-ops and lets
- * the `requestModel` action carry a source URI a real storage loads.
+ * source root directly, through a method of the concrete driver such as
+ * `GlspHarness.seedSourceRoot`, which the port does not declare; FAITHFUL
+ * no-ops and lets the `requestModel` action carry a source URI a real storage
+ * loads.
  */
 export interface GlspFixture<TAction, TDriver extends GlspConformanceDriver<TAction>> {
    /**

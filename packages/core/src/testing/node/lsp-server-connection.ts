@@ -155,7 +155,9 @@ export interface LspServerConnection extends Harness {
     * Seam: the server-side `Connection`, NOT yet attached to a server. The caller
     * composes the services tree onto it (`createXxxServices({ connection })`) and
     * calls `startLanguageServer(services.shared)`, which wires the LSP handlers
-    * and calls `connection.listen()`.
+    * and calls `connection.listen()`; a caller recording only applied edits
+    * skips `startLanguageServer` but still calls `listen()`, as
+    * {@link makeLspServerConnection} says.
     */
    readonly serverConnection: Connection;
    /** Seam: the raw client connection over the in-memory wire; escape hatch for unwrapped requests. */
@@ -333,6 +335,10 @@ function makeCountingStreamPair(): {
  * (it owns the `createServices` callback + `startLanguageServer` + `buildWorkspace`);
  * use this primitive directly when the CALLER must own the tree — e.g. to attach
  * additional protocol heads (data-server, GLSP) onto the same `shared` services.
+ *
+ * To record only {@link LspServerConnection.appliedEdits}, skip
+ * `startLanguageServer`, call `serverConnection.listen()`, and open through
+ * `TextDocuments.notifyDidOpenTextDocument`.
  */
 export function makeLspServerConnection(): LspServerConnection {
    const pair = makeCountingStreamPair();

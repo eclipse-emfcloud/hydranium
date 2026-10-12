@@ -126,7 +126,8 @@ export interface AstDocumentManagerOptions extends LogNameOptions {
  *
  * Generic over `<TAst extends AstNode, TDiagnostic>` so each consumer projects
  * its own AST root type and diagnostic shape into the emitted
- * {@link AstDocument} envelopes.
+ * {@link AstDocument} envelopes. A diagnostic shape narrower than
+ * `AstDiagnostic` is asserted unchecked; see {@link toAstDocument}.
  *
  * **URI contract.** Every URI-accepting member takes a URI in *any* spelling
  * (canonical, symlinked, `..`/case-divergent) and canonicalizes internally
@@ -217,8 +218,9 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
  *
  * Generic over `<TAst extends AstNode, TDiagnostic>` so each consumer
  * projects its own AST root type and diagnostic shape into the emitted
- * `AstDocument` envelopes. `TDiagnostic` defaults to `unknown`; consumers
- * that care about the diagnostic shape name a concrete one.
+ * `AstDocument` envelopes. `TDiagnostic` defaults to `AstDiagnostic`; a
+ * narrower one is asserted unchecked, as
+ * {@link AstDocumentManager.toAstDocument} says.
  *
  * **URI contract.** Every URI-accepting method takes a URI in *any* spelling
  * (canonical, symlinked, `..`/case-divergent) and canonicalizes internally

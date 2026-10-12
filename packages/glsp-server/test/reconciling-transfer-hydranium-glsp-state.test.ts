@@ -495,6 +495,25 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
       });
    });
 
+   it('queries candidates outside an operation from an unattached stand-in, under the built container it names', () => {
+      const state = createState(makeHarness());
+      const { built, item } = seedBuiltItem(state);
+      // A node not created yet: names its container, is in none of its lists.
+      const standIn = makeFakeAstNode<AstNode>({ $type: 'Leaf', $container: item, $containerProperty: 'children' });
+
+      const info = state.referenceInfoOf(standIn, 'target');
+      const chain: unknown[] = [];
+      for (let current = info?.container; current; current = current.$container) {
+         chain.push(current === standIn ? 'stand-in' : current === item ? 'built item' : current === built ? 'built root' : current.$type);
+      }
+
+      expect({ asked: info?.container === standIn, property: info?.property, chain }).toEqual({
+         asked: true,
+         property: 'target',
+         chain: ['stand-in', 'built item', 'built root']
+      });
+   });
+
    describe('JsonModelState compatibility', () => {
       it('mirrors the source uri into the inherited properties map', () => {
          const state = createState(makeHarness());
@@ -503,6 +522,34 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
       });
    });
 });
+
+/**
+ * Seed `state` with a built root holding one item. Its `AstReflection` stub lets
+ * `buildAstNode` run, which a candidate query reaches only when it builds a node
+ * of its own, so a regression that does fails as an assertion, not a crash.
+ */
+function seedBuiltItem(state: ReturnType<typeof createState>): { readonly built: TestRoot; readonly item: AstNode } {
+   const built = makeFakeAstNode<TestRoot>({
+      $type: 'TestRoot',
+      label: 'r',
+      $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+      members: []
+   });
+   const item = makeFakeAstNode<AstNode>({
+      $type: 'Item',
+      name: 'a',
+      $container: built,
+      $containerProperty: 'members',
+      $containerIndex: 0,
+      children: []
+   });
+   (built as unknown as { members: AstNode[] }).members.push(item);
+   state.setSourceRoot('file:///a.a', built);
+   (state as unknown as { sharedServices: { AstReflection: unknown } }).sharedServices.AstReflection = {
+      getTypeMetaData: () => undefined
+   };
+   return { built, item };
+}
 
 describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
    it('writes the projection of the copy once when the operation ends, and leaves the built root unedited', async () => {
@@ -717,25 +764,7 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
 
    it('queries candidates from the built node of a copy, and from a created node under the built nodes it sits in', async () => {
       const state = createState(makeHarness());
-      const built = makeFakeAstNode<TestRoot>({
-         $type: 'TestRoot',
-         label: 'r',
-         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
-         members: []
-      });
-      const item = makeFakeAstNode<AstNode>({
-         $type: 'Item',
-         name: 'a',
-         $container: built,
-         $containerProperty: 'members',
-         $containerIndex: 0,
-         children: []
-      });
-      (built as unknown as { members: AstNode[] }).members.push(item);
-      state.setSourceRoot('file:///a.a', built);
-      (state as unknown as { sharedServices: { AstReflection: unknown } }).sharedServices.AstReflection = {
-         getTypeMetaData: () => undefined
-      };
+      const { built, item } = seedBuiltItem(state);
       type Copy = AstNode & { members: Copy[]; children: Copy[] };
       // Each container up to the root, so a chain that skips one shows.
       const chainOf = (node: AstNode | undefined): unknown[] => {

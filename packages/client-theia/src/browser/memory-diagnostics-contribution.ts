@@ -93,7 +93,7 @@ export class MemoryDiagnosticsContribution implements CommandContribution {
    /** Dimensions the profiling commands capture — the server samples only what is named. */
    protected readonly profileDimensions: StartProfilingArgs = { cpu: true, allocation: true, gc: true, eventLoopDelay: true };
    /** Window length for the "Record Performance Profile" command. */
-   protected readonly recordDurationMs = 10_000;
+   protected readonly recordDurationMs: number = 10_000;
    /**
     * Label of the stop-profiling command, and of the action its start toast
     * offers. One field for both: two literals naming one command can be
