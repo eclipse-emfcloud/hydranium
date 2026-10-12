@@ -396,6 +396,29 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(harness.debugs.some(msg => msg.includes('no-op'))).toBe(true);
       });
 
+      it('on an already-applied outcome, writes nothing more and takes the current root of the document', async () => {
+         const harness = makeHarness();
+         harness.throwConflictOnNextUpdate = true;
+         harness.resolve = async () => ({ status: 'already-applied', theirs: { $type: 'TestRoot', label: 'edited' } });
+         const refreshed = makeRoot('refreshed');
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: refreshed },
+            textDocument: { version: 0, getText: () => 'stored' }
+         });
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('before'));
+
+         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5));
+
+         expect({ writes: harness.updateCalls.length, refreshed: state.sourceRoot === refreshed, warns: harness.warns }).toEqual({
+            writes: 1,
+            refreshed: true,
+            warns: []
+         });
+      });
+
       it('on a conflict outcome, refreshes the source root from the document and warns', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;

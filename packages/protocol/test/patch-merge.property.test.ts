@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { applyPatch, compare, deepClone } from 'fast-json-patch';
+import { applyPatch, compare, deepClone, getValueByPointer } from 'fast-json-patch';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { reconcileByPatchReplay } from '../src/patch-merge';
@@ -66,6 +66,15 @@ const keyedSpecs = fc.uniqueArray(
    { selector: spec => spec.key, minLength: 2, maxLength: 12 }
 );
 
+/** The value that holds the last step of `pointer`; `undefined` when a step is missing. */
+function parentOf(document: object, pointer: string): unknown {
+   try {
+      return getValueByPointer(document, pointer.slice(0, pointer.lastIndexOf('/')));
+   } catch {
+      return undefined;
+   }
+}
+
 describe('patch-merge property tests', () => {
    it('round-trips, so applyPatch(source, compare(source, target)) equals target', () => {
       fc.assert(
@@ -122,8 +131,8 @@ describe('patch-merge property tests', () => {
 
       await fc.assert(
          fc.asyncProperty(conflictScenario, async ({ sharedKey, userVal, foreignVal, others }) => {
-            // Keep the collision on the shared key alone.
-            fc.pre(!others.some(other => other.key === sharedKey));
+            // Keep the collision on the shared key alone; equal values agree.
+            fc.pre(!others.some(other => other.key === sharedKey) && userVal !== foreignVal);
 
             const base: JsonRecord = { [sharedKey]: SENTINEL() };
             for (const other of others) {
@@ -142,6 +151,106 @@ describe('patch-merge property tests', () => {
             if (outcome.status === 'conflict') {
                expect(outcome.theirs).toEqual(theirs);
             }
+         })
+      );
+   });
+
+   it('reconciles a refetch holding ours as already-applied, unless the edit inserts into an array', async () => {
+      await fc.assert(
+         fc.asyncProperty(jsonObject, jsonObject, async (base, ours) => {
+            const userPatch = compare(base, ours);
+            fc.pre(userPatch.length > 0);
+            // Two equal insertions may be two intended elements.
+            const inserts = userPatch.some(op => op.op === 'add' && Array.isArray(parentOf(base, op.path)));
+
+            const outcome = await reconcileByPatchReplay(base, ours, async () => deepClone(ours));
+
+            expect(outcome).toEqual(inserts ? { status: 'conflict', theirs: ours } : { status: 'already-applied', theirs: ours });
+         })
+      );
+   });
+
+   it('keeps a disjoint foreign edit, so a refetch holding both intents is already-applied', async () => {
+      await fc.assert(
+         fc.asyncProperty(keyedSpecs, async specs => {
+            const userSpecs = specs.filter(spec => spec.role === 'user');
+            fc.pre(userSpecs.length > 0);
+
+            const base: JsonRecord = {};
+            for (const spec of specs) {
+               base[spec.key] = spec.role === 'filler' ? spec.fillerVal : SENTINEL();
+            }
+            const ours = deepClone(base);
+            const theirs = deepClone(base);
+            for (const spec of specs) {
+               if (spec.role !== 'filler') {
+                  theirs[spec.key] = spec.editVal;
+               }
+               if (spec.role === 'user') {
+                  ours[spec.key] = spec.editVal;
+               }
+            }
+
+            const outcome = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs));
+
+            expect(outcome).toEqual({ status: 'already-applied', theirs });
+         })
+      );
+   });
+
+   it('an op on an object key never agrees with a refetch where that object is absent or no object', async () => {
+      const scenario = fc.record({
+         outer: safeKey,
+         others: fc.dictionary(safeKey, leaf, { maxKeys: 3 }),
+         held: leaf,
+         edit: fc.constantFrom('remove', 'replace', 'add'),
+         // An array holds the user's value at the index the user's key names.
+         stand: fc.constantFrom('absent', 'scalar', 'array')
+      });
+
+      await fc.assert(
+         fc.asyncProperty(scenario, async ({ outer, others, held, edit, stand }) => {
+            fc.pre(held !== 'edited' && !('0' in others));
+            const inner: JsonRecord = edit === 'add' ? { ...others } : { ...others, 0: held };
+            const edited: JsonRecord = edit === 'remove' ? { ...others } : { ...others, 0: 'edited' };
+            const theirs: JsonRecord = stand === 'absent' ? {} : { [outer]: stand === 'scalar' ? held : ['edited'] };
+
+            const outcome = await reconcileByPatchReplay({ [outer]: inner }, { [outer]: edited }, async () => theirs);
+
+            expect(outcome.status).not.toBe('already-applied');
+         })
+      );
+   });
+
+   it('an array insert never agrees, even with a refetch holding ours', async () => {
+      await fc.assert(
+         fc.asyncProperty(
+            fc.array(jsonValue, { maxLength: 4 }),
+            fc.array(jsonValue, { minLength: 1, maxLength: 3 }),
+            async (items, added) => {
+               const ours = { items: [...items, ...added] };
+
+               const outcome = await reconcileByPatchReplay({ items }, ours, async () => deepClone(ours));
+
+               expect(outcome.status).toBe('conflict');
+            }
+         )
+      );
+   });
+
+   it('an array removal agrees only with a refetch that removed the same element', async () => {
+      const removals = fc
+         .integer({ min: 1, max: 6 })
+         .chain(length => fc.record({ length: fc.constant(length), ours: fc.nat(length - 1), theirs: fc.nat(length - 1) }));
+
+      await fc.assert(
+         fc.asyncProperty(removals, async ({ length, ours: removedByUser, theirs: removedByServer }) => {
+            const items = Array.from({ length }, (_, i) => ({ id: i }));
+            const without = (index: number): JsonRecord => ({ items: items.filter((_, i) => i !== index) });
+
+            const outcome = await reconcileByPatchReplay({ items }, without(removedByUser), async () => without(removedByServer));
+
+            expect(outcome.status).toBe(removedByUser === removedByServer ? 'already-applied' : 'conflict');
          })
       );
    });

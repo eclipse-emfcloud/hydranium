@@ -9,7 +9,7 @@
 
 /** Undo and redo of an operation, and the order of its side effects. */
 
-import { type Command, CompoundCommand, CompoundOperation, RedoAction, UndoAction } from '@eclipse-glsp/server';
+import { type Command, CompoundCommand, CompoundOperation, MessageAction, RedoAction, UndoAction } from '@eclipse-glsp/server';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
@@ -408,6 +408,204 @@ describe('undo and redo of an operation', () => {
       expect({ count: counter.count, foreign: textOf(opened, layoutUri).includes('node Pay at 55, 115') }).toEqual({
          count: 1,
          foreign: true
+      });
+   });
+
+   describe("when the text already holds the undo's or redo's result", () => {
+      const payAt = (opened: Setup): string | undefined => /node Pay at \S+, \S+/.exec(textOf(opened, opened.layoutUri))?.[0];
+      const errorsSince = (diagram: Diagram, before: number): number =>
+         diagram.actions.slice(before).filter(action => MessageAction.is(action) && action.severity === 'ERROR').length;
+
+      it('undoes an operation whose side effect brings the text to the undo result before its write, and redoes it', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         const counter = await applyUndoable(opened, () =>
+            changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 40, 100'))
+         );
+         const before = diagram.actions.length;
+
+         await undoOrRedo(diagram, UndoAction.create());
+         const undone = { count: counter.count, pay: payAt(opened) };
+         await undoOrRedo(diagram, RedoAction.create());
+
+         expect({ undone, redone: { count: counter.count, pay: payAt(opened) }, errors: errorsSince(diagram, before) }).toEqual({
+            undone: { count: 0, pay: 'node Pay at 40, 100' },
+            redone: { count: 1, pay: 'node Pay at 50, 110' },
+            errors: 0
+         });
+      });
+
+      it('redoes an operation whose side effect brings the text to the redo result before its write, and undoes it again', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         const counter = await applyUndoable(
+            opened,
+            async () => undefined,
+            () => changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 50, 110'))
+         );
+         await undoOrRedo(diagram, UndoAction.create());
+         const before = diagram.actions.length;
+
+         await undoOrRedo(diagram, RedoAction.create());
+         const redone = { count: counter.count, pay: payAt(opened) };
+         await undoOrRedo(diagram, UndoAction.create());
+
+         expect({ redone, undone: { count: counter.count, pay: payAt(opened) }, errors: errorsSince(diagram, before) }).toEqual({
+            redone: { count: 1, pay: 'node Pay at 50, 110' },
+            undone: { count: 0, pay: 'node Pay at 40, 100' },
+            errors: 0
+         });
+      });
+
+      it('undoes an operation a foreign edit already reverted, running the side effects and writing nothing', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         const counter = await applyUndoable(opened, async () => undefined);
+         await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 40, 100'));
+         const persist = spyOnPersist(diagram);
+
+         await undoOrRedo(diagram, UndoAction.create());
+         const undone = { count: counter.count, writes: persist.mock.calls.length, pay: payAt(opened) };
+         await undoOrRedo(diagram, RedoAction.create());
+
+         expect({ undone, redone: { count: counter.count, pay: payAt(opened) } }).toEqual({
+            undone: { count: 0, writes: 0, pay: 'node Pay at 40, 100' },
+            redone: { count: 1, pay: 'node Pay at 50, 110' }
+         });
+      });
+
+      it('keeps a foreign edit that lands while an undo a foreign edit already reverted runs its side effects', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         const counter = await applyUndoable(opened, () =>
+            changeTextBuilt(opened, layoutUri, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'))
+         );
+         await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 40, 100'));
+         const persist = spyOnPersist(diagram);
+
+         await undoOrRedo(diagram, UndoAction.create());
+
+         const layout = textOf(opened, layoutUri);
+         expect({
+            count: counter.count,
+            writes: persist.mock.calls.length,
+            pay: payAt(opened),
+            foreign: layout.includes('node PaymentOk at 270, 95')
+         }).toEqual({
+            count: 0,
+            writes: 0,
+            pay: 'node Pay at 40, 100',
+            foreign: true
+         });
+      });
+
+      it('undoes the side effects of a redo a foreign edit already applied when a later step throws', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         const counter = await applyUndoable(
+            opened,
+            async () => undefined,
+            async () => {
+               throw new Error('redo step failed');
+            }
+         );
+         await undoOrRedo(diagram, UndoAction.create());
+         await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 50, 110'));
+         const persist = spyOnPersist(diagram);
+
+         const message = await applyFailing(diagram, RedoAction.create());
+
+         expect({
+            reported: message.details?.includes('redo step failed'),
+            count: counter.count,
+            writes: persist.mock.calls.length
+         }).toEqual({
+            reported: true,
+            count: 0,
+            writes: 0
+         });
+      });
+
+      /**
+       * Rename the task Cancel to Abort in an operation whose undo side effect
+       * runs `onUndo`; from then on, as for a state that overrides
+       * `onReadyRefreshed`, nothing but the undo captures the root.
+       */
+      async function applyRename(opened: Setup, onUndo: () => Promise<void>): Promise<void> {
+         const { diagram } = opened;
+         const create = createTask();
+         const rename = (): void => {
+            (diagram.state.sourceRoot.nodes.find(node => node.name === 'Cancel') as { name: string }).name = 'Abort';
+         };
+         const hook: Command = { execute: () => undefined, undo: onUndo, redo: () => undefined };
+         vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(
+            () => new CompoundCommand([new OrderFlowCommand(diagram.state, 'Rename', rename), hook])
+         );
+         await apply(diagram, create);
+         vi.spyOn(diagram.state as unknown as { onReadyRefreshed(): Promise<void> }, 'onReadyRefreshed').mockResolvedValue();
+      }
+
+      it('takes the current root of the document after an undo whose write the text already held', async () => {
+         const opened = await openDiagram();
+         const { diagram, processUri } = opened;
+         await applyRename(opened, () => changeTextBuilt(opened, processUri, text => text.replace('task Abort', 'task Cancel')));
+
+         await undoOrRedo(diagram, UndoAction.create());
+
+         expect({
+            cancel: textOf(opened, processUri).includes('task Cancel'),
+            sourceRootIsBuilt: diagram.state.sourceRoot === builtProcessRoot(opened),
+            baseVersion: diagram.state.baseVersion
+         }).toEqual({
+            cancel: true,
+            sourceRootIsBuilt: true,
+            baseVersion: opened.services.shared.workspace.TextDocuments.version(processUri)
+         });
+      });
+
+      it('takes the root of a foreign edit that lands after the refetch of an undo whose write the text already held', async () => {
+         const opened = await openDiagram();
+         const { diagram, processUri } = opened;
+         await applyRename(opened, () => changeTextBuilt(opened, processUri, text => text.replace('task Abort', 'task Cancel')));
+         const state = diagram.state as unknown as { refetch(): Promise<unknown> };
+         const refetch = state.refetch.bind(state);
+         let landedAt: number | undefined;
+         vi.spyOn(state, 'refetch').mockImplementationOnce(async () => {
+            const refetched = await refetch();
+            await changeTextBuilt(opened, processUri, text => `${text}\n`);
+            landedAt = opened.services.shared.workspace.TextDocuments.version(processUri);
+            return refetched;
+         });
+
+         await undoOrRedo(diagram, UndoAction.create());
+
+         expect({
+            landed: landedAt !== undefined,
+            baseVersion: diagram.state.baseVersion,
+            sourceRootIsBuilt: diagram.state.sourceRoot === builtProcessRoot(opened)
+         }).toEqual({ landed: true, baseVersion: landedAt, sourceRootIsBuilt: true });
+      });
+
+      it('takes the root a side effect rebuilt in an undo a foreign edit already reverted, which writes nothing', async () => {
+         const opened = await openDiagram();
+         const { diagram, processUri } = opened;
+         await applyRename(opened, () => changeTextBuilt(opened, processUri, text => `${text}\n`));
+         await changeTextBuilt(opened, processUri, text => text.replace('task Abort', 'task Cancel'));
+         // The state sees the revert, so the undo finds its transition already applied and writes nothing.
+         (diagram.state as unknown as { refreshSourceRoot(): void }).refreshSourceRoot();
+         const persist = spyOnPersist(diagram);
+
+         await undoOrRedo(diagram, UndoAction.create());
+
+         expect({
+            writes: persist.mock.calls.length,
+            sourceRootIsBuilt: diagram.state.sourceRoot === builtProcessRoot(opened),
+            baseVersion: diagram.state.baseVersion
+         }).toEqual({
+            writes: 0,
+            sourceRootIsBuilt: true,
+            baseVersion: opened.services.shared.workspace.TextDocuments.version(processUri)
+         });
       });
    });
 

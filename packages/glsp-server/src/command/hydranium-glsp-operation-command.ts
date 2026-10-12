@@ -131,7 +131,8 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    protected baseVersionAtOpen?: ModelVersion;
    /**
     * The primary root to capture when the operation closes: the one its write
-    * produced, or the current one after a dropped write.
+    * produced, or the document's built one after a dropped write or one the
+    * document already held.
     */
    protected writtenRoot?: AstNode;
    /** Whether the write's reconcile dropped the edit. */
@@ -410,8 +411,8 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /**
     * Resolve the transition onto the current model, run the commands' side
     * effects, then write once, gated on the versions the model was read at. A
-    * collision does nothing but warn; a transition with nothing left to apply
-    * still runs the side effects.
+    * collision does nothing but warn; a transition with nothing left to apply,
+    * or one the model already holds, still runs the side effects.
     *
     * The caller holds `runExclusive`, which nothing here takes again.
     */
@@ -433,7 +434,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          );
          if (outcome.status === 'merged') {
             merged = outcome.merged;
-         } else if (outcome.status !== 'no-op') {
+         } else if (outcome.status !== 'no-op' && outcome.status !== 'already-applied') {
             this.modelState.logger.warn(
                `${direction === 'undo' ? 'Undo' : 'Redo'} of an operation skipped (${outcome.status}); a foreign edit changed a shared field`
             );
@@ -481,7 +482,10 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             await run(step);
             done.unshift(step);
          }
-         if (merged !== undefined && !(await this.write(merged))) {
+         if (merged === undefined) {
+            // Nothing to write, but a step may have rebuilt the document: close on its built root, not the one opened on.
+            this.modelState.captureBuiltRoot();
+         } else if (!(await this.write(merged))) {
             throw new DiagramEditDroppedError(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
          }
       } catch (error: unknown) {

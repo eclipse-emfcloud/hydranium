@@ -51,12 +51,14 @@ export type ReconcileWriteOutcome =
    | { readonly status: 'persisted' }
    | {
         /**
-         * `merged`: a merged write landed. `unchanged`: the edit was empty, so the
-         * caller is behind the server. `conflict`: the resolver found a same-path
-         * collision. `dropped`: the writes ran out. `unavailable`: the refetch
-         * produced nothing and {@link ReconcileWriteHooks.onUnavailable} ran.
+         * `merged`: a merged write landed. `already-applied`: the refetch
+         * already held the edit, so nothing more was written. `unchanged`: the
+         * edit was empty, so the caller is behind the server. `conflict`: the
+         * resolver found a same-path collision. `dropped`: the writes ran out.
+         * `unavailable`: the refetch produced nothing and
+         * {@link ReconcileWriteHooks.onUnavailable} ran.
          */
-        readonly status: 'merged' | 'unchanged' | 'conflict' | 'dropped' | 'unavailable';
+        readonly status: 'merged' | 'already-applied' | 'unchanged' | 'conflict' | 'dropped' | 'unavailable';
         readonly conflict: ConflictError;
         readonly writes: number;
      };
@@ -95,6 +97,8 @@ export async function reconcileWrite<TModel extends object>(
             candidate = outcome.merged;
             candidateBaseVersion = refetched?.baseVersion ?? 'any';
             continue;
+         case 'already-applied':
+            return { status: 'already-applied', conflict, writes };
          case 'no-op':
             return { status: 'unchanged', conflict, writes };
          case 'conflict':

@@ -8,12 +8,12 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { ClientId, GModelIndex, GModelSerializer, ModelState } from '@eclipse-glsp/server';
+import { ClientId, type Command, CompoundCommand, GModelIndex, GModelSerializer, ModelState } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, type LangiumDocument } from '@hydranium/langium';
 import { type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
-import { type BaseVersion, asModelVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
+import { type BaseVersion, asModelVersion, ConflictError, isModelVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
@@ -68,6 +68,12 @@ interface Harness {
    onUpdate?: (text: string) => void;
    /** The trivia service the stub language binds; absent unless a test sets one. */
    trivia?: { extract(document: unknown): unknown; apply(text: string, trivia: unknown): string };
+   /** The text the store holds; absent unless a test sets one. */
+   storeText?: string;
+   /** Whether the next update throws a `ConflictError` instead of writing. */
+   conflictOnNextUpdate?: boolean;
+   /** The debug lines the state logged. */
+   readonly debugLines: string[];
 }
 
 @injectable()
@@ -76,6 +82,7 @@ class TestFullTextState extends FullTextHydraniumGlspState<TestRoot> {}
 function makeHarness(): Harness {
    return {
       updateCalls: [],
+      debugLines: [],
       documentVersion: 0,
       serialize: root => `serialized:${root.label}`,
       nextUpdatedRoot: makeRoot('persisted')
@@ -93,7 +100,7 @@ function createState(harness: Harness): TestFullTextState {
       info: () => undefined,
       warn: () => undefined,
       error: () => undefined,
-      debug: () => undefined,
+      debug: (message: string) => harness.debugLines.push(message),
       for: (): unknown => childLogger,
       withUri: (): unknown => childLogger,
       async time<T>(_label: string, callback: () => Promise<T> | T): Promise<T> {
@@ -120,7 +127,7 @@ function createState(harness: Harness): TestFullTextState {
    const sharedServices = {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: {
-         TextDocuments: { get: () => undefined },
+         TextDocuments: { get: () => (harness.storeText === undefined ? undefined : { getText: () => harness.storeText }) },
          LangiumDocuments: { getDocument: () => undefined },
          ModelLedger: ledger,
          DocumentUriPolicy: { canonicalUri: (uri: string) => uri }
@@ -130,6 +137,11 @@ function createState(harness: Harness): TestFullTextState {
          ModelService: {
             async update(args: UpdateCall): Promise<{ root: TestRoot }> {
                harness.updateCalls.push(args);
+               // As the real gate: only a write gated on a version conflicts, and the error names that version.
+               if (harness.conflictOnNextUpdate && isModelVersion(args.baseVersion)) {
+                  harness.conflictOnNextUpdate = false;
+                  throw new ConflictError(args.uri, args.baseVersion, harness.documentVersion);
+               }
                harness.onUpdate?.(args.model as string);
                return { root: harness.nextUpdatedRoot };
             },
@@ -201,6 +213,31 @@ describe('FullTextHydraniumGlspState', () => {
             { uri: 'file:///a.a', model: 'new document text', clientId: 'test-client', baseVersion: asModelVersion(0) }
          ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
+      });
+
+      it('takes a conflicting write the text already holds as applied, at the document version it is built to', async () => {
+         const harness = makeHarness();
+         harness.documentVersion = 4;
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', parsedAt(3));
+         harness.storeText = 'new document text';
+         harness.conflictOnNextUpdate = true;
+
+         await state.updateSourceModel({ text: 'new document text' }, asModelVersion(3));
+
+         expect({ writes: harness.updateCalls.length, version: state.version }).toEqual({ writes: 1, version: 4 });
+         expect(harness.debugLines.filter(line => line.includes('already applied (model v3 / text v4)'))).toHaveLength(1);
+      });
+
+      it('throws a conflicting write the text does not hold', async () => {
+         const harness = makeHarness();
+         harness.documentVersion = 4;
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', parsedAt(3));
+         harness.storeText = 'another text';
+         harness.conflictOnNextUpdate = true;
+
+         await expect(state.updateSourceModel({ text: 'new document text' }, asModelVersion(3))).rejects.toBeInstanceOf(ConflictError);
       });
    });
 
@@ -329,6 +366,49 @@ describe('FullTextHydraniumGlspState under an operation', () => {
          writes: [['serialized:edited', asModelVersion(3)]],
          builtLabel: 'r1',
          capturedVersion: 5
+      });
+   });
+});
+
+describe('FullTextHydraniumGlspState undo', () => {
+   it('undoes an operation whose side effect brings the text to the undo result before the write', async () => {
+      const harness = makeHarness();
+      harness.documentVersion = 3;
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', parsedAt(3));
+      const written = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'edited' });
+      ledger.record(written, 5);
+      harness.nextUpdatedRoot = written;
+      let sideEffects = 0;
+      const sideEffect: Command = {
+         execute: () => void sideEffects++,
+         // As an integrity rule repairing the document on build: the text moves to the undo's result.
+         undo: () => {
+            sideEffects--;
+            harness.documentVersion = 6;
+            harness.storeText = 'serialized:r1';
+            harness.conflictOnNextUpdate = true;
+         },
+         redo: () => void sideEffects++
+      };
+      const operation = new HydraniumGlspOperationCommand<FullTextSourceModel>(state);
+      await runOperation(
+         operation,
+         () =>
+            new CompoundCommand([
+               new HydraniumGlspRecordingCommand<FullTextSourceModel>(state, 'Edit', () => {
+                  (state.sourceRoot as { label: string }).label = 'edited';
+               }),
+               sideEffect
+            ])
+      );
+
+      await operation.undo();
+
+      expect({ sideEffects, writes: harness.updateCalls.map(call => call.model), version: state.version }).toEqual({
+         sideEffects: 0,
+         writes: ['serialized:edited', 'serialized:r1'],
+         version: 6
       });
    });
 });

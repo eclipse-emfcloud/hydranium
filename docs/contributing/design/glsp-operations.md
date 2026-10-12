@@ -49,6 +49,13 @@ operation's recorded transition. A recording command executed there throws; the
 undo then fails whole: the steps it already ran are run back, nothing is
 written, and GLSP's command stack flushes.
 
+A side effect can bring the document to the undo's or redo's result before the
+write, as an integrity rule repairing the document on build does. The write's
+reconcile then finds every changed path already holding its value, writes
+nothing, and the undo or redo succeeds on the document's built root. An array
+counts as held only whole, since a patch addresses its elements by index, and
+an inserted element never does, since two equal insertions may both be meant.
+
 ## One gesture, one operation
 
 An operation a handler dispatches runs after the handler's own, as its own

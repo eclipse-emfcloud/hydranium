@@ -52,13 +52,17 @@ export function augmentWithTestOps(base: object, userPatch: ReadonlyArray<JsonPa
 
 /**
  * Outcome of {@link reconcileByPatchReplay}. The caller persists `merged` and
- * takes it as the new base, drops + surfaces the `theirs` root on `conflict`,
+ * takes it as the new base, takes `theirs` as the new base on
+ * `already-applied`, drops + surfaces the `theirs` root on `conflict`,
  * catches up with the server on `no-op`, and decides its own fallback (e.g.
  * force-retry) on `unavailable`.
  */
 export type ReconcileOutcome<T> =
    | {
-        /** The replay succeeded: the foreign writer touched no path the user did. */
+        /**
+         * The replay succeeded: the foreign writer touched no path the user
+         * did, or wrote the user's value at one that runs through no array.
+         */
         status: 'merged';
         /**
          * A new root built on theirs, carrying both intents. It is NOT the
@@ -77,7 +81,23 @@ export type ReconcileOutcome<T> =
         status: 'no-op';
      }
    | {
-        /** User and foreign writer changed one path, or both added the same element or key. */
+        /** The refetch already holds every path the user changed at the user's value: nothing is left to write. */
+        status: 'already-applied';
+        /**
+         * The server's current root, refetched and unmodified. Take it as the
+         * new base, not `ours`: it can also hold another writer's edit to a
+         * path the user did not change.
+         */
+        theirs: T;
+     }
+   | {
+        /**
+         * User and foreign writer changed one path to different values, or
+         * both changed one inside an array the refetch holds otherwise than
+         * the user, even to the same value; both inserted the same array
+         * element; or the foreign writer removed or replaced what the user
+         * edited inside.
+         */
         status: 'conflict';
         /**
          * The server's current root, refetched and unmodified — the user's
@@ -103,11 +123,17 @@ export type ReconcileOutcome<T> =
  * - `no-op` — the user's root equals the base: nothing to replay, and no
  *   refetch; the caller's document is behind the server's.
  * - `unavailable` — the refetch produced nothing; caller falls back.
- * - `merged` — the foreign writer touched only paths the user did not; the
- *   merged root carries both intents.
- * - `conflict` — a same-path divergence tripped a `test` op, or an `add`
- *   collides with one the foreign writer made; caller drops the write and
- *   surfaces `theirs`.
+ * - `already-applied` — the refetch already holds the user's value at every
+ *   path the user changed, and the user's whole array for a path through
+ *   one; nothing is replayed.
+ * - `merged` — the foreign writer touched only paths the user did not, or
+ *   made the user's change itself at a path through no array; the merged
+ *   root carries both intents.
+ * - `conflict` — a same-path divergence tripped a `test` op, including the
+ *   user's own value inside an array the refetch holds otherwise than the
+ *   user; or an `add` collides with one the foreign writer made; or the
+ *   foreign writer removed or replaced what the user edited inside. The
+ *   caller drops the write and surfaces `theirs`.
  *
  * I/O is the caller's: `refetch` supplies the current root, and applying the
  * `merged` result (update vs save, new base, UI refresh) stays at the call
@@ -126,11 +152,16 @@ export async function reconcileByPatchReplay<T extends object>(
    if (!theirs) {
       return { status: 'unavailable' };
    }
-   if (addsCollide(base, theirs, userPatch)) {
+   const comparable = toJson(theirs);
+   const pending = withoutAgreed(base, ours, comparable, userPatch);
+   if (pending.length === 0) {
+      return { status: 'already-applied', theirs };
+   }
+   if (addsCollide(base, comparable, pending)) {
       return { status: 'conflict', theirs };
    }
    try {
-      const merged = applyPatch(deepClone(theirs), augmentWithTestOps(base, userPatch), true).newDocument;
+      const merged = applyPatch(deepClone(theirs), augmentWithTestOps(base, pending), true).newDocument;
       return { status: 'merged', merged };
    } catch {
       return { status: 'conflict', theirs };
@@ -138,35 +169,134 @@ export async function reconcileByPatchReplay<T extends object>(
 }
 
 /**
+ * `userPatch` without the ops `theirs` already agrees with: a `replace` or
+ * object-key `add` whose key the object at its parent path holds at the
+ * user's value, a `remove` whose key that object lacks. A parent that is
+ * absent or no object agrees with nothing: a foreign writer deleted or
+ * replaced what the user edited inside, or a refetch omitted a document it
+ * could not read.
+ *
+ * Ops address array elements by index, so an op through an array agrees only
+ * when that array, the outermost on its path, equals the user's: matching one
+ * index of an array that shifted would drop the user's edit to another
+ * element. An insert never agrees, as {@link addsCollide} keeps two equal
+ * additions apart, and neither does any op through its array, or replaying
+ * the insert alone would add its element a second time. Each array is
+ * compared once, however many ops run through it and however many arrays the
+ * patch inserts into, so a bulk edit stays linear.
+ *
+ * `theirs` is the refetch through {@link toJson}.
+ */
+function withoutAgreed(base: object, ours: object, theirs: object, userPatch: readonly JsonPatchOperation[]): JsonPatchOperation[] {
+   const jsonOurs = toJson(ours);
+   // An insert is keyed by the outermost array on its path, as every op is looked up, so one set answers for every array.
+   const insertedArrays = new Set(
+      userPatch
+         .filter(op => op.op === 'add' && Array.isArray(valueAt(base, op.path.slice(0, op.path.lastIndexOf('/')))))
+         .map(op => outermostArrayOn(jsonOurs, op.path))
+   );
+   const arrayAgrees = new Map<string, boolean>();
+   return userPatch.filter(op => {
+      const array = outermostArrayOn(jsonOurs, op.path);
+      if (array !== undefined) {
+         let agrees = arrayAgrees.get(array);
+         if (agrees === undefined) {
+            agrees = !insertedArrays.has(array) && _areEquals(valueAt(theirs, array), valueAt(jsonOurs, array));
+            arrayAgrees.set(array, agrees);
+         }
+         return !agrees;
+      }
+      const cut = op.path.lastIndexOf('/');
+      const parent = valueAt(theirs, op.path.slice(0, cut));
+      if (typeof parent !== 'object' || parent === null || Array.isArray(parent)) {
+         return true;
+      }
+      const key = unescapePathComponent(op.path.slice(cut + 1));
+      if (op.op === 'remove') {
+         return Object.hasOwn(parent, key);
+      }
+      if (op.op !== 'replace' && op.op !== 'add') {
+         return true;
+      }
+      return !Object.hasOwn(parent, key) || !_areEquals(Reflect.get(parent, key), op.value);
+   });
+}
+
+/** The outermost array a step of `pointer` before its last runs through in `document`, as a pointer; `undefined` for none. */
+function outermostArrayOn(document: object, pointer: string): string | undefined {
+   const steps = pointer.split('/');
+   for (let i = 1; i < steps.length; i++) {
+      const prefix = steps.slice(0, i).join('/');
+      if (Array.isArray(valueAt(document, prefix))) {
+         return prefix;
+      }
+   }
+   return undefined;
+}
+
+/**
+ * `value` through JSON, as `compare` clones the values it diffs: an
+ * undefined-valued key would otherwise make two equal values differ.
+ */
+function toJson<T>(value: T): T {
+   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
  * Whether an `add` of `userPatch` collides with one the foreign writer made:
  * it inserts a value into an array that `theirs` holds more often than
- * `base` did, or it adds an object key that `theirs` already holds.
+ * `base` did, or it adds an object key that `theirs` already holds, at
+ * another value once `withoutAgreed` has dropped the equal ones.
  *
  * Replayed, the first inserts the value a second time and the second replaces
- * the foreign value. Identical values conflict rather than being skipped:
- * skipping drops one of two additions that merely happen to be equal.
+ * the foreign value. Identical array elements conflict rather than being
+ * skipped: skipping drops one of two insertions that merely happen to be
+ * equal. `theirs` is the refetch through {@link toJson}.
  */
 function addsCollide(base: object, theirs: object, userPatch: readonly JsonPatchOperation[]): boolean {
-   // Through JSON, as `compare` clones the add values: an undefined-valued key
-   // in `theirs` would otherwise make an equal element count as another.
-   const comparable = JSON.parse(JSON.stringify(theirs)) as object;
+   // Each array's elements are counted once, however many ops insert into it, so a bulk insert stays linear.
+   const tallies = new Map<string, { readonly before: ReadonlyMap<string, number>; readonly now: ReadonlyMap<string, number> }>();
    return userPatch.some(op => {
       if (op.op !== 'add') {
          return false;
       }
       const cut = op.path.lastIndexOf('/');
-      const before = valueAt(base, op.path.slice(0, cut));
-      const now = valueAt(comparable, op.path.slice(0, cut));
+      const parent = op.path.slice(0, cut);
+      const before = valueAt(base, parent);
+      const now = valueAt(theirs, parent);
       if (Array.isArray(before)) {
-         return Array.isArray(now) && occurrences(now, op.value) > occurrences(before, op.value);
+         if (!Array.isArray(now)) {
+            return false;
+         }
+         let tally = tallies.get(parent);
+         if (!tally) {
+            tally = { before: tallyElements(before), now: tallyElements(now) };
+            tallies.set(parent, tally);
+         }
+         const key = canonicalJson(op.value);
+         return (tally.now.get(key) ?? 0) > (tally.before.get(key) ?? 0);
       }
       return typeof now === 'object' && now !== null && Object.hasOwn(now, unescapePathComponent(op.path.slice(cut + 1)));
    });
 }
 
-/** How many elements of `array` deeply equal `value`, whatever their key order. */
-function occurrences(array: readonly unknown[], value: unknown): number {
-   return array.filter(element => _areEquals(element, value)).length;
+/** How many elements of `array` there are of each value, keyed by {@link canonicalJson}. */
+function tallyElements(array: readonly unknown[]): ReadonlyMap<string, number> {
+   const tally = new Map<string, number>();
+   for (const element of array) {
+      const key = canonicalJson(element);
+      tally.set(key, (tally.get(key) ?? 0) + 1);
+   }
+   return tally;
+}
+
+/** `value` as JSON with every object's keys sorted, so two deeply equal values give one string whatever their key order. */
+function canonicalJson(value: unknown): string {
+   return JSON.stringify(value, (_key, nested: unknown) =>
+      typeof nested === 'object' && nested !== null && !Array.isArray(nested)
+         ? Object.fromEntries(Object.entries(nested).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
+         : nested
+   );
 }
 
 /** The value at `pointer`, or `undefined` when a step of it is missing. */
@@ -189,8 +319,8 @@ export interface ConflictResolver {
    /**
     * Reconcile the user's `base → ours` intent against the current
     * server state (theirs, from `refetch`), returning a {@link ReconcileOutcome} the caller
-    * acts on (persist `merged`, drop on `conflict`, catch up on `no-op`, fall
-    * back on `unavailable`).
+    * acts on (persist `merged`, write nothing on `already-applied`, drop on
+    * `conflict`, catch up on `no-op`, fall back on `unavailable`).
     */
    resolve<T extends object>(base: T, ours: T, refetch: () => Promise<T | undefined>): Promise<ReconcileOutcome<T>>;
 }
