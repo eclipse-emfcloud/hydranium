@@ -110,11 +110,6 @@ describe('a staged integrity correction reaches the client that opens the file',
       const repaired = trivia.apply(serialized, extracted, uri);
       expect(repaired).toContain('Staged__1');
 
-      // Arm the mirror before the open: `ModelService` registers the settled
-      // listener that performs the sync, and Langium constructs a slot only when
-      // something resolves it.
-      void harness.shared.model.ModelService;
-
       // The client opens the file, reading the unrepaired text from disk.
       harness.shared.workspace.TextDocuments.notifyDidOpenTextDocument({
          textDocument: { uri: uri.toString(), languageId: 'domain', version: 1, text: ON_DISK }

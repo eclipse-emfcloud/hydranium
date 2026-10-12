@@ -164,10 +164,6 @@ async function bootCapturing(
          { integrity: { IntegrityService: services => new PropagationRecordingIntegrityService(services, { syncMode }) } }
       ]
    });
-   // Arm the mirror: `ModelService` registers the settled listener that syncs to
-   // the language client, and Langium constructs a slot only when something
-   // resolves it.
-   void scratch.harness.shared.model.ModelService;
    return scratch.harness;
 }
 

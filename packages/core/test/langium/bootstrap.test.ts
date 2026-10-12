@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LangiumServices, LangiumSharedServices } from '@hydranium/langium/lsp';
 import {
+   DEFAULT_EAGER_SERVICES,
    STRICT_BINDINGS_ENV,
    assertCoreSlotsBound,
    bootstrapLangium,
@@ -18,7 +19,7 @@ import {
    bootstrapLangiumLanguages,
    warnOnUnexpectedBindings
 } from '../../src/langium/bootstrap.js';
-import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
+import type { ServerSharedServices } from '../../src/langium/module.js';
 import { ExtendedServiceRegistry } from '../../src/langium/service-registry.js';
 import {
    AbstractAstReflection,
@@ -43,7 +44,7 @@ type RegisterCall = { language: LangiumServices };
  * registration wiring through structural stubs and don't need spy / mock
  * semantics anyway.
  */
-function fullyBoundShared(): LangiumSharedServices & ServerSharedServicesMinimal & { __registerCalls: RegisterCall[] } {
+function fullyBoundShared(): LangiumSharedServices & ServerSharedServices & { __registerCalls: RegisterCall[] } {
    const calls: RegisterCall[] = [];
    return {
       ServiceRegistry: { register: (language: LangiumServices) => calls.push({ language }) },
@@ -61,7 +62,7 @@ function fullyBoundShared(): LangiumSharedServices & ServerSharedServicesMinimal
          BuildPipelineIntegration: {}
       },
       __registerCalls: calls
-   } as unknown as LangiumSharedServices & ServerSharedServicesMinimal & { __registerCalls: RegisterCall[] };
+   } as unknown as LangiumSharedServices & ServerSharedServices & { __registerCalls: RegisterCall[] };
 }
 
 function fullyBoundLanguage(): LangiumServices {
@@ -153,6 +154,38 @@ describe('bootstrapLangium', () => {
       expect(shared.__registerCalls).toEqual([{ language }]);
       // Eager accessors run AFTER assertion, so a failed assertion still skips them.
       expect(eagerCalls).toEqual([]);
+   });
+});
+
+describe('DEFAULT_EAGER_SERVICES', () => {
+   it('constructs the services whose constructors subscribe to the builder', () => {
+      // `assertCoreSlotsBound` happens to construct `AstDocumentManager` first;
+      // the list must not depend on that.
+      const touched: string[] = [];
+      const record = (prefix: string): unknown =>
+         new Proxy(
+            {},
+            {
+               get: (_target, key) => {
+                  const path = prefix + String(key);
+                  touched.push(path);
+                  return record(`${path}.`);
+               }
+            }
+         );
+      for (const accessor of DEFAULT_EAGER_SERVICES) {
+         accessor(record('') as ServerSharedServices);
+      }
+      expect(touched).toEqual(
+         expect.arrayContaining([
+            'workspace.ProjectManager',
+            'workspace.BuildPipelineIntegration',
+            'profilers.LangiumProfiler',
+            'workspace.CstResidencyService',
+            'workspace.AstDocumentManager',
+            'model.ModelService'
+         ])
+      );
    });
 });
 
@@ -301,7 +334,7 @@ describe('assertReflectionCoversLanguages', () => {
    }
 
    /** Shared tree whose reflection knows exactly these types, capturing `Logger.warn`. */
-   function sharedKnowing(...types: string[]): LangiumSharedServices & ServerSharedServicesMinimal & { warns: string[] } {
+   function sharedKnowing(...types: string[]): LangiumSharedServices & ServerSharedServices & { warns: string[] } {
       const shared = fullyBoundShared();
       const warns: string[] = [];
       (shared as unknown as { AstReflection: unknown }).AstReflection = { getAllTypes: () => types };
@@ -421,7 +454,7 @@ describe('assertSingleLangiumCopy', () => {
 });
 
 describe('warnOnUnexpectedBindings', () => {
-   function captureLogger(): { shared: LangiumSharedServices & ServerSharedServicesMinimal; warns: string[] } {
+   function captureLogger(): { shared: LangiumSharedServices & ServerSharedServices; warns: string[] } {
       const warns: string[] = [];
       const shared = fullyBoundShared();
       (shared as unknown as { Logger: unknown }).Logger = { warn: (message: string) => warns.push(message) };

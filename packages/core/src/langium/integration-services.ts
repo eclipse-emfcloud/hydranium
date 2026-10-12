@@ -18,8 +18,7 @@ import {
 } from '@hydranium/langium/lsp';
 import { DEFAULT_EAGER_SERVICES, bootstrapLangiumLanguages } from './bootstrap.js';
 import { createServerLanguageModule } from './language-module.js';
-import { createServerSharedModule, type ServerModuleContext } from './module.js';
-import type { ServerSharedServicesMinimal } from './shared-services.js';
+import { createServerSharedModule, type ServerModuleContext, type ServerSharedServices } from './module.js';
 
 /**
  * Options accepted by {@link createIntegrationServices}. Wraps the
@@ -40,7 +39,7 @@ import type { ServerSharedServicesMinimal } from './shared-services.js';
  */
 export interface IntegrationServicesOptions<
    TContext extends ServerModuleContext,
-   TShared extends LangiumSharedServices & ServerSharedServicesMinimal,
+   TShared extends LangiumSharedServices & ServerSharedServices,
    TLanguage extends LangiumServices
 > {
    /**
@@ -224,7 +223,7 @@ export interface IntegrationServicesOptions<
  * differs only in its grammar-generated module.
  */
 export interface AdditionalLanguageModules<
-   TShared extends LangiumSharedServices & ServerSharedServicesMinimal,
+   TShared extends LangiumSharedServices & ServerSharedServices,
    TLanguage extends LangiumServices
 > {
    /**
@@ -260,7 +259,7 @@ export interface AdditionalLanguageModules<
  */
 export function createIntegrationServices<
    TContext extends ServerModuleContext,
-   TShared extends LangiumSharedServices & ServerSharedServicesMinimal,
+   TShared extends LangiumSharedServices & ServerSharedServices,
    TLanguage extends LangiumServices
 >(
    options: IntegrationServicesOptions<TContext, TShared, TLanguage>

@@ -243,7 +243,9 @@ export interface ServerAddedSharedServices<
        * there is only one, and `'plaintext'` when there are several, rather
        * than naming a language the document demonstrably is not. Consumers
        * that need to narrow the diagnostic type or override lifecycle
-       * behaviour rebind this slot with a subclass.
+       * behaviour rebind this slot with a subclass. Subscribes to the build
+       * pipeline and the text store in its constructor, so it is eagerly
+       * constructed via `DEFAULT_EAGER_SERVICES`.
        */
       AstDocumentManager: AstDocumentManager<AstNode>;
       /**
@@ -317,6 +319,10 @@ export interface ServerAddedSharedServices<
     */
    model: {
       TransferEncoder: TransferEncoder<TDiagnostic>;
+      /**
+       * Subscribes to the settled document phase in its constructor, so it is
+       * eagerly constructed via `DEFAULT_EAGER_SERVICES`.
+       */
       ModelService: ModelService<AstNode>;
       /** Builds the handle of every session `ModelService.createSession` starts. */
       ClientSessionFactory: ClientSessionFactory;
@@ -559,6 +565,8 @@ export function createServerSharedModule(
                host: writable ? (fromContext as WritableFileSystemProvider) : new DefaultEmptyFileSystemProvider(services)
             });
          },
+         // Eagerly constructed, so its build-pipeline and text-store listeners
+         // attach before the first build.
          AstDocumentManager: services => new DefaultAstDocumentManager(services),
          FileSystemTaskQueue: services => new DefaultFileSystemTaskQueue(services),
          // Eagerly constructed, so its build-phase listeners attach before the
@@ -576,6 +584,8 @@ export function createServerSharedModule(
          // Generic walker — adopters with a typed `$type → wire shape` overlay
          // rebind this slot with a subclass.
          TransferEncoder: services => new DefaultTransferEncoder(services),
+         // Eagerly constructed, so its settled-phase listener attaches before
+         // the first build.
          ModelService: services => new DefaultModelService(services),
          ClientSessionFactory: services => new DefaultClientSessionFactory(services)
       },
