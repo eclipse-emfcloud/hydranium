@@ -1130,9 +1130,9 @@ void glspServer;
       data
          ? `
 //
-// NOT the entry \`hydranium-cli query\` / \`save\` / \`projects\` / \`watch\` speak to:
-// stdio here carries LSP, and the data head is a socket whose port is published
-// over the LSP connection. Those subcommands spawn \`data-server-main.js\`.`
+// NOT the entry the data-server subcommands of \`hydranium-cli\` speak to: stdio
+// here carries LSP, and the data head is a socket whose port is published over
+// the LSP connection. Those subcommands spawn \`data-server-main.js\`.`
          : ''
    }
 //
@@ -1163,11 +1163,11 @@ ${dataBlock}${glspBlock}`;
  * Emitted with the `data` head because it is the ONLY command line that reaches
  * that head from outside the editor. `main.ts` gives stdio to LSP and publishes
  * the data head's socket port over the LSP connection, so a client that is not
- * an LSP client cannot discover it — which is every one of `hydranium-cli`'s
- * `query` / `save` / `projects` / `watch`, all of which drive the data protocol
- * over a spawned child's stdin/stdout. Without this file a scaffolded project
- * has no `--server` value, and the closest guess — the LSP entry — fails as an
- * unrecognised method rather than as a missing head.
+ * an LSP client cannot discover it — which is every data-server subcommand of
+ * `hydranium-cli`, since each drives the data protocol over a spawned child's
+ * stdin/stdout. Without this file a scaffolded project has no `--server` value,
+ * and the closest guess — the LSP entry — fails as an unrecognised method
+ * rather than as a missing head.
  *
  * A separate process rather than a flag on `main.ts`: only one protocol can own
  * stdio, so the two entries are mutually exclusive by construction.
@@ -1178,10 +1178,9 @@ function dataServerMainFile(composition: InitComposition): string {
    const plural = roots.length > 1 ? 's' : '';
 
    const text = `${SHEBANG}// Standalone entry point: a data-server head on **stdio**, with no LSP head in
-// the process. This is the transport \`hydranium-cli\` speaks — \`query\`, \`save\`,
-// \`projects\` and \`watch\` all spawn a server command and drive JSON-RPC over its
-// stdin/stdout — so it is what makes those subcommands usable against this
-// language.
+// the process. This is the transport \`hydranium-cli\` speaks — its data-server
+// subcommands spawn a server command and drive JSON-RPC over its stdin/stdout —
+// so it is what makes those subcommands usable against this language.
 //
 // Invocation: \`node lib/data-server-main.js [<workspace-path>]\`, or the
 // package's \`__PROJECT_ID__-data-server\` bin script. The workspace path defaults to

@@ -13,6 +13,7 @@ import { describeError } from '@hydranium/protocol';
 import { readCliVersion } from './cli-version.js';
 import { runAnalyzeHeapCommand } from './commands/analyze-heap-args.js';
 import { runAstGroundTruthCommand } from './commands/ast-ground-truth-args.js';
+import { runCreateCommand } from './commands/create-args.js';
 import { runDeleteCommand } from './commands/delete-args.js';
 import { runGenerateTransferModelCommand } from './commands/generate-transfer-model-args.js';
 import { runInitCommand } from './commands/init-args.js';
@@ -46,6 +47,7 @@ const COMMANDS: Record<string, { readonly summary: string; readonly run: (args: 
       summary: "Tally a workspace's live-model $types (analyze-heap --validate input).",
       run: runAstGroundTruthCommand
    },
+   create: { summary: 'Create a new document and its file via a data-server subprocess.', run: runCreateCommand },
    delete: { summary: 'Delete a document, its file included, via a data-server subprocess.', run: runDeleteCommand },
    'generate-transfer-model': {
       summary: 'Generate a transfer-model TypeScript file from a Langium AST.',
@@ -58,7 +60,7 @@ const COMMANDS: Record<string, { readonly summary: string; readonly run: (args: 
    projects: { summary: 'List projects exposed by a data-server subprocess.', run: runProjectsCommand },
    query: { summary: 'Print the data-server document envelope for a URI.', run: runQueryCommand },
    reflect: { summary: "Dump a head's grammar/AST reflection (types, terminals, refs).", run: runReflectCommand },
-   save: { summary: 'Update + persist a document via a data-server subprocess.', run: runSaveCommand },
+   save: { summary: 'Update + persist an existing document via a data-server subprocess.', run: runSaveCommand },
    validate: { summary: 'Validate a workspace headlessly; non-zero exit on errors (CI gate).', run: runValidateCommand },
    watch: { summary: 'Subscribe to data-server document updates; print events as NDJSON.', run: runWatchCommand }
 };

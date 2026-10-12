@@ -373,7 +373,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'src/main.ts': { verdict: 'identical', reason: 'all three heads in one process, as emitted' },
    // The only in-repo target pinning this entry as EMITTED rather than adapted,
    // which is what makes it evidence that a scaffolded project can be reached by
-   // `hydranium-cli query` / `save` / `projects` / `watch` with no hand edits.
+   // the data-server subcommands of `hydranium-cli` with no hand edits.
    'src/data-server-main.ts': { verdict: 'identical', reason: 'the stdio data head the CLI subcommands spawn, as emitted' },
    'src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port commands, as emitted' },
    // The diagram files, the starter operation handler and the test that runs it.
