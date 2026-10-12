@@ -37,6 +37,7 @@ const SLOWEST = 10;
 
 interface TestCase {
    name: string;
+   file: string;
    seconds: number;
    failed: boolean;
    skipped: boolean;
@@ -101,9 +102,20 @@ function parseCases(xml: string): TestCase[] {
       const attributes = match[1];
       const body = match[3] ?? '';
       const name = /\sname="([^"]*)"/.exec(attributes)?.[1] ?? '(unnamed)';
+      const classname = /\sclassname="([^"]+)"/.exec(attributes)?.[1];
+      // Mocha's `classname` holds the describe titles, so its `file` wins. Only
+      // the basename, because the paths have no common root: Playwright's start
+      // at its testDir, and Mocha's are absolute. Mocha writes `undefined` for
+      // a runnable with no file, such as a root-level hook.
+      const reportedFile = /\sfile="(?!undefined")([^"]+)"/.exec(attributes)?.[1];
+      const file = reportedFile ?? classname ?? '(no file)';
+      // A `classname` that is not the file is Mocha's describe path, which its
+      // `name` leaves out.
+      const describePath = reportedFile && classname && !reportedFile.endsWith(classname) ? classname : undefined;
       const seconds = Number(/\stime="([0-9.]+)"/.exec(attributes)?.[1] ?? '0');
       cases.push({
-         name: decodeXml(name),
+         name: decodeXml(describePath ? `${describePath} ${name}` : name),
+         file: decodeXml(file).replace(/^.*[\\/]/, ''),
          seconds,
          failed: /<(failure|error)\b/.test(body),
          skipped: /<skipped\b/.test(body)
@@ -119,7 +131,17 @@ function decodeXml(text: string): string {
       .replaceAll('&quot;', '"')
       .replaceAll('&apos;', "'")
       .replaceAll('&#10;', ' ')
+      .replace(/&#x([0-9a-f]+);/gi, (_entity, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+      .replace(/&#([0-9]+);/g, (_entity, decimal: string) => String.fromCodePoint(Number(decimal)))
       .replaceAll('&amp;', '&');
+}
+
+/**
+ * A test name as Markdown text: GitHub reads `<…>` as HTML and drops it, and a
+ * `|` ends a table cell.
+ */
+function escapeMarkdown(text: string): string {
+   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('|', '\\|');
 }
 
 /** `packages/core` or `examples/order-flow/browser`, from the report's path. */
@@ -154,8 +176,8 @@ if (reports.length === 0) {
       }))
       .sort((left, right) => right.seconds - left.seconds);
 
-   const all = perPackage.flatMap(entry => entry.cases);
-   const failures = perPackage.flatMap(entry => entry.failed.map(one => ({ ...one, pkg: entry.name })));
+   const all = perPackage.flatMap(entry => entry.cases.map(one => ({ ...one, pkg: entry.name })));
+   const failures = all.filter(one => one.failed);
 
    lines.push('## Test results', '');
    lines.push(
@@ -166,7 +188,7 @@ if (reports.length === 0) {
 
    if (failures.length > 0) {
       lines.push('### Failures', '');
-      for (const failure of failures) lines.push(`- \`${failure.pkg}\` — ${failure.name}`);
+      for (const failure of failures) lines.push(`- \`${failure.pkg}\` \`${failure.file}\` — ${escapeMarkdown(failure.name)}`);
       lines.push('');
    }
 
@@ -184,8 +206,8 @@ if (reports.length === 0) {
    // the next slow test is found by it going red.
    const slowest = [...all].sort((left, right) => right.seconds - left.seconds).slice(0, SLOWEST);
    lines.push(`<details><summary>Slowest ${slowest.length}</summary>`, '');
-   lines.push('| Time | Test |', '| ---: | --- |');
-   for (const one of slowest) lines.push(`| ${one.seconds.toFixed(2)}s | ${one.name} |`);
+   lines.push('| Time | Package | File | Test |', '| ---: | --- | --- | --- |');
+   for (const one of slowest) lines.push(`| ${one.seconds.toFixed(2)}s | \`${one.pkg}\` | \`${one.file}\` | ${escapeMarkdown(one.name)} |`);
    lines.push('', '</details>');
 }
 
