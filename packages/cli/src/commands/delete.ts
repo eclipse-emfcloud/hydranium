@@ -11,6 +11,7 @@ import type { TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
 import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
+import { withClientSession } from './client-session.js';
 
 /**
  * Options for the {@link runDelete} subcommand. Deletes the document at `uri`,
@@ -47,23 +48,14 @@ export async function runDelete(options: DeleteCommandOptions): Promise<void> {
    );
 }
 
-/**
- * Delete `uri` as the session `clientId`, and end the session whether the
- * delete succeeded or not. An end that fails after a failed delete is
- * swallowed: the delete's error is the one the user needs.
- */
-async function deleteOpened(
+/** Open `uri` as the session `clientId` and delete it, then end the session. */
+function deleteOpened(
    server: Pick<DataServerProtocol<TransferElement>, 'createSession' | 'openModelDocument' | 'deleteModelDocument' | 'closeSession'>,
    uri: string,
    clientId: string
 ): Promise<void> {
-   await server.createSession({ clientId, label: 'hydranium-cli' });
-   try {
+   return withClientSession(server, clientId, async () => {
       await server.openModelDocument({ uri, clientId });
       await server.deleteModelDocument({ uri, clientId, baseVersion: 'any' });
-   } catch (error: unknown) {
-      await server.closeSession({ clientId }).catch(() => undefined);
-      throw error;
-   }
-   await server.closeSession({ clientId });
+   });
 }

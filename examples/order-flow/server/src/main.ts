@@ -13,9 +13,9 @@
 // Invocation: `node lib/main.js --stdio`, or the package's `order-flow-server`
 // bin script.
 //
-// NOT the entry `hydranium-cli query` / `save` / `projects` / `watch` speak to:
-// stdio here carries LSP, and the data head is a socket whose port is published
-// over the LSP connection. Those subcommands spawn `data-server-main.js`.
+// NOT the entry the data-server subcommands of `hydranium-cli` speak to: stdio
+// here carries LSP, and the data head is a socket whose port is published over
+// the LSP connection. Those subcommands spawn `data-server-main.js`.
 //
 // Everything here runs at module scope, so this file is an executable rather
 // than a library entry — import `./index.js` instead to compose the language.

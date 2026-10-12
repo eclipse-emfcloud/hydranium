@@ -40,6 +40,7 @@ export const SAVE_HELP: readonly string[] = [
    'Usage: hydranium-cli save --server "<cmd>..." --uri <uri> --content <text|@file> [--client-id <id>] [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Update the document at `<uri>` with `<content>` and persist via saveModelDocument.',
+   'Fails when the file does not exist; `create` writes a new one.',
    'Output is the post-save envelope as a single JSON line.',
    '',
    'Options:',

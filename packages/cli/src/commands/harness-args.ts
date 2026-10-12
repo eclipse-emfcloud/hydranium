@@ -33,6 +33,7 @@
 
 import { describeError, type LogThreshold } from '@hydranium/protocol';
 import { statSync } from 'node:fs';
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type LogOptions, parseLogLevelOption } from '../log-level.js';
@@ -471,4 +472,22 @@ export function parseServerSpawnOptions(args: string[], commandName: string, onE
       }
    }
    return { serverCommand, serverArgs, cwd, ...logOptions(logFlags), extra };
+}
+
+/**
+ * Resolve the `--content` argument to its textual form. The `@<path>`
+ * prefix reads from a file (parses as UTF-8); anything else is taken
+ * literally. The leading `@` can be escaped as `\@` for content that
+ * legitimately starts with `@`.
+ */
+export async function resolveContent(content: string, readFile?: (path: string) => Promise<string>): Promise<string> {
+   if (content.startsWith('@')) {
+      const file = content.slice(1);
+      const reader = readFile ?? ((target: string) => fs.readFile(target, 'utf8'));
+      return reader(file);
+   }
+   if (content.startsWith('\\@')) {
+      return content.slice(1);
+   }
+   return content;
 }

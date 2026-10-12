@@ -66,11 +66,10 @@ export interface StartedStdioServer extends IntegratedServer {
 
 /**
  * Start a **stdio**-based protocol head — the transport `hydranium-cli` speaks,
- * since `query` / `save` / `projects` / `watch` all spawn a server command and
- * drive JSON-RPC over its stdin/stdout. The socket counterpart is
- * `startSocketServer`; the two differ more
- * than the transport swap suggests, and the differences are the reason this is
- * a launcher rather than four lines in each adopter's entry.
+ * since its data-server subcommands spawn a server command and drive JSON-RPC
+ * over its stdin/stdout. The socket counterpart is `startSocketServer`; the two
+ * differ more than the transport swap suggests, and the differences are the
+ * reason this is a launcher rather than four lines in each adopter's entry.
  *
  * **One client, not N.** A socket head accepts arbitrarily many connections and
  * tracks them; a stdio head has exactly one peer — the process that spawned it

@@ -7,11 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describeError, type TransferElement } from '@hydranium/protocol';
+import type { TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
-import * as fs from 'node:fs/promises';
 import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
+import { withClientSession } from './client-session.js';
+import { resolveContent } from './harness-args.js';
 
 /**
  * Options for the {@link runSave} subcommand. Updates the document at
@@ -25,9 +26,9 @@ import { withDataServer } from '../spawn-data-server.js';
  * identity (per-user, per-script) override.
  *
  * The command saves as a client session under `clientId`: it registers the
- * session, creates the document from the content when there is no file,
- * opens it otherwise, saves, and ends the session, which leaves nothing open
- * behind it.
+ * session, opens the document, saves, and ends the session, which leaves
+ * nothing open behind it. A missing file fails the open; `runCreate` writes a
+ * new one.
  */
 export interface SaveCommandOptions extends LogOptions {
    readonly serverCommand: string;
@@ -66,56 +67,15 @@ export async function runSave(options: SaveCommandOptions): Promise<void> {
    );
 }
 
-/**
- * Save `model` to `uri` as the session `clientId`, and end the session whether
- * the save succeeded or not. An end that fails after a failed save is
- * swallowed: the save's error is the one the user needs.
- */
-async function saveOpened(
-   server: Pick<
-      DataServerProtocol<TransferElement>,
-      'createSession' | 'openModelDocument' | 'createModelDocument' | 'saveModelDocument' | 'closeSession'
-   >,
+/** Open `uri` as the session `clientId` and save `model` to it, then end the session. */
+function saveOpened(
+   server: Pick<DataServerProtocol<TransferElement>, 'createSession' | 'openModelDocument' | 'saveModelDocument' | 'closeSession'>,
    uri: string,
    clientId: string,
    model: string
 ): Promise<unknown> {
-   await server.createSession({ clientId, label: 'hydranium-cli' });
-   let saved: unknown;
-   try {
-      // The server creates a document only when it finds no file and no
-      // client has it open; anything else is opened. An open that fails
-      // reports why the create failed too, since that may be the real cause.
-      await server.createModelDocument({ uri, clientId, text: model }).catch((created: unknown) =>
-         server.openModelDocument({ uri, clientId }).catch((opened: unknown) => {
-            throw new Error(`Cannot save ${uri}: ${describeError(opened)} (creating it failed first: ${describeError(created)})`, {
-               cause: created
-            });
-         })
-      );
-      saved = await server.saveModelDocument({ uri, clientId, model, baseVersion: 'any' });
-   } catch (error: unknown) {
-      await server.closeSession({ clientId }).catch(() => undefined);
-      throw error;
-   }
-   await server.closeSession({ clientId });
-   return saved;
-}
-
-/**
- * Resolve the `--content` argument to its textual form. The `@<path>`
- * prefix reads from a file (parses as UTF-8); anything else is taken
- * literally. The leading `@` can be escaped as `\@` for content that
- * legitimately starts with `@`.
- */
-async function resolveContent(content: string, readFile?: (path: string) => Promise<string>): Promise<string> {
-   if (content.startsWith('@')) {
-      const path = content.slice(1);
-      const reader = readFile ?? ((target: string) => fs.readFile(target, 'utf8'));
-      return reader(path);
-   }
-   if (content.startsWith('\\@')) {
-      return content.slice(1);
-   }
-   return content;
+   return withClientSession(server, clientId, async () => {
+      await server.openModelDocument({ uri, clientId });
+      return server.saveModelDocument({ uri, clientId, model, baseVersion: 'any' });
+   });
 }

@@ -15,7 +15,7 @@ and the other commands drive your built head from a shell or a CI step.
   own docs.
 - Generate the serializable transfer model from Langium's generated AST.
 - Measure model-store memory and analyze a V8 heap snapshot.
-- List, read, save and watch documents through a spawned data server,
+- List, read, create, save and watch documents through a spawned data server,
   printing JSON a script can pipe, and delete them.
 
 ## Install
@@ -60,8 +60,8 @@ lists each command's flags.
   once or on watch.
 - **Memory.** Measure a workspace's model-store memory, and analyze a heap
   snapshot.
-- **Data server.** Spawn your data head and list projects, or query, save,
-  delete or watch a document.
+- **Data server.** Spawn your data head and list projects, or query, create,
+  save, delete or watch a document.
 
 The commands that boot your head take `--services <module>`. That is an ESM
 module exporting a zero-arg `createServices()` that returns `{ shared }`,
@@ -78,8 +78,8 @@ as the entry's argument rather than through `--cwd`:
 hydranium-cli projects --server "node ./lib/data-server-main.js ./models"
 ```
 
-`save` and `delete` spawn a data server of their own, and a workspace has one
-writer. Saving or deleting in a workspace an editor has open makes two
+`create`, `save` and `delete` spawn a data server of their own, and a
+workspace has one writer. Writing in a workspace an editor has open makes two
 writers, and one write is lost: an editor that holds a deleted file can save it
 back.
 

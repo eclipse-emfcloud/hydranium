@@ -236,9 +236,9 @@ export function spawnDataServer<TTransfer extends TransferElement, TDiagnostic e
  * child down afterwards. The `use` call is raced against
  * {@link DataServerHandle.whenTerminated}, so a spawn failure or a premature child
  * exit rejects with a clear message instead of hanging on an RPC that can never be
- * answered. This is the one-shot counterpart the `projects` / `query` / `save`
- * subcommands compose; `watch` races its own long-running loop against
- * `whenTerminated` directly.
+ * answered. This is the one-shot counterpart the data-server subcommands
+ * compose; `watch` races its own long-running loop against `whenTerminated`
+ * directly.
  */
 export async function withDataServer<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic, R>(
    options: SpawnDataServerOptions,

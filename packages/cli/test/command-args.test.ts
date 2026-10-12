@@ -17,8 +17,10 @@
  */
 
 import type { LogThreshold } from '@hydranium/protocol';
+import { execFile } from 'node:child_process';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
    ANALYZE_HEAP_FLAGS,
@@ -33,7 +35,7 @@ import {
    GENERATE_TRANSFER_MODEL_VALUE_FLAGS,
    parseGenerateOptions
 } from '../src/commands/generate-transfer-model-args.js';
-import { INIT_FLAGS, INIT_VALUE_FLAGS, parseInitArgs } from '../src/commands/init-args.js';
+import { INIT_FLAGS, INIT_HELP, INIT_VALUE_FLAGS, parseInitArgs } from '../src/commands/init-args.js';
 import { LINT_GRAMMAR_FLAGS, LINT_GRAMMAR_HELP, parseLintGrammarArgs } from '../src/commands/lint-grammar-args.js';
 import { MEASURE_MEMORY_FLAGS, MEASURE_MEMORY_HELP, parseMeasureMemoryArgs } from '../src/commands/measure-memory-args.js';
 import { MODEL_DOCS_FLAGS, MODEL_DOCS_HELP, parseModelDocsArgs } from '../src/commands/model-docs-args.js';
@@ -41,6 +43,7 @@ import { PROJECTS_FLAGS, PROJECTS_HELP, parseProjectsArgs } from '../src/command
 import { QUERY_FLAGS, QUERY_HELP, parseQueryArgs } from '../src/commands/query-args.js';
 import { REFLECT_FLAGS, REFLECT_HELP, parseReflectArgs } from '../src/commands/reflect-args.js';
 import { helpRequested, type UsageError } from '../src/commands/harness-args.js';
+import { CREATE_FLAGS, CREATE_HELP, parseCreateArgs } from '../src/commands/create-args.js';
 import { DELETE_FLAGS, DELETE_HELP, parseDeleteArgs } from '../src/commands/delete-args.js';
 import { SAVE_FLAGS, SAVE_HELP, SAVE_VALUE_FLAGS, parseSaveArgs } from '../src/commands/save-args.js';
 import { VALIDATE_FLAGS, VALIDATE_HELP, parseValidateArgs } from '../src/commands/validate-args.js';
@@ -83,6 +86,7 @@ const COMMANDS: ReadonlyArray<{
       help: AST_GROUND_TRUTH_HELP,
       parse: args => parseAstGroundTruthArgs(args, onError)
    },
+   { name: 'create', flags: CREATE_FLAGS, help: CREATE_HELP, parse: args => parseCreateArgs(args, onError) },
    { name: 'delete', flags: DELETE_FLAGS, help: DELETE_HELP, parse: args => parseDeleteArgs(args, onError) },
    {
       name: 'generate-transfer-model',
@@ -121,6 +125,44 @@ const COMMANDS_BY_NAME = COMMANDS.map(command => [command.name, command] as cons
 function describedFlags(help: readonly string[]): string[] {
    return help.map(line => line.match(/^ {2}(--[a-z-]+)/)?.[1]).filter((flag): flag is string => flag !== undefined);
 }
+
+/**
+ * Every subcommand's help: the table above, plus `init`, which it leaves out.
+ * Spawned, because the entry runs `main()` on import; the timeout covers a cold
+ * child under a loaded gate.
+ */
+const HELP_BY_NAME: ReadonlyArray<readonly [string, readonly string[]]> = [
+   ...COMMANDS.map(command => [command.name, command.help] as const),
+   ['init', INIT_HELP]
+];
+
+function runBinary(args: string[]): Promise<{ stdout: string }> {
+   return promisify(execFile)(process.execPath, [fileURLToPath(new URL('../lib/cli.js', import.meta.url)), ...args]);
+}
+
+describe('the binary registers every subcommand', () => {
+   it('lists exactly the subcommands whose help is held here', async () => {
+      const { stdout } = await runBinary(['--help']);
+      // A name sits at two spaces; a wrapped summary at more.
+      const listed = stdout
+         .slice(stdout.indexOf('Commands:'))
+         .split('\n')
+         .map(line => /^ {2}([a-z][a-z-]*) /.exec(line)?.[1])
+         .filter((name): name is string => name !== undefined);
+      expect(listed.sort()).toEqual(HELP_BY_NAME.map(([name]) => name).sort());
+   }, 30_000);
+
+   // Its own help, not just an exit code, so a command wired to another
+   // command's runner fails too.
+   it.each(HELP_BY_NAME)(
+      "hydranium-cli %s --help prints that command's help",
+      async (name, help) => {
+         const { stdout } = await runBinary([name, '--help']);
+         expect(stdout).toContain(help.join('\n'));
+      },
+      30_000
+   );
+});
 
 describe('every subcommand documents its own flags', () => {
    /**
@@ -553,6 +595,20 @@ describe('the data-server subcommands', () => {
          'Missing required option: --content (hydranium-cli save --help)'
       );
       expect(parseSaveArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text'], onError).clientId).toBeUndefined();
+   });
+
+   it('create demands --uri and --content, and leaves --client-id to the runner', () => {
+      expect(
+         parseCreateArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text', '--client-id', 'tester'], onError)
+      ).toMatchObject({
+         uri: 'file:///a.x',
+         content: 'text',
+         clientId: 'tester'
+      });
+      expect(() => parseCreateArgs(['--server', 'node s.js', '--uri', 'file:///a.x'], onError)).toThrow(
+         'Missing required option: --content (hydranium-cli create --help)'
+      );
+      expect(parseCreateArgs(['--server', 'node s.js', '--uri', 'file:///a.x', '--content', 'text'], onError).clientId).toBeUndefined();
    });
 
    it('delete demands --uri, and leaves --client-id to the runner', () => {

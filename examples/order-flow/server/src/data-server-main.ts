@@ -9,10 +9,9 @@
  ********************************************************************************/
 
 // Standalone entry point: a data-server head on **stdio**, with no LSP head in
-// the process. This is the transport `hydranium-cli` speaks — `query`, `save`,
-// `projects` and `watch` all spawn a server command and drive JSON-RPC over its
-// stdin/stdout — so it is what makes those subcommands usable against this
-// language.
+// the process. This is the transport `hydranium-cli` speaks — its data-server
+// subcommands spawn a server command and drive JSON-RPC over its stdin/stdout —
+// so it is what makes those subcommands usable against this language.
 //
 // Invocation: `node lib/data-server-main.js [<workspace-path>]`, or the
 // package's `order-flow-data-server` bin script. The workspace path defaults to

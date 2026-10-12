@@ -8,9 +8,9 @@
  ********************************************************************************/
 
 /**
- * `hydranium-cli query` / `save` against a **real** stdio data-server.
+ * `hydranium-cli`'s data-server subcommands against a **real** stdio server.
  *
- * Both subcommands spawn a server command and talk JSON-RPC over its
+ * The subcommands spawn a server command and talk JSON-RPC over its
  * stdin/stdout, so what they need to be tested against is an entry with a real
  * Langium stack behind it — which is what this package's
  * `lib/data-server-main.js` provides. The CLI package's own coverage either
@@ -18,7 +18,7 @@
  * has a document builder, so neither can observe what the subcommands actually
  * ask for.
  *
- * That distinction is load-bearing, because both call `getModelDocument({
+ * That distinction is load-bearing, because `query` calls `getModelDocument({
  * includeDiagnostics: true })`, which settles at `DocumentState.Validated` rather
  * than at the resolve-only state. So the assertions here are on diagnostic
  * **content**: a test that only checked the envelope arrived would pass against a
@@ -29,10 +29,10 @@
  * rebuild runs the integrity rules (see `makeScratchWorkspace`'s own docs).
  */
 
-import { runQuery, runSave } from '@hydranium/cli';
+import { runCreate, runQuery, runSave } from '@hydranium/cli';
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -151,6 +151,62 @@ describe('hydranium-cli over a real stdio data-server', () => {
          // The write reached disk, not just the in-memory text store — `save` is
          // the one data-server path that is supposed to persist.
          expect(readFileSync(path.join(scratch().root, relativePath), 'utf8')).toContain('CarrierCode');
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'save refuses a missing file and creates none',
+      async () => {
+         const relativePath = 'commerce-core/carrier.domain';
+
+         await expect(
+            runSave({
+               ...serverSpawn(),
+               uri: uriOf(relativePath),
+               content: 'entity CarrierCode {\n   code: String\n}\n',
+               write: () => undefined
+            })
+         ).rejects.toThrow('ENOENT');
+
+         expect(existsSync(path.join(scratch().root, relativePath))).toBe(false);
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'create writes the content to a new file as given',
+      async () => {
+         const relativePath = 'commerce-core/carrier.domain';
+         // Trailing blank lines no serialiser writes, so a re-serialised model shows.
+         const content = 'entity CarrierCode {\n   code: String\n}\n\n\n';
+
+         const lines: string[] = [];
+         await runCreate({ ...serverSpawn(), uri: uriOf(relativePath), content, write: line => lines.push(line) });
+
+         expect(lines).toHaveLength(1);
+         expect(JSON.parse(lines[0]).uri).toBe(uriOf(relativePath));
+         expect(readFileSync(path.join(scratch().root, relativePath), 'utf8')).toBe(content);
+      },
+      SPAWN_TIMEOUT_MS
+   );
+
+   it(
+      'create refuses an existing file and leaves it as it was',
+      async () => {
+         const relativePath = WORKSPACE_FILES.commerceCoreInternal;
+         const before = readFileSync(path.join(scratch().root, relativePath), 'utf8');
+
+         await expect(
+            runCreate({
+               ...serverSpawn(),
+               uri: uriOf(relativePath),
+               content: 'entity CarrierCode {\n   code: String\n}\n',
+               write: () => undefined
+            })
+         ).rejects.toThrow('the file exists');
+
+         expect(readFileSync(path.join(scratch().root, relativePath), 'utf8')).toBe(before);
       },
       SPAWN_TIMEOUT_MS
    );

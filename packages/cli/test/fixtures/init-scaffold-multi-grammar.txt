@@ -755,9 +755,9 @@ src/main.ts
 // Invocation: `node lib/main.js --stdio`, or the package's `order-flow` bin
 // script.
 //
-// NOT the entry `hydranium-cli query` / `save` / `projects` / `watch` speak to:
-// stdio here carries LSP, and the data head is a socket whose port is published
-// over the LSP connection. Those subcommands spawn `data-server-main.js`.
+// NOT the entry the data-server subcommands of `hydranium-cli` speak to: stdio
+// here carries LSP, and the data head is a socket whose port is published over
+// the LSP connection. Those subcommands spawn `data-server-main.js`.
 //
 // Everything here runs at module scope, so this file is an executable rather
 // than a library entry — import `./index.js` instead to compose the language.
@@ -822,10 +822,9 @@ src/data-server-main.ts
 ==============================================================================
 #!/usr/bin/env node
 // Standalone entry point: a data-server head on **stdio**, with no LSP head in
-// the process. This is the transport `hydranium-cli` speaks — `query`, `save`,
-// `projects` and `watch` all spawn a server command and drive JSON-RPC over its
-// stdin/stdout — so it is what makes those subcommands usable against this
-// language.
+// the process. This is the transport `hydranium-cli` speaks — its data-server
+// subcommands spawn a server command and drive JSON-RPC over its stdin/stdout —
+// so it is what makes those subcommands usable against this language.
 //
 // Invocation: `node lib/data-server-main.js [<workspace-path>]`, or the
 // package's `order-flow-data-server` bin script. The workspace path defaults to
