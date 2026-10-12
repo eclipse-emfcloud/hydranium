@@ -197,11 +197,11 @@ describe('ModelService readiness gate', () => {
 
    /**
     * `workspaceInitialized` rejects on a cancelled initial build (routine — any
-    * write preempts one) and on a failed one. Langium's `ready`, which this gate
-    * replaced, could not reject at all, so propagating would turn a timing fix
-    * into a permanent failure: every later `waitForReady` rejects for the rest of
-    * the process lifetime. "Connection is disposed" at teardown is the rejection
-    * that surfaces this in practice.
+    * write preempts one) and on a failed one. The workspace manager's `ready`,
+    * which this gate replaced, rejects only on a failed startup, so propagating
+    * would turn a timing fix into a permanent failure: every later
+    * `waitForReady` rejects for the rest of the process lifetime. "Connection
+    * is disposed" at teardown is the rejection that surfaces this in practice.
     */
    it('resolves rather than rejecting when the initial build fails', async () => {
       const service = new DefaultModelService<FakeRoot>(

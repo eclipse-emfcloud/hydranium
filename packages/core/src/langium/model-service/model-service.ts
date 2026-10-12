@@ -457,13 +457,13 @@ export class DefaultModelService<
          } catch {
             // NEVER rejects, deliberately. This gate is about TIMING — "the
             // initial build has finished" — not about whether it succeeded, and
-            // Langium's `ready` (what it replaced) could not reject at all.
-            // `workspaceInitialized` can: it rejects on a cancelled initial
-            // build (routine — any write preempts one) and on a failed one
-            // (e.g. a disposed connection at teardown). Propagating either would
-            // fail every `waitForReady` for the rest of the process lifetime,
-            // a far worse failure than the late gate this exists to fix. The
-            // workspace manager logs the outcome.
+            // the workspace manager's `ready` (what it replaced) rejects only on
+            // a failed startup. `workspaceInitialized` also rejects on a
+            // cancelled initial build (routine — any write preempts one) and on
+            // a failed one (e.g. a disposed connection at teardown).
+            // Propagating either would fail every `waitForReady` for the rest
+            // of the process lifetime, a far worse failure than the late gate
+            // this exists to fix. The workspace manager logs the outcome.
          }
       })();
       // One persistent listener mirroring non-LSP-client changes back to the LSP

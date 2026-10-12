@@ -11,13 +11,14 @@ import { Deferred, type Logger, type Tracer, describeError, describeErrorWithSta
 import {
    DefaultWorkspaceManager,
    DocumentState,
+   interruptAndCheck,
    isOperationCancelled,
    type LangiumDocument,
    type Stream,
    UriUtils,
    type URI
 } from '@hydranium/langium';
-import { type CancellationToken, type InitializeParams } from 'vscode-languageserver';
+import { type CancellationToken, CancellationTokenSource, type InitializeParams } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import { type LogNameOptions, resolveLogFilePlaceholder, toLogFileWorkspaceToken } from '../diagnostics/logger.js';
 import type { ServerLocale } from '../../locale/server-locale.js';
@@ -45,6 +46,13 @@ let operationCancelledSuppressionInstalled = false;
  * every later tree's genuine rejections to a logger nobody is reading.
  */
 let operationCancelledSuppressionLogger: Logger | undefined;
+
+/**
+ * Never cancelled: `interruptAndCheck` yields only for a token other than
+ * `CancellationToken.None`, and the load must not stop part-way, since Langium
+ * checks for cancellation once every document exists.
+ */
+const LOAD_YIELD_TOKEN = new CancellationTokenSource().token;
 
 /**
  * Decide what to do with a process-level unhandled promise rejection.
@@ -188,6 +196,8 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    protected readonly warnUnservedDocuments: boolean;
    /** URIs of the documents the running startup's file traversal loaded; see {@link loadWorkspaceDocuments}. */
    protected readonly traversedUris = new Set<string>();
+   /** How many documents {@link loadWorkspaceDocuments} reads and parses before it may yield; below 1 counts as 1. */
+   protected readonly loadChunkSize: number = 10;
 
    constructor(services: ServerSharedServicesMinimal, options: HydraniumWorkspaceManagerOptions = {}) {
       super(services);
@@ -313,8 +323,17 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    }
 
    /**
-    * Record each document the file traversal loads, so startup can tell them
-    * from the documents `loadAdditionalDocuments` seeded, through the
+    * Load the documents the file traversal found through
+    * {@link loadTraversedDocument}, {@link loadChunkSize} at a time, yielding
+    * between chunks once Langium's interruption period has passed. Langium's
+    * own load starts every read at once and parses each as it returns: over a
+    * synchronous provider nothing else runs until the last file has parsed, and
+    * over the Node provider incoming messages wait through long runs of parses.
+    * The cost: at most a chunk of reads is in flight, and each chunk waits for
+    * its slowest read, so slow storage takes a round per chunk, not one burst.
+    *
+    * Each loaded document is recorded, so startup can tell them from the
+    * documents `loadAdditionalDocuments` seeded, through the
     * `additionalDocuments` group or an override of its own.
     *
     * The traversal found each of its documents through the provider, so asking
@@ -326,10 +345,51 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
     * about each of them.
     */
    protected override async loadWorkspaceDocuments(uris: Stream<URI>, collector: (document: LangiumDocument) => void): Promise<void> {
-      await super.loadWorkspaceDocuments(uris, document => {
-         this.traversedUris.add(document.uri.toString());
-         collector(document);
-      });
+      const pending = uris.toArray();
+      const chunkSize = Math.max(1, this.loadChunkSize);
+      for (let i = 0; i < pending.length; i += chunkSize) {
+         if (i > 0) {
+            await interruptAndCheck(LOAD_YIELD_TOKEN);
+         }
+         await Promise.all(
+            pending.slice(i, i + chunkSize).map(async uri => {
+               const document = await this.loadTraversedDocument(uri);
+               if (document) {
+                  this.traversedUris.add(document.uri.toString());
+                  collector(document);
+               }
+            })
+         );
+      }
+   }
+
+   /**
+    * Load one document the file traversal found, or answer `undefined` to
+    * leave it out of the workspace.
+    *
+    * A file whose read fails and that the provider's `existsSettled`, or
+    * `exists` for a provider without it, reports gone is left out with a debug
+    * line, since it went between the scan and the read. A file still there is
+    * read once more, since a replacing rename can hide its name for a moment;
+    * that read's failure, and cancellation, fail the startup. A check that
+    * throws counts the file as there, since it cannot say the file went. The
+    * skip is the startup's only: other callers of `getOrCreateDocument` still
+    * get the read error.
+    */
+   protected async loadTraversedDocument(uri: URI): Promise<LangiumDocument | undefined> {
+      try {
+         return await this.langiumDocuments.getOrCreateDocument(uri);
+      } catch (error: unknown) {
+         if (isOperationCancelled(error)) {
+            throw error;
+         }
+         const fileSystem = this.writableFileSystemProvider;
+         if (!(await (fileSystem.existsSettled?.(uri) ?? fileSystem.exists(uri)).catch(() => true))) {
+            this.tracer.debug(`Skipped ${uri.toString()}: it was removed between the workspace scan and its load`);
+            return undefined;
+         }
+         return this.langiumDocuments.getOrCreateDocument(uri);
+      }
    }
 
    /**
@@ -500,7 +560,9 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
     *
     * A failed setup is logged here, since every framework waiter on
     * {@link workspaceInitialized} discards the rejection; an override that
-    * rejects the deferred itself logs its own failure.
+    * rejects the deferred itself logs its own failure. A failed startup also
+    * rejects `ready`, so its waiters fail rather than wait forever; an override
+    * that skips `super` and catches a failed startup rejects `_ready` too.
     */
    override async initializeWorkspace(folders: WorkspaceFolder[], cancelToken?: CancellationToken): Promise<void> {
       try {
@@ -513,6 +575,10 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
             this.tracer.error(`Initial workspace build failed: ${describeErrorWithStack(error)}`);
          }
          this.workspaceInitializedDeferred.reject(error);
+         // Langium settles `ready` only after a startup that succeeded. Marked
+         // handled, as logged above; a no-op once startup has resolved it.
+         this._ready.reject(error);
+         this._ready.promise.catch(() => undefined);
          throw error;
       }
    }
