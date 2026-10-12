@@ -542,11 +542,12 @@ function tsconfigJson(composition: InitComposition): string {
 
 // `isolatedModules` is what makes this check agree with the transform that
 // actually runs the tests. `npm test` is `typecheck:test && vitest run`, and
-// vitest compiles through esbuild — a per-file transform with no type
+// vitest compiles each file on its own — a transform with no type
 // information, which cannot tell a re-exported TYPE from a re-exported value.
-// Without the flag `tsc` accepts `export { SomeType } from './x'` that esbuild
-// then emits as a real import of a symbol that does not exist at runtime, so
-// the typecheck passes and the suite fails with a confusing missing-export.
+// Without the flag `tsc` accepts `export { SomeType } from './x'` that the
+// transform then emits as a real import of a symbol that does not exist at
+// runtime, so the typecheck passes and the suite fails with a confusing
+// missing-export.
 const TSCONFIG_TEST = `{
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -559,12 +560,21 @@ const TSCONFIG_TEST = `{
 }
 `;
 
+// Found by name, unlike `tsconfig.test.json`. Under vite 8, vitest's transform
+// applies a tsconfig only to the files its own `include` lists, so without this
+// a test declaring a decorated class fails to load.
+const TEST_DIR_TSCONFIG = `{
+  "extends": "../tsconfig.test.json",
+  "include": ["../src", ".", "../src/**/*.json"]
+}
+`;
+
 const VITEST_CONFIG = `import { defineConfig } from 'vitest/config';
 
 // Vitest transforms TypeScript itself and resolves \`.js\` specifiers to their
 // \`.ts\` source, so tests import from \`../src/\` with the same specifiers the
 // compiled output uses. \`include\` is scoped to \`test/\` so \`lib/\` is never
-// scanned; \`npm test\` runs \`typecheck:test\` first, because the esbuild
+// scanned; \`npm test\` runs \`typecheck:test\` first, because vitest's
 // transform strips types without checking them.
 
 export default defineConfig({
@@ -2117,6 +2127,7 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       { path: 'langium-config.json', content: langiumConfig(composition) },
       { path: 'tsconfig.json', content: tsconfigJson(composition) },
       { path: 'tsconfig.test.json', content: TSCONFIG_TEST },
+      { path: 'test/tsconfig.json', content: TEST_DIR_TSCONFIG },
       { path: 'vitest.config.ts', content: VITEST_CONFIG },
       { path: '.gitignore', content: GITIGNORE },
       { path: 'README.md', content: readme(composition) },

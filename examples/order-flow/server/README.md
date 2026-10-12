@@ -88,7 +88,7 @@ What happened to each file `init` emits:
 | Verdict | Files |
 | --- | --- |
 | identical | `langium-config.json`, `tsconfig.json`, `tsconfig.test.json`, `src/services.ts` |
-| adapted | `package.json`, `vitest.config.ts`, `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, `src/head-ports.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers |
+| adapted | `package.json`, `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, `src/head-ports.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers |
 | replaced | the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules` |
 | dropped | `.gitignore` (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts` |
 | hand-written | everything else in `src/`, `scripts/` and `test/`, including the whole GLSP head |

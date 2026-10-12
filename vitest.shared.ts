@@ -22,7 +22,7 @@ const jsonrpcBrowser = join(dirname(createRequire(import.meta.url).resolve('vsco
  * `jest.config.cjs` that set only `displayName`.
  *
  * ONE base covers both ESM and CommonJS packages: Vitest transforms TypeScript
- * via esbuild and runs it in its own module runner, so the Jest ESM/CommonJS
+ * itself and runs it in its own module runner, so the Jest ESM/CommonJS
  * base split (`jest.base.cjs` / `jest.base.esm.cjs`, the
  * `--experimental-vm-modules` flag, the `.js`→`.ts` `moduleNameMapper`) is no
  * longer needed — Vite resolves `.js` specifiers to their `.ts` source itself.

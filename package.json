@@ -79,7 +79,7 @@
     "turbo": "^2.9.14",
     "typescript": "^7.0.2",
     "typescript-api": "npm:typescript@^6.0.3",
-    "vite": "~8.0.16",
+    "vite": "^8.3.4",
     "vitest": "^4.0.0",
     "vscode-jsonrpc": "9.0.0"
   },
@@ -97,7 +97,6 @@
   "//overrides": "Only langium is overridden; see `//langium`. The wire stack is not: every workspace that depends on vscode-languageserver-protocol or vscode-jsonrpc pins the versions vscode-languageserver pins and the init scaffold emits (the peers take ranges), so this tree resolves as an adopter's does. Langium, the LSP connection and the framework share one protocol and one 9.x transport, while @eclipse-glsp/* and Theia keep their own 8.x transports. Overriding those copies away would hide what an adopter's install hits: a message type built by one copy and sent over a connection from another throws 'Unknown parameter structure auto', which is why every connection carrying GLSP's typed messages goes through sendByMethodName. Like every override, langium's takes effect only after a from-scratch install (rm -rf node_modules + package-lock.json); a lockfile-only delete leaves stale nested copies.",
   "//puppeteer": "Puppeteer, a dependency of Theia's CLI, reads `puppeteer.skipDownload` from this manifest and so installs without downloading Chrome. Nothing here launches it, since the e2e suites drive Playwright's own Chromium; a tool that does launch it needs `npx puppeteer browsers install chrome` first.",
   "//typescript-api": "The TypeScript 6 compiler API that the gate scripts parsing source import as `typescript-api`. TypeScript 7's package exports `tsc` and `unstable/*` only, so `typescript` cannot serve them.",
-  "//vite": "vite is a DIRECT devDependency pinned to ~8.0.16 even though nothing imports it: we consume it as vitest's transform pipeline, and vite 8.1.x — which switched to rolldown 1.1.x — mis-transforms LEGACY TypeScript decorators. Every test file declaring an `@injectable()` class then fails to load with an opaque `SyntaxError: Invalid or unexpected token` before a single import runs (the inversify-based state/harness tests). vite 8.0.16 + rolldown 1.0.3 transform the same files correctly. It is declared as a devDependency rather than in `overrides` because there is no version CONFLICT to resolve: nothing else in the workspace declares a vite range, vitest simply asks for `^6 || ^7 || ^8`, and a fresh resolve takes the newest 8.x. A direct dependency states what we actually consume, stays visible to `npm ls` / audits, and leaves `overrides` for the single-physical-copy identity problems above. The trade-off is that it DEDUPES rather than forces, so after a from-scratch install re-verify that exactly ONE vite is installed and it is 8.0.x. The pin is transform-only — no product code depends on vite. Drop it once vite/rolldown fix the decorator transform; verify with `npm --prefix packages/glsp-server run test`.",
   "puppeteer": {
     "skipDownload": true
   }

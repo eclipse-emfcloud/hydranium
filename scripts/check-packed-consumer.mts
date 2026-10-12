@@ -51,6 +51,24 @@ const TYPESCRIPT_FLOOR = '5.4.5';
 /** A scaffold smoke starts a server and makes a handful of requests; one that hangs fails at this. */
 const SMOKE_TIMEOUT_MS = 2 * 60_000;
 
+/**
+ * A test declaring a decorated class, added to every scaffold: under vite 8 it
+ * loads only when a tsconfig the transform discovers includes the test.
+ */
+const DECORATED_TEST = `import { expect, it } from 'vitest';
+
+function marked(target: object): void {
+   Reflect.set(target, 'marked', true);
+}
+
+@marked
+class Decorated {}
+
+it('loads a test declaring a decorated class', () => {
+   expect(Reflect.get(Decorated, 'marked')).toBe(true);
+});
+`;
+
 /** The npm a workspace root declares, which lifts the scaffold's `vitest` hold when it also runs `init`. */
 const WORKSPACE_NPM = '11.15.0';
 
@@ -413,6 +431,7 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    if (vitest !== shape.vitest) throw new Error(`${shape.label}: init emitted vitest ${vitest}, expected ${shape.vitest}`);
    const repointed = repointFramework(join(project, 'package.json'), candidates);
    cpSync(join(root, 'scripts/fixtures/packed-consumer/scaffold-smoke.mjs'), join(project, 'scaffold-smoke.mjs'));
+   writeFileSync(join(project, 'test/decorated.test.ts'), DECORATED_TEST);
 
    shapeInstall('install');
    assertInstalledFrom(repointed, installRoot, member);
