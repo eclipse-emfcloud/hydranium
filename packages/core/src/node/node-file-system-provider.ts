@@ -23,7 +23,7 @@ import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from '../langium/worksp
 /**
  * Node-based default {@link WritableFileSystemProvider}. Extends Langium's
  * {@link NodeFileSystemProvider} with an async {@link writeFile} that
- * creates parent directories on demand, replaces the target indivisibly unless
+ * creates parent directories on demand, replaces the target whole unless
  * that would break a hard link, and registers the resulting mtime with the
  * {@link SelfSaveRegistry} bound at `services.workspace.SelfSaveRegistry` — so
  * consumers can suppress the `didChangeWatchedFiles` echo for their own writes.
@@ -143,7 +143,10 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
     * overwrite cannot offer that, because the target is truncated before the
     * first byte lands, so a reader in that window gets a short or empty file —
     * and a model file that fails to parse is worse than one holding a previous
-    * good revision. It does NOT serialise writers: two writers still race, and
+    * good revision. On Windows the replacing rename also leaves the name
+    * unresolvable for a moment, so a reader there can find the file missing
+    * (`ENOENT`) or refused (`EPERM`), never torn, and must not take either for
+    * a deletion. It does NOT serialise writers: two writers still race, and
     * the loser's content is replaced wholesale rather than interleaved.
     *
     * The destination is the RESOLVED path, via {@link realpath}: a `rename`

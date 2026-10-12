@@ -125,6 +125,9 @@ lost write. Because the replacement is a new file:
 - permission bits carry over, but ownership, extended attributes and ACLs do
   not. If your model files depend on those, write them through your own
   filesystem provider;
+- on Windows, a reader racing the replacement can find the file missing or
+  refused for a moment. If your code reads model files while the server saves
+  them, retry such a read before treating the file as deleted;
 - a file with more than one hard link is written in place instead. All its
   names see the new content and keep their attributes, but a reader can catch
   that write half-done.
