@@ -26,7 +26,9 @@ import {
    type ResolvedMessage,
    type RpcProxy,
    type TransferElement,
-   TransferDocument
+   TransferDocument,
+   type TransferWatchedDocument,
+   UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import { makeFakeDataPort, waitFor } from '@hydranium/protocol/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
@@ -39,19 +41,21 @@ import {
    DefaultClientSession,
    HydraniumTextDocuments,
    initializeWorkspaceProgrammatically,
+   RealpathDocumentUriPolicy,
    type ServerSharedServices
 } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
 import type {
    DataServerProtocol,
    TransferUpdateDocumentArgs,
+   TransferDocumentDeletedEvent,
    TransferDocumentDirtyChangedEvent,
    TransferUpdateDocumentsArgs,
    WatchModelDocumentArgs
 } from '@hydranium/protocol/data';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { type CancellationToken, FileChangeType } from 'vscode-languageserver';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -112,9 +116,10 @@ class RestoreProbeServer extends DataServer<DomainModel> {
       return super.updateModelDocuments(args);
    }
 
-   override async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
-      await super.watchModelDocument(args);
+   override async watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument> {
+      const answer = await super.watchModelDocument(args);
       await this.afterWatch?.();
+      return answer;
    }
 }
 
@@ -928,65 +933,264 @@ describe('DataSession when its document is deleted', () => {
    });
 
    it.each([
-      ['its file was deleted after a write, reporting the write lost', { created: false, written: true }],
-      ['its file was deleted with nothing unsaved, reporting nothing', { created: false, written: false }],
-      ['it was created and written but never saved, reporting it lost', { created: true, written: true }],
-      ['it was created and never saved, reporting it lost', { created: true, written: false }]
-   ])('forgets a document that is gone once it reconnects after the release grace, when %s', async (_case, { created, written }) => {
-      const { services, uri, newUri, path } = await boot(GRACE_MS);
-      const target = created ? newUri : uri;
-      const pairs: DuplexConnectionPair[] = [];
-      const servers: DataServer<DomainModel>[] = [];
-      let reconnectGate: Promise<void> | undefined;
-      const port = makeFakeDataPort({
-         connect: async () => {
-            await reconnectGate;
-            const pair = makeDuplexConnectionPair();
-            pairs.push(pair);
-            servers.push(new DataServer<DomainModel>(pair.left, services.shared));
-            return pair.right;
-         }
-      });
-      const connection = new DataConnectionWithEvents<DomainModel>(port);
-      const session = connection.createSession('form');
-      try {
-         if (created) {
-            await session.createDocument({ uri: target, text: CLEAN });
-         } else {
-            await session.openDocument({ uri: target });
-         }
-         if (written) {
-            await session.updateDocument({ uri: target, model: EDITED, baseVersion: 'any' });
-         }
+      ['its file was deleted after a write', { created: false, written: true }],
+      ['its file was deleted with nothing unsaved', { created: false, written: false }],
+      ['it was created and written but never saved', { created: true, written: true }],
+      ['it was created and never saved', { created: true, written: false }]
+   ])(
+      'forgets a document that is gone once it reconnects after the release grace, and tells the client, when %s',
+      async (_case, { created, written }) => {
+         const { services, uri, newUri, path } = await boot(GRACE_MS);
+         const target = created ? newUri : uri;
+         const client = reconnectingClient(() => services.shared);
+         const { connection, deleted } = client;
+         const session = connection.createSession('form');
+         try {
+            const opened = created
+               ? await session.createDocument({ uri: target, text: CLEAN })
+               : await session.openDocument({ uri: target });
+            if (written) {
+               await session.updateDocument({ uri: target, model: EDITED, baseVersion: 'any' });
+            }
 
-         // Held, so the session cannot reconnect before the document is gone.
-         let reconnect!: () => void;
-         reconnectGate = new Promise(resolve => (reconnect = resolve));
-         servers[0].dispose('lost');
-         pairs[0].dispose();
-         port.fireDispose();
-         if (!created) {
-            rmSync(path(FILE));
-            services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
-               changes: [{ uri: target, type: FileChangeType.Deleted }]
+            const reconnect = client.drop();
+            if (!created) {
+               rmSync(path(FILE));
+               services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
+                  changes: [{ uri: target, type: FileChangeType.Deleted }]
+               });
+            }
+            await outlastGrace();
+            await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, {
+               message: 'the document never left'
             });
+            reconnect();
+            await session.connected();
+
+            expect(deleted).toEqual([{ uri: opened.uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+            // Released by the drop, a created document's loss is reported too.
+            expect(client.port.reported.map(report => report.message.params)).toEqual(created ? [{ uris: target }] : []);
+            expect(services.shared.workspace.TextDocuments.isOpenInClient(target, session.clientId)).toBe(false);
+         } finally {
+            client.dispose();
          }
-         await outlastGrace();
-         await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, {
-            message: 'the document never left'
-         });
+      }
+   );
+
+   it('tells the client of a document gone across a server restart', async () => {
+      const { services, uri, path } = await boot();
+      let shared = services.shared;
+      const client = reconnectingClient(() => shared);
+      const session = client.connection.createSession('form');
+      try {
+         const opened = await session.openDocument({ uri });
+
+         const reconnect = client.drop();
+         rmSync(path(FILE));
+         const restarted = makeServices();
+         await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+         shared = restarted.shared;
          reconnect();
          await session.connected();
 
-         const lost = created || written;
-         expect(port.reported.map(report => report.message.code)).toEqual(lost ? [DATA_SESSION_UNSAVED_LOST.code] : []);
-         expect(port.reported.map(report => report.message.params)).toEqual(lost ? [{ uris: target }] : []);
-         expect(services.shared.workspace.TextDocuments.isOpenInClient(target, session.clientId)).toBe(false);
+         expect(client.deleted).toEqual([{ uri: opened.uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(client.port.reported).toEqual([]);
       } finally {
+         client.dispose();
+      }
+   });
+
+   it('tells the client once of a document a watch and a session both followed, gone while the connection was down', async () => {
+      const { services, uri, path } = await boot();
+      const client = reconnectingClient(() => services.shared);
+      const { connection, deleted } = client;
+      const session = connection.createSession('form');
+      try {
+         const watch = await connection.watchDocument(uri, 'outline');
+         const opened = await session.openDocument({ uri });
+
+         // Within the store's default release grace, which the deletion ends.
+         const reconnect = client.drop();
+         rmSync(path(FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         await waitFor(() => services.shared.model.ModelService.getDocument(uri) === undefined, { message: 'the document never left' });
+         reconnect();
+         await session.connected();
+         // Sent after the watch's own read back, so answered after it too.
+         await (await connection.connected()).getModelDocument({ uri });
+
+         expect(deleted).toEqual([{ uri: opened.uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(client.port.reported).toEqual([]);
+         watch.dispose();
+      } finally {
+         client.dispose();
+      }
+   });
+
+   it('tells the client of a watched document created while it watched, once gone while the connection was down', async () => {
+      const { services, newUri, path, connect } = await boot();
+      const client = reconnectingClient(() => services.shared);
+      const { connection, deleted } = client;
+      const writer = connect();
+      try {
+         const watch = await connection.watchDocument(newUri, 'outline');
+         const created = new Promise<void>(resolve => connection.events.onDidUpdateDocument(() => resolve()));
+         await writer.proxy.createSession({ clientId: SESSION });
+         await writer.proxy.createModelDocument({ uri: newUri, clientId: SESSION, text: CLEAN });
+         await writer.proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: CLEAN, baseVersion: 'any' });
+         await created;
+
+         const reconnect = client.drop();
+         rmSync(path(NEW_FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: newUri, type: FileChangeType.Deleted }] });
+         await waitFor(() => services.shared.model.ModelService.getDocument(newUri) === undefined, { message: 'the document never left' });
+         reconnect();
+         await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });
+
+         expect(deleted).toEqual([{ uri: newUri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         watch.dispose();
+      } finally {
+         client.dispose();
+      }
+   });
+
+   it('tells the client of a document watched through a symlink, gone while the connection was down, under the target the store keys it by', async () => {
+      scratch = await makeScratchWorkspaceHarness(
+         prepared => {
+            prepared.write(FILE, CLEAN);
+            symlinkSync(prepared.resolve(FILE), prepared.resolve('link.domain'), 'file');
+         },
+         {
+            extraSharedModules: [
+               { workspace: { DocumentUriPolicy: (shared: ServerSharedServices) => new RealpathDocumentUriPolicy(shared) } }
+            ]
+         }
+      );
+      const { harness: services, workspace } = scratch;
+      const target = workspace.uri(FILE);
+      const client = reconnectingClient(() => services.shared);
+      try {
+         const watch = await client.connection.watchDocument(workspace.uri('link.domain'), 'outline');
+
+         const reconnect = client.drop();
+         rmSync(workspace.resolve(FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
+         await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, { message: 'the document never left' });
+         reconnect();
+         await waitFor(() => client.deleted.length > 0, { message: 'the client heard no deletion' });
+
+         expect(client.deleted).toEqual([{ uri: target, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         watch.dispose();
+      } finally {
+         client.dispose();
+      }
+   });
+
+   it('tells the client of a document watched through a link to nothing, created while it watched and gone while the connection was down', async () => {
+      scratch = await makeScratchWorkspaceHarness(
+         prepared => {
+            symlinkSync(prepared.resolve(NEW_FILE), prepared.resolve('link.domain'), 'file');
+         },
+         {
+            extraSharedModules: [
+               { workspace: { DocumentUriPolicy: (shared: ServerSharedServices) => new RealpathDocumentUriPolicy(shared) } }
+            ]
+         }
+      );
+      const { harness: services, workspace } = scratch;
+      const target = workspace.uri(NEW_FILE);
+      const client = reconnectingClient(() => services.shared);
+      const writer = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, services.shared)
+      });
+      heads.push(writer);
+      try {
+         // Keyed by the target before it exists, so the target's events reach it.
+         const watch = await client.connection.watchDocument(workspace.uri('link.domain'), 'outline');
+         const created = new Promise<void>(resolve => client.connection.events.onDidUpdateDocument(() => resolve()));
+         await writer.proxy.createSession({ clientId: SESSION });
+         await writer.proxy.createModelDocument({ uri: target, clientId: SESSION, text: CLEAN });
+         await writer.proxy.saveModelDocument({ uri: target, clientId: SESSION, model: CLEAN, baseVersion: 'any' });
+         await created;
+
+         const reconnect = client.drop();
+         rmSync(workspace.resolve(NEW_FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
+         await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, { message: 'the document never left' });
+         reconnect();
+         await waitFor(() => client.deleted.length > 0, { message: 'the client heard no deletion' });
+
+         expect(client.deleted).toEqual([{ uri: target, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         watch.dispose();
+      } finally {
+         client.dispose();
+      }
+   });
+
+   it('tells the client of a watched document gone while the connection was down, and nothing of one never there', async () => {
+      const { services, uri, newUri, path } = await boot();
+      const client = reconnectingClient(() => services.shared);
+      const { connection, deleted } = client;
+      try {
+         const watch = await connection.watchDocument(uri, 'outline');
+         const waiting = await connection.watchDocument(newUri, 'outline');
+
+         const reconnect = client.drop();
+         rmSync(path(FILE));
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         await waitFor(() => services.shared.model.ModelService.getDocument(uri) === undefined, { message: 'the document never left' });
+         reconnect();
+         await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });
+         await (await connection.connected()).getModelDocument({ uri: newUri });
+
+         expect(deleted).toEqual([{ uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         watch.dispose();
+         waiting.dispose();
+      } finally {
+         client.dispose();
+      }
+   });
+});
+
+/**
+ * A {@link DataConnectionWithEvents} over a fresh server on the services
+ * `shared` answers for each connection, recording the deletions its client
+ * hears.
+ */
+function reconnectingClient(shared: () => ServerSharedServices) {
+   const pairs: DuplexConnectionPair[] = [];
+   const servers: DataServer<DomainModel>[] = [];
+   let reconnectGate: Promise<void> | undefined;
+   const port = makeFakeDataPort({
+      connect: async () => {
+         await reconnectGate;
+         const pair = makeDuplexConnectionPair();
+         pairs.push(pair);
+         servers.push(new DataServer<DomainModel>(pair.left, shared()));
+         return pair.right;
+      }
+   });
+   const connection = new DataConnectionWithEvents<DomainModel>(port);
+   const deleted: TransferDocumentDeletedEvent[] = [];
+   connection.events.onDidDeleteDocument(event => deleted.push(event));
+   return {
+      connection,
+      port,
+      deleted,
+      /** Drop the connection, holding the next one back until the returned call. */
+      drop: (): (() => void) => {
+         let reconnect!: () => void;
+         reconnectGate = new Promise(resolve => (reconnect = resolve));
+         servers.at(-1)?.dispose('lost');
+         pairs.at(-1)?.dispose();
+         port.fireDispose();
+         return reconnect;
+      },
+      dispose: (): void => {
          connection.dispose();
          servers.forEach(server => server.dispose());
          pairs.forEach(pair => pair.dispose());
          port.dispose();
       }
-   });
-});
+   };
+}

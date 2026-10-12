@@ -57,7 +57,8 @@ import type {
    ReferenceContext,
    TransferDiagnostic,
    TransferElement,
-   TransferSavedDocument
+   TransferSavedDocument,
+   TransferWatchedDocument
 } from '@hydranium/protocol';
 import type {
    CloseSessionArgs,
@@ -157,6 +158,10 @@ export interface CanaryDefects {
    readonly ignoreEdits?: boolean;
    /** `watchModelDocument` registers nothing, so no event is ever delivered. */
    readonly silentSubscriptions?: boolean;
+   /** `watchModelDocument` answers that a document exists whatever the URI holds. */
+   readonly watchClaimsDocument?: boolean;
+   /** `watchModelDocument` answers a position no event sent later passes. */
+   readonly watchAnswersPastEvents?: boolean;
    /** Updates are fanned out regardless of the subscription table. */
    readonly notifiesBeforeSubscribe?: boolean;
    /** A write's own update event is reported as rebuilt rather than changed. */
@@ -277,6 +282,8 @@ export class CanaryDataServer {
    /** What each save wrote, by URI: the file a last close goes back to. */
    private readonly disk = new Map<string, string>();
    private readonly watched = new Set<string>();
+   /** The position of the last event sent, which each event and watch answer carries. */
+   private sequence = 0;
    /** Live session ids, and the URIs each has open. */
    private readonly sessions = new Map<string, Set<string>>();
    /** Opens left behind by an ended session, under `sessionOpensSurviveEnd`. */
@@ -507,7 +514,12 @@ export class CanaryDataServer {
             ? { ...document, model: { ...document.model, diagnostics: undefined } }
             : document;
       if (this.watched.has(args.uri) || this.defects.notifiesBeforeSubscribe) {
-         this.events.push({ document, sourceClientId: args.clientId, reason: this.defects.ownWriteRebuilt ? 'rebuilt' : 'changed' });
+         this.events.push({
+            document,
+            sourceClientId: args.clientId,
+            reason: this.defects.ownWriteRebuilt ? 'rebuilt' : 'changed',
+            sequence: ++this.sequence
+         });
       }
       // The fake's stand-in for a dependency graph: editing `valid` "rebuilds"
       // the fixture's dependent. A Map holds no references, so the relation is
@@ -525,16 +537,22 @@ export class CanaryDataServer {
          this.events.push({
             document: this.envelope(CANARY_DEPENDENT_URI),
             sourceClientId: this.defects.dependentCreditedToOpener && opener !== undefined ? opener : UNKNOWN_CLIENT_ID,
-            reason: 'rebuilt'
+            reason: 'rebuilt',
+            sequence: ++this.sequence
          });
       }
       return answer;
    }
 
-   async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
+   async watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument> {
       if (!this.defects.silentSubscriptions) {
          this.watched.add(args.uri);
       }
+      return {
+         uri: args.uri,
+         exists: this.defects.watchClaimsDocument === true || this.documents.has(args.uri),
+         sequence: this.defects.watchAnswersPastEvents ? Number.MAX_SAFE_INTEGER : this.sequence
+      };
    }
 
    async unwatchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
@@ -595,7 +613,11 @@ export class CanaryDataServer {
             opens.delete(args.uri);
          }
       }
-      this.deletions.push({ uri: args.uri, sourceClientId: this.defects.deletionUnattributed ? UNKNOWN_CLIENT_ID : args.clientId });
+      this.deletions.push({
+         uri: args.uri,
+         sourceClientId: this.defects.deletionUnattributed ? UNKNOWN_CLIENT_ID : args.clientId,
+         sequence: ++this.sequence
+      });
    }
 
    /** The answer to a save or persist: nothing writes between the take and the answer here, so the version written is the one stored. */

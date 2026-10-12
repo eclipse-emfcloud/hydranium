@@ -21,6 +21,8 @@ import { type ServerSharedServicesMinimal } from '../shared-services.js';
  */
 export interface RealpathCapableFileSystem {
    realpath?(uri: URI): URI | undefined;
+   /** `uri` with its links followed, those to nothing included; see `WritableFileSystemProvider.resolveLinks`. */
+   resolveLinks?(uri: URI): URI;
 }
 
 /**
@@ -149,11 +151,13 @@ export class DefaultDocumentUriPolicy implements DocumentUriPolicy {
  * The raw `realpath` syscall lives on the `FileSystemProvider`
  * (`@hydranium/core/node`'s `DefaultFileSystemProvider`), not here — this policy
  * is pure routing over that seam, so it carries no `node:fs` import and is
- * browser-neutral. Both methods follow the *same* policy: `canonicalUri` falls
- * back to the syntactic form when the path can't be resolved (optimistic — a
- * file that appears later canonicalises to the same key once present), while
- * `loadUri` returns `undefined` for an absent path (honest about existence, so a
- * caller about to read the filesystem skips it).
+ * browser-neutral. Both methods follow the *same* policy: `canonicalUri` keys a
+ * path that can't be resolved by the links it follows, where the provider has
+ * `resolveLinks`, else by its syntactic form (optimistic — a file that appears
+ * later canonicalises to the same key once present, also one reached through a
+ * link that pointed at nothing), while `loadUri` returns `undefined` for an
+ * absent path (honest about existence, so a caller about to read the
+ * filesystem skips it).
  *
  * If the provider for a URI's scheme has no `realpath` (in-memory / browser /
  * empty), the framework's `FileSystemProviderRegistry` returns the URI
@@ -173,9 +177,14 @@ export class RealpathDocumentUriPolicy extends DefaultDocumentUriPolicy {
 
    override canonicalUri(uri: URI | string): CanonicalUri {
       const parsed = UriUtils.toUri(uri);
-      const real = parsed && this.fs.realpath?.(parsed);
-      // Mint via `asCanonicalUri` once normalised; absent / unresolvable paths
-      // (and a provider without `realpath`) fall back to the syntactic form.
+      // An absent path keys by the links it follows, so a file reached through
+      // a link keys the same before it exists and once it does; a provider
+      // without `resolveLinks`, or without `realpath`, keys it syntactically.
+      // `resolveLinks` alone where it exists: it resolves a present path as
+      // `realpath` does, and asking both would cost an absent path a second
+      // miss.
+      const real = parsed && (this.fs.resolveLinks ? this.fs.resolveLinks(parsed) : this.fs.realpath?.(parsed));
+      // Mint via `asCanonicalUri` once normalised.
       return real ? asCanonicalUri(UriUtils.normalize(real)) : super.canonicalUri(uri);
    }
 

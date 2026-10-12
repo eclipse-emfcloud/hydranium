@@ -63,6 +63,7 @@ function makeHarness(options: { readonly withChild?: boolean } = {}): WatchHarne
       server: {
          async watchModelDocument(args) {
             subscribes.push(args);
+            return { uri: args.uri, exists: true, sequence: 0 };
          },
          async unwatchModelDocument(args) {
             if (childDead) {
@@ -131,12 +132,14 @@ describe('runWatch', () => {
       harness.fire({
          document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 1, { $type: 'FakeRoot', v: 1 }, 'hash'),
          sourceClientId: 'editor-1',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 1
       });
       harness.fire({
          document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }, 'hash'),
          sourceClientId: 'editor-1',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 2
       });
 
       controller.abort();
@@ -169,12 +172,14 @@ describe('runWatch', () => {
       harness.fire({
          document: TransferDocument.create<FakeRoot>('file:///workspace/B.fake', 1, { $type: 'FakeRoot', v: 1 }, 'hash'),
          sourceClientId: 'editor-1',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 3
       });
       harness.fire({
          document: TransferDocument.create<FakeRoot>('file:///workspace/A.fake', 2, { $type: 'FakeRoot', v: 2 }, 'hash'),
          sourceClientId: 'editor-1',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 4
       });
 
       controller.abort();

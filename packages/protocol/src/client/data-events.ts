@@ -59,7 +59,11 @@ export class DataEvents<
    readonly onDidSaveDocument: Event<TransferDocumentSavedEvent<TTransfer, TDiagnostic>> = this.documentSavedEmitter.event;
    /** A watched document's text started or stopped differing from its file. */
    readonly onDidChangeDocumentDirty: Event<TransferDocumentDirtyChangedEvent> = this.documentDirtyChangedEmitter.event;
-   /** A document's backing file was removed, watched or not. Any watch survives. */
+   /**
+    * A document's backing file was removed, watched or not. Any watch
+    * survives. After a reconnect, also a document a session had open or a
+    * watch followed that went while the connection was down.
+    */
    readonly onDidDeleteDocument: Event<TransferDocumentDeletedEvent> = this.documentDeletedEmitter.event;
    /** Documents built that nobody watches — re-read anything derived from them. */
    readonly onDidBuildDocuments: Event<TransferDocumentsBuiltEvent> = this.documentsBuiltEmitter.event;

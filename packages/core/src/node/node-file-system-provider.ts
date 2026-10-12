@@ -11,8 +11,9 @@ import { type Tracer } from '@hydranium/protocol';
 import { type FileSystemNode, URI, UriUtils } from '@hydranium/langium';
 import { NodeFileSystemProvider } from '@hydranium/langium/node';
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { readlinkSync, realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import { isFileNotFound } from '../langium/workspace/file-not-found.js';
 import { type SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
@@ -314,6 +315,40 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
          return undefined;
       }
    }
+
+   /**
+    * The path `uri` names with every link followed, a link to nothing
+    * included, so a file reached through a link keys the same before it
+    * exists and once it does. What is missing is joined as spelled under the
+    * real path of what exists. A non-`file:` URI passes through unchanged.
+    */
+   resolveLinks(uri: URI): URI {
+      return uri.scheme === 'file' ? URI.file(followLinks(uri.fsPath)) : uri;
+   }
+}
+
+/** `path` with its links followed; see `DefaultFileSystemProvider.resolveLinks`. */
+function followLinks(path: string, hops = 0): string {
+   try {
+      return realpathSync(path);
+   } catch {
+      // Absent somewhere along the way.
+   }
+   // A link to nothing is followed to what it names; a chain is bounded as
+   // the kernel bounds one.
+   if (hops < 40) {
+      let target: string | undefined;
+      try {
+         target = readlinkSync(path);
+      } catch {
+         // Not a link, or not there.
+      }
+      if (target !== undefined) {
+         return followLinks(resolve(dirname(path), target), hops + 1);
+      }
+   }
+   const parent = dirname(path);
+   return parent === path ? path : join(followLinks(parent, hops), basename(path));
 }
 
 /** The "no content here" rejection, for a URI naming no readable file. */

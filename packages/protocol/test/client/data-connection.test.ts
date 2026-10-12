@@ -22,7 +22,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { ResponseError, type MessageConnection } from 'vscode-jsonrpc';
+import { type Disposable, ResponseError, type MessageConnection } from 'vscode-jsonrpc';
 import { type Clock, SystemClock } from '../../src/clock';
 import { FRAMEWORK_CLIENT_IDS, UNKNOWN_CLIENT_ID } from '../../src/client-ids';
 import {
@@ -41,7 +41,13 @@ import {
    type DataSessionFactory,
    type DataSessionHost
 } from '../../src/client/data-session';
-import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol, type TransferDocumentDirtyChangedEvent } from '../../src/data';
+import {
+   DATA_SERVER_WIRE_PREFIX,
+   type DataClientProtocol,
+   type DataServerProtocol,
+   type TransferDocumentDeletedEvent,
+   type TransferDocumentDirtyChangedEvent
+} from '../../src/data';
 import {
    ConflictError,
    DuplicateClientIdError,
@@ -167,8 +173,12 @@ interface ServerBehaviour {
    dirty?: Map<string, boolean>;
    /** Runs as a watch arrives, before it answers. */
    beforeWatch?: (uri: string) => void;
-   /** Held before a watch answers. */
+   /** Held before a watch takes its answer. */
    watchGate?: Promise<void>;
+   /** Held after a watch has taken its answer, before it is sent. */
+   answerGate?: Promise<void>;
+   /** The position of the last event sent, which every event and watch answer carries. */
+   sent?: { sequence: number };
    /**
     * Per URI, the text the server holds. Set, every answer carries it as its
     * `text.hash`, and a write replaces it with the written model.
@@ -265,13 +275,20 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          record('create', args);
          return document(answered(args.uri));
       },
-      watchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
+      watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('watch', args);
          behaviour.beforeWatch?.(args.uri);
          await behaviour.watchGate;
          if (behaviour.failWatch) {
             throw new Error('watch refused');
          }
+         // Taken once the watch is in place, as a server answers it, with the
+         // position of the last event sent; an event sent while the answer
+         // waits to go out counts past it.
+         const sent = (behaviour.sent ??= { sequence: 0 });
+         const answer = { uri: answered(args.uri), exists: !behaviour.gone?.has(args.uri), sequence: sent.sequence };
+         await behaviour.answerGate;
+         return answer;
       },
       unwatchModelDocument: async (args: { uri: string; clientId: string }): Promise<void> => {
          record('unwatch', args);
@@ -374,6 +391,11 @@ class InspectableConnection extends DataConnection<ProbeElement> {
    get toldDirty(): ReadonlyMap<string, boolean> {
       return this.dirtyStates;
    }
+
+   /** How many watches record the events heard while they are in flight. */
+   get watchesInFlight(): number {
+      return this.heardInFlight.size;
+   }
 }
 
 interface Harness {
@@ -403,6 +425,7 @@ function harness(
 ): Harness {
    const calls: ServerCall[] = [];
    const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
+   const sent = (behaviour.sent ??= { sequence: 0 });
    const port = makeFakeDataPort({
       connect: () => {
          const pair = makeDuplexConnectionPair();
@@ -437,10 +460,13 @@ function harness(
          pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentUpdated`, {
             document: document(uri, 1, undefined, text),
             sourceClientId,
-            reason
+            reason,
+            sequence: ++sent.sequence
          }),
       notifyDeleted: (uri, sourceClientId = UNKNOWN_CLIENT_ID) =>
-         pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDeleted`, { uri, sourceClientId }),
+         pairs
+            .at(-1)!
+            .left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDeleted`, { uri, sourceClientId, sequence: ++sent.sequence }),
       dispose: () => {
          connection.dispose();
          pairs.forEach(closeEnds);
@@ -503,6 +529,35 @@ function recordsOf(session: DataSession<ProbeElement>): ReadonlySet<string> {
 }
 
 const of = (calls: readonly ServerCall[], ...methods: Method[]): ServerCall[] => calls.filter(call => methods.includes(call.method));
+
+/**
+ * A harness whose sessions log to `lines`, as `level uri`, each line that
+ * says a document is gone; restore the log level with `restoreLevel`.
+ */
+function loggingHarness(behaviour: ServerBehaviour): Harness & { readonly lines: string[]; restoreLevel(): void } {
+   const lines: string[] = [];
+   class GoneLog extends NoopLogger {
+      override withUri(uri: string): this {
+         return this.with(uri);
+      }
+
+      protected override emit(level: LogLevel, _label: string, message: string): void {
+         if (message.includes('is gone')) {
+            lines.push(`${level} ${this.component?.split('] [').at(-1)}`);
+         }
+      }
+   }
+   const previousLevel = Logger.getLevel();
+   Logger.setLevel('debug');
+   return { ...harness(behaviour, 10_000, undefined, undefined, new GoneLog()), lines, restoreLevel: () => Logger.setLevel(previousLevel) };
+}
+
+/** The deletions `events` delivers, from now on: which document, by whom. */
+function deletionsOf(events: DataEvents<ProbeElement>): TransferDocumentDeletedEvent[] {
+   const deletions: TransferDocumentDeletedEvent[] = [];
+   events.onDidDeleteDocument(event => deletions.push({ uri: event.uri, sourceClientId: event.sourceClientId }));
+   return deletions;
+}
 
 describe('DataConnection.lifecycle hooks', () => {
    it('reports connecting then ready around the two waits', async () => {
@@ -2351,6 +2406,7 @@ describe('DataConnection.watchDocument', () => {
       const { connection, calls, dropTransport, dispose } = harness({ failWatch: true });
       try {
          await expect(connection.watchDocument(URI_A)).rejects.toThrow(/watch refused/);
+         expect(connection.watchesInFlight).toBe(0);
          const before = calls.length;
 
          dropTransport();
@@ -2710,6 +2766,7 @@ describe('DataConnection.watchDocument', () => {
          await tick(5);
 
          expect(port.reported).toEqual([]);
+         expect(connection.watchesInFlight).toBe(0);
       } finally {
          answer.release();
          dispose();
@@ -3036,6 +3093,517 @@ describe('DataConnection.watchDocument', () => {
          }
       });
    }
+});
+
+describe('DataConnection.watchDocument and a document gone while its connection was down', () => {
+   /** A harness counting the reads its server answered, and the deletions its client heard. */
+   function watching(behaviour: ServerBehaviour = {}): Harness & {
+      readonly deletions: TransferDocumentDeletedEvent[];
+      /** Drop the transport, and wait until a read after the reconnect has answered and been acted on. */
+      reconnect(): Promise<void>;
+   } {
+      let reads = 0;
+      const beforeRead = behaviour.beforeRead;
+      behaviour.beforeRead = uri => {
+         reads++;
+         beforeRead?.(uri);
+      };
+      const target = harness(behaviour, 10_000);
+      const deletions = deletionsOf(target.events);
+      return {
+         ...target,
+         deletions,
+         reconnect: async () => {
+            const before = reads;
+            target.dropTransport();
+            await waitFor(() => reads > before, { message: 'nothing was read after the reconnect' });
+            // The answer, and what the connection does with it.
+            await tick(5);
+         }
+      };
+   }
+
+   const gone = { uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID };
+
+   it('tells the client once of a watched document gone while its connection was down', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, deletions, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+         behaviour.gone = new Set([URI_A]);
+
+         await reconnect();
+         expect(deletions).toEqual([gone]);
+         await reconnect();
+         expect(deletions).toEqual([gone]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client again of a watched document created again and gone once more by a later reconnect', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, events, deletions, notifyUpdated, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+         behaviour.gone = new Set([URI_A]);
+         await reconnect();
+         const heard = new Promise<void>(resolve => events.onDidUpdateDocument(() => resolve()));
+         behaviour.gone = undefined;
+         await notifyUpdated(URI_A, 'back', 'other');
+         await heard;
+
+         behaviour.gone = new Set([URI_A]);
+         await reconnect();
+
+         expect(deletions).toEqual([gone, gone]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing of a watched document that was never there', async () => {
+      const behaviour: ServerBehaviour = { gone: new Set([URI_A]) };
+      const { connection, deletions, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+
+         await reconnect();
+
+         expect(deletions).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client of a watched document created while it watched, once gone while its connection was down', async () => {
+      const behaviour: ServerBehaviour = { gone: new Set([URI_A]) };
+      const { connection, events, deletions, notifyUpdated, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+         const heard = new Promise<void>(resolve => events.onDidUpdateDocument(() => resolve()));
+         behaviour.gone = undefined;
+         await notifyUpdated(URI_A, 'created', 'other');
+         await heard;
+         behaviour.gone = new Set([URI_A]);
+
+         await reconnect();
+
+         expect(deletions).toEqual([gone]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing again of a watched document whose deletion it heard', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, deletions, notifyDeleted, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+         await notifyDeleted(URI_A, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         behaviour.gone = new Set([URI_A]);
+
+         await reconnect();
+
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing of a watched document still there after a reconnect', async () => {
+      const { connection, deletions, reconnect, dispose } = watching();
+      try {
+         await connection.watchDocument(URI_A);
+
+         await reconnect();
+
+         expect(deletions).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('names the deletion by the key the server answered the watch with', async () => {
+      const spelled = 'file:///A.x';
+      const behaviour: ServerBehaviour = { canonical: uri => (uri === spelled ? URI_A : uri) };
+      const { connection, deletions, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(spelled);
+         behaviour.gone = new Set([spelled]);
+
+         await reconnect();
+
+         expect(deletions).toEqual([gone]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('names the deletion by the key the re-watch answered, where the server resolves the URI to another file than before', async () => {
+      const spelled = 'file:///A.x';
+      const behaviour: ServerBehaviour = { canonical: uri => (uri === spelled ? URI_A : uri) };
+      const { connection, deletions, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(spelled);
+         // A link re-pointed at a file that is not there: what the client
+         // followed is gone where the link now points, not where it did.
+         behaviour.gone = new Set([spelled]);
+         behaviour.canonical = uri => (uri === spelled ? URI_B : uri);
+
+         await reconnect();
+
+         expect(deletions).toEqual([{ uri: URI_B, sourceClientId: UNKNOWN_CLIENT_ID }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client once of a document two watches and a session followed', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, deletions, reconnect, dispose } = watching(behaviour);
+      try {
+         await connection.watchDocument(URI_A);
+         await connection.watchDocument(URI_A);
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.gone = new Set([URI_A]);
+         behaviour.failOpens = new Set([URI_A]);
+
+         await reconnect();
+         await panel.connected();
+         await tick(5);
+
+         expect(deletions).toEqual([gone]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the watch when the client throws on the deletion a reconnect found', async () => {
+      class Throwing extends DataEvents<ProbeElement> {
+         override onDocumentDeleted(): void {
+            throw new Error('listener failed');
+         }
+      }
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour, undefined, new Throwing());
+      try {
+         await connection.watchDocument(URI_A);
+         behaviour.gone = new Set([URI_A]);
+         let reads = 0;
+         behaviour.beforeRead = () => reads++;
+
+         dropTransport();
+         await waitFor(() => reads === 1, { message: 'nothing was read after the reconnect' });
+         await tick(5);
+         dropTransport();
+
+         await waitFor(() => of(calls, 'watch').length === 3, { message: 'the watch was not sent again' });
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client nothing again of a deletion heard before its watch answered', async () => {
+      const held = gate();
+      const behaviour: ServerBehaviour = { watchGate: held.promise };
+      const { connection, calls, deletions, notifyDeleted, reconnect, dispose } = watching(behaviour);
+      try {
+         const watched = connection.watchDocument(URI_A);
+         await waitFor(() => of(calls, 'watch').length === 1, { message: 'the watch was never sent' });
+         await notifyDeleted(URI_A);
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         // Answered after the deletion, as a server answers once the watch is in place.
+         behaviour.gone = new Set([URI_A]);
+         behaviour.watchGate = undefined;
+         held.release();
+         await watched;
+
+         await reconnect();
+
+         expect(deletions).toEqual([gone]);
+      } finally {
+         held.release();
+         dispose();
+      }
+   });
+
+   describe('while the watch after a reconnect is under way', () => {
+      /**
+       * Watch, then drop with the document gone, holding the watch sent after
+       * the reconnect at `at`, before its answer is taken or after, until
+       * `release`; `unhold` lets later watches through.
+       */
+      async function heldWatch(
+         behaviour: ServerBehaviour,
+         target: ReturnType<typeof watching>,
+         at: 'watchGate' | 'answerGate' = 'watchGate'
+      ): Promise<{ watch: Disposable; release(): void; unhold(): void }> {
+         const watch = await target.connection.watchDocument(URI_A);
+         const held = gate();
+         const before = of(target.calls, 'watch').length;
+         behaviour.gone = new Set([URI_A]);
+         behaviour[at] = held.promise;
+         target.dropTransport();
+         await waitFor(() => of(target.calls, 'watch').length > before, { message: 'nothing was watched after the reconnect' });
+         return { watch, release: held.release, unhold: () => (behaviour[at] = undefined) };
+      }
+
+      it('tells the client only the deletion it heard meanwhile', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const { release } = await heldWatch(behaviour, target);
+            await target.notifyDeleted(URI_A, 'other');
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+
+            release();
+            await tick(5);
+
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('tells the client of no deletion when the document came back meanwhile', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const { release } = await heldWatch(behaviour, target);
+            const heard = new Promise<void>(resolve => target.events.onDidUpdateDocument(() => resolve()));
+            behaviour.gone = undefined;
+            await target.notifyUpdated(URI_A, 'back', 'other');
+            await heard;
+
+            release();
+            await tick(5);
+
+            expect(target.deletions).toEqual([]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('tells the client only the deletion it heard when the document came back and went again meanwhile', async () => {
+         let reads = 0;
+         const behaviour: ServerBehaviour = { beforeRead: () => reads++ };
+         const target = watching(behaviour);
+         try {
+            const { release } = await heldWatch(behaviour, target);
+            const heard = new Promise<void>(resolve => target.events.onDidUpdateDocument(() => resolve()));
+            await target.notifyUpdated(URI_A, 'back', 'other');
+            await heard;
+            await target.notifyDeleted(URI_A, 'other');
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+
+            const before = reads;
+            release();
+            // Read back only once the answer was acted on.
+            await waitFor(() => reads > before, { message: 'the watch never read the document back' });
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+
+            // Held gone, so a later reconnect still finding it gone tells nothing again.
+            await target.reconnect();
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('tells the client of no deletion when an update sent after the watch took its answer is newer than it', async () => {
+         let reads = 0;
+         const behaviour: ServerBehaviour = { beforeRead: () => reads++ };
+         const target = watching(behaviour);
+         try {
+            const { release } = await heldWatch(behaviour, target, 'answerGate');
+            const heard = new Promise<void>(resolve => target.events.onDidUpdateDocument(() => resolve()));
+            // Sent after the server took its answer, which still holds the document gone.
+            await target.notifyUpdated(URI_A, 'back', 'other');
+            await heard;
+
+            const before = reads;
+            release();
+            await waitFor(() => reads > before, { message: 'the watch never read the document back' });
+            expect(target.deletions).toEqual([]);
+            expect(target.connection.watchesInFlight).toBe(0);
+
+            // Held existing, so a later reconnect finding it gone tells it.
+            await target.reconnect();
+            expect(target.deletions).toEqual([gone]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('takes the answer over a deletion sent before it was taken, on the first watch', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const held = gate();
+            behaviour.watchGate = held.promise;
+            const watch = target.connection.watchDocument(URI_A);
+            await waitFor(() => of(target.calls, 'watch').length > 0, { message: 'the watch was never sent' });
+            // Deleted before the answer was taken, then created again with no update.
+            await target.notifyDeleted(URI_A);
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+            held.release();
+            behaviour.watchGate = undefined;
+            await watch;
+
+            behaviour.gone = new Set([URI_A]);
+            await target.reconnect();
+
+            expect(target.deletions).toEqual([gone, gone]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('takes the answer over a deletion sent before it was taken, on a re-watch', async () => {
+         let reads = 0;
+         const behaviour: ServerBehaviour = { beforeRead: () => reads++ };
+         const target = watching(behaviour);
+         try {
+            await target.connection.watchDocument(URI_A);
+            const held = gate();
+            const before = of(target.calls, 'watch').length;
+            behaviour.watchGate = held.promise;
+            target.dropTransport();
+            await waitFor(() => of(target.calls, 'watch').length > before, { message: 'nothing was watched after the reconnect' });
+            // Deleted before the answer was taken, then created again with no update.
+            await target.notifyDeleted(URI_A, 'other');
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+            const read = reads;
+            held.release();
+            behaviour.watchGate = undefined;
+            await waitFor(() => reads > read, { message: 'the watch never read the document back' });
+
+            behaviour.gone = new Set([URI_A]);
+            await target.reconnect();
+
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }, gone]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('takes a deletion sent after the answer was taken over it, on the first watch', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const held = gate();
+            behaviour.answerGate = held.promise;
+            const watch = target.connection.watchDocument(URI_A);
+            await waitFor(() => of(target.calls, 'watch').length > 0, { message: 'the watch was never sent' });
+            // Deleted once the answer was taken, which holds the document existing.
+            await target.notifyDeleted(URI_A, 'other');
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+            held.release();
+            behaviour.answerGate = undefined;
+            await watch;
+
+            // Held gone, so a later reconnect still finding it gone tells nothing again.
+            behaviour.gone = new Set([URI_A]);
+            await target.reconnect();
+
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('takes a deletion sent after the answer was taken over it, on a re-watch', async () => {
+         let reads = 0;
+         const behaviour: ServerBehaviour = { beforeRead: () => reads++ };
+         const target = watching(behaviour);
+         try {
+            await target.connection.watchDocument(URI_A);
+            const held = gate();
+            const before = of(target.calls, 'watch').length;
+            behaviour.answerGate = held.promise;
+            target.dropTransport();
+            await waitFor(() => of(target.calls, 'watch').length > before, { message: 'nothing was watched after the reconnect' });
+            // Deleted once the answer was taken, which holds the document existing.
+            await target.notifyDeleted(URI_A, 'other');
+            await waitFor(() => target.deletions.length === 1, { message: 'the deletion never arrived' });
+            const read = reads;
+            held.release();
+            behaviour.answerGate = undefined;
+            await waitFor(() => reads > read, { message: 'the watch never read the document back' });
+
+            // Held gone, so a later reconnect still finding it gone tells nothing again.
+            behaviour.gone = new Set([URI_A]);
+            await target.reconnect();
+
+            expect(target.deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('holds a document existing that an update sent after the first watch took its answer names, over the answer', async () => {
+         let reads = 0;
+         const behaviour: ServerBehaviour = { beforeRead: () => reads++, gone: new Set([URI_A]) };
+         const target = watching(behaviour);
+         try {
+            const held = gate();
+            behaviour.answerGate = held.promise;
+            const watch = target.connection.watchDocument(URI_A);
+            await waitFor(() => of(target.calls, 'watch').length > 0, { message: 'the watch was never sent' });
+            const heard = new Promise<void>(resolve => target.events.onDidUpdateDocument(() => resolve()));
+            // Sent after the server took its answer, which holds the document gone.
+            await target.notifyUpdated(URI_A, 'back', 'other');
+            await heard;
+            held.release();
+            behaviour.answerGate = undefined;
+            await watch;
+            expect(target.connection.watchesInFlight).toBe(0);
+
+            await target.reconnect();
+
+            expect(target.deletions).toEqual([gone]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('tells the client of no deletion for a watch disposed meanwhile', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const { watch, release } = await heldWatch(behaviour, target);
+            watch.dispose();
+
+            release();
+            await tick(5);
+
+            expect(target.deletions).toEqual([]);
+         } finally {
+            target.dispose();
+         }
+      });
+
+      it('tells the client of the deletion once a later reconnect watches again, after a drop cut the watch short', async () => {
+         const behaviour: ServerBehaviour = {};
+         const target = watching(behaviour);
+         try {
+            const { release, unhold } = await heldWatch(behaviour, target);
+            unhold();
+
+            await target.reconnect();
+            release();
+            await tick(5);
+
+            expect(target.deletions).toEqual([gone]);
+         } finally {
+            target.dispose();
+         }
+      });
+   });
 });
 
 describe('DataConnection.reportError', () => {
@@ -3936,6 +4504,7 @@ describe('DataSession when a document is deleted', () => {
    });
 
    it.each([
+      ['succeeds', undefined],
       ['fails', 'error'],
       ['conflicts', 'conflict']
    ] as const)('reports nothing for a document deleted while the restore writes it again and the write %s', async (_outcome, refusal) => {
@@ -4285,10 +4854,128 @@ describe('DataSession when a document is deleted', () => {
       }
    });
 
-   it('reports a document created after the deletion as lost when it is gone, after a save sent before the deletion answered', async () => {
+   it('reports a document it created and never saved when a watch finds it gone before the restore', async () => {
       const behaviour: ServerBehaviour = {};
       const target = harness(behaviour, 10_000);
       const { connection, calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+         await connection.watchDocument(URI_A);
+         const before = calls.length;
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+         // The session registers again only once the watch told the deletion.
+         const held = gate();
+         behaviour.createGate = held.promise;
+
+         dropTransport();
+         await waitFor(() => of(calls.slice(before), 'createSession').length > 0, { message: 'the session never registered again' });
+         await waitFor(() => deletions.length === 1, { message: 'the watch told no deletion' });
+         held.release();
+         await panel.connected();
+
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a document it created and never saved when a watch finds it gone and a second drop cuts the registration short', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = harness(behaviour, 10_000);
+      const { connection, calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+         await connection.watchDocument(URI_A);
+         const before = calls.length;
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+         const held = gate();
+         behaviour.createGate = held.promise;
+
+         dropTransport();
+         await waitFor(() => of(calls.slice(before), 'createSession').length > 0, { message: 'the session never registered again' });
+         await waitFor(() => deletions.length === 1, { message: 'the watch told no deletion' });
+         dropTransport();
+         behaviour.createGate = undefined;
+         held.release();
+         await connection.connected();
+
+         await waitFor(() => port.reported.length > 0, { message: 'the loss was never reported' });
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+         // Told once per generation: the watch's, then the restore's on the next.
+         expect(new Set(deletions.map(deletion => deletion.uri))).toEqual(new Set([URI_A]));
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports at once a document it created and never saved whose deletion naming no session is heard outside a restore', async () => {
+      const target = harness({}, 10_000);
+      const { connection, port, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a document it created and never saved whose deletion naming no session is heard while it registers again', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = harness(behaviour, 10_000);
+      const { connection, calls, port, dropTransport, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+         const before = calls.length;
+         const held = gate();
+         behaviour.createGate = held.promise;
+
+         dropTransport();
+         await waitFor(() => of(calls.slice(before), 'createSession').length > 0, { message: 'the session never registered again' });
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+         held.release();
+         await panel.connected();
+
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+         expect(of(calls.slice(before), 'open')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a document it created and never saved that another session deleted', async () => {
+      const target = harness({}, 10_000);
+      const { connection, port, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+
+         await notifyDeleted(URI_A, 'other');
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a document created after the deletion when it is gone, after a save sent before the deletion answered', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = loggingHarness(behaviour);
+      const { connection, calls, port, lines, dropTransport, restoreLevel, dispose } = target;
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -4306,8 +4993,11 @@ describe('DataSession when a document is deleted', () => {
          dropTransport();
          await panel.connected();
 
-         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         // The first is the deletion heard before the create.
+         expect(lines).toEqual([`debug ${URI_A}`, `warn ${URI_A}`]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
       } finally {
+         restoreLevel();
          dispose();
       }
    });
@@ -4731,9 +5421,10 @@ describe('DataSession.deleteDocument at each of its awaits', () => {
       }
    });
 
-   it('reports the unsaved text of a document whose delete landed while the connection dropped, as gone while it was down', async () => {
+   it('tells the client of a document whose delete landed while the connection dropped, as gone while it was down', async () => {
       const behaviour: ServerBehaviour = { silentDeletes: true };
-      const { connection, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const deletions = deletionsOf(events);
       const held = gate();
       try {
          const panel = connection.createSession('panel', 'panel');
@@ -4749,7 +5440,8 @@ describe('DataSession.deleteDocument at each of its awaits', () => {
          await expect(deleting).rejects.toThrow();
          await panel.connected();
 
-         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(port.reported).toEqual([]);
          expect(serverUrisOf(panel).size).toBe(0);
       } finally {
          held.release();
@@ -4959,9 +5651,10 @@ describe('DataSession.openDocument while a close is under way', () => {
 });
 
 describe('DataSession.restore of a document that is gone', () => {
-   it('forgets a document gone while the connection was down, and reports its unsaved writes lost', async () => {
+   it('forgets a document gone while the connection was down, tells the client of it once, and logs its unsaved writes at warn', async () => {
       const behaviour: ServerBehaviour = {};
-      const { connection, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, calls, port, lines, dropTransport, restoreLevel, dispose } = loggingHarness(behaviour);
+      const deletions = deletionsOf(events);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -4973,22 +5666,26 @@ describe('DataSession.restore of a document that is gone', () => {
          dropTransport();
          await panel.connected();
 
-         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
-         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(port.reported).toEqual([]);
+         expect(lines).toEqual([`warn ${URI_A}`]);
          expect(serverUrisOf(panel).size).toBe(0);
          expect(of(calls.slice(before), 'update', 'watch')).toEqual([]);
          const again = calls.length;
          dropTransport();
          await panel.connected();
          expect(of(calls.slice(again), 'open')).toEqual([]);
+         expect(deletions).toHaveLength(1);
       } finally {
+         restoreLevel();
          dispose();
       }
    });
 
-   it('forgets a gone document it holds nothing unsaved of, and reports nothing', async () => {
+   it('logs at debug a gone document it holds nothing unsaved of', async () => {
       const behaviour: ServerBehaviour = {};
-      const { connection, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, port, lines, dropTransport, restoreLevel, dispose } = loggingHarness(behaviour);
+      const deletions = deletionsOf(events);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -4998,16 +5695,97 @@ describe('DataSession.restore of a document that is gone', () => {
          dropTransport();
          await panel.connected();
 
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
          expect(port.reported).toEqual([]);
+         expect(lines).toEqual([`debug ${URI_A}`]);
          expect(serverUrisOf(panel).size).toBe(0);
+      } finally {
+         restoreLevel();
+         dispose();
+      }
+   });
+
+   it('names the deletion by the URI the server answered the open with', async () => {
+      const spelled = 'file:///A.x';
+      const behaviour: ServerBehaviour = { canonical: uri => (uri === spelled ? URI_A : uri) };
+      const { connection, events, dropTransport, dispose } = harness(behaviour, 10_000);
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: spelled });
+         behaviour.failOpens = new Set([spelled]);
+         behaviour.gone = new Set([spelled]);
+         // A gone file no longer resolves to the key it was open under.
+         behaviour.canonical = undefined;
+
+         dropTransport();
+         await panel.connected();
+
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
       } finally {
          dispose();
       }
    });
 
-   it('reports a document it created and never saved as lost when it is gone', async () => {
+   it('tells the client once of a document two sessions had open, and each forgets it', async () => {
       const behaviour: ServerBehaviour = {};
-      const { connection, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const tree = connection.createSession('tree', 'tree');
+         await panel.openDocument({ uri: URI_A });
+         await tree.openDocument({ uri: URI_A });
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+
+         dropTransport();
+         await panel.connected();
+         await tree.connected();
+
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect([serverUrisOf(panel).size, serverUrisOf(tree).size]).toEqual([0, 0]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('goes on restoring when the client throws on the deletion', async () => {
+      class Throwing extends DataEvents<ProbeElement> {
+         override onDocumentDeleted(): void {
+            throw new Error('listener failed');
+         }
+      }
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, port, dropTransport, dispose } = harness(behaviour, 10_000, new Throwing());
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         const before = calls.length;
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+
+         dropTransport();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'open', 'watch').map(call => `${call.method} ${call.uri}`)).toEqual([
+            `open ${URI_A}`,
+            `open ${URI_B}`,
+            `watch ${URI_B}`
+         ]);
+         expect([...serverUrisOf(panel).keys()]).toEqual([URI_B]);
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports, and logs at warn, a document it created and never saved when it is gone', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, events, port, lines, dropTransport, restoreLevel, dispose } = loggingHarness(behaviour);
+      const deletions = deletionsOf(events);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.createDocument({ uri: URI_A, text: 'created' });
@@ -5017,9 +5795,11 @@ describe('DataSession.restore of a document that is gone', () => {
          dropTransport();
          await panel.connected();
 
-         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
-         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
+         expect(lines).toEqual([`warn ${URI_A}`]);
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
       } finally {
+         restoreLevel();
          dispose();
       }
    });
@@ -5029,9 +5809,10 @@ describe('DataSession.restore of a document that is gone', () => {
       ['closed and opened again', 'reopen'],
       ['heard turn clean after another client saved it', 'clean'],
       ['heard another client write over', 'superseded']
-   ] as const)('reports nothing for a document it created and then %s when it is gone', async (_how, step) => {
+   ] as const)('logs at debug a document it created and then %s when it is gone', async (_how, step) => {
       const behaviour: ServerBehaviour = {};
-      const { connection, events, port, notifyDirty, notifyUpdated, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, port, lines, notifyDirty, notifyUpdated, dropTransport, restoreLevel, dispose } =
+         loggingHarness(behaviour);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.createDocument({ uri: URI_A, text: 'created' });
@@ -5063,19 +5844,394 @@ describe('DataSession.restore of a document that is gone', () => {
          dropTransport();
          await panel.connected();
 
+         expect(lines).toEqual([`debug ${URI_A}`]);
          expect(port.reported).toEqual([]);
       } finally {
+         restoreLevel();
          dispose();
       }
    });
 
-   it('writes nothing of a set written together one of whose documents is gone, and reports both lost', async () => {
+   it('writes nothing of a set written together one of whose documents a watch finds gone before the restore', async () => {
       const texts = new Map([
          [URI_A, 'clean'],
          [URI_B, 'clean']
       ]);
       const behaviour: ServerBehaviour = { texts };
-      const { connection, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, events, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await connection.watchDocument(URI_B);
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+            ]
+         });
+         const before = calls.length;
+         behaviour.failOpens = new Set([URI_B]);
+         behaviour.gone = new Set([URI_B]);
+         // The session registers again only once the watch told the deletion.
+         const held = gate();
+         behaviour.createGate = held.promise;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await waitFor(() => deletions.length === 1, { message: 'the watch told no deletion' });
+         held.release();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
+      } finally {
+         dispose();
+      }
+   });
+
+   /** A session that wrote A and B in one call, on a harness whose texts the test can move. */
+   async function setWritten(behaviour: ServerBehaviour, target: Harness): Promise<DataSession<ProbeElement>> {
+      const panel = target.connection.createSession('panel', 'panel');
+      const openedA = await panel.openDocument({ uri: URI_A });
+      const openedB = await panel.openDocument({ uri: URI_B });
+      await panel.updateDocuments({
+         updates: [
+            { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
+            { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+         ]
+      });
+      return panel;
+   }
+
+   it('writes nothing of a set written together one of whose documents is deleted while the session registers again', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = await setWritten(behaviour, target);
+         const before = calls.length;
+         const held = gate();
+         behaviour.createGate = held.promise;
+         behaviour.failOpens = new Set([URI_B]);
+         behaviour.gone = new Set([URI_B]);
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await waitFor(() => of(calls.slice(before), 'createSession').length > 0, { message: 'the session never registered again' });
+         await target.notifyDeleted(URI_B, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         held.release();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+         expect(recordsOf(panel).has(URI_B)).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing of a set written together one of whose documents is deleted after the restore re-opened it', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = await setWritten(behaviour, target);
+         const before = calls.length;
+         const held = gate();
+         behaviour.beforeWatch = uri => {
+            if (uri === URI_B) {
+               behaviour.watchGate = held.promise;
+            }
+         };
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'clean');
+         await waitFor(() => of(calls.slice(before), 'watch').some(call => call.uri === URI_B), { message: 'the restore never watched B' });
+         await target.notifyDeleted(URI_B, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         behaviour.watchGate = undefined;
+         held.release();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+         expect(recordsOf(panel).has(URI_B)).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing of a set one of whose documents is deleted while a registration that is then refused runs', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = await setWritten(behaviour, target);
+         const before = calls.length;
+         const held = gate();
+         behaviour.createGate = held.promise;
+         behaviour.refuseSessions = true;
+
+         dropTransport();
+         await waitFor(() => of(calls.slice(before), 'createSession').length > 0, { message: 'the session never registered again' });
+         await target.notifyDeleted(URI_B, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         held.release();
+         await expect(panel.connected()).rejects.toThrow();
+         behaviour.createGate = undefined;
+         behaviour.refuseSessions = false;
+         texts.set(URI_A, 'clean');
+         dropTransport();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toContainEqual({ uris: URI_A });
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing of a set one of whose documents another client deleted before the drop', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { calls, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = await setWritten(behaviour, target);
+         await target.notifyDeleted(URI_B, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         const before = calls.length;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps no write of a document deleted once a restore has ended', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { connection, dropTransport, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: 'any' });
+         dropTransport();
+         await panel.connected();
+
+         await target.notifyDeleted(URI_A, 'other');
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(recordsOf(panel).size).toBe(0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps no write of a document deleted after the restore decided its set', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const target = harness(behaviour, 10_000);
+      const { calls, dropTransport, dispose } = target;
+      const deletions = deletionsOf(target.events);
+      try {
+         const panel = await setWritten(behaviour, target);
+         const before = calls.length;
+         const held = gate();
+         // Each document holds the set's write, so nothing is sent again,
+         // and the restore's only reads are those of the dirty states.
+         texts.set(URI_A, textOf('edited-a'));
+         texts.set(URI_B, textOf('edited-b'));
+         let reading = false;
+         behaviour.beforeRead = () => (reading = true);
+         behaviour.readGate = held.promise;
+
+         dropTransport();
+         await waitFor(() => reading, { message: 'the restore never read a dirty state' });
+         await target.notifyDeleted(URI_B, 'other');
+         await waitFor(() => deletions.length === 1, { message: 'the deletion never arrived' });
+         held.release();
+         await panel.connected();
+
+         expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(recordsOf(panel).has(URI_B)).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it.each([
+      ['binds no method', false, false],
+      ['binds no method, also when a watch finds it gone', false, true],
+      ['leaves the deletion out of the methods it binds', true, false],
+      ['leaves the deletion out of the methods it binds, also when a watch finds it gone', true, true]
+   ])('reports the unsaved text of a gone document when the client %s', async (_how, implemented, watched) => {
+      const behaviour: ServerBehaviour = {};
+      const calls: ServerCall[] = [];
+      const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
+      const port = makeFakeDataPort({
+         connect: () => {
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            recordingServer(pair.left, calls, behaviour);
+            return pair.right;
+         }
+      });
+      // A request/response-only client, or one implementing every method but binding only updates.
+      const client = implemented ? new DataEvents<ProbeElement>() : {};
+      const clientMethods: (keyof DataClientProtocol<ProbeElement>)[] = implemented ? ['onDocumentUpdated'] : [];
+      const deleted = vi.fn();
+      if (client instanceof DataEvents) {
+         client.onDidDeleteDocument(deleted);
+      }
+      const connection = new DataConnection<ProbeElement, DataServerProtocol<ProbeElement>, Partial<DataClientProtocol<ProbeElement>>>(
+         port,
+         client,
+         { clientMethods }
+      );
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         if (watched) {
+            await connection.watchDocument(URI_A);
+         }
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+         // The session registers again only once a watch read the document back.
+         let reads = 0;
+         behaviour.beforeRead = () => reads++;
+         const held = gate();
+         behaviour.createGate = watched ? held.promise : undefined;
+
+         port.fireDispose();
+         closeEnds(pairs.at(-1)!);
+         if (watched) {
+            await waitFor(() => reads > 0, { message: 'the watch never read the document' });
+            await tick(5);
+         }
+         held.release();
+         await panel.connected();
+
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
+         expect(deleted).not.toHaveBeenCalled();
+      } finally {
+         connection.dispose();
+         pairs.forEach(closeEnds);
+      }
+   });
+
+   it('tells a client nothing of a dirty state a restore read, through a method it leaves out of those it binds', async () => {
+      const behaviour: ServerBehaviour = { dirty: new Map([[URI_A, true]]) };
+      const calls: ServerCall[] = [];
+      const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
+      const port = makeFakeDataPort({
+         connect: () => {
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            recordingServer(pair.left, calls, behaviour);
+            return pair.right;
+         }
+      });
+      const client = new DataEvents<ProbeElement>();
+      const flips = vi.fn();
+      client.onDidChangeDocumentDirty(flips);
+      const connection = new DataConnection<ProbeElement, DataServerProtocol<ProbeElement>, Partial<DataClientProtocol<ProbeElement>>>(
+         port,
+         client,
+         { clientMethods: ['onDocumentUpdated'] }
+      );
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await connection.watchDocument(URI_B);
+
+         port.fireDispose();
+         closeEnds(pairs.at(-1)!);
+         await panel.connected();
+         await waitFor(() => of(calls, 'watch').filter(call => call.uri === URI_B).length === 2, { message: 'the watch never came back' });
+         await (await connection.connected()).getModelDocument({ uri: URI_B });
+
+         expect(flips).not.toHaveBeenCalled();
+      } finally {
+         connection.dispose();
+         pairs.forEach(closeEnds);
+      }
+   });
+
+   it('reports the unsaved text of a gone document to a host that cannot tell the client of the deletion', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, events, port, dropTransport, dispose } = harness(
+         behaviour,
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         (clientId, host, label) => new BoundedSession(clientId, { ...host, restoreDeletion: undefined }, label, 10_000)
+      );
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+
+         dropTransport();
+         await panel.connected();
+
+         expect(deletions).toEqual([]);
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
+      } finally {
+         dispose();
+      }
+   });
+
+   it('writes nothing of a set written together one of whose documents is gone, tells the client of that one first, and reports the other lost', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, events, calls, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const reportedAtDeletion: number[] = [];
+      const deletions = deletionsOf(events);
+      events.onDidDeleteDocument(() => reportedAtDeletion.push(port.reported.length));
       try {
          const panel = connection.createSession('panel', 'panel');
          const openedA = await panel.openDocument({ uri: URI_A });
@@ -5095,16 +6251,18 @@ describe('DataSession.restore of a document that is gone', () => {
          await panel.connected();
 
          expect(of(calls.slice(before), 'update', 'updates')).toEqual([]);
+         expect(deletions).toEqual([{ uri: URI_B, sourceClientId: UNKNOWN_CLIENT_ID }]);
+         expect(reportedAtDeletion).toEqual([0]);
          expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
-         expect(port.reported[0].message.params).toEqual({ uris: `${URI_B}, ${URI_A}` });
+         expect(port.reported[0].message.params).toEqual({ uris: URI_A });
       } finally {
          dispose();
       }
    });
 
-   it('reports nothing for a created document a restore read back clean, when it is gone later', async () => {
+   it('logs at debug a created document a restore read back clean, when it is gone later', async () => {
       const behaviour: ServerBehaviour = {};
-      const { connection, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, port, lines, dropTransport, restoreLevel, dispose } = loggingHarness(behaviour);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.createDocument({ uri: URI_A, text: 'created' });
@@ -5118,16 +6276,18 @@ describe('DataSession.restore of a document that is gone', () => {
          dropTransport();
          await panel.connected();
 
+         expect(lines).toEqual([`debug ${URI_A}`]);
          expect(port.reported).toEqual([]);
       } finally {
+         restoreLevel();
          dispose();
       }
    });
 
-   it('reports the lost text of a created document once, not again when it is gone later', async () => {
+   it('reports the lost text of a created document once, and logs it at debug when it is gone later', async () => {
       const texts = new Map([[URI_A, 'created']]);
       const behaviour: ServerBehaviour = { texts };
-      const { connection, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const { connection, port, lines, dropTransport, restoreLevel, dispose } = loggingHarness(behaviour);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.createDocument({ uri: URI_A, text: 'created' });
@@ -5143,14 +6303,175 @@ describe('DataSession.restore of a document that is gone', () => {
          await panel.connected();
 
          expect(port.reported).toHaveLength(1);
+         expect(lines).toEqual([`debug ${URI_A}`]);
+      } finally {
+         restoreLevel();
+         dispose();
+      }
+   });
+
+   it.each([
+      ['an opened document it reads gone', { created: false, gone: true, tells: true }],
+      ['a document it created and never saved that it reads gone', { created: true, gone: true, tells: true }],
+      ['a written document it reads gone, to a host that cannot tell the client', { created: false, gone: true, tells: false }],
+      ['a document it could not re-open for another reason', { created: false, gone: false, tells: true }]
+   ])('tells and reports nothing when the session is disposed while the restore reads %s', async (_case, { created, gone, tells }) => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, events, port, dropTransport, dispose } = harness(
+         behaviour,
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         (clientId, host, label) => new BoundedSession(clientId, tells ? host : { ...host, restoreDeletion: undefined }, label, 10_000)
+      );
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         if (created) {
+            await panel.createDocument({ uri: URI_A, text: 'created' });
+         } else {
+            await panel.openDocument({ uri: URI_A });
+            await panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         }
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = gone ? new Set([URI_A]) : undefined;
+         const held = gate();
+         let reading = false;
+         behaviour.beforeRead = () => (reading = true);
+         behaviour.readGate = held.promise;
+
+         dropTransport();
+         const restoring = panel.connected().catch(() => undefined);
+         await waitFor(() => reading, { message: 'the restore never read the document' });
+         panel.dispose();
+         held.release();
+         await restoring;
+         await tick(5);
+
+         expect(deletions).toEqual([]);
+         expect(port.reported).toEqual([]);
       } finally {
          dispose();
       }
    });
 
-   it('reports a document whose re-open fails when the read fails as well', async () => {
+   it('reports nothing when the session is disposed while the restore reads a second gone document, after the first went into its report', async () => {
       const behaviour: ServerBehaviour = {};
       const { connection, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+         await panel.openDocument({ uri: URI_B });
+         behaviour.failOpens = new Set([URI_A, URI_B]);
+         behaviour.gone = new Set([URI_A, URI_B]);
+         const held = gate();
+         let reading = false;
+         behaviour.beforeRead = uri => {
+            if (uri === URI_B) {
+               reading = true;
+               behaviour.readGate = held.promise;
+            }
+         };
+
+         dropTransport();
+         const restoring = panel.connected().catch(() => undefined);
+         await waitFor(() => reading, { message: 'the restore never read the second document' });
+         panel.dispose();
+         held.release();
+         await restoring;
+         await tick(5);
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells and reports nothing when the session is disposed while the restore reads a dirty state', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const dirty = new Map([[URI_A, false]]);
+      const behaviour: ServerBehaviour = { texts, dirty };
+      const { connection, events, port, dropTransport, notifyDirty, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await panel.updateDocument({ uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version });
+         await notifyDirty(URI_A, false);
+         await waitFor(() => connection.toldDirty.get(URI_A) === false, { message: 'the clean state never arrived' });
+         const flips: unknown[] = [];
+         events.onDidChangeDocumentDirty(event => flips.push(event));
+         // Made dirty, and B written over, by another client while the connection was down.
+         dirty.set(URI_A, true);
+         texts.set(URI_B, 'theirs');
+         const held = gate();
+         let reading = false;
+         const readAfterDispose: string[] = [];
+         behaviour.beforeRead = uri => {
+            if (uri === URI_A) {
+               reading = true;
+               behaviour.readGate = held.promise;
+            }
+            if (panel.isDisposed) {
+               readAfterDispose.push(uri);
+            }
+         };
+
+         dropTransport();
+         const restoring = panel.connected().catch(() => undefined);
+         await waitFor(() => reading, { message: 'the restore never read a dirty state' });
+         panel.dispose();
+         held.release();
+         await restoring;
+         await tick(5);
+
+         expect(flips).toEqual([]);
+         expect(port.reported).toEqual([]);
+         // Nothing is read for a session its caller has ended.
+         expect(readAfterDispose).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells the client only the deletion it heard while the restore read the document', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = harness(behaviour, 10_000);
+      const { connection, events, dropTransport, dispose } = target;
+      const deletions = deletionsOf(events);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
+         const held = gate();
+         let reading = false;
+         behaviour.beforeRead = () => (reading = true);
+         behaviour.readGate = held.promise;
+
+         dropTransport();
+         const restoring = panel.connected();
+         await waitFor(() => reading, { message: 'the restore never read the document' });
+         await target.notifyDeleted(URI_A, 'other');
+         await waitFor(() => deletions.length > 0, { message: 'the deletion never arrived' });
+         held.release();
+         await restoring;
+
+         expect(deletions).toEqual([{ uri: URI_A, sourceClientId: 'other' }]);
+         expect(serverUrisOf(panel).size).toBe(0);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a document whose re-open fails when the read fails as well, and tells the client of no deletion', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, events, port, dropTransport, dispose } = harness(behaviour, 10_000);
+      const deletions = deletionsOf(events);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -5162,19 +6483,22 @@ describe('DataSession.restore of a document that is gone', () => {
 
          expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_RESTORE_FAILED.code]);
          expect(serverUrisOf(panel).size).toBe(0);
+         expect(deletions).toEqual([]);
       } finally {
          dispose();
       }
    });
 
-   it('reports nothing for a document forgotten while the restore reads it', async () => {
+   it('reports nothing, and tells the client of no deletion, for a document closed while the restore reads it gone', async () => {
       const behaviour: ServerBehaviour = {};
       const target = harness(behaviour, 10_000);
-      const { connection, port, dropTransport, dispose } = target;
+      const { connection, events, port, dropTransport, dispose } = target;
+      const deletions = deletionsOf(events);
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
          behaviour.failOpens = new Set([URI_A]);
+         behaviour.gone = new Set([URI_A]);
          const held = gate();
          let reading = false;
          behaviour.beforeRead = () => (reading = true);
@@ -5190,6 +6514,7 @@ describe('DataSession.restore of a document that is gone', () => {
          await closing;
 
          expect(port.reported).toEqual([]);
+         expect(deletions).toEqual([]);
       } finally {
          dispose();
       }

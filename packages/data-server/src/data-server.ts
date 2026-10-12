@@ -44,6 +44,7 @@ import {
    type TransferDiagnostic,
    TransferDocument,
    type TransferSavedDocument,
+   type TransferWatchedDocument,
    type TransferElement,
    UNKNOWN_CLIENT_ID,
    textHash
@@ -470,6 +471,12 @@ export class DataServer<
     */
    protected readonly watchKeys = new Map<string, Map<string, string>>();
    /**
+    * The position of the last update or deletion event sent, which each
+    * such event carries, and a watch's answer carries as of the moment it
+    * took whether its document exists: an event past it was sent after.
+    */
+   protected eventSequence = 0;
+   /**
     * The live client sessions this connection registered, by client id. A
     * document request carrying one of these ids acts as that session; one
     * carrying any other id fails. A session leaves once it ends, so a
@@ -781,11 +788,11 @@ export class DataServer<
    }
 
    /**
-    * Record a watch for `(uri, clientId)`. Subsequent phase events on `uri`
-    * fan out to the wired `clientProxy.onDocumentUpdated`. The
-    * bidirectional pattern means the event channel is the client
-    * notification surface, not a returned handle — this method only
-    * registers the watcher in {@link uriWatchRecords}.
+    * Record a watch for `(uri, clientId)` in {@link uriWatchRecords}.
+    * Subsequent phase events on `uri` fan out to the wired
+    * `clientProxy.onDocumentUpdated`. The bidirectional pattern means the
+    * event channel is the client notification surface, not a returned
+    * handle.
     *
     * Also baselines the URI's emission fingerprint (see
     * {@link dispatchPhaseEvent}) to the document's current state when the
@@ -793,8 +800,12 @@ export class DataServer<
     * the watch with no observable change is suppressed — watchers obtain
     * initial state via `getModelDocument` (or {@link openModelDocument}) and
     * do not need a redundant phase notification for that same state.
+    *
+    * Answers once the document is loaded as a read loads it, with the key
+    * events name it by and whether a document exists, taken after the watch
+    * is in place and the load, so an event sent while it loads is older.
     */
-   async watchModelDocument(args: WatchModelDocumentArgs): Promise<void> {
+   async watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument> {
       const uri = this.canonicalKey(args.uri);
       const keys = this.watchKeys.get(args.clientId) ?? new Map<string, string>();
       this.watchKeys.set(args.clientId, keys.set(args.uri, uri));
@@ -808,6 +819,15 @@ export class DataServer<
             record.fingerprintVersion = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
          }
       }
+      // As for a read, only a missing document counts as none. A file briefly
+      // unreadable leaves the builder's placeholder, and is there all the same.
+      // Whether it exists and the position of the last event sent are read
+      // in one synchronous run, so an event sent after is past the position.
+      const answer = (exists: boolean): TransferWatchedDocument => ({ uri, exists, sequence: this.eventSequence });
+      return this.modelService.ensureDocumentState(args.uri).then(
+         () => answer(this.modelService.getDocument(args.uri) !== undefined),
+         (error: unknown) => answer(!this.isMissingDocument(error, args.uri))
+      );
    }
 
    /**
@@ -1360,7 +1380,7 @@ export class DataServer<
          record.sentVersion = undefined;
          this.pruneUriWatchRecord(uri);
       }
-      this.clientProxy.onDocumentDeleted({ uri, sourceClientId: event.sourceClientId });
+      this.clientProxy.onDocumentDeleted({ uri, sourceClientId: event.sourceClientId, sequence: ++this.eventSequence });
    }
 
    /** Fan out a save event for the document's URI, gated on the URI's watchers. */
@@ -1460,7 +1480,8 @@ export class DataServer<
       const wireEvent: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic> = {
          document: this.envelope(document.uri, fingerprint),
          sourceClientId: releaseBuild ? DOCUMENT_RELEASE_CLIENT_ID : sourceClientId,
-         reason
+         reason,
+         sequence: ++this.eventSequence
       };
       const mark = afterRelease ? `, release mark: opened v${openedVersion ?? '-'}, attributed ${sourceClientId}` : '';
       this.tracer

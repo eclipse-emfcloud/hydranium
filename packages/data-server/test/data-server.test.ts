@@ -929,10 +929,32 @@ describe('DataServer', () => {
             bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_B), URI.parse(URI_A)]);
             await waitFor(() => deletions.length >= 2);
 
+            // Each carries its position among the events sent.
             expect(deletions).toEqual([
-               { uri: URI_B, sourceClientId: UNKNOWN_CLIENT_ID },
-               { uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID }
+               { uri: URI_B, sourceClientId: UNKNOWN_CLIENT_ID, sequence: 1 },
+               { uri: URI_A, sourceClientId: UNKNOWN_CLIENT_ID, sequence: 2 }
             ]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers a watch with the position of the last event sent, which the next event passes', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { proxy, events, deletions, pair } = makeHarness(bundle.services);
+         try {
+            const first = await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-1' });
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A-v2' }));
+            await waitFor(() => events.length >= 1);
+            const second = await proxy.watchModelDocument({ uri: URI_A, clientId: 'sub-2' });
+            bundle.documentBuilder.fireOnUpdate([], [URI.parse(URI_A)]);
+            await waitFor(() => deletions.length >= 1);
+
+            expect(first.sequence).toBe(0);
+            expect(events.map(event => event.sequence)).toEqual([1]);
+            expect(second.sequence).toBe(1);
+            expect(deletions.map(deletion => deletion.sequence)).toEqual([2]);
          } finally {
             pair.dispose();
          }

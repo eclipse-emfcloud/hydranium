@@ -78,7 +78,7 @@ class FakeServer {
 }
 
 function updated(uri: string): TransferDocumentUpdatedEvent<FakeTransfer, TransferDiagnostic> {
-   return { document: TransferDocument.create(uri, 1, ROOT, 'hash'), reason: 'changed', sourceClientId: 'client-a' };
+   return { document: TransferDocument.create(uri, 1, ROOT, 'hash'), reason: 'changed', sourceClientId: 'client-a', sequence: 1 };
 }
 
 function saved(uri: string): TransferDocumentSavedEvent<FakeTransfer, TransferDiagnostic> {

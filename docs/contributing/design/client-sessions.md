@@ -130,14 +130,54 @@ it. It does not wait for its calls in flight, as a close does: a restore in that
 wait would re-open the file that is gone. It unwatches rather than closes,
 because the server keeps the watch of a deleted file, and a close could end a
 re-open of a re-created file still in flight. The connection hears the deletion
-only when its client binds `onDocumentDeleted`. A document that went while the
-connection was down, deleted or released with no file behind it, reaches the
-session as no deletion: its restore finds the re-open failing and a read of it
-answering without a model, and forgets it the same way. No one else learns of
-that loss, so unsaved text the document took with it, written since its last
-save or never saved since the session created it, goes into the
-`DATA_SESSION_UNSAVED_LOST` report; a deletion the session heard is only
-logged, since the client hears it too.
+only when its client binds `onDocumentDeleted`. Unsaved text the document took
+with it is logged, since the client hears the deletion too. A document the
+session created and never saved is reported as well when the deletion names no
+session: it has no file a watcher could see removed, so the deletion can only
+be the release of the text a drop left behind.
+
+A document that went while the connection was down, deleted or released with no
+file behind it, reaches the session as no deletion: its restore finds the
+re-open failing and a read of it answering without a model, forgets it the same
+way, and tells the connection's client of the deletion under the unknown
+client, naming the URI the open answered with. The server cannot: it sends a
+deletion only over a live connection, and a restarted server has no memory of
+what was deleted. A document the session created and never saved went because
+the drop released it, not because anyone deleted it, so it also goes into the
+`DATA_SESSION_UNSAVED_LOST` report.
+
+A watch of `watchDocument` learns whether its document exists from the answer
+to `watchModelDocument`: the key the server's events name the document by, and
+whether one exists, taken once the watch is in place and the document loaded.
+An event can still go out between the server taking the answer and sending
+it, so every update and deletion event carries its position among them, and
+the answer the position of the last one sent as of the moment it was taken.
+An event heard while the watch was in flight wins over the answer where its
+position is past the answer's; otherwise the answer wins, as it must over a
+deletion that was sent before the watch was placed and whose document was then
+re-created with no update, since an update goes out only to a placed watch. A
+read of the client's own would not be ordered against the watch's events.
+
+Only a missing document answers that none exists: one that fails to load
+otherwise is there all the same, and a reconnect tells no deletion of it. A
+reconnect whose watch answers that no document exists tells the client of a
+deletion only where the client last heard one did, so a watch of a document
+not created yet tells nothing; a document created while it watches counts as
+heard only through an `onDocumentUpdated` the client binds.
+
+Under `RealpathDocumentUriPolicy` a file reached through a link keys by the
+link's target whether the target is there or not, so a watch made through a
+link to nothing hears the target created and is told of its deletion.
+
+A deletion found this way goes to the client alone. The sessions do not hear
+it: each finds its own losses in its own restore, which a deletion arriving
+part-way through would otherwise change under it. The connection tells each
+URI once per reconnect, however many sessions and watches follow it. A
+document the connection follows through no session and no watch is not told,
+although a live connection hears every deletion: nothing records what the
+client knew of it. A client that binds no `onDocumentDeleted` is told nothing
+either; a restore then reports the unsaved text a gone document took with it
+(`DATA_SESSION_UNSAVED_LOST`), since nothing else tells of the loss.
 
 The session's own `deleteDocument` ends the same way: the server sends the
 deletion before it answers, and the session forgets the document on hearing
@@ -183,7 +223,10 @@ is reported rather than written again. The session drops a document's record
 on its own save, a close, the deletion of its file, the document turning clean,
 and another client writing over it while the connection holds, so the report
 covers only what the drop cost. A document closed or deleted while a restore
-runs is neither restored nor reported.
+runs is neither restored nor reported. A document another client deleted
+blocks its set, as one that cannot be re-opened does, whenever its deletion
+arrived: written again without it, the set would no longer be the one its
+caller wrote together.
 
 ### In Theia
 
@@ -355,7 +398,9 @@ scheme is in [Service placement](service-placement.md).
 When a build reports a file deleted, every open of that file closes, except the
 editor's: an editor keeps the buffer of a deleted file and goes on sending
 changes for it. A session that writes the file afterwards gets
-`DocumentNotOpenError`.
+`DocumentNotOpenError`. A document waiting out the release grace is released at
+once: the lost client's re-open would otherwise take its text back, and the
+document would live on with no file behind it.
 
 A session's `delete` takes that same path: it removes the file in the file's
 disk queue, then has a build remove the document, and resolves once that build
@@ -371,9 +416,7 @@ deletion names the deleting session, and every other deletion the unknown
 client. A document no build has reached yet is built first, since a build
 removes only a document it has. The file removed is the one the store keys the
 document by, so under `RealpathDocumentUriPolicy` a delete through a symlink
-removes its target and leaves the link. A watch ends under the key its URI
-resolved to when it was made, since the link no longer resolves once the target
-is gone.
+removes its target and leaves the link, which still keys by the target.
 
 The mark refuses session writes only. A change the editor, a file watcher or a
 recovery build requests before the build starts merges over the deletion, and

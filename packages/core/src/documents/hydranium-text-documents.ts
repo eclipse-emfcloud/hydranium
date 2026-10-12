@@ -583,6 +583,14 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       }
    }
 
+   /** Release now a document waiting out the grace, as its last close would have; one that is not waiting is left alone. */
+   protected releaseIfDeferred(uri: CanonicalUri): void {
+      if (this.documentReleaseScheduler.isDeferred(uri)) {
+         this.documentReleaseScheduler.cancel(uri);
+         this.releaseDocument(uri);
+      }
+   }
+
    /**
     * Drop the document no client has open any more, announce it on
     * {@link onDidReleaseDocument}, then hand it to the
@@ -1310,7 +1318,9 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
 
    /**
     * The file behind `uri` was deleted: close every open of it except the
-    * language client's.
+    * language client's, and release now a document waiting out the grace,
+    * whose lost client's open would otherwise bring its text back with no
+    * file behind it.
     *
     * The editor's open is left alone because the editor owns it: it keeps the
     * buffer of a deleted file and goes on sending changes for it, and a store
@@ -1324,6 +1334,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.notifyDidCloseTextDocument({ textDocument: { uri: key } }, clientId);
          }
       }
+      this.releaseIfDeferred(key);
    }
 
    /**
@@ -1343,10 +1354,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       }
       // A document waiting out the grace has no client left to close, and is
       // released now as its last close would have released it.
-      if (this.documentReleaseScheduler.isDeferred(key)) {
-         this.documentReleaseScheduler.cancel(key);
-         this.releaseDocument(key);
-      }
+      this.releaseIfDeferred(key);
       super.delete(key);
    }
 

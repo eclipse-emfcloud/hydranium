@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
+import { UNKNOWN_CLIENT_ID } from '../client-ids';
 import { type Clock, SystemClock } from '../clock';
 import type {
    DataServerProtocol,
@@ -190,6 +191,11 @@ function indexOf(write: DataSessionUnsavedWrite<TransferElement, DataServerProto
    return 'index' in write.call ? write.call.index : 0;
 }
 
+/** The call `write` was last written by, which a restore writes again as one set. */
+function setOf(write: DataSessionUnsavedWrite<TransferElement, DataServerProtocol<TransferElement>>): object {
+   return 'update' in write.call ? write.call.update : write.call.updates;
+}
+
 /**
  * What a {@link DataSession} needs from the connection that minted it.
  *
@@ -206,6 +212,13 @@ export interface DataSessionHost<TTransfer extends TransferElement, TServer exte
     * is what the client was last told of the URI since the URI's last open.
     */
    restoreDirty?(event: TransferDocumentDirtyChangedEvent): void;
+   /**
+    * Tell the connection's client of a document a restore found gone, whose
+    * deletion reached no one while the connection was down, as the server
+    * tells it of a deletion over a live connection. Without it, the restore
+    * reports the unsaved text such a document took with it as lost.
+    */
+   restoreDeletion?(event: TransferDocumentDeletedEvent): void;
    /**
     * Forget what the client was told of `uri`'s dirty state: an open just
     * made answered its caller afresh, and the client heard none of it, or a
@@ -229,7 +242,7 @@ export interface DataSessionHost<TTransfer extends TransferElement, TServer exte
    /**
     * Fires with each deletion the server sends. A session forgets a document
     * whose file was deleted; without this event it keeps it as open until a
-    * restore finds it gone, and reports its unsaved text lost only then.
+    * restore finds it gone.
     */
    readonly onDidDeleteDocument?: Event<TransferDocumentDeletedEvent>;
    /** Where the session logs the documents it forgets as gone. */
@@ -379,6 +392,13 @@ export class DataSession<
     * over a connection that is going away.
     */
    protected detached = false;
+   /**
+    * Write sets, keyed as a restore groups them, that lost a document to
+    * another client's deletion. A restore cannot write such a set again
+    * whole, so it writes none of it. Weak, so a set goes once no write
+    * record holds it.
+    */
+   protected readonly brokenSets = new WeakSet<object>();
    /** The subscription to the host's `onDidChangeDirty`, disposed with the session. */
    protected readonly dirtySubscription?: Disposable;
    /** The subscription to the host's `onDidUpdateDocument`, disposed with the session. */
@@ -918,7 +938,10 @@ export class DataSession<
     * let a restore re-open the file that is gone. Unwatched rather than
     * closed: the server keeps the watch, and a close could end a re-open of a
     * re-created file still in flight. Unsaved writes are logged, not
-    * reported: the client hears the deletion too.
+    * reported: the client hears the deletion too. A document this session
+    * created and never saved, deleted by no session, is reported as well: a
+    * drop released it. An unsaved write breaks the set it was written with,
+    * see {@link brokenSets}.
     *
     * This session's own deletion is neither unwatched nor logged as dropping
     * unsaved text: its delete released the watch, and its caller chose to
@@ -935,7 +958,18 @@ export class DataSession<
             this.forgetDocument(uri);
             continue;
          }
+         const write = this.unsavedWrites.get(uri);
+         if (write) {
+            this.brokenSets.add(setOf(write));
+         }
+         // Never saved, so no file a watcher could see removed: a deletion
+         // naming no session is the release of the text a drop left behind.
+         const released = this.createdUris.has(uri) && event.sourceClientId === UNKNOWN_CLIENT_ID;
          this.forgetGoneDocument(uri);
+         if (released) {
+            const reported = resolve(DATA_SESSION_UNSAVED_LOST, { uris: uri });
+            this.host.reportError?.(new Error(reported.text), reported);
+         }
          this.connected()
             .then(server => server.unwatchModelDocument({ uri, clientId: this.clientId }))
             .catch(() => undefined);
@@ -988,7 +1022,7 @@ export class DataSession<
     * write, so an edit arriving in between conflicts, and a conflict is not
     * retried. Documents last written by one {@link updateDocuments} are sent
     * again by one, and only when every one of them may be; a document that
-    * could not be re-opened blocks its set.
+    * could not be re-opened, or that another client deleted, blocks its set.
     *
     * No caller is waiting, so the outcomes go through the host: one report
     * naming every document whose unsaved text is gone, whose record is then
@@ -998,8 +1032,13 @@ export class DataSession<
     * restore to decide again. A document closed while the restore runs, or
     * whose file is deleted then, is neither restored nor reported. One gone
     * while the connection was down, which the server reads back without a
-    * model, is forgotten, and goes into the report of lost unsaved text when
-    * the session wrote it since its last save, or created it and never saved it.
+    * model, is forgotten, and its deletion goes to the host as the deletion
+    * no event brought; unsaved text it took with it is logged, as for a
+    * deletion heard live, and reported as well for a document the session
+    * created and never saved, which the drop released. A host that cannot
+    * tell the client has the unsaved text of either reported. Once the session
+    * is disposed, its caller has ended it, and the restore returns at its
+    * next await: nothing more goes to the server or the host.
     *
     * Each document's dirty state goes to the host too, read once the watch is
     * in place and any write is sent: a flip while the connection was down, or
@@ -1021,6 +1060,9 @@ export class DataSession<
          }
          try {
             const document = await server.openModelDocument({ uri, clientId: this.clientId });
+            if (this.disposed) {
+               return;
+            }
             if (!this.openUris.has(uri)) {
                // Forgotten while it re-opened. A close of the caller's would
                // follow, but a deletion sends none.
@@ -1037,6 +1079,9 @@ export class DataSession<
                await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
                throw error;
             });
+            if (this.disposed) {
+               return;
+            }
             if (this.openUris.has(uri)) {
                this.recordText(uri, document);
             }
@@ -1045,21 +1090,41 @@ export class DataSession<
             // Gone while the connection was down, which no deletion told the
             // session of: the server answers a read of it without a model.
             const read = await server.getModelDocument({ uri }).catch(() => undefined);
+            if (this.disposed) {
+               return;
+            }
             // Forgotten meanwhile, so nothing is lost.
             if (!this.openUris.has(uri)) {
                continue;
             }
             if (read && !read.model) {
-               // No deletion reached the client either, so unsaved text the
-               // document took with it is reported, as a drop's other losses are.
                const write = this.unsavedWrites.get(uri);
-               if (this.forgetGoneDocument(uri)) {
-                  lost.push(uri);
-               }
+               // Named as the client last heard it, by the open's answer.
+               const serverUri = this.opens.get(uri)?.serverUri ?? uri;
+               // Never saved, so the drop released it and no one deleted it.
+               const created = this.createdUris.has(uri);
+               const unsaved = this.forgetGoneDocument(uri);
                // Kept for `reapply`, where it blocks its set as a document
                // that could not be re-opened does, and goes.
                if (write) {
                   this.unsavedWrites.set(uri, write);
+               }
+               if (!this.host.restoreDeletion) {
+                  // No client hears of the deletion, so the loss is reported.
+                  if (unsaved) {
+                     lost.push(uri);
+                  }
+                  continue;
+               }
+               // The client hears of the deletion, so unsaved text is logged,
+               // as for one heard live; the drop's release is reported too.
+               if (created) {
+                  lost.push(uri);
+               }
+               try {
+                  this.host.restoreDeletion({ uri: serverUri, sourceClientId: UNKNOWN_CLIENT_ID });
+               } catch {
+                  // The client's listener failed, not the restore.
                }
                continue;
             }
@@ -1074,11 +1139,14 @@ export class DataSession<
       }
       const sets = new Map<object, [string, DataSessionUnsavedWrite<TTransfer, TServer>][]>();
       for (const [uri, write] of writes) {
-         const call = 'update' in write.call ? write.call.update : write.call.updates;
-         sets.set(call, [...(sets.get(call) ?? []), [uri, write]]);
+         const set = setOf(write);
+         sets.set(set, [...(sets.get(set) ?? []), [uri, write]]);
       }
       for (const members of sets.values()) {
          lost.push(...(await this.reapply(server, members, reopened)));
+         if (this.disposed) {
+            return;
+         }
       }
       for (const uri of reopened.keys()) {
          if (!this.openUris.has(uri)) {
@@ -1087,6 +1155,9 @@ export class DataSession<
          // A failed read, or one without text, leaves the client's dirty
          // state as it was; the document is restored all the same.
          const current = await server.getModelDocument({ uri }).catch(() => undefined);
+         if (this.disposed) {
+            return;
+         }
          // Again after the read: one closed or deleted meanwhile has no
          // state to tell.
          if (current?.text !== undefined && this.openUris.has(uri)) {
@@ -1140,7 +1211,8 @@ export class DataSession<
     *
     * A member whose record is no longer the one the restore started with was
     * closed, saved or disposed meanwhile, and is left out: writing it would
-    * put back text its caller discarded.
+    * put back text its caller discarded. A set in {@link brokenSets} is
+    * not written again.
     */
    protected async reapply(
       server: RpcProxy<TServer>,
@@ -1172,7 +1244,7 @@ export class DataSession<
          });
          return gone.filter(member => member.outcome === 'lost' || member.outcome === 'resend').map(member => member.uri);
       };
-      if (outcomes.some(member => member.outcome === 'lost' || member.outcome === 'failed')) {
+      if (this.brokenSets.has(setOf(members[0][1])) || outcomes.some(member => member.outcome === 'lost' || member.outcome === 'failed')) {
          return lose();
       }
       // In the order of the call's updates, which is the order of its answers.

@@ -10,7 +10,7 @@
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
-import type { TransferDocument, TransferSavedDocument } from '../transfer-document';
+import type { TransferDocument, TransferSavedDocument, TransferWatchedDocument } from '../transfer-document';
 import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
 import type {
@@ -183,15 +183,19 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * {@link DocumentClientProtocol.onDocumentUpdated} on the paired wire
     * for every build-phase event on `uri`.
     *
-    * Returns `Promise<void>` — the bidirectional pattern means the event
-    * channel is the client interface, not a returned handle. Callers fan
-    * out a single inbound `onDocumentUpdated` to multiple local listeners
-    * with their own `Emitter<T>` (matching Theia's pattern). Pair every
-    * `watchModelDocument` with {@link unwatchModelDocument} when no longer
-    * needed; the server holds the watch record until the matching unwatch
-    * lands.
+    * Answers with the key the watch's events name the document by, whether
+    * a document exists, taken once the watch is in place and the document
+    * is loaded as a read loads it, and the position of the last update or
+    * deletion event sent as of that moment, so an event the client heard
+    * while the watch was in flight tells by its own position whether it is
+    * newer than the answer. No handle: the event channel is the client
+    * interface. Callers fan out a single inbound `onDocumentUpdated` to
+    * multiple local listeners with their own `Emitter<T>` (matching Theia's
+    * pattern). Pair every `watchModelDocument` with
+    * {@link unwatchModelDocument} when no longer needed; the server holds the
+    * watch record until the matching unwatch lands.
     */
-   watchModelDocument(args: WatchModelDocumentArgs): Promise<void>;
+   watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument>;
 
    /**
     * Stop watching `(uri, clientId)` previously started by
