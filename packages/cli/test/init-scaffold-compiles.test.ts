@@ -154,8 +154,8 @@ describe('the emitted scaffold compiles', () => {
 
             // The emitted `typecheck:test`, which is a DIFFERENT check: it also
             // covers `test/`, and it turns on `isolatedModules`, so it is the only
-            // thing that proves the emitted sources satisfy the stricter rules the
-            // esbuild-based test runner needs.
+            // thing that proves the emitted sources satisfy the stricter rules
+            // vitest's per-file transform needs.
             expect(() =>
                runTool(targetDir, 'typescript', 'tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.test.json')])
             ).not.toThrow();

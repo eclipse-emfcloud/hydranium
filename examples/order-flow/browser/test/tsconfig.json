@@ -1,13 +1,13 @@
-// Exists for the EDITOR, not for any build or script — see the sibling packages'
-// `test/tsconfig.json` for the full reasoning. This tier's tests are
-// type-checked by `../tsconfig.e2e.json` rather than a `tsconfig.test.json`,
-// because they run in Node, under Playwright or vitest, and need the `node`
-// types the worker and page projects deliberately drop.
+// The test tree's project, which an editor and vitest's transform both find by
+// name. It extends `../tsconfig.e2e.json` rather than a `tsconfig.test.json`,
+// because these tests run in Node, under Playwright or vitest, and need the
+// `node` types the worker and page projects deliberately drop. Without this
+// file the TS server infers a project that loads every `@types` package and
+// reports `TS2403` clashes between `@types/mocha` and `@types/jest`.
 //
-// Without this file the tests belong to no editor-discoverable project, so the
-// TS server infers one that loads every `@types` package in the tree and
-// reports `TS2403` clashes between `@types/mocha` and `@types/jest` that no
-// `typecheck:test` run reproduces.
+// `include` is declared, not inherited: the transform applies a config only to
+// files its own `include` lists, and gives any other file none of its options.
 {
-  "extends": "../tsconfig.e2e.json"
+  "extends": "../tsconfig.e2e.json",
+  "include": ["."]
 }

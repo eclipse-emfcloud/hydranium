@@ -372,6 +372,7 @@ describe('planInitFiles', () => {
             'test/parsing.test.ts',
             'test/serialization.test.ts',
             'test/services.test.ts',
+            'test/tsconfig.json',
             'test/validating.test.ts',
             'tsconfig.json',
             'tsconfig.test.json',
@@ -634,13 +635,13 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(21);
+      expect(captured?.files).toHaveLength(22);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (21 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (22 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
@@ -661,10 +662,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 21 single-grammar files + two further grammars, their two serializers and
+      // 22 single-grammar files + two further grammars, their two serializers and
       // the shared fragment.
-      expect(captured?.files).toHaveLength(26);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (26 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      expect(captured?.files).toHaveLength(27);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (27 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -680,10 +681,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 26 multi-grammar files + the nine for the one diagram.
-      expect(captured?.files).toHaveLength(35);
+      // 27 multi-grammar files + the nine for the one diagram.
+      expect(captured?.files).toHaveLength(36);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (35 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (36 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -986,7 +987,7 @@ describe('runInit --monorepo', () => {
    it('writes the .gitignore a standalone project gets, whatever the root ignores', () => {
       const { files } = scaffold();
       // Same file count as a standalone single-grammar scaffold.
-      expect(files).toHaveLength(21);
+      expect(files).toHaveLength(22);
       const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
       expect(contentOf(files, '.gitignore')).toBe(contentOf(standalone, '.gitignore'));
    });

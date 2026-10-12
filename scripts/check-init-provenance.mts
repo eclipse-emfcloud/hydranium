@@ -238,6 +238,7 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    // does not already supply with the same value.
    'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
    'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
+   'test/tsconfig.json': { verdict: 'adapted', reason: 'carries the comment its sibling packages carry' },
    'vitest.config.ts': { verdict: 'adapted', reason: "uses the repo's shared vitest config" },
    'README.md': { verdict: 'adapted', reason: "rewritten as the example's map" },
    // The scaffold emits these paths itself, so each entry is a plain 'adapted'.
@@ -354,6 +355,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'langium-config.json': { verdict: 'identical', reason: 'one language, derived from --name' },
    'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
    'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
+   'test/tsconfig.json': { verdict: 'identical', reason: 'the test tree owning its files, as emitted' },
    // Deliberately NOT switched to the repo's shared vitest helper, unlike
    // order-flow's: a provenance target that has been adapted pins nothing, and
    // this is the only target pinning the scaffold's own self-contained config.
