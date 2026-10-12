@@ -142,6 +142,20 @@ describe('Debouncer', () => {
          expect(fn).toHaveBeenCalledTimes(1);
       });
 
+      it('forces the fire at the ceiling when the wall clock jumps back mid-window', () => {
+         const clock = makeFakeClock();
+         const fn = vi.fn();
+         const debouncer = new Debouncer(clock, fn, { delayMs: 100, maxWaitMs: 250 });
+
+         debouncer.schedule();
+         clock.jumpWallClock(-3_600_000);
+         for (let elapsed = 0; elapsed < 250; elapsed += 50) {
+            clock.advance(50);
+            debouncer.schedule();
+         }
+         expect(fn).toHaveBeenCalledTimes(1);
+      });
+
       it('opens a fresh ceiling window after firing', () => {
          const clock = makeFakeClock();
          const fn = vi.fn();

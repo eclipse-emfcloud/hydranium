@@ -9,6 +9,7 @@
 
 import {
    type Clock,
+   type Stopwatch,
    type LogThreshold,
    type MaybeObservableValue,
    ObservableValue,
@@ -254,7 +255,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected languageFileExtensions: string[] = [];
    /** {@link ExtendedServiceRegistry.registrations} {@link languageFileExtensions} was built at; `-1` until first built. */
    protected cachedRegistrations = -1;
-   protected lastPhaseMs = 0;
+   /** Running since the last phase was reached, or since the active build started. */
+   protected sinceLastPhase?: Stopwatch;
    /** Resolved from {@link DocumentBuilderOptions.refreshCrossDocumentComputedScopes}. */
    protected readonly refreshCrossDocumentComputedScopes: boolean;
    /** LSP event name (e.g. `'didChangeWatchedFiles'`) staged for the next `update()` call. */
@@ -384,7 +386,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       // the document is keyed by its real path.
       const doc = this.langiumDocuments.getDocument(UriUtils.toUri(this.uriPolicy.canonicalUri(uri)));
       const docState = doc ? DocumentState[doc.state] : 'unknown (document not loaded)';
-      const lastPhase = this.lastPhaseMs > 0 ? `${Math.round(performance.now() - this.lastPhaseMs)}ms ago` : 'no phase observed';
+      const lastPhase = this.sinceLastPhase ? `${Math.round(this.sinceLastPhase.elapsedMs)}ms ago` : 'no phase observed';
       return `current state: '${docState}', last phase: ${lastPhase}, active build: ${this.formatSession(this.activeSession)}`;
    }
 
@@ -407,7 +409,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          return 'none';
       }
       const id = session.traceId !== undefined ? `#${session.traceId}` : 'untimed';
-      return `${id} (${session.trigger}, ${Math.round(performance.now() - session.startMs)}ms in)`;
+      return `${id} (${session.trigger}, ${Math.round(session.sinceStart.elapsedMs)}ms in)`;
    }
 
    // ============================================================
@@ -1217,7 +1219,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.activeSession = session;
       // A phase's "since previous phase" must measure from the build's start,
       // not from whenever the last build's final phase happened to land.
-      this.lastPhaseMs = session.startMs;
+      this.sinceLastPhase = session.sinceStart;
       return this.tracer.time(
          label,
          async () => {
@@ -1252,7 +1254,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * throughout it.
     */
    protected createBuildSession(context: BuildSessionContext): BuildSession {
-      return new BuildSession(performance.now(), context.trigger, context.triggerCountsDocs, this.phaseDetailMs.value);
+      return new BuildSession(this.clock.stopwatch(), context.trigger, context.triggerCountsDocs, this.phaseDetailMs.value);
    }
 
    /**
@@ -1277,8 +1279,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * {@link log}, which would route them straight back into the buffer.
     */
    protected flushSession(session: BuildSession): void {
-      const elapsedMs = performance.now() - session.startMs;
-      if (elapsedMs >= session.detailThresholdMs) {
+      if (session.sinceStart.elapsedMs >= session.detailThresholdMs) {
          for (const line of session.bufferedLines) {
             this.emit(line);
          }
@@ -1326,9 +1327,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
 
    /** Called once per phase-reached event. Override to add custom side-effects beyond logging. */
    protected onPhaseReached(state: DocumentState, documents: LangiumDocument[]): void {
-      const now = performance.now();
-      const elapsedMs = Math.round(now - this.lastPhaseMs);
-      this.lastPhaseMs = now;
+      const elapsedMs = Math.round(this.sinceLastPhase?.elapsedMs ?? 0);
+      this.sinceLastPhase = this.clock.stopwatch();
       // Counted before the line is formatted, so the formatter stays a pure
       // function of state a caller can also set up in a test.
       if (this.activeSession) {
@@ -1355,7 +1355,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       }
       const elapsedInfo =
          session && session.phasesLogged <= 1
-            ? `${Math.round(performance.now() - session.startMs)}ms since build start`
+            ? `${Math.round(session.sinceStart.elapsedMs)}ms since build start`
             : `${elapsedMs}ms since previous phase`;
       return `Reached phase '${DocumentState[state]}' [${docInfo}, ${elapsedInfo}]`;
    }

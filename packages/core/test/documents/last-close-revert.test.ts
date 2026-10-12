@@ -80,8 +80,6 @@ interface RevertRig {
    holdLock(): { release: () => void };
    /** Fail the next `DocumentBuilder.update` with `error`, running `before` first. */
    failNextBuild(error: Error, before?: () => void): void;
-   /** Step the wall clock (`now()`) by `ms`, as a time sync does, leaving timers and stopwatches alone. */
-   jumpWallClock(ms: number): void;
 }
 
 /**
@@ -101,7 +99,6 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
    let beforeNextBuildFailure: (() => void) | undefined;
    const onDisk = new Set<string>([FILE, OTHER_FILE]);
    let existenceChecks = 0;
-   let wallOffsetMs = 0;
    const noop = makeNoopTracer();
    const recordError = (message: string): void => {
       errors.push(message);
@@ -135,8 +132,7 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
       staged = undefined;
    };
    const services = {
-      // Layered over the fake clock rather than spread from it, for the same reason.
-      Clock: Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs }),
+      Clock: clock,
       Tracer: { for: () => tracer },
       workspace: {
          DocumentUriPolicy: uriPolicy,
@@ -193,9 +189,6 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
       failNextBuild: (error, before) => {
          nextBuildFailure = error;
          beforeNextBuildFailure = before;
-      },
-      jumpWallClock: ms => {
-         wallOffsetMs += ms;
       }
    };
 }
@@ -609,12 +602,12 @@ describe('HydraniumTextDocuments release grace', () => {
    });
 
    it('hands the unsaved text back to a lost client within its grace though the wall clock jumps forward', () => {
-      const { docs, clock, jumpWallClock } = makeRig(1000);
+      const { docs, clock } = makeRig(1000);
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
       close(docs, 'form', 'lost');
       clock.advance(100);
-      jumpWallClock(5000);
+      clock.jumpWallClock(5000);
 
       open(docs, 'form');
 
@@ -623,11 +616,11 @@ describe('HydraniumTextDocuments release grace', () => {
    });
 
    it('reverts for a lost client past its grace though the wall clock jumps back', () => {
-      const { docs, clock, jumpWallClock } = makeRig(1000);
+      const { docs, clock } = makeRig(1000);
       open(docs, 'x');
       open(docs, 'e');
       close(docs, 'x', 'lost');
-      jumpWallClock(-60_000);
+      clock.jumpWallClock(-60_000);
       clock.advance(5000);
       docs.applyContentChange(FILE, EDITED, 'e');
       close(docs, 'e', 'lost');

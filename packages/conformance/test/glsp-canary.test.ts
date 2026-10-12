@@ -85,7 +85,7 @@ class CanaryGlspServer implements GlspConformanceDriver<CanaryAction> {
    }
 
    async nextAction<T extends CanaryAction = CanaryAction>(kind: string, timeoutMs: number = RESPONSE_TIMEOUT_MS): Promise<T> {
-      const deadline = Date.now() + timeoutMs;
+      const deadline = performance.now() + timeoutMs;
       // Polls rather than registering a waiter because `dispatch` is
       // synchronous here, so the action is normally already delivered by the
       // time the check awaits — the loop exists only for the silent defects.
@@ -95,7 +95,7 @@ class CanaryGlspServer implements GlspConformanceDriver<CanaryAction> {
             const [action] = this.delivered.splice(index, 1);
             return action as T;
          }
-         if (Date.now() >= deadline) {
+         if (performance.now() >= deadline) {
             throw new Error(`the canary delivered no ${kind} action`);
          }
          await new Promise(resolve => setTimeout(resolve, 5));

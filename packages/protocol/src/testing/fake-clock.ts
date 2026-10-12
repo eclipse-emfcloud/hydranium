@@ -22,6 +22,12 @@ export interface FakeClock extends Clock {
     * chain settle before advancing.
     */
    advance(ms: number): void;
+   /**
+    * Move `now()` by `ms`, backwards when negative, leaving stopwatches and
+    * timers where they are: the wall-clock step a time sync or a manual change makes,
+    * which a duration taken from two `now()` readings gets wrong.
+    */
+   jumpWallClock(ms: number): void;
    /** How many {@link Clock.setTimer} timers have neither fired nor been disposed. */
    pendingTimers(): number;
 }
@@ -39,7 +45,8 @@ interface FakeTimer {
  * (`Date.now` for `now()`, `performance.now()` for the stopwatch); the fake
  * collapses them onto ONE virtual time axis, so a single
  * {@link FakeClock.advance} drives `now()`, every live stopwatch's elapsed, and
- * any due timer together.
+ * any due timer together; only {@link FakeClock.jumpWallClock} pulls `now()`
+ * off that axis.
  *
  * Server-free and DI-free — lives in `@hydranium/protocol/testing` so every
  * head can bind it without pulling in a server package.
@@ -58,13 +65,19 @@ export function makeFakeClock(options: { now?: number } = {}): FakeClock {
  */
 class VirtualClock extends SystemClock implements FakeClock {
    protected readonly timers: FakeTimer[] = [];
+   /** What {@link jumpWallClock} has added to `now()`. */
+   protected wallClockOffset = 0;
 
    constructor(protected current: number) {
       super();
    }
 
    override now(): number {
-      return this.current;
+      return this.current + this.wallClockOffset;
+   }
+
+   jumpWallClock(ms: number): void {
+      this.wallClockOffset += ms;
    }
 
    override setTimer(callback: () => void, ms: number): Disposable {

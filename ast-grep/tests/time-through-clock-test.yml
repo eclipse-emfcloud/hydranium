@@ -1,0 +1,12 @@
+id: time-through-clock
+valid:
+  - 'const sinceStart = this.clock.stopwatch();'
+  - 'const stamp = this.clock.now();'
+  - 'const elu = performance.eventLoopUtilization();'
+invalid:
+  - 'const deadline = Date.now() + 2_000;'
+  - 'const start = performance.now();'
+  - 'const start = globalThis.performance.now();'
+  - 'const stamp = window.Date.now();'
+  - 'const clock = { now: Date.now };'
+  - 'const read = performance.now;'

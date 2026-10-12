@@ -77,6 +77,17 @@ describe('startMemoryMonitor', () => {
       stop();
    });
 
+   it('re-emits after the cooldown when the wall clock jumps back in between', () => {
+      const { logger, lines } = makeCapturingLogger();
+      const stop = startMemoryMonitor(makeNoopSharedServices({ Logger: logger }), { intervalMs: 1000, cooldownMs: 5000 });
+      memorySpy.mockReturnValue(memoryAtRatio(0.9));
+      vi.advanceTimersByTime(1000); // emits on entering the warn band
+      vi.setSystemTime(Date.now() - 3_600_000); // the wall clock alone: timers and performance.now keep their pace
+      vi.advanceTimersByTime(6000);
+      expect(lines).toHaveLength(2);
+      stop();
+   });
+
    it('stops sampling once the returned disposer runs', () => {
       const { logger, lines } = makeCapturingLogger();
       const stop = startMemoryMonitor(makeNoopSharedServices({ Logger: logger }), { intervalMs: 1000 });

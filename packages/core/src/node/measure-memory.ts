@@ -8,10 +8,9 @@
  ********************************************************************************/
 
 import * as fs from 'node:fs';
-import { performance } from 'node:perf_hooks';
 import * as path from 'node:path';
 import * as v8 from 'node:v8';
-import { Format } from '@hydranium/protocol';
+import { Format, SystemClock } from '@hydranium/protocol';
 import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { buildWorkspaceProgrammatically } from '../langium/workspace/initialize-workspace.js';
 import { tallyAstGroundTruth } from './ast-ground-truth.js';
@@ -120,10 +119,11 @@ export async function measureModelMemory(options: MeasureModelMemoryOptions): Pr
    const { shared } = options.createServices();
    const empty = report('after-services-empty');
 
-   const start = performance.now();
+   // Not `shared.Clock`, which the service factory may fake: the build time is reported as measured.
+   const sinceBuildStart = new SystemClock().stopwatch();
    const build = (): Promise<void> => buildWorkspaceProgrammatically(shared, options.workspace);
    await (profilingRun ? profilingRun.window('build', build) : build());
-   const buildMs = performance.now() - start;
+   const buildMs = sinceBuildStart.elapsedMs;
    const docs = shared.workspace.LangiumDocuments.all.toArray();
    const settleMs = options.settleMs ?? 0;
    if (settleMs > 0) {

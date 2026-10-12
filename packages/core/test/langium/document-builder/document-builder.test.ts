@@ -476,7 +476,7 @@ describe('HydraniumDocumentBuilder', () => {
                return Disposable.EMPTY;
             }
             protected override createBuildSession(context: BuildSessionContext): BuildSession {
-               const session = new AffectedSession(performance.now(), context.trigger, context.triggerCountsDocs, 0);
+               const session = new AffectedSession(this.clock.stopwatch(), context.trigger, context.triggerCountsDocs, 0);
                for (const uri of context.changed) {
                   session.affected.add(uri.toString());
                }

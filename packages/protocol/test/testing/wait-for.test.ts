@@ -29,8 +29,8 @@ describe('waitFor', () => {
 
       // Every timer is due once the loop resumes, and the deadline fires after
       // the flag is set but before the next poll.
-      const stalledUntil = Date.now() + 100;
-      while (Date.now() < stalledUntil) {
+      const stalledUntil = performance.now() + 100;
+      while (performance.now() < stalledUntil) {
          // stall the event loop
       }
 

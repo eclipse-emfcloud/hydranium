@@ -24,6 +24,23 @@ describe('makeFakeClock', () => {
          const clock = makeFakeClock({ now: 5000 });
          expect(clock.now()).toBe(5000);
       });
+
+      it('jumps the wall clock alone, leaving stopwatches and timers where they are', () => {
+         const clock = makeFakeClock({ now: 5000 });
+         const stopwatch = clock.stopwatch();
+         const fired = vi.fn();
+         clock.setTimer(fired, 100);
+
+         clock.jumpWallClock(-3000);
+         expect(clock.now()).toBe(2000);
+         expect(stopwatch.elapsedMs).toBe(0);
+         expect(fired).not.toHaveBeenCalled();
+
+         clock.advance(100);
+         expect(clock.now()).toBe(2100);
+         expect(stopwatch.elapsedMs).toBe(100);
+         expect(fired).toHaveBeenCalledTimes(1);
+      });
    });
 
    describe('setTimer', () => {

@@ -7,11 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { MessageService, nls } from '@theia/core';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
 import { ConnectionStatus, ConnectionStatusService } from '@theia/core/lib/browser/connection-status-service';
 import { WebSocketConnectionSource } from '@theia/core/lib/browser/messaging/ws-connection-source';
-import { inject, injectable, type interfaces } from '@theia/core/shared/inversify';
+import { inject, injectable, optional, type interfaces } from '@theia/core/shared/inversify';
+import { Clock } from '../common/clock';
 import { type ConnectionBufferOverflow } from '../common/framed-socket-write-buffer';
 import { ChannelLogger } from './channel-logger';
 import { SessionAwareConnectionSource } from './session-aware-connection-source';
@@ -36,11 +38,13 @@ export class ConnectionDiagnosticsContribution implements FrontendApplicationCon
    @inject(ConnectionStatusService) protected readonly connectionStatus: ConnectionStatusService;
    @inject(ChannelLogger) protected readonly logger: ChannelLogger;
    @inject(MessageService) protected readonly messageService: MessageService;
+   /** Times the outages the log reports: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    /** Main channels created so far; more than one means the server did not recognise this frontend. */
    protected channelCount = 0;
-   protected socketClosedAt?: number;
-   protected offlineAt?: number;
+   protected sinceSocketClosed?: Stopwatch;
+   protected sinceOffline?: Stopwatch;
 
    initialize(): void {
       this.connectionSource.onSocketDidOpen(() => this.handleSocketOpen());
@@ -56,13 +60,13 @@ export class ConnectionDiagnosticsContribution implements FrontendApplicationCon
    }
 
    protected handleSocketOpen(): void {
-      const downFor = this.socketClosedAt === undefined ? '' : ` after ${Date.now() - this.socketClosedAt} ms down`;
-      this.socketClosedAt = undefined;
+      const downFor = this.sinceSocketClosed === undefined ? '' : ` after ${Math.round(this.sinceSocketClosed.elapsedMs)} ms down`;
+      this.sinceSocketClosed = undefined;
       this.logger.info(`websocket connected: socket ${this.socketId()}${downFor}`);
    }
 
    protected handleSocketClose(): void {
-      this.socketClosedAt = Date.now();
+      this.sinceSocketClosed = this.clock.stopwatch();
       this.logger.info(`websocket disconnected: socket ${this.socketId()}; outgoing messages are buffered until it returns`);
    }
 
@@ -85,12 +89,12 @@ export class ConnectionDiagnosticsContribution implements FrontendApplicationCon
 
    protected handleStatusChange(status: ConnectionStatus): void {
       if (status === ConnectionStatus.ONLINE) {
-         const offlineFor = this.offlineAt === undefined ? '' : ` after ${Date.now() - this.offlineAt} ms`;
-         this.offlineAt = undefined;
+         const offlineFor = this.sinceOffline === undefined ? '' : ` after ${Math.round(this.sinceOffline.elapsedMs)} ms`;
+         this.sinceOffline = undefined;
          this.logger.info(`backend reachable again${offlineFor}`);
          return;
       }
-      this.offlineAt = Date.now();
+      this.sinceOffline = this.clock.stopwatch();
       const socket = this.connectionSource.socket;
       if (socket?.connected) {
          this.logger.warn(

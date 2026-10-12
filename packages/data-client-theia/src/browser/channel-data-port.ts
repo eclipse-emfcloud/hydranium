@@ -8,10 +8,12 @@
  ********************************************************************************/
 
 import { ChannelLogger, ConnectionReporter, type ConnectionAttempt, type ConnectionTarget } from '@hydranium/client-theia/browser';
+import { Clock } from '@hydranium/client-theia/common';
 import {
    DATA_SERVER_CONNECT_FAILED,
    DATA_SERVER_NOT_READY,
    renderFrameworkMessage,
+   SystemClock,
    type DataPort,
    type ResolvedMessage,
    type RpcConnectionLifecycle
@@ -19,7 +21,7 @@ import {
 import { Emitter, MessageService, nls, type Event } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { RemoteConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import { type ChannelConnectionHandle, openChannelConnection } from './channel-connection';
@@ -44,6 +46,8 @@ export abstract class ChannelDataPort implements DataPort {
    @inject(MessageService) protected readonly messageService!: MessageService;
    @inject(ConnectionReporter) protected readonly connectionReporter!: ConnectionReporter;
    @inject(ChannelLogger) readonly logger!: ChannelLogger;
+   /** Times the channel's reconnect escalation: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    /** Frontend service path the backend forwarder for this head is registered under. */
    protected abstract readonly servicePath: string;
@@ -110,6 +114,7 @@ export abstract class ChannelDataPort implements DataPort {
          this.handle = openChannelConnection(this.connectionProvider, this.servicePath, {
             whenReady: whenWorkspaceOpen(this.workspaceService),
             logger: this.logger,
+            clock: this.clock,
             reconnect: this.reconnectOnConnectionLoss
          });
          // A relaunched server binds new ephemeral ports; the handle re-opens

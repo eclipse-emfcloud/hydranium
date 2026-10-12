@@ -197,7 +197,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * rule set to completion against a doomed build.
     */
    async enforceBatch(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {
-      const phaseStart = performance.now();
+      const sincePhaseStart = this.services.shared.Clock.stopwatch();
       let mutatedCount = 0;
       // Per-rule self-time profiling is opt-in: only spin up a session when the
       // debug threshold is active, so the production `info` path allocates
@@ -212,7 +212,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          }
          await interruptAndCheck(cancelToken);
       }
-      const totalMs = Math.round(performance.now() - phaseStart);
+      const totalMs = Math.round(sincePhaseStart.elapsedMs);
       // A repair is the operator's to know of; the timing alone is diagnosis.
       if (mutatedCount > 0) {
          this.tracer.info(`enforce ${DocumentState[phase]}: docs=${documents.length}, mutated=${mutatedCount} [${totalMs}ms]`);

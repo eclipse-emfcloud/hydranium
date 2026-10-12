@@ -183,8 +183,8 @@ function messageOf(diagnostic: Diagnostic): string {
  * fan-out on the LSP side wants exactly the same treatment.
  */
 async function waitForPushedMarkers(diagram: OpenDiagram, since: number, timeoutMs = 2000): Promise<Marker[]> {
-   const deadline = Date.now() + timeoutMs;
-   while (Date.now() < deadline) {
+   const deadline = performance.now() + timeoutMs;
+   while (performance.now() < deadline) {
       const markers = diagram.harness.actions
          .slice(since)
          .filter(SetMarkersAction.is)

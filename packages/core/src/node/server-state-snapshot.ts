@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Format } from '@hydranium/protocol';
+import { Format, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { DocumentState, type LangiumDocuments } from '@hydranium/langium';
 import { isCstShed } from '../langium/residency/cst-residency-service.js';
 import { performance } from 'node:perf_hooks';
@@ -15,7 +15,7 @@ import * as v8 from 'node:v8';
 
 /** Cumulative samples kept across calls so each snapshot can report deltas. */
 interface DeltaState {
-   atMs: number;
+   sinceSample: Stopwatch;
    cpu: NodeJS.CpuUsage;
    elu: { idle: number; active: number };
 }
@@ -62,7 +62,7 @@ export interface ServerStateSnapshotOptions {
  * requested via `options` ({@link ServerStateSnapshotOptions}).
  */
 export function formatServerState(documents?: LangiumDocuments, label?: string, options?: ServerStateSnapshotOptions): string {
-   const now = performance.now();
+   const sinceSample = new SystemClock().stopwatch();
    const mem = process.memoryUsage();
    const heap = v8.getHeapStatistics();
    const cpu = process.cpuUsage();
@@ -87,7 +87,7 @@ export function formatServerState(documents?: LangiumDocuments, label?: string, 
          `native contexts ${heap.number_of_native_contexts}, detached contexts ${heap.number_of_detached_contexts}`
    );
    if (lastSample) {
-      const wallMs = now - lastSample.atMs;
+      const wallMs = lastSample.sinceSample.elapsedMs;
       const userMs = (cpu.user - lastSample.cpu.user) / 1000;
       const systemMs = (cpu.system - lastSample.cpu.system) / 1000;
       const cpuPct = wallMs > 0 ? Math.round(((userMs + systemMs) / wallMs) * 100) : 0;
@@ -138,7 +138,7 @@ export function formatServerState(documents?: LangiumDocuments, label?: string, 
       }
    }
 
-   lastSample = { atMs: now, cpu, elu };
+   lastSample = { sinceSample, cpu, elu };
    return lines.join('\n');
 }
 

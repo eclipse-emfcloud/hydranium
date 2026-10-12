@@ -19,7 +19,7 @@
  * worst available failure, because the adopter reads it as coverage.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { TransferDiagnostic } from '@hydranium/protocol';
 import { buildDataChecks, type DataConformanceDriver } from '../src/data/index.js';
 import type { ConformanceCheck } from '../src/conformance-suite.js';
@@ -112,6 +112,21 @@ describe('the /data battery discriminates', () => {
       // A server behind a socket refuses the id until it has read the close,
       // which is not a defect; the connection-end check has to wait it out.
       expect(await failingChecks({ endsSessionsLate: true })).toEqual([]);
+   });
+
+   it('passes every check against a server that goes back to the file a moment after the last close', async () => {
+      expect(await failingChecks({ releasesLate: true })).toEqual([]);
+   });
+
+   it('waits out a late server while the wall clock jumps forward between readings', async () => {
+      // An hour per reading, so any deadline taken from `Date.now` has passed at the next poll.
+      let wallClock = Date.now();
+      const wallClockSpy = vi.spyOn(Date, 'now').mockImplementation(() => (wallClock += 3_600_000));
+      try {
+         expect(await failingChecks({ endsSessionsLate: true, releasesLate: true })).toEqual([]);
+      } finally {
+         wallClockSpy.mockRestore();
+      }
    });
 
    it('plans exactly the twenty-six checks the must-fail cases below name', () => {

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock } from '@hydranium/protocol';
+import { type Clock, type Stopwatch } from '@hydranium/protocol';
 import { isCaseInsensitiveFileSystem } from '../../util/environment.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 
@@ -48,13 +48,11 @@ export interface SelfSaveRegistry {
  * save whose content is unchanged is still recognised.
  */
 export class DefaultSelfSaveRegistry implements SelfSaveRegistry {
-   protected readonly entries = new Map<string, { mtimeMs: number; registeredAt: number }>();
+   protected readonly entries = new Map<string, { mtimeMs: number; sinceRegistered: Stopwatch }>();
    /**
-    * Read time through the shared {@link Clock} rather than `Date.now()`: the
-    * TTL gates whether an incoming watcher event still counts as a self-save
-    * echo, so tests advance a fake clock to exercise expiry without a real
-    * wait. Wall-clock `now()` is correct here — entries are compared against a
-    * file's `mtime`.
+    * Ages entries on a {@link Clock} stopwatch: the TTL is how long ago the
+    * write happened, which a wall-clock step would otherwise shorten or
+    * stretch. The `mtime` match compares the stored value only.
     */
    protected readonly clock: Clock;
    protected readonly ttlMs: number;
@@ -83,12 +81,12 @@ export class DefaultSelfSaveRegistry implements SelfSaveRegistry {
 
    register(fsPath: string, mtimeMs: number): void {
       this.evictExpired();
-      this.entries.set(this.key(fsPath), { mtimeMs, registeredAt: this.clock.now() });
+      this.entries.set(this.key(fsPath), { mtimeMs, sinceRegistered: this.clock.stopwatch() });
    }
 
    isRegistered(fsPath: string, mtimeMs: number): boolean {
       const entry = this.entries.get(this.key(fsPath));
-      if (!entry || this.isExpired(entry.registeredAt)) {
+      if (!entry || this.isExpired(entry.sinceRegistered)) {
          return false;
       }
       // Accept mtime equality (some filesystems have 1-second precision).
@@ -107,14 +105,14 @@ export class DefaultSelfSaveRegistry implements SelfSaveRegistry {
     */
    protected evictExpired(): void {
       for (const [key, entry] of this.entries) {
-         if (this.isExpired(entry.registeredAt)) {
+         if (this.isExpired(entry.sinceRegistered)) {
             this.entries.delete(key);
          }
       }
    }
 
    /** Strictly greater, so an entry aged exactly to the TTL is still eligible. */
-   protected isExpired(registeredAt: number): boolean {
-      return this.clock.now() - registeredAt > this.ttlMs;
+   protected isExpired(sinceRegistered: Stopwatch): boolean {
+      return sinceRegistered.elapsedMs > this.ttlMs;
    }
 }

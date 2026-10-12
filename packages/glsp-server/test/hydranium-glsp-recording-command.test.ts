@@ -46,9 +46,9 @@ function makeFakeLogger(log: LogCapture): unknown {
          // no-op: skip-on-divergence warnings are not asserted by these tests
       },
       async time<T>(label: string, fn: () => Promise<T> | T): Promise<T> {
-         const start = Date.now();
+         const start = performance.now();
          const result = await fn();
-         log.timings.push({ label, durationMs: Date.now() - start });
+         log.timings.push({ label, durationMs: performance.now() - start });
          return result;
       }
    };

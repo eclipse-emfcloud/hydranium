@@ -31,8 +31,9 @@ import {
    UpdateModelAction
 } from '@eclipse-glsp/client';
 import { ChannelLogger, ChannelTracer } from '@hydranium/client-theia/browser';
-import { type Tracer } from '@hydranium/protocol';
-import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
+import { Clock } from '@hydranium/client-theia/common';
+import { type Stopwatch, SystemClock, type Tracer } from '@hydranium/protocol';
+import { inject, injectable, optional, unmanaged } from '@theia/core/shared/inversify';
 
 /** Default subset of action kinds the framework dispatcher will log: the GLSP
  *  traffic an observer reading the Output channel typically wants to see. All
@@ -90,6 +91,8 @@ export interface HydraniumGlspActionDispatcherOptions {
 export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    @inject(ChannelLogger) protected readonly channel!: ChannelLogger;
    @inject(ChannelTracer) protected readonly tracer!: Tracer;
+   /** Times each request to its response: the diagram container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    protected readonly loggedKinds: ReadonlySet<string>;
    protected readonly kindPairs: ReadonlyMap<string, string>;
@@ -97,9 +100,9 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
 
    protected pairCounter = 0;
    /** Pending requests keyed by requestId (for actions that carry one). */
-   protected pendingById = new Map<string, { id: number; start: number }>();
+   protected pendingById = new Map<string, { id: number; sinceRequest: Stopwatch }>();
    /** FIFO queue per response kind, used for `flow` pairs without requestId/responseId. */
-   protected pendingByKind = new Map<string, Array<{ id: number; start: number }>>();
+   protected pendingByKind = new Map<string, Array<{ id: number; sinceRequest: Stopwatch }>>();
 
    constructor(@unmanaged() options?: HydraniumGlspActionDispatcherOptions) {
       super();
@@ -198,13 +201,13 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       }
       // Request side.
       if (RequestAction.is(action) && action.requestId) {
-         const entry = { id: ++this.pairCounter, start: performance.now() };
+         const entry = { id: ++this.pairCounter, sinceRequest: this.clock.stopwatch() };
          this.pendingById.set(action.requestId, entry);
          return `[request #${entry.id}]`;
       }
       if (this.kindPairs.has(action.kind)) {
          const responseKind = this.kindPairs.get(action.kind)!;
-         const entry = { id: ++this.pairCounter, start: performance.now() };
+         const entry = { id: ++this.pairCounter, sinceRequest: this.clock.stopwatch() };
          const queue = this.pendingByKind.get(responseKind) ?? [];
          queue.push(entry);
          this.pendingByKind.set(responseKind, queue);
@@ -213,8 +216,8 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       return '';
    }
 
-   protected formatResponse(entry: { id: number; start: number }): string {
-      const elapsed = Math.round(performance.now() - entry.start);
+   protected formatResponse(entry: { id: number; sinceRequest: Stopwatch }): string {
+      const elapsed = Math.round(entry.sinceRequest.elapsedMs);
       return `[response #${entry.id}, ${elapsed}ms]`;
    }
 

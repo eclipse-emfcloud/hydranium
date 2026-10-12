@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
 import { RENAME_CONTENTION_CODES, renameOverOpenReaders } from '../../src/node/rename-over-open-readers.js';
 
@@ -61,15 +61,12 @@ describe('renameOverOpenReaders', () => {
    it('keeps retrying past a wall-clock jump, which spends none of the budget', async () => {
       const stub = failing(2, 'EPERM');
       const clock = makeFakeClock();
-      let wallOffsetMs = 0;
-      // Layered over the fake clock rather than spread from it: its methods live on a prototype.
-      const wallClock = Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs });
       const rename = async (): Promise<void> => {
          // An hour's jump during the first attempt, after the budget has started.
-         wallOffsetMs += 60 * 60 * 1000;
+         clock.jumpWallClock(60 * 60 * 1000);
          await stub.rename();
       };
-      await expect(renameOverOpenReaders('from', 'to', { rename, budgetMs: 1_000, clock: wallClock })).resolves.toBeUndefined();
+      await expect(renameOverOpenReaders('from', 'to', { rename, budgetMs: 1_000, clock })).resolves.toBeUndefined();
       expect(stub.calls()).toBe(3);
    });
 

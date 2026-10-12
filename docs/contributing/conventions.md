@@ -107,6 +107,11 @@ for a single canonical implementation, `this.constructor.name` where the slot
 has swappable strategies, so the log shows which ran. GLSP states are built per
 request by Inversify and inject `HydraniumTypes.Tracer` instead.
 
+**Time goes through a `Clock`**, so a platform workaround lives in one place
+and a test can drive time; a duration is a `stopwatch()`, never two `now()`
+readings, which a wall-clock step skews. Enforced by the ast-grep rule
+`time-through-clock` over framework and example source.
+
 **Typeguards and namespaces.** A typeguard the framework defines is a free
 function, `isFoo(x): x is Foo`, matching the generated guards adopters call. A
 namespace merged with a type holds factories, utilities and constants, never a

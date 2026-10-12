@@ -7,14 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type Channel } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
 import { NoopLogger } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/testing';
+import { tick, waitFor } from '@hydranium/protocol/testing';
 import { createChannelConnection, openChannelConnection } from '../src/browser/channel-connection';
 
 /** Flush pending microtasks/timers so the helper's async `start()` runs. */
@@ -44,9 +44,9 @@ class FakeConnectionProvider {
  */
 async function nextListen(provider: FakeConnectionProvider): Promise<void> {
    const before = provider.listenCalls;
-   const deadline = Date.now() + 5_000;
+   const deadline = performance.now() + 5_000;
    while (provider.listenCalls === before) {
-      if (Date.now() > deadline) {
+      if (performance.now() > deadline) {
          throw new Error('the handle never asked for a replacement channel');
       }
       await new Promise(resolve => setTimeout(resolve, 5));
@@ -419,6 +419,37 @@ describe('openChannelConnection', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(provider.listenCalls).toBe(listensAfterOpen);
+   });
+
+   it('keeps backing off when the wall clock jumps forward while a connection is up', async () => {
+      const provider = new FakeConnectionProvider();
+      const handle = openChannelConnection(provider as unknown as ServiceConnectionProvider, 'test-path', {
+         logger: new NoopLogger(),
+         reconnectDelays: [10, 10_000]
+      });
+      await flush();
+
+      const first = makeChannelPipe();
+      provider.handler!('test-path', first.left);
+      await handle.current;
+      first.right.close();
+      await nextListen(provider);
+      const second = makeChannelPipe();
+      provider.handler!('test-path', second.left);
+      await handle.current;
+      const listensAfterReopen = provider.listenCalls;
+
+      const realNow = Date.now();
+      const wallClock = vi.spyOn(Date, 'now').mockReturnValue(realNow + 3_600_000);
+      try {
+         second.right.close();
+         await tick(100);
+      } finally {
+         wallClock.mockRestore();
+      }
+
+      expect(provider.listenCalls).toBe(listensAfterReopen);
+      handle.dispose();
    });
 
    it('ignores a channel handed over after dispose', async () => {

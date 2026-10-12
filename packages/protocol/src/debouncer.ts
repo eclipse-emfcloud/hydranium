@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock } from './clock';
+import { type Clock, type Stopwatch } from './clock';
 import { ObservableValue, type MaybeObservableValue } from './observable-value';
 import { type Disposable } from './util';
 
@@ -53,8 +53,8 @@ export class Debouncer implements Disposable {
    protected readonly delay: ObservableValue<number>;
    protected readonly maxWaitMs?: number;
    protected timer?: Disposable;
-   /** Virtual time of the first {@link schedule} of the current pending window; drives {@link DebouncerOptions.maxWaitMs}. */
-   protected firstScheduledAt?: number;
+   /** Running since the first {@link schedule} of the current pending window; drives {@link DebouncerOptions.maxWaitMs}. */
+   protected sinceFirstSchedule?: Stopwatch;
 
    constructor(
       protected readonly clock: Clock,
@@ -77,13 +77,10 @@ export class Debouncer implements Disposable {
     * elapses since the first pending call.
     */
    schedule(): void {
-      const now = this.clock.now();
-      if (this.firstScheduledAt === undefined) {
-         this.firstScheduledAt = now;
-      }
+      this.sinceFirstSchedule ??= this.clock.stopwatch();
       let wait = Math.max(0, this.delay.value);
       if (this.maxWaitMs !== undefined) {
-         const untilCeiling = this.firstScheduledAt + this.maxWaitMs - now;
+         const untilCeiling = this.maxWaitMs - this.sinceFirstSchedule.elapsedMs;
          wait = Math.min(wait, Math.max(0, untilCeiling));
       }
       this.timer?.dispose();
@@ -101,7 +98,7 @@ export class Debouncer implements Disposable {
    cancel(): void {
       this.timer?.dispose();
       this.timer = undefined;
-      this.firstScheduledAt = undefined;
+      this.sinceFirstSchedule = undefined;
    }
 
    /** Cancel any pending fire and release. */
@@ -112,7 +109,7 @@ export class Debouncer implements Disposable {
    protected fire(): void {
       this.timer?.dispose();
       this.timer = undefined;
-      this.firstScheduledAt = undefined;
+      this.sinceFirstSchedule = undefined;
       this.fn();
    }
 }

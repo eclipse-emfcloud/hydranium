@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import type { URI } from '@hydranium/langium';
+import { SystemClock } from '@hydranium/protocol';
 import type { WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import type { StubSelfSaveRegistry } from './stub-self-save-registry.js';
 
@@ -49,7 +50,7 @@ export function makeStubWritableFileSystem(selfSaveRegistry?: StubSelfSaveRegist
       readDirectory: async () => [],
       async writeFile(uri: URI, content: string) {
          writes.push({ uri: uri.toString(), content });
-         selfSaveRegistry?.register(uri.fsPath, Date.now());
+         selfSaveRegistry?.register(uri.fsPath, new SystemClock().now());
       },
       reset() {
          writes.length = 0;

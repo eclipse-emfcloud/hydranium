@@ -72,20 +72,28 @@ describe('DefaultSelfSaveRegistry', () => {
       expect(registry.entryCount).toBe(1);
    });
 
-   it('treats an entry aged exactly to the TTL as still eligible (boundary, non-zero registeredAt)', () => {
+   it('treats an entry aged exactly to the TTL as still eligible', () => {
       const clock = makeFakeClock();
-      // Register at a non-zero base time so registeredAt > 0: this distinguishes
-      // the `now - registeredAt` subtraction from a `now + registeredAt` mutant,
-      // and exercising the exact boundary distinguishes `>` from `>=`.
-      clock.advance(100);
       const registry = new DefaultSelfSaveRegistry({ Clock: clock }, { ttlMs: 1000 });
-      registry.register('/a.a', 1000); // registeredAt = 100
+      registry.register('/a.a', 1000);
 
-      clock.advance(1000); // now = 1100; age = 1100 - 100 = 1000 === ttlMs
-      // `now - registeredAt > ttlMs` -> `1000 > 1000` -> false -> NOT expired -> matches.
-      // `>=` mutant: `1000 >= 1000` -> true -> expired -> would NOT match.
-      // `+` mutant: `1100 + 100 = 1200 > 1000` -> true -> expired -> would NOT match.
+      // Separates the strict `>` from `>=`, which would expire it here.
+      clock.advance(1000);
       expect(registry.isRegistered('/a.a', 1000)).toBe(true);
+   });
+
+   it('ages an entry by elapsed time, whichever way the wall clock jumps', () => {
+      const clock = makeFakeClock();
+      const registry = new DefaultSelfSaveRegistry({ Clock: clock }, { ttlMs: 1000 });
+      registry.register('/a.a', 1000);
+      registry.register('/b.a', 2000);
+
+      clock.jumpWallClock(3_600_000);
+      expect(registry.isRegistered('/a.a', 1000)).toBe(true);
+
+      clock.jumpWallClock(-7_200_000);
+      clock.advance(1001);
+      expect(registry.isRegistered('/b.a', 2000)).toBe(false);
    });
 
    it('does not match a different mtime (a foreign write to the same path)', () => {

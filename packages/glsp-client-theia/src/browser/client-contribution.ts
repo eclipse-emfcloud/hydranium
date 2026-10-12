@@ -11,10 +11,11 @@ import { ClientState, type GLSPClient, type InitializeResult } from '@eclipse-gl
 import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
 import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/browser';
-import { sendByMethodName, describeError } from '@hydranium/protocol';
+import { Clock } from '@hydranium/client-theia/common';
+import { sendByMethodName, describeError, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
+import { inject, injectable, optional, unmanaged } from '@theia/core/shared/inversify';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 // GLSP's channel connection uses the top-level `vscode-jsonrpc`'s root entry, which
 // installs no runtime layer; without the browser entry, no message is received.
@@ -51,6 +52,8 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
    @inject(WorkspaceService) protected readonly workspaceService!: WorkspaceService;
    @inject(ConnectionReporter) protected readonly connectionReporter!: ConnectionReporter;
    @inject(ChannelLogger) protected readonly logger!: ChannelLogger;
+   /** Times the restart escalation reset: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    readonly id: string;
 
@@ -62,8 +65,8 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
    protected readonly restartEscalationResetMs: number = 30_000;
    protected consecutiveFailures = 0;
    protected restartTimer?: ReturnType<typeof setTimeout>;
-   /** When the current client started; `0` once a restart has taken it into account. */
-   protected startedAt = 0;
+   /** Running since the current client started; cleared once a restart has taken it into account. */
+   protected sinceStart?: Stopwatch;
    /** Clients started so far, which numbers them in the log: they share {@link id}. */
    protected startedClients = 0;
    /** The attempt waiting for a channel, if any. */
@@ -127,7 +130,7 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
          client => {
             clearTimeout(timeout);
             attempt.connected();
-            this.startedAt = Date.now();
+            this.sinceStart = this.clock.stopwatch();
             this.logger.info(`[${this.id}] Diagram client ${++this.startedClients} started.`);
             this.clientStartedEmitter.fire(client);
             this.restartOnLoss(client);
@@ -165,10 +168,10 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
 
    /** Run `restart` after the delay for the failures so far, and return that delay. */
    protected scheduleRestart(restart: () => void): number {
-      if (this.startedAt > 0 && Date.now() - this.startedAt >= this.restartEscalationResetMs) {
+      if (this.sinceStart !== undefined && this.sinceStart.elapsedMs >= this.restartEscalationResetMs) {
          this.consecutiveFailures = 0;
       }
-      this.startedAt = 0;
+      this.sinceStart = undefined;
       const delay = this.restartDelaysMs[Math.min(this.consecutiveFailures, this.restartDelaysMs.length - 1)];
       this.consecutiveFailures++;
       clearTimeout(this.restartTimer);
