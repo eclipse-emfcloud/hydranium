@@ -68,7 +68,7 @@ async function composeServer(): Promise<LspServerConnection> {
    return composed;
 }
 
-describe('makeLspServerConnection — caller-composed services tree', () => {
+describe('makeLspServerConnection with a caller-composed services tree', () => {
    it('drives a real LSP server the caller composed onto serverConnection', async () => {
       const composed = await composeServer();
 

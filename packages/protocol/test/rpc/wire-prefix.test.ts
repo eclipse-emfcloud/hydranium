@@ -49,7 +49,7 @@ describe('assertValidMethodNamespace', () => {
    });
 });
 
-describe('bindRpcMethods — methodNamespace validation', () => {
+describe('bindRpcMethods methodNamespace validation', () => {
    it('throws at construction time when methodNamespace lacks a trailing slash', () => {
       const pair = makeDuplexConnectionPair();
       try {
@@ -71,7 +71,7 @@ describe('bindRpcMethods — methodNamespace validation', () => {
    });
 });
 
-describe('createRpcProxy — methodNamespace validation', () => {
+describe('createRpcProxy methodNamespace validation', () => {
    it('throws at construction time when methodNamespace lacks a trailing slash', () => {
       const pair = makeDuplexConnectionPair();
       try {

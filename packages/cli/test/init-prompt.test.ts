@@ -52,7 +52,7 @@ vi.mock('@clack/prompts', () => {
 
 const { createClackPrompt, InitWizardCancelled, OPTIONAL_HEAD_CHOICES } = await import('../src/commands/init-prompt.js');
 
-describe('the clack adapter', () => {
+describe('createClackPrompt', () => {
    beforeEach(() => {
       for (const key of Object.keys(calls)) {
          delete calls[key];

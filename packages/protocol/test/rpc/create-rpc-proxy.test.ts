@@ -559,7 +559,7 @@ describe('bindRpcMethods', () => {
       }
    });
 
-   it('silently skips missing methods when { requireAll: false } is passed (transitional opt-in)', async () => {
+   it('silently skips missing methods when `{ requireAll: false }` is passed (transitional opt-in)', async () => {
       const pair = makeDuplexConnectionPair();
       try {
          // Armed before the bind: these are absolute counts over the whole

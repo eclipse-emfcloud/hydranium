@@ -215,7 +215,7 @@ describe('AbstractHydraniumSemanticTokenProvider', () => {
          ]);
       });
 
-      it('colours an UNRESOLVED reference — the declared type is known without resolution', () => {
+      it('colours an UNRESOLVED reference, since the declared type is known without resolution', () => {
          const provider = new TestProvider(makeServices({ 'TypeTwo.ref': 'TypeOne' }), { TypeOne: SemanticTokenTypes.class });
          // `ref` undefined: the target does not exist, as in a half-typed document.
          const node = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', ref: makeReference('ns.Missing') });

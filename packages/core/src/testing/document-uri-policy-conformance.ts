@@ -96,7 +96,7 @@ export function documentUriPolicyConformance(
       // Computed here rather than tallied from the assertions above, so the
       // guard does not depend on the runner executing tests in declaration
       // order (a `--shuffle` run would otherwise read it as zero).
-      it(`at least one sample URI is loadable (checked: ${sampleUris.join(', ')})`, () => {
+      it(`at least one sample URI is loadable among ${sampleUris.join(', ')}`, () => {
          const loadable = sampleUris.filter(uri => makePolicy().loadUri(uri) !== undefined);
          expect(loadable.length > 0).toBe(true);
       });

@@ -16,9 +16,10 @@
  * `makeTestServices` takes a `serialize` function and gives it to
  * `StubModelService`, so the framework's own harness *substitutes* the hook under
  * test — its stub services tree has no `ServiceRegistry` for a per-language
- * `Serializer` to be resolved through. The real `ModelService.serialize`, which
- * resolves `ServiceRegistry.getServices(uri).serializer.Serializer`, therefore
- * only runs where real language services exist. That is here.
+ * `Serializer` to be resolved through. The real
+ * `DefaultModelService.serialize`, which resolves
+ * `ServiceRegistry.getServices(uri).serializer.Serializer`, therefore only runs
+ * where real language services exist. That is here.
  *
  * A test that pins only the *dispatch* — that `serialize` was called, or that a
  * recording stub returned its constant — cannot see the failure that matters: an
@@ -74,7 +75,7 @@ async function writeAsForm(harness: OrderFlowHarness, uri: string, model: Transf
    await session.update({ uri, model, baseVersion: 'any' });
 }
 
-describe('order-flow structured write path — ClientSession.update with a transfer model', () => {
+describe('order-flow structured write path through ClientSession.update with a transfer model', () => {
    it('writes back a .process transfer model with every cross-reference intact', async () => {
       const harness = await makeWorkspaceHarness();
       const uri = await loadCopy(harness, 'orders/fulfillment.process');
@@ -195,7 +196,7 @@ describe('order-flow structured write path — ClientSession.update with a trans
       expect(after).not.toMatch(/:\s*$/m);
    });
 
-   it('leaves the on-disk file untouched — update is an in-memory edit, not a save', async () => {
+   it('leaves the on-disk file untouched, since update is an in-memory edit and not a save', async () => {
       // Pins the update/save split: `save` persists, `update` does not. If this
       // ever starts failing, an unexpected disk write appeared in the update path
       // (the integrity write-back is the candidate) and the temp-copy guard above

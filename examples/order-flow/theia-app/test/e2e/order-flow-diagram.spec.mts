@@ -55,7 +55,7 @@ async function loadingOverlayWasSeen(app: TheiaApp): Promise<boolean> {
    return app.page.evaluate(() => (window as unknown as { __hydraniumOverlaySeen?: boolean }).__hydraniumOverlaySeen === true);
 }
 
-test.describe.serial('Order-flow diagram in Theia', () => {
+test.describe.serial('order-flow diagram in Theia', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

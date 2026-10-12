@@ -82,7 +82,7 @@ const fixturesDirectory = fileURLToPath(new URL('./fixtures/serializer', import.
 const corpus = makeGoldenCorpus(fixturesDirectory);
 
 describe('order-flow serializer golden corpus', () => {
-   describe.each(corpus)('golden: $name', ({ path, text }) => {
+   describe.each(corpus.map(fixture => [fixture.name, fixture] as const))('%s', (_name, { path, text }) => {
       const uri = URI.file(path);
       // The serializers emit no trailing newline; goldens carry the
       // editorconfig-mandated final newline, so normalise exactly one.
@@ -121,7 +121,7 @@ describe('order-flow serializer golden corpus', () => {
              }`
          ],
          [
-            'cramped fields — no spaces around the colon, the brackets or the braces',
+            'cramped fields with no spaces around the colon, the brackets or the braces',
             '.domain',
             `entity   Cramped{sku :ID
                 tags: Barcode [ ]}

@@ -25,7 +25,7 @@ function makeService(buildPhasePasses?: unknown): BuildPhasePassService {
 
 const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
-describe('BuildPhasePassService — dispatch', () => {
+describe('BuildPhasePassService dispatch', () => {
    it('runs only passes whose `state` matches the phase', async () => {
       const service = makeService();
       const ran: string[] = [];
@@ -36,7 +36,7 @@ describe('BuildPhasePassService — dispatch', () => {
       expect(ran).toEqual(['linked']);
    });
 
-   it('runs passes in priority order — lower runs first', async () => {
+   it('runs passes in priority order, lower first', async () => {
       const service = makeService();
       const ran: string[] = [];
       service.register({ id: 'late', priority: 10, state: DocumentState.Linked, run: () => void ran.push('late') });
@@ -92,7 +92,7 @@ describe('BuildPhasePassService — dispatch', () => {
    });
 });
 
-describe('BuildPhasePassService — cancellation', () => {
+describe('BuildPhasePassService cancellation', () => {
    it('runs nothing when the entry token is already cancelled', async () => {
       const service = makeService();
       const ran: string[] = [];
@@ -129,7 +129,7 @@ describe('BuildPhasePassService — cancellation', () => {
    });
 });
 
-describe('BuildPhasePassService — registration', () => {
+describe('BuildPhasePassService registration', () => {
    it('throws on duplicate id', () => {
       const service = makeService();
       service.register({ id: 'dup', state: DocumentState.Linked, run: () => undefined });
@@ -170,7 +170,7 @@ describe('BuildPhasePassService — registration', () => {
    });
 });
 
-describe('BuildPhasePassService — profiling', () => {
+describe('BuildPhasePassService profiling', () => {
    afterEach(() => Logger.setLevel('info'));
 
    function capturingService(): { service: BuildPhasePassService; lines: CapturedLine[] } {

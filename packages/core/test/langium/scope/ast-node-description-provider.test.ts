@@ -49,7 +49,7 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
    const provider = new HydraniumAstNodeDescriptionProvider(services as never);
 
    describe('createLocal', () => {
-      it('produces tier: local, no projectId, document URI preserved', () => {
+      it('produces `tier: local`, no projectId, document URI preserved', () => {
          const node = makeFakeAstNode<FakeNode>({ $type: 'X', name: 'foo' });
          const document = fakeDocument('file:///a/foo.test');
          const description = provider.createLocal({ node, name: 'foo', document });
@@ -62,7 +62,7 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
    });
 
    describe('createProject', () => {
-      it('produces tier: project with required projectId', () => {
+      it('produces `tier: project` with required projectId', () => {
          const node = makeFakeAstNode<FakeNode>({ $type: 'X', name: 'foo' });
          const document = fakeDocument();
          const description = provider.createProject({ node, name: 'foo', document, projectId: 'dm1' });
@@ -72,7 +72,7 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
    });
 
    describe('createPublic', () => {
-      it('produces tier: public with required projectId (the multi-tier emission contract)', () => {
+      it('produces `tier: public` with required projectId (the multi-tier emission contract)', () => {
          const node = makeFakeAstNode<FakeNode>({ $type: 'X', name: 'foo' });
          const document = fakeDocument();
          const description = provider.createPublic({ node, name: 'foo', document, projectId: 'dm1' });
@@ -82,7 +82,7 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
    });
 
    describe('createUniversal', () => {
-      it('produces tier: universal with no projectId', () => {
+      it('produces `tier: universal` with no projectId', () => {
          const node = makeFakeAstNode<FakeNode>({ $type: 'X', name: 'foo' });
          const document = fakeDocument();
          const description = provider.createUniversal({ node, name: 'foo', document });
@@ -91,8 +91,8 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
       });
    });
 
-   describe('createDescription (overridden)', () => {
-      it('produces a local-tier description — no un-tiered descriptions escape the provider', () => {
+   describe('createDescription as the provider overrides it', () => {
+      it('produces a local-tier description, so no un-tiered description escapes the provider', () => {
          const node = makeFakeAstNode<FakeNode>({ $type: 'X', name: 'foo' });
          const document = fakeDocument();
          const description = provider.createDescription(node, 'foo', document);

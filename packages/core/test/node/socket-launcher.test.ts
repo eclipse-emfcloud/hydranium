@@ -99,7 +99,7 @@ describe('startSocketServer', () => {
       await handle.stopped;
    });
 
-   it("serves every interface for host '::'", async () => {
+   it('serves every interface for host `::`', async () => {
       if (!(await hasIpv6Loopback())) {
          // Nothing to distinguish on a machine with no IPv6: the escape hatch
          // and the default would both answer on IPv4 alone.

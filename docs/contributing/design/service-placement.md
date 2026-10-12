@@ -59,7 +59,7 @@ Each of these is a choice between two defensible answers:
   that branch unifies two document roots into one wire root. Should two
   genuinely different client vocabularies appear, the change is additive: a
   per-language `TransferEncoder` slot, with the shared one delegating per URI
-  as `ModelService.serialize` does for `Serializer`.
+  as `DefaultModelService.serialize` does for `Serializer`.
 
 Some of Langium's shared slots, the `lsp.Connection` and `LanguageServer`
 surface, flow through unchanged. Others are narrowed at the _type_ level as well
@@ -92,9 +92,10 @@ decide. That is why `sharedModules.extra` exists on `createIntegrationServices`:
   language; the pipeline forces them at the first build phase that needs them
   and touches each language's `ValidationContributionCollector`, so checks are
   registered before `Validated`.
-- **`Serializer`: per-language, dispatched per URI.** `ModelService.serialize`
-  resolves `ServiceRegistry.getServices(uri).serializer.Serializer`, so each
-  file reaches the serializer of its own language.
+- **`Serializer`: per-language, dispatched per URI.**
+  `DefaultModelService.serialize` resolves
+  `ServiceRegistry.getServices(uri).serializer.Serializer`, so each file
+  reaches the serializer of its own language.
 - **`ServiceRegistry`: the bridge.** Every path from a shared service to a
   per-language one goes through it. It is shared, since there is one dispatch
   table, and it is the single seam between the two tiers.

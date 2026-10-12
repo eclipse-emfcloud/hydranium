@@ -61,7 +61,7 @@ function slot(services: ServerSharedServicesMinimal, name: string): unknown {
    return (services as unknown as Record<string, unknown>)[name];
 }
 
-describe('makeNoopSharedServices — the defaults', () => {
+describe('makeNoopSharedServices defaults', () => {
    it('binds the real framework observability classes, not stand-ins', () => {
       const services = makeNoopSharedServices();
 
@@ -88,7 +88,7 @@ describe('makeNoopSharedServices — the defaults', () => {
    });
 });
 
-describe('makeNoopSharedServices — the overrides', () => {
+describe('makeNoopSharedServices overrides', () => {
    it('binds an overridden Logger on its own slot and threads it into the default Tracer', () => {
       const { logger, lines } = makeCapturingLogger();
       const services = makeNoopSharedServices({ Logger: logger });
@@ -154,7 +154,7 @@ describe('makeNoopSharedServices — the overrides', () => {
    });
 });
 
-describe('makeNoopLanguageServices — the shared sub-tree', () => {
+describe('makeNoopLanguageServices shared sub-tree', () => {
    it('routes shared overrides through makeNoopSharedServices and spreads the rest per-language', () => {
       const { logger, lines } = makeCapturingLogger();
       const scopeProvider = { getScope: (): undefined => undefined };

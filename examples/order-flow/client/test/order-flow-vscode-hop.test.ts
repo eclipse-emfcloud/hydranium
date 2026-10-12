@@ -208,7 +208,7 @@ async function thirdPartyWrite(uri: string, root: OrderFlowTransferRoot): Promis
    await writeAsThirdParty(server, THIRD_PARTY, uri, root);
 }
 
-describe('order-flow properties panel data path (socket → relay → messenger hop)', () => {
+describe('order-flow properties panel data path through a socket, a relay and a messenger hop', () => {
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-hop-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });

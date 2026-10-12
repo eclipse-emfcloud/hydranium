@@ -516,7 +516,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
-   describe('ensureLanguageFileExtensions (registered-extension cache)', () => {
+   describe('ensureLanguageFileExtensions caching registered extensions', () => {
       // The walk filters on this list, so a stale entry means files of a
       // late-registered language never build on a watched-directory change.
       class CacheBuilder extends HydraniumDocumentBuilder {
@@ -557,7 +557,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
-   describe('flattenAndAdaptURI (FileSystemProvider walk)', () => {
+   describe('flattenAndAdaptURI walking the FileSystemProvider', () => {
       // An in-memory tree: key = uri string, value = directory children (a leaf
       // is absent from the map). The fake provider mirrors NodeFileSystem's
       // shape — statSync throws for unknown paths, readDirectorySync returns
@@ -686,7 +686,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
-   describe('resetToState — rehydrate-on-re-entry (CST residency)', () => {
+   describe('resetToState rehydrating the CST on re-entry', () => {
       // Stub the dependencies that the inherited `resetToState` touches so it runs
       // without the full DI graph (index removal + linker unlink are no-ops here;
       // the test only asserts the resulting target state). `indexManager` and
@@ -805,7 +805,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
-   describe('awaitDocumentState — liveness of the replaced rejection', () => {
+   describe('awaitDocumentState liveness of the replaced rejection', () => {
       // Langium rejects when the workspace has already passed the requested
       // state without carrying the document along; this class waits instead,
       // which makes keeping that wait resolvable its own responsibility. The
@@ -1240,7 +1240,7 @@ describe('HydraniumDocumentBuilder', () => {
          expect(document.diagnostics).toBe(diagnostics);
       });
 
-      it('DOES replace an entry whose renderer changed the text', () => {
+      it('does replace an entry whose renderer changed the text', () => {
          // The control on the three rows above: they assert the pass leaves
          // things alone, and a pass that rendered NOTHING would satisfy all of
          // them. This is the same comparison from the other side.

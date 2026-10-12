@@ -67,7 +67,7 @@ const keyedSpecs = fc.uniqueArray(
 );
 
 describe('patch-merge property tests', () => {
-   it('round-trip: applyPatch(source, compare(source, target)) equals target', () => {
+   it('round-trips, so applyPatch(source, compare(source, target)) equals target', () => {
       fc.assert(
          fc.property(jsonObject, jsonObject, (source, target) => {
             const patched = applyPatch(deepClone(source), compare(source, target), false, true).newDocument;
@@ -146,7 +146,7 @@ describe('patch-merge property tests', () => {
       );
    });
 
-   it('idempotence: reconciling an unchanged root is a no-op and skips the refetch', async () => {
+   it('is idempotent, reconciling an unchanged root as a no-op that skips the refetch', async () => {
       await fc.assert(
          fc.asyncProperty(jsonObject, async base => {
             let refetched = false;
@@ -160,7 +160,7 @@ describe('patch-merge property tests', () => {
       );
    });
 
-   it('convergence: a sequence of interleaved foreign + user edits loses no intent', async () => {
+   it('converges, losing no intent over a sequence of interleaved foreign + user edits', async () => {
       const sequenceScenario = fc.uniqueArray(safeKey, { minLength: 2, maxLength: 12 }).chain(pool => {
          const keys = pool.slice(0, Math.floor(pool.length / 2) * 2);
          return fc.record({

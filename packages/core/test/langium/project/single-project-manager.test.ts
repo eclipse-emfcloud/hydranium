@@ -79,13 +79,13 @@ describe('SingleProjectManager', () => {
       expect(mgr.getProjectUris('does-not-exist')).toEqual([]);
    });
 
-   it('getVisibleProjects is self-only — combined with single-project ownership = everything sees everything', () => {
+   it('getVisibleProjects is self-only, so with single-project ownership everything sees everything', () => {
       const mgr = new SingleProjectManager(fakeServices([URI_A, URI_B]));
       expect(mgr.getVisibleProjects(SingleProjectManager.WORKSPACE_PROJECT_ID)).toEqual([SingleProjectManager.WORKSPACE_PROJECT_ID]);
       expect(mgr.getVisibleProjects('does-not-exist')).toEqual([]);
    });
 
-   it('isVisible: synthetic project sees itself per selfVisible', () => {
+   it('isVisible lets the synthetic project see itself per selfVisible', () => {
       const mgr = new SingleProjectManager(fakeServices([]));
       const id = SingleProjectManager.WORKSPACE_PROJECT_ID;
       expect(mgr.isVisible(id, id)).toBe(false); // default selfVisible=false
@@ -113,7 +113,7 @@ describe('SingleProjectManager', () => {
       expect(mgr.getProject(URI_A)?.id).toBe('@workspace');
    });
 
-   it('isVisible: non-workspace source is never visible even to itself', () => {
+   it('isVisible never makes a non-workspace source visible, even to itself', () => {
       // Kills the `if (false)` mutant of isVisible's workspace-id guard: a foreign
       // source must short circuit to false before the self-equality branch can
       // return selfVisible.

@@ -203,7 +203,7 @@ async function settle(): Promise<void> {
    await new Promise<void>(resolve => setImmediate(resolve));
 }
 
-describe('HydraniumTextDocuments — revert on release', () => {
+describe('HydraniumTextDocuments revert on release', () => {
    it('rebuilds the document from disk once its last client closes it, with no LSP head', async () => {
       const { docs, builds } = makeRig();
       open(docs, 'form');
@@ -430,7 +430,7 @@ describe('HydraniumTextDocuments — revert on release', () => {
    });
 });
 
-describe('HydraniumTextDocuments — release grace', () => {
+describe('HydraniumTextDocuments release grace', () => {
    it('keeps a lost client’s document for 10 s when no grace is configured', async () => {
       const { docs, builds, clock } = makeRig();
       open(docs, 'form');
@@ -781,7 +781,7 @@ function openInEditor(editor: ProtocolConnection, uri: string): Promise<void> {
    });
 }
 
-describe('HydraniumTextDocuments — a language client whose worker port closes', () => {
+describe('HydraniumTextDocuments with a language client whose worker port closes', () => {
    it('closes every document the editor held, and each reverts', async () => {
       const { docs, builds } = makeRig();
       const port = listenOnWorkerPort(docs);

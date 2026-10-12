@@ -1688,7 +1688,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('.context-view .action-label').filter({ hasText: 'Befehlspalette' })).toHaveCount(1);
    });
 
-   test("labels Monaco's menu in English with no locale — the control on the row above", async ({ page }) => {
+   test("labels Monaco's menu in English with no locale, as the control for the row above", async ({ page }) => {
       // Without this the row above passes against a page that always loaded the
       // German bundle, which is the one thing the boot module could get wrong in
       // a way no other assertion sees.
@@ -1732,7 +1732,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(problems.filter({ hasText: 'unexpected character' })).toHaveCount(0);
    });
 
-   test('renders the lexer error in English with no locale — the control on the row above', async ({ page }) => {
+   test('renders the lexer error in English with no locale, as the control for the row above', async ({ page }) => {
       // Without this the row above passes against a page that always got German
       // — and, more specifically here, against an identity attached to the wrong
       // message, since chevrotain's own sentence is what the pass must reproduce
@@ -1804,14 +1804,14 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator(STATUS_BAND)).not.toContainText('Read-only');
    });
 
-   test('labels the palette in English with no locale — the control on the row above', async ({ page }) => {
+   test('labels the palette in English with no locale, as the control for the row above', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('[data-report="glsp-head"]')).toHaveAttribute('title', RENDERED_REPORT);
 
       await expect(page.locator(`${MOUNT} .tool-button`)).toHaveText(['Task', 'Gateway', 'Transition', 'Effect']);
    });
 
-   test('renders the English when no locale is declared — the control on the row above', async ({ page }) => {
+   test('renders the English when no locale is declared, as the control for the row above', async ({ page }) => {
       // Same page, same catalogue, only the query parameter differs. Without
       // this the row above would pass against a page that always got German, and
       // against a server that ignored the locale entirely.
@@ -1929,7 +1929,7 @@ test.describe('order-flow in a web worker', () => {
       await expect(panel.locator('.diagnostics li')).toHaveCount(1);
    });
 
-   test('the two outstanding states are marked apart: a field pending, a buffer unsaved', async ({ page }) => {
+   test('marks the two outstanding states apart, a field pending and a buffer unsaved', async ({ page }) => {
       await page.goto('/');
       const panel = page.locator('#properties-body');
       const nameField = panel.locator('#field-name');

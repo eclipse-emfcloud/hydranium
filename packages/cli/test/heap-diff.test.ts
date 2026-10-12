@@ -19,7 +19,7 @@ function analysis(totalShallowBytes: number, concepts: unknown = {}, astByType: 
    return { totalShallowBytes, concepts, astByType };
 }
 
-describe('diffAnalyses (pure, CI-gating)', () => {
+describe('diffAnalyses', () => {
    it('flags a regression when total-shallow growth exceeds the threshold', () => {
       const diff = diffAnalyses(analysis(1000), analysis(1100), 0.05);
       expect(diff.total).toMatchObject({ base: 1000, cur: 1100, delta: 100 });

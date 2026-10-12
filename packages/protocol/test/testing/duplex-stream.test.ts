@@ -16,7 +16,7 @@ function nextChunk(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 describe('makeDuplexStreamPair', () => {
-   it('carries each direction independently — what is written is read back on the same PassThrough', async () => {
+   it('carries each direction independently, so what is written is read back on the same PassThrough', async () => {
       const pair = makeDuplexStreamPair();
       try {
          const clientPayload = Buffer.from('from-client');
@@ -46,7 +46,7 @@ describe('makeDuplexStreamPair', () => {
       expect(pair.serverToClient.destroyed).toBe(true);
    });
 
-   it('dispose() is idempotent — a second call is a clean no-op', () => {
+   it('dispose() is idempotent, a second call being a clean no-op', () => {
       const pair = makeDuplexStreamPair();
       pair.dispose();
       expect(() => pair.dispose()).not.toThrow();

@@ -53,7 +53,7 @@ afterEach(() => {
    Logger.setLevel('info');
 });
 
-describe('HydraniumTextDocuments — client sessions', () => {
+describe('HydraniumTextDocuments client sessions', () => {
    it('closes everything a session has open, then announces the session closed', () => {
       const { docs } = makeDocs();
       docs.registerSession('s');
@@ -108,7 +108,7 @@ describe('HydraniumTextDocuments — client sessions', () => {
    });
 });
 
-describe('HydraniumTextDocuments — deletion closes opens', () => {
+describe('HydraniumTextDocuments deletion closes opens', () => {
    it('closes every open of a URI when a subclass deletes it, and continues its version sequence', () => {
       const { docs } = makeDocs();
       open(docs, A, 'form');

@@ -153,7 +153,7 @@ describe('order-flow .process read-only status', () => {
       expect(lastOf(diagram, SetEditModeAction.is)?.editMode).toBe(EditMode.READONLY);
    });
 
-   it('leaves the band clear on a diagram opened over a clean document — the control on the row above', async () => {
+   it('leaves the band clear on a diagram opened over a clean document, as the control for the row above', async () => {
       const diagram = await openDiagram();
 
       await afterLiveValidation(diagram, 0);

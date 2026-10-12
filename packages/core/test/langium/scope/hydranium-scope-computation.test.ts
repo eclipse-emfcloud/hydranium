@@ -195,7 +195,7 @@ describe('HydraniumScopeComputation', () => {
       );
    }
 
-   it('addExportedSymbol emits tier: project keyed by document-qualified name when the document has an owning project', () => {
+   it('addExportedSymbol emits `tier: project` keyed by document-qualified name when the document has an owning project', () => {
       const nameProvider = makeNameProviderStub(node => (node as FakeNode).name);
       const services = makeExportTestServices({ 'file:///projA/foo.fake': 'projA' }, nameProvider);
       const computation = new HydraniumScopeComputation(services as never);
@@ -215,7 +215,7 @@ describe('HydraniumScopeComputation', () => {
       }
    });
 
-   it('addExportedSymbol emits tier: universal when the document has no owning project', () => {
+   it('addExportedSymbol emits `tier: universal` when the document has no owning project', () => {
       const nameProvider = makeNameProviderStub(node => (node as FakeNode).name);
       const services = makeExportTestServices({}, nameProvider);
       const computation = new HydraniumScopeComputation(services as never);
@@ -309,7 +309,7 @@ describe('HydraniumScopeComputation', () => {
    });
 });
 
-describe('HydraniumScopeComputation — collectLocalSymbols profiling', () => {
+describe('HydraniumScopeComputation.collectLocalSymbols profiling', () => {
    afterEach(() => Logger.setLevel('info'));
 
    /** Container root with a `members` array so `streamAllContents` yields the children. */

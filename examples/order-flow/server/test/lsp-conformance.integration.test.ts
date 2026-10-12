@@ -197,5 +197,5 @@ runLspConformance({
       };
    },
    languages: [domainFixture, processFixture, layoutFixture],
-   suiteTitle: 'conformance: lsp (order-flow, three grammars)'
+   suiteTitle: 'order-flow lsp conformance over three grammars'
 });

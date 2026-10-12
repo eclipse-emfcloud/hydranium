@@ -213,7 +213,7 @@ function open(docs: HydraniumTextDocuments<TextDocument>, clientId: string, text
    docs.notifyDidOpenTextDocument({ textDocument: { uri: FILE, languageId: 'plaintext', version: 1, text } }, clientId);
 }
 
-describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
+describe('HydraniumTextDocuments disk baseline and dirty state', () => {
    it('opens clean on the text it opened with, and flips on each change of the answer', () => {
       const { docs, flips } = makeRig();
       open(docs, 'form');
@@ -242,7 +242,7 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
       expect(docs.isDirty(FILE)).toBe(false);
    });
 
-   it('takes a baseline it is given: the file text cleans, no file dirties', () => {
+   it('takes a baseline it is given, so the file text cleans and no file dirties', () => {
       const { docs, flips } = makeRig();
       open(docs, 'form');
       docs.applyContentChange(FILE, EDITED, 'form');
@@ -560,7 +560,7 @@ describe('HydraniumTextDocuments — disk baseline and dirty state', () => {
    });
 });
 
-describe('HydraniumTextDocuments — text state', () => {
+describe('HydraniumTextDocuments text state', () => {
    it('hashes the text of a held document once per version', () => {
       const { docs } = makeRig();
       open(docs, 'form');

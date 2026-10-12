@@ -270,7 +270,7 @@ entity Renamed {
 });
 
 for (const syncMode of ['editor', 'silent'] as const) {
-   describe(`an integrity repair of a URI open in the store (${syncMode} mode)`, () => {
+   describe(`an integrity repair of a URI open in the store in ${syncMode} mode`, () => {
       // Both modes are covered because the open/closed branch is what selects
       // between them, and an open document must take neither: a repair delivered
       // to an editor is delivered by content, and writing it to disk underneath
@@ -352,7 +352,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
       });
    });
 
-   describe(`an integrity repair of a URI held only through the data head (${syncMode} mode)`, () => {
+   describe(`an integrity repair of a URI held only through the data head in ${syncMode} mode`, () => {
       // Not a closed file, though no editor holds it: the store is the
       // authority, and it carries the client's unsaved updates. Routing it as
       // closed writes those updates to disk in silent mode whenever an edit

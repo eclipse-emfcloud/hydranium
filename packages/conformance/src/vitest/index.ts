@@ -57,7 +57,7 @@ const vitestRunner: ConformanceRunner = {
 export function runDataConformance<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic = TransferDiagnostic>(
    options: DataConformanceOptions<TTransfer, TDiagnostic>
 ): void {
-   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'conformance: data-server', buildDataChecks(options));
+   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'data-server conformance', buildDataChecks(options));
 }
 
 /**
@@ -66,7 +66,7 @@ export function runDataConformance<TTransfer extends TransferElement, TDiagnosti
  * per language) and a ran-vs-skipped summary.
  */
 export function runLspConformance(options: LspConformanceOptions): void {
-   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'conformance: lsp', buildLspChecks(options));
+   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'lsp conformance', buildLspChecks(options));
 }
 
 /**
@@ -77,5 +77,5 @@ export function runLspConformance(options: LspConformanceOptions): void {
 export function runGlspConformance<TAction, TDriver extends GlspConformanceDriver<TAction>>(
    options: GlspConformanceOptions<TAction, TDriver>
 ): void {
-   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'conformance: glsp', buildGlspChecks(options));
+   emitConformanceSuite(vitestRunner, options.suiteTitle ?? 'glsp conformance', buildGlspChecks(options));
 }

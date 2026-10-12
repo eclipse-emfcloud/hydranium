@@ -154,7 +154,7 @@ export interface GlspConformanceOptions<TAction, TDriver extends GlspConformance
    readonly connect: () => TDriver | Promise<TDriver>;
    /** Per-diagram-type fixtures. */
    readonly diagrams: ReadonlyArray<GlspFixture<TAction, TDriver>>;
-   /** Suite title override. Default `'conformance: glsp'`. */
+   /** Suite title override. Default `'glsp conformance'`. */
    readonly suiteTitle?: string;
 }
 

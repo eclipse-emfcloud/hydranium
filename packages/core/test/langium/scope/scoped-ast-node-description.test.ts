@@ -31,7 +31,7 @@ describe('TieredAstNodeDescription', () => {
       });
    });
 
-   describe('isLocalTier / isProjectTier / isPublicTier / isUniversalTier', () => {
+   describe('isLocalTier, isProjectTier, isPublicTier and isUniversalTier', () => {
       const local = makeFakeDescription('L', { tier: 'local' });
       const project = makeFakeDescription('P', { tier: 'project', projectId: 'dm1' });
       const publicTier = makeFakeDescription('Pu', { tier: 'public', projectId: 'dm1' });

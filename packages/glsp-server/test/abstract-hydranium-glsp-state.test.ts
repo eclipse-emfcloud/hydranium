@@ -214,7 +214,7 @@ function nodeInDoc(uri: string): AstNode {
 }
 
 describe('AbstractHydraniumGlspState', () => {
-   describe('diagramLanguage / languageServicesFor', () => {
+   describe('diagramLanguage and languageServicesFor', () => {
       it('has no language before a source root is captured', () => {
          const { state } = createState(makeHarness());
          expect(state.diagramLanguage).toBeUndefined();
@@ -363,7 +363,7 @@ describe('AbstractHydraniumGlspState', () => {
       });
    });
 
-   describe('ready()', () => {
+   describe('ready', () => {
       it('logs a "Wait for state ..." line and resolves when ensureDocumentState resolves', async () => {
          const harness = makeHarness();
          harness.ensureDocumentStatePromise = () => Promise.resolve();
@@ -373,7 +373,7 @@ describe('AbstractHydraniumGlspState', () => {
          expect(harness.logger.timeLabels.some(label => label.includes("Wait for state 'Validated'"))).toBe(true);
       });
 
-      it('runs onReadyRefreshed after the wait — sees the refreshed root', async () => {
+      it('runs onReadyRefreshed after the wait, so it sees the refreshed root', async () => {
          const harness = makeHarness();
          harness.ensureDocumentStatePromise = () => Promise.resolve();
          const { state } = createState(harness);

@@ -33,7 +33,7 @@ async function fulfillment(harness: OrderFlowHarness): Promise<ProcessModel> {
    return documentFor<ProcessModel>(harness, 'orders/fulfillment.process').parseResult.value;
 }
 
-describe('order-flow integrity rules — bound, and running in the build', () => {
+describe('order-flow integrity rules bound and running in the build', () => {
    it('leaves a well-formed workspace untouched', async () => {
       const harness = await makeWorkspaceHarness();
       const orders = documentFor<DomainModel>(harness, 'orders/orders.domain').parseResult.value;
@@ -82,7 +82,7 @@ describe('order-flow integrity rules — bound, and running in the build', () =>
    });
 });
 
-describe('order-flow AST extensions — a cross-grammar computed property', () => {
+describe('order-flow AST extensions computing a cross-grammar property', () => {
    it('populates _writtenFields with the .domain fields a .process task writes', async () => {
       const harness = await makeWorkspaceHarness();
       const pay = taskNamed(await fulfillment(harness), 'Pay');

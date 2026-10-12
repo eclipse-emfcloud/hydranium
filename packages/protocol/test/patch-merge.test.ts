@@ -185,7 +185,7 @@ describe('reconcileByPatchReplay', () => {
 });
 
 describe('ReconcilingConflictResolver', () => {
-   test('delegates to reconcileByPatchReplay — merges a disjoint foreign edit', async () => {
+   test('delegates to reconcileByPatchReplay and merges a disjoint foreign edit', async () => {
       const resolver = new ReconcilingConflictResolver();
       const base = { entity: { name: 'X', description: 'D' } };
       const ours = { entity: { name: 'Y', description: 'D' } };
@@ -200,7 +200,7 @@ describe('ReconcilingConflictResolver', () => {
       }
    });
 
-   test('delegates to reconcileByPatchReplay — reports conflict on same-field divergence', async () => {
+   test('delegates to reconcileByPatchReplay and reports a conflict on same-field divergence', async () => {
       const resolver = new ReconcilingConflictResolver();
       const base = { entity: { name: 'X' } };
       const ours = { entity: { name: 'Y' } };

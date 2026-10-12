@@ -463,8 +463,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * method routes the out-of-band part by document registration:
     *
     * - **Open in the language client** → nothing to push here. The AST
-    *   mutation rode the current build, so `ModelService.syncToLanguageClient`
-    *   (the persistent integrity-settled listener) mirrors it to the client by
+    *   mutation rode the current build, so
+    *   `DefaultModelService.syncToLanguageClient` (the persistent
+    *   integrity-settled listener) mirrors it to the client by
     *   *content* (shadow diff), and the editor shows it as an unsaved change.
     * - **Held only through the data or GLSP head**, or waiting out the release
     *   grace after its last client's connection was lost → the store is the

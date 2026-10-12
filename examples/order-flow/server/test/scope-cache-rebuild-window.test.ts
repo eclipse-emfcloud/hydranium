@@ -41,7 +41,7 @@ import { describe, expect, it } from 'vitest';
 import type { Entity, ProcessModel } from '../src/language-server/ast.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harness.js';
 
-describe('order-flow scope caches — a query landing mid-rebuild', () => {
+describe('order-flow scope caches under a query landing mid-rebuild', () => {
    it('does not strand a cross-document reference in an unedited document', async () => {
       const { harness, workspace } = await makeScratchWorkspaceHarness();
       try {

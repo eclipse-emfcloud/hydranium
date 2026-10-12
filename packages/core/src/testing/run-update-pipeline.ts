@@ -27,7 +27,8 @@
  * # Resolved per URI, not per language handle
  *
  * Both slots are resolved through `ServiceRegistry.getServices(uri)`, which is
- * what `ModelService.serialize` and `ModelService.rewriteModel` do. Taking a
+ * what `DefaultModelService.serialize` and `DefaultModelService.rewriteModel`
+ * do. Taking a
  * language-services handle instead would be shorter, but it re-hardcodes the
  * language at the call site and so cannot witness a multi-grammar workspace
  * routing a write to the wrong language's rewrite set or serializer — the one

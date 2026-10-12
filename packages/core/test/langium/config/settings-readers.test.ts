@@ -397,7 +397,7 @@ describe('Settings.string', () => {
  * cases also exercise the loose `unknown` default so untyped call sites
  * keep their permissive shape.
  */
-describe('compile-time path validation (typed TConfig)', () => {
+describe('Settings compile-time path validation with a typed TConfig', () => {
    interface EditorConfig {
       updateDelayMs?: number;
       mode?: 'compact' | 'verbose';

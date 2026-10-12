@@ -201,7 +201,7 @@ describe('assertDistinctFileRouting', () => {
    });
 });
 
-describe('bootstrapLangiumLanguages — shared-services back-fill', () => {
+describe('bootstrapLangiumLanguages shared-services back-fill', () => {
    it('hands the shared services to a registry that was constructed without them', () => {
       // An adopter rebinding the slot with a zero-argument `new MyRegistry()`
       // would otherwise silently lose Langium's declared-languageId lookup
@@ -386,7 +386,7 @@ describe('assertReflectionCoversLanguages', () => {
       expect(() => assertReflectionCoversLanguages(sharedKnowing(), [languageProducing('only', 'Root')])).not.toThrow();
    });
 
-   it('stays quiet when no reflection is bound at all — a different failure', () => {
+   it('stays quiet when no reflection is bound at all, which is a different failure', () => {
       const languages = [languageProducing('langA', 'Element'), languageProducing('langB', 'OtherElement')];
 
       expect(() => assertReflectionCoversLanguages(fullyBoundShared(), languages)).not.toThrow();

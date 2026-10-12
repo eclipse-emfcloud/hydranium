@@ -43,7 +43,7 @@ import {
 } from './uncommitted-edit-harness.js';
 
 describe('the exits of an operation', () => {
-   it('success: writes once, pushes one undo step and submits', async () => {
+   it('writes once, pushes one undo step and submits on success', async () => {
       const opened = await openDiagram();
       const { diagram, processUri, layoutUri } = opened;
       const persist = spyOnPersist(diagram);
@@ -58,7 +58,7 @@ describe('the exits of an operation', () => {
       }).toEqual({ writes: 1, process: true, layout: true, canUndo: true });
    });
 
-   it('createCommand throws: the built root keeps nothing the handler did, and the client is told', async () => {
+   it('keeps nothing the handler did in the built root and tells the client when createCommand throws', async () => {
       const opened = await openDiagram();
       const { diagram, processUri } = opened;
       const textBefore = textOf(opened, processUri);
@@ -92,7 +92,7 @@ describe('the exits of an operation', () => {
       });
    });
 
-   it('a compound child throws after an earlier one succeeded: nothing written, its side effect reverted, the next operation runs', async () => {
+   it('writes nothing, reverts the side effect and runs the next operation when a compound child throws after an earlier one succeeded', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       const layoutBefore = textOf(opened, layoutUri);
@@ -127,7 +127,7 @@ describe('the exits of an operation', () => {
       });
    });
 
-   it('the write merges: a compound operation lands as one write onto a foreign edit', async () => {
+   it('lands a compound operation as one write onto a foreign edit when the write merges', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       // A foreign edit to another entry, so the write conflicts and merges.
@@ -148,7 +148,7 @@ describe('the exits of an operation', () => {
       }).toEqual({ writes: 2, pay: true, ship: true, foreign: true, pick: true, canUndo: true });
    });
 
-   it('the write is dropped: nothing lands, the side effects are reverted, no undo step is pushed, and the client view is submitted', async () => {
+   it('lands nothing, reverts the side effects, pushes no undo step and submits the client view when the write is dropped', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await apply(diagram, move(diagram, 'Cancel', 300, 300));
@@ -207,7 +207,7 @@ describe('the exits of an operation', () => {
       expect(sideEffects).toEqual({ outer: 0, inner: 0 });
    });
 
-   it('the write throws: the built root and the index stay on it, the stack is unchanged, nothing is submitted', async () => {
+   it('keeps the built root and the index on the write, leaves the stack unchanged and submits nothing when the write throws', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await apply(diagram, move(diagram, 'Pay', 50, 110));

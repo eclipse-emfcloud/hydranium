@@ -46,7 +46,7 @@ async function setField(app: TheiaApp, fieldName: string, value: string): Promis
  * serial mode a retried repair would run against a workspace nobody had broken
  * and pass for the wrong reason.
  */
-test.describe.serial('Order-flow properties panel in Theia', () => {
+test.describe.serial('order-flow properties panel in Theia', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

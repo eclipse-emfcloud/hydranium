@@ -119,7 +119,7 @@ function soleWrite(model: ProcessModel): Write {
    return write;
 }
 
-describe('order-flow stdlib — the additional-document branch with no workspace folders', () => {
+describe('order-flow stdlib through the additional-document branch with no workspace folders', () => {
    it('seeds the stdlib and nothing else, and a scratch document still resolves a primitive', async () => {
       const harness = await bootFolderless();
 

@@ -18,11 +18,11 @@ import { describe, expect, it } from 'vitest';
 import { buildValidateDriverArgs, runValidate } from '../src/commands/validate.js';
 
 describe('validate', () => {
-   it('buildValidateDriverArgs: emits --services + workspace and omits unset flags', () => {
+   it('buildValidateDriverArgs emits --services + workspace and omits unset flags', () => {
       expect(buildValidateDriverArgs({ servicesModule: './svc.js', workspace: '/ws' })).toEqual(['--services', './svc.js', '/ws']);
    });
 
-   it('buildValidateDriverArgs: appends --json and --strict when set', () => {
+   it('buildValidateDriverArgs appends --json and --strict when set', () => {
       expect(buildValidateDriverArgs({ servicesModule: './svc.js', workspace: '/ws', json: true, strict: true })).toEqual([
          '--services',
          './svc.js',
@@ -32,7 +32,7 @@ describe('validate', () => {
       ]);
    });
 
-   it('buildValidateDriverArgs: forwards --out-file after the gate flags', () => {
+   it('buildValidateDriverArgs forwards --out-file after the gate flags', () => {
       expect(buildValidateDriverArgs({ servicesModule: './svc.js', workspace: '/ws', strict: true, outFile: '/tmp/v.txt' })).toEqual([
          '--services',
          './svc.js',
@@ -43,7 +43,7 @@ describe('validate', () => {
       ]);
    });
 
-   it('runValidate: spawns the driver (no --expose-gc) with the forwarded args', async () => {
+   it('runValidate spawns the driver (no --expose-gc) with the forwarded args', async () => {
       let captured: string[] = [];
       await runValidate({
          servicesModule: './svc.js',
@@ -59,7 +59,7 @@ describe('validate', () => {
       expect(captured.slice(-4)).toEqual(['--services', './svc.js', '/ws', '--strict']);
    });
 
-   it('runValidate: a non-zero child exit (validation failed) sets the process exit code', async () => {
+   it('runValidate sets the process exit code on a non-zero child exit (validation failed)', async () => {
       const previous = process.exitCode;
       await runValidate({ servicesModule: './svc.js', workspace: '/ws', __spawnForTest: () => Promise.resolve(1) });
       expect(process.exitCode).toBe(1);

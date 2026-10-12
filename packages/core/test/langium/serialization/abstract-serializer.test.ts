@@ -76,7 +76,7 @@ describe('AbstractSerializer base dispatch', () => {
          expect(serializer.probe(null)).toBeUndefined();
       });
 
-      it('returns a bare string verbatim — the transfer-mode reference shape', () => {
+      it('returns a bare string verbatim, the transfer-mode reference shape', () => {
          // The `TransferEncoder` emits every cross-reference as a plain string id, so
          // rendering one is this method's transfer-mode half. It cannot tell a reference
          // id from a primitive string on its own and does not try: the caller guarantees
@@ -131,7 +131,7 @@ describe('AbstractSerializer base dispatch', () => {
          expect(await gated.serializeAst(node as never)).toBe('{\n  "name": "plain",\n  "ref": { "$ref": "Element" }\n}');
       });
 
-      it('serializes a {$refText: <non-string>} value as a plain object, not a reference', async () => {
+      it('serializes a `{$refText: <non-string>}` value as a plain object, not a reference', async () => {
          const refSerializer = buildJson(JsonSerializer, {
             reflection: makeFakeReflection({ Holder: {} }),
             propertyOrder: new Map([['Holder', ['payload']]]),
@@ -144,7 +144,7 @@ describe('AbstractSerializer base dispatch', () => {
       });
    });
 
-   describe('option fallbacks (all optional maps omitted)', () => {
+   describe('option fallbacks with all optional maps omitted', () => {
       it('falls back to Object.keys order and tolerates an absent referenceWrapperTypes map', async () => {
          // No propertyOrder => Object.keys fallback; no referenceWrapperTypes => the
          // optional-chaining lookup on a nested node must not throw.

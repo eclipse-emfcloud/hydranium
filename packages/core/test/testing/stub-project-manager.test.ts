@@ -103,7 +103,7 @@ async function realManager(): Promise<DifferentialProjectManager> {
    return manager;
 }
 
-describe('makeStubProjectManager — differential against AbstractProjectManager', () => {
+describe('makeStubProjectManager differential against AbstractProjectManager', () => {
    it('holds the same registry, in the same order, on both sides', async () => {
       const real = await realManager();
       const stub = makeStubProjectManager(GRAPH);
@@ -186,7 +186,7 @@ describe('makeStubProjectManager — differential against AbstractProjectManager
    });
 });
 
-describe('makeStubProjectManager — the seams a test drives it through', () => {
+describe('makeStubProjectManager seams a test drives it through', () => {
    it('delivers a fired change event to live listeners and stops at dispose', () => {
       const stub = makeStubProjectManager(GRAPH);
       const seen: string[][] = [];

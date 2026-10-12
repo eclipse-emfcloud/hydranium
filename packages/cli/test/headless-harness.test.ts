@@ -36,11 +36,11 @@ import { runReflect } from '../src/commands/reflect.js';
 import { runValidate } from '../src/commands/validate.js';
 
 describe('measure-memory', () => {
-   it('buildDriverArgs: emits --services + workspace and omits unset options', () => {
+   it('buildDriverArgs emits --services + workspace and omits unset options', () => {
       expect(buildDriverArgs({ servicesModule: './svc.js', workspace: '/ws' })).toEqual(['--services', './svc.js', '/ws']);
    });
 
-   it('buildDriverArgs: forwards every set option in the order the driver parses', () => {
+   it('buildDriverArgs forwards every set option in the order the driver parses', () => {
       expect(
          buildDriverArgs({
             servicesModule: './svc.js',
@@ -67,11 +67,11 @@ describe('measure-memory', () => {
       ]);
    });
 
-   it('buildDriverArgs: omits --snapshot when writeSnapshot is false', () => {
+   it('buildDriverArgs omits --snapshot when writeSnapshot is false', () => {
       expect(buildDriverArgs({ servicesModule: './svc.js', workspace: '/ws', writeSnapshot: false })).not.toContain('--snapshot');
    });
 
-   it('runMeasureMemory: spawns the driver under --expose-gc with the forwarded args', async () => {
+   it('runMeasureMemory spawns the driver under --expose-gc with the forwarded args', async () => {
       let captured: string[] = [];
       await runMeasureMemory({
          servicesModule: './svc.js',
@@ -92,7 +92,7 @@ describe('measure-memory', () => {
       expect(captured.slice(-5)).toEqual(['--services', './svc.js', '/ws', '--edits', '3']);
    });
 
-   it('runMeasureMemory: a non-zero child exit sets the process exit code', async () => {
+   it('runMeasureMemory sets the process exit code on a non-zero child exit', async () => {
       const previous = process.exitCode;
       await runMeasureMemory({ servicesModule: './svc.js', workspace: '/ws', __spawnForTest: () => Promise.resolve(2) });
       expect(process.exitCode).toBe(2);
@@ -101,7 +101,7 @@ describe('measure-memory', () => {
 });
 
 describe('ast-ground-truth', () => {
-   it('buildGroundTruthDriverArgs: emits --services + workspace, adds --out-file when set', () => {
+   it('buildGroundTruthDriverArgs emits --services + workspace, adding --out-file when set', () => {
       expect(buildGroundTruthDriverArgs({ servicesModule: './svc.js', workspace: '/ws' })).toEqual(['--services', './svc.js', '/ws']);
       expect(buildGroundTruthDriverArgs({ servicesModule: './svc.js', workspace: '/ws', outFile: '/tmp/gt.json' })).toEqual([
          '--services',
@@ -112,7 +112,7 @@ describe('ast-ground-truth', () => {
       ]);
    });
 
-   it('runAstGroundTruth: spawns the driver (no --expose-gc) with the forwarded args', async () => {
+   it('runAstGroundTruth spawns the driver (no --expose-gc) with the forwarded args', async () => {
       let captured: string[] = [];
       await runAstGroundTruth({
          servicesModule: './svc.js',
@@ -142,7 +142,10 @@ const PARENTS: ReadonlyArray<{
    { name: 'validate', run: runValidate }
 ];
 
-describe('PARENTS', () => {
+// `[name, row]` tuples so `%s` renders the name bare; `$name` would quote it.
+const PARENTS_BY_NAME = PARENTS.map(parent => [parent.name, parent] as const);
+
+describe('the --services commands', () => {
    it('covers the six of them, so no assertion below runs on a short list', () => {
       expect(PARENTS.map(parent => parent.name)).toEqual([
          'ast-ground-truth',
@@ -219,7 +222,7 @@ describe('runDriverChild', () => {
  * where the driver would reject it as an unknown option.
  */
 describe('the loaders reach the driver child', () => {
-   it.each(PARENTS)('$name: registers each --import before the driver script', async ({ run }) => {
+   it.each(PARENTS_BY_NAME)('%s registers each --import before the driver script', async (_name, { run }) => {
       let argv: string[] = [];
       await run({
          servicesModule: './svc.ts',
@@ -249,7 +252,7 @@ describe('the loaders reach the driver child', () => {
  * report, which no per-command test that nobody added can see.
  */
 describe('the log threshold reaches the driver child', () => {
-   it.each(PARENTS)('$name: sets the log-level variable on the child env, and only that', async ({ run }) => {
+   it.each(PARENTS_BY_NAME)('%s sets the log-level variable on the child env, and only that', async (_name, { run }) => {
       let captured: Record<string, string> | undefined;
       let argv: string[] = [];
       await run({
@@ -269,7 +272,7 @@ describe('the log threshold reaches the driver child', () => {
       expect(argv).not.toContain('--log-level');
    });
 
-   it.each(PARENTS)('$name: sets the log-file variables on the child env', async ({ run }) => {
+   it.each(PARENTS_BY_NAME)('%s sets the log-file variables on the child env', async (_name, { run }) => {
       let captured: Record<string, string> | undefined;
       await run({
          servicesModule: './svc.js',
@@ -285,7 +288,7 @@ describe('the log threshold reaches the driver child', () => {
       expect(captured).toEqual({ [DEFAULT_LOG_FILE_ENV]: '/logs/{workspace}.log', [DEFAULT_LOG_FILE_LEVEL_ENV]: 'debug' });
    });
 
-   it.each(PARENTS)('$name: leaves the child env alone when no level was asked for', async ({ run }) => {
+   it.each(PARENTS_BY_NAME)('%s leaves the child env alone when no level was asked for', async (_name, { run }) => {
       // `undefined` rather than `{}`: the spawn helper reads the difference as
       // "inherit the parent's environment", which is what keeps an ambient
       // HYDRANIUM_LOG_LEVEL working.

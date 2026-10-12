@@ -58,7 +58,8 @@ interface Harness {
    serialize: (root: TestRoot) => string | Promise<string>;
    nextUpdatedRoot: TestRoot;
    /**
-    * Called by the fake `ModelService.update` with the text it was handed, so a
+    * Called by the double's `update`, which the stubbed session's `update`
+    * forwards to, with the text it was handed, so a
     * test can model the real round-trip: a write re-parses the document, and the
     * NEXT serialization reflects it. Without that loop the source model looks
     * unchanged after a write, and the recording command's divergence guard

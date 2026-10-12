@@ -195,8 +195,9 @@ export class DefaultReferenceCandidateProvider implements ReferenceCandidateProv
     * and never matches: a self-reference filter silently stops excluding, and
     * the element offers itself as its own target.
     *
-    * The mirror of `ReferenceBuilder.nameProviderFor`, and the same fallback
-    * reasoning: an unroutable target has no better answer than the source's.
+    * The mirror of `DefaultReferenceBuilder.nameProviderFor`, and the same
+    * fallback reasoning: an unroutable target has no better answer than the
+    * source's.
     */
    protected nameProviderFor(target: AstNode): NameProvider {
       return this.services.shared.ServiceRegistry?.getServicesFor(target)?.references.NameProvider ?? this.nameProvider;

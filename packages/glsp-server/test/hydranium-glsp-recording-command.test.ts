@@ -231,7 +231,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.updateCalls[0].baseVersion).toBe(5);
    });
 
-   it('takes the version at command start; later state.baseVersion drift does not affect the threaded value', async () => {
+   it('takes the version at command start, so later state.baseVersion drift does not affect the threaded value', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 5);
       const command = makeCommand(state, 'Add node', () => {
@@ -290,7 +290,7 @@ describe('HydraniumGlspRecordingCommand', () => {
       expect(state.updateCalls).toHaveLength(writesBeforeRedo);
    });
 
-   it('routes undo through the state conflict resolver — a ForceConflictResolver clobbers a same-field foreign edit', async () => {
+   it('routes undo through the state conflict resolver, so a ForceConflictResolver clobbers a same-field foreign edit', async () => {
       const log = makeLog();
       const state = makeFakeState(log, 0, new ForceConflictResolver());
       state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };

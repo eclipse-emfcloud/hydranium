@@ -20,7 +20,7 @@ import { type UpdateRewrite } from './update-rewrite.js';
  * Public contract for the per-language update-rewrite runner. Extends the
  * {@link UpdateRewriteRegistry} (the imperative `register` surface
  * contributions use) with the {@link apply} entry point
- * `ModelService.rewriteModel` calls on the structured write path, before
+ * `DefaultModelService.rewriteModel` calls on the structured write path, before
  * serialisation.
  *
  * Adopter overrides go through {@link DefaultUpdateRewriteService}; the

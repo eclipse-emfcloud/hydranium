@@ -36,7 +36,7 @@ const BINARY = fileURLToPath(new URL('../lib/cli.js', import.meta.url));
 const MANIFEST_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as { version: string }).version;
 
 describe('hydranium-cli --version', () => {
-   it.each(['--version', '-V'])('%s: prints the manifest version alone on stdout and exits zero', async flag => {
+   it.each(['--version', '-V'])('prints the manifest version alone on stdout and exits zero for %s', async flag => {
       const run = await execFileAsync(process.execPath, [BINARY, flag]);
 
       // The whole of stdout, not a substring: a support script capturing the

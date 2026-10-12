@@ -60,7 +60,7 @@ describe('DefaultNameProvider', () => {
          expect(provider.getOwnName(node)).toBe('Foo');
       });
 
-      it('does NOT probe `id` by default — adopters with id-bearing grammars opt in via nameProperties', () => {
+      it('does NOT probe `id` by default, so adopters with id-bearing grammars opt in via nameProperties', () => {
          const provider = new DefaultNameProvider(makeServices());
          const node = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', id: 'E1' });
          expect(provider.getOwnName(node)).toBeUndefined();
@@ -113,7 +113,7 @@ describe('DefaultNameProvider', () => {
          expect(provider.hasName(makeFakeAstNode<AnyNode>({ $type: 'Anonymous' }))).toBe(false);
       });
 
-      it('respects nameProperties: an id-only adopter returns true for id-bearing nodes', () => {
+      it('respects nameProperties, so an id-only adopter returns true for id-bearing nodes', () => {
          const provider = new DefaultNameProvider(makeServices(), { nameProperties: ['id'] });
          expect(provider.hasName(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', id: 'E1' }))).toBe(true);
          expect(provider.hasName(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'Element' }))).toBe(false);
@@ -131,7 +131,7 @@ describe('DefaultNameProvider', () => {
          expect(provider.getNameProperty(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'Foo' }))).toBe('name');
       });
 
-      it('respects nameProperties — an id-keyed grammar reports id', () => {
+      it('respects nameProperties, so an id-keyed grammar reports id', () => {
          const provider = new DefaultNameProvider(makeServices(), { nameProperties: ['id', 'name'] });
          expect(provider.getNameProperty(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', id: 'E1' }))).toBe('id');
       });
@@ -339,7 +339,7 @@ describe('DefaultNameProvider', () => {
       });
    });
 
-   describe('getName (Langium contract)', () => {
+   describe('getName against the Langium contract', () => {
       it('defaults to getProjectQualifiedName so the linker resolves workspace-unique forms', () => {
          const root = makeFakeAstNode<AnyNode>({ $type: 'BaseType', name: 'P' });
          Object.assign(root, { $document: { uri: URI.parse('file:///workspace/foo.a') } });

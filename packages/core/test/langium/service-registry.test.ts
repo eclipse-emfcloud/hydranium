@@ -155,7 +155,7 @@ describe('ExtendedServiceRegistry', () => {
       });
    });
 
-   describe('servicesFor (per-target lookup)', () => {
+   describe('servicesFor per-target lookup', () => {
       function twoLanguages(): ExtendedServiceRegistry {
          const registry = new ExtendedServiceRegistry();
          registry.register(makeServices<AlphaServices>('alpha', 'first', ['.one']));
@@ -291,7 +291,7 @@ describe('ExtendedServiceRegistry', () => {
       });
    });
 
-   it('TypedLanguageMetaData brand is invariant — phantom type prevents cross-assignment', () => {
+   it('TypedLanguageMetaData brand is invariant, its phantom type preventing cross-assignment', () => {
       // Compile-time check: the line below would assign an Alpha handle to a Beta-typed
       // slot; the phantom `unique symbol` brand on `TypedLanguageMetaData<T>` blocks it.
       // Verified via `// @ts-expect-error` — if invariance were lost, the directive would

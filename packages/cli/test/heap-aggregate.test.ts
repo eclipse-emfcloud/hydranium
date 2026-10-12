@@ -31,7 +31,7 @@ function arrays(nodes: { self: number; dom: number; label: string }[]): Arrays {
 
 const total = (byLabel: Map<string, number>): number => [...byLabel.values()].reduce((sum, value) => sum + value, 0);
 
-describe('attributeExclusiveRetained (dominator attribution)', () => {
+describe('attributeExclusiveRetained', () => {
    it('attributes each node to its nearest dominating anchor and partitions the whole heap', () => {
       const graph = arrays([
          { self: 10, dom: -1, label: 'Root' }, // 0 GC root

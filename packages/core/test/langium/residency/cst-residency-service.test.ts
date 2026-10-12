@@ -122,7 +122,7 @@ describe('CstResidencyService', () => {
       expect(cstNodeCount(doc)).toBe(2);
    });
 
-   it('does not shed a synthetic (non-file) document — its text is unrecoverable', () => {
+   it('does not shed a synthetic (non-file) document, whose text is unrecoverable', () => {
       const { pass, clock, addDoc } = makeService({ strategy: { kind: 'shed-closed-when-idle', idleMs: 0 } });
       const builtin = addDoc('builtin:///Element.a');
       pass.run([builtin]);
@@ -214,7 +214,7 @@ describe('CstResidencyService', () => {
 });
 
 describe('CstResidencyService.rehydrateNode', () => {
-   it('is a no-op for a resident node — the document factory is never touched', () => {
+   it('is a no-op for a resident node, never touching the document factory', () => {
       // The harness's noop services carry NO LangiumDocumentFactory: the fast
       // path must return before resolving it, or this test throws.
       const { service, addDoc } = makeService({ strategy: { kind: 'always-keep' } });

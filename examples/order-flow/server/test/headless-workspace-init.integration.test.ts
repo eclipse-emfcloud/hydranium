@@ -50,7 +50,7 @@ function registeredDocuments(harness: ReturnType<typeof makeServices>): LangiumD
    return harness.shared.workspace.LangiumDocuments.all.toArray().sort((left, right) => left.uri.path.localeCompare(right.uri.path));
 }
 
-describe('order-flow headless init — the editor-equivalent seam links but does not validate', () => {
+describe('order-flow headless init linking through the editor-equivalent seam without validating', () => {
    it('settles every document and validates none of them', async () => {
       const harness = makeServices();
       await initializeWorkspaceProgrammatically(harness.shared, WORKSPACE_ROOT);

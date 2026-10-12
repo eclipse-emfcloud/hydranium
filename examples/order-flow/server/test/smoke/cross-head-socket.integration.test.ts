@@ -208,7 +208,7 @@ function uriOf(relativePath: string): string {
    return workspace.uri(relativePath);
 }
 
-describe('order-flow cross-head write smoke (data socket in, LSP wire out)', () => {
+describe('order-flow cross-head write smoke from the data socket to the LSP wire', () => {
    beforeAll(async () => {
       // A throwaway copy, not the committed workspace: the initial build runs the
       // integrity rules, whose default silent mode persists repairs to every

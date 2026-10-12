@@ -120,7 +120,7 @@ function harness(lifecycle: RpcConnectionLifecycle = {}, portLifecycle?: RpcConn
    };
 }
 
-describe('RpcConnection lifecycle', () => {
+describe('RpcConnection.lifecycle', () => {
    /** A host reports its connections through its port; a connection that had
     *  to be handed the port's hooks as well would report nothing when not. */
    it("calls the port's lifecycle beside the one its options pass", async () => {

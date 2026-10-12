@@ -209,7 +209,7 @@ function makeObservable(initial: number): ObservableValue<number> & { set: (next
    };
 }
 
-describe('HydraniumDocumentUpdateHandler — debounce off (default)', () => {
+describe('HydraniumDocumentUpdateHandler with debounce off by default', () => {
    it('flushes synchronously when `debounceMs` is unset (default 0)', () => {
       const handler = new CapturingHandler(makeServicesStub());
       handler.triggerChange('file:///a.a');
@@ -225,7 +225,7 @@ describe('HydraniumDocumentUpdateHandler — debounce off (default)', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — debounce on', () => {
+describe('HydraniumDocumentUpdateHandler with debounce on', () => {
    it('schedules a timer instead of dispatching immediately', () => {
       const clock = makeFakeClock();
       const handler = new CapturingHandler(makeServicesStub({ clock }), { debounceMs: 50 });
@@ -345,7 +345,7 @@ describe('HydraniumDocumentUpdateHandler — debounce on', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — bypassNonLanguageClientChanges', () => {
+describe('HydraniumDocumentUpdateHandler.bypassNonLanguageClientChanges', () => {
    it('bypasses debouncing when getAuthor !== LANGUAGE_CLIENT_ID (default true)', () => {
       const handler = new CapturingHandler(makeServicesStub({ getAuthor: () => 'glsp-client' }), { debounceMs: 50 });
       handler.simulateNonLanguageClientChange('file:///a.a');
@@ -374,7 +374,7 @@ describe('HydraniumDocumentUpdateHandler — bypassNonLanguageClientChanges', ()
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — MaybeObservableValue<number> for debounceMs', () => {
+describe('HydraniumDocumentUpdateHandler debounceMs as a MaybeObservableValue<number>', () => {
    it('accepts a static number', () => {
       const clock = makeFakeClock();
       const handler = new CapturingHandler(makeServicesStub({ clock }), { debounceMs: 75 });
@@ -404,7 +404,7 @@ describe('HydraniumDocumentUpdateHandler — MaybeObservableValue<number> for de
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
+describe('HydraniumDocumentUpdateHandler reason stamping', () => {
    // These use a BARE handler, not `CapturingHandler`, so the real `dispatch`
    // runs and the reason reaches the `scheduleUpdate` side-channel on the
    // services stub, a stub returning a resolved promise, so the reason under
@@ -504,8 +504,8 @@ describe('HydraniumDocumentUpdateHandler — reason stamping', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', () => {
-   it('short-circuits — never calls super.didChangeWatchedFiles when every change is a self-save', async () => {
+describe('HydraniumDocumentUpdateHandler.didChangeWatchedFiles dispatch', () => {
+   it('short-circuits, never calling super.didChangeWatchedFiles when every change is a self-save', async () => {
       // Pins the `if (filtered.changes.length === 0) return;` guard. The
       // dispatch level can't distinguish (an empty super call dispatches
       // nothing either way), so observe `onWatchedFilesChange`: Langium's
@@ -536,7 +536,7 @@ describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', ()
       expect(watchedFilesEvents).toEqual([]);
    });
 
-   it('bypasses debouncing — a surviving watched-file change dispatches synchronously', async () => {
+   it('bypasses debouncing, dispatching a surviving watched-file change synchronously', async () => {
       // Pins the `immediateFlush = true` stamp: with a non-zero window the
       // surviving change would be scheduled on the timer rather than dispatched
       // on the trailing edge of super.didChangeWatchedFiles' fireDocumentUpdate.
@@ -552,7 +552,7 @@ describe('HydraniumDocumentUpdateHandler — didChangeWatchedFiles dispatch', ()
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — disk baseline of watched files', () => {
+describe('HydraniumDocumentUpdateHandler disk baseline of watched files', () => {
    it('reloads the baseline of each change the self-save filter keeps, deletions included', async () => {
       const reloadedBaselines: string[] = [];
       const deleted = URI.file('/hydranium-test/deleted.a').toString();
@@ -580,7 +580,7 @@ describe('HydraniumDocumentUpdateHandler — disk baseline of watched files', ()
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
+describe('HydraniumDocumentUpdateHandler.filterSelfSaves', () => {
    // No filesystem here: the handler reads the mtime through the
    // `FileSystemProvider.mtimeMs` seam, so an injected constant pins the
    // `uri → fsPath` + mtime pair the handler forwards to
@@ -667,7 +667,7 @@ describe('HydraniumDocumentUpdateHandler — filterSelfSaves', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler — editor saves', () => {
+describe('HydraniumDocumentUpdateHandler editor saves', () => {
    const SAVED_URI = 'file:///saved.a';
    const willSave = { document: { uri: SAVED_URI }, reason: 1 } as unknown as TextDocumentWillSaveEvent<TextDocument>;
 

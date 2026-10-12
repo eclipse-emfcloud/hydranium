@@ -1001,7 +1001,7 @@ describe('HydraniumTextDocuments.commitRepair', () => {
    });
 });
 
-describe('HydraniumTextDocuments notifyDidChangeTextDocument guards', () => {
+describe('HydraniumTextDocuments.notifyDidChangeTextDocument guards', () => {
    it('ignores a change event carrying an empty contentChanges array', () => {
       // Kills the `changes.length === 0` early-return guard: with the
       // guard removed the manager would proceed to bump the version with no
@@ -1127,8 +1127,8 @@ describe('HydraniumTextDocuments notifyDidChangeTextDocument guards', () => {
    });
 });
 
-describe('HydraniumTextDocuments open / close client gating', () => {
-   it('is idempotent: re-opening for the same client does not re-fire onDidOpen', () => {
+describe('HydraniumTextDocuments open and close client gating', () => {
+   it('is idempotent, so re-opening for the same client does not re-fire onDidOpen', () => {
       // Kills the `isOpenInClient` early-return guard in notifyDidOpen:
       // with `if (false)` a duplicate open for the same client would re-fire.
       const { docs } = makeDocs();
@@ -1139,7 +1139,7 @@ describe('HydraniumTextDocuments open / close client gating', () => {
       expect(opens).toHaveLength(1);
    });
 
-   it('is idempotent: re-opening for the same client does not fire a change event', () => {
+   it('is idempotent, so re-opening for the same client does not fire a change event', () => {
       // Kills that same `if (this.isOpenInClient(...))` early-return guard
       // (`if (false)`): the onDidOpen count alone does NOT distinguish the
       // mutant, because with the guard removed a same-client re-open falls
@@ -1185,8 +1185,8 @@ describe('HydraniumTextDocuments open / close client gating', () => {
 
 describe('HydraniumTextDocuments staged-content baseline', () => {
    it('still delivers staged content to the language client that opened the file from disk', async () => {
-      // `IntegrityService.syncCorrections` stages for a CLOSED file and sends no edit
-      // of its own, so the open's own sync is the only delivery. Monaco opened from
+      // `DefaultIntegrityService.syncCorrections` stages for a CLOSED file and sends no
+      // edit of its own, so the open's own sync is the only delivery. Monaco opened from
       // disk, so it holds the stale text and the correction is an edit it needs.
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
       docs.stagePendingContent(URI, 'corrected\n');
@@ -1242,7 +1242,7 @@ describe('HydraniumTextDocuments language-client attach baseline', () => {
    });
 });
 
-describe('HydraniumTextDocuments applyEditToLanguageClient invalidation', () => {
+describe('HydraniumTextDocuments.applyEditToLanguageClient invalidation', () => {
    it('preserves the shadow when applyEdit reports applied=true', async () => {
       // Kills the `result.applied === false` mutations (`=== true`, `!== false`,
       // `if (true)`): an applied=true result must NOT invalidate the shadow.
@@ -1297,7 +1297,7 @@ describe('HydraniumTextDocuments query helpers', () => {
    });
 });
 
-describe('HydraniumTextDocuments getAuthor missing-version logging', () => {
+describe('HydraniumTextDocuments.getAuthor missing-version logging', () => {
    it('logs "Could not detect author" only when history exists but the version is absent', () => {
       // Kills getAuthor's `!clientId && history` guard and its message:
       // a present version must NOT log; a missing version (with history) must.
@@ -1943,7 +1943,7 @@ describe('HydraniumTextDocuments URI normalization', () => {
    });
 });
 
-describe('HydraniumTextDocuments get() — canonical lookup (symlink divergence)', () => {
+describe('HydraniumTextDocuments.get canonical lookup under symlink divergence', () => {
    // With a realpath-style canonicalizer a symlinked file opened under path S has
    // canonical identity R≠S. The store keys synced docs by their CANONICAL identity
    // (documentKey), so a client-space caller addressing the symlink path S misses

@@ -92,7 +92,7 @@ function normalizedUpstreamBody(): string {
    return prototype.handleClientRequest.toString().replace(/\s+/g, ' ').trim();
 }
 
-describe('upstream handleClientRequest', () => {
+describe('DefaultGLSPServer.handleClientRequest', () => {
    it('still matches the body HydraniumGlspServer was lifted from', () => {
       const digest = createHash('sha256').update(normalizedUpstreamBody()).digest('hex');
       expect(

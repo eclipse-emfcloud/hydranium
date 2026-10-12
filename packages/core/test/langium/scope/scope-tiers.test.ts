@@ -96,7 +96,7 @@ const REF_TYPE = 'FakeRoot';
  * untagged descriptions the filtered and unfiltered answers are identical and
  * the guard under test is invisible to the assertion.
  */
-describe('HydraniumScopeProvider tier walk — early exits from the project filter', () => {
+describe('HydraniumScopeProvider tier walk early exits from the project filter', () => {
    it('returns the input scope unfiltered when no project owns the source URI', () => {
       // TWO projects, so the isSingleProject fast-path below cannot stand in for
       // the guard this test is about.
@@ -143,7 +143,7 @@ describe('HydraniumScopeProvider tier walk — early exits from the project filt
 // Multi-project workspaces
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk — multi-project workspace', () => {
+describe('HydraniumScopeProvider tier walk over a multi-project workspace', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
    const URI_C = 'file:///workspace/projC/Element.fake';
@@ -250,7 +250,7 @@ describe('HydraniumScopeProvider tier walk — multi-project workspace', () => {
 // Adopter hook: getProjectIdForDescription
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk — adopter hook', () => {
+describe('HydraniumScopeProvider tier walk adopter hook', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
 
@@ -318,7 +318,7 @@ describe('HydraniumScopeProvider tier walk — adopter hook', () => {
 // Typed scope reading — TieredAstNodeDescription
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk — typed scope reading', () => {
+describe('HydraniumScopeProvider tier walk typed scope reading', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
 
@@ -330,7 +330,7 @@ describe('HydraniumScopeProvider tier walk — typed scope reading', () => {
       return { bundle, provider: makeTestScopeProvider(bundle.services) };
    }
 
-   describe('tier: public', () => {
+   describe('public', () => {
       it("passes through public descriptions whose projectId is in the source's dependency closure", () => {
          // A depends on B; B's public-tier descriptions ARE in A's closure.
          const { provider } = makeProvider(
@@ -373,7 +373,7 @@ describe('HydraniumScopeProvider tier walk — typed scope reading', () => {
       });
    });
 
-   describe('tier: universal', () => {
+   describe('universal', () => {
       it('passes through universal descriptions unconditionally', () => {
          // Need 2+ projects so the isSingleProject fast-path doesn't short-circuit.
          const { provider } = makeProvider(
@@ -389,7 +389,7 @@ describe('HydraniumScopeProvider tier walk — typed scope reading', () => {
       });
    });
 
-   describe('tier: project (own-project equality)', () => {
+   describe('project by own-project equality', () => {
       it('passes through project-tier descriptions whose projectId equals the source', () => {
          const { provider } = makeProvider(
             [
@@ -453,7 +453,7 @@ describe('HydraniumScopeProvider tier walk — typed scope reading', () => {
       });
    });
 
-   describe('tier: local', () => {
+   describe('local', () => {
       it('hides local descriptions defensively (they should not appear in the global index)', () => {
          // Need 2+ projects so the filter actually runs (isSingleProject fast-path
          // would short-circuit a single-project setup).

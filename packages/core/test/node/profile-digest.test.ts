@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { digestAllocationProfile, digestCpuProfile, type AllocationProfile, type CpuProfile } from '../../src/node/profile-digest.js';
 
-describe('digestCpuProfile (pure)', () => {
+describe('digestCpuProfile', () => {
    const profile: CpuProfile = {
       nodes: [
          { id: 1, callFrame: { functionName: '(root)', url: '', lineNumber: -1 } },
@@ -69,7 +69,7 @@ describe('digestCpuProfile (pure)', () => {
    });
 });
 
-describe('digestAllocationProfile (pure)', () => {
+describe('digestAllocationProfile', () => {
    const profile: AllocationProfile = {
       head: {
          callFrame: { functionName: '(root)', url: '', lineNumber: 0 },

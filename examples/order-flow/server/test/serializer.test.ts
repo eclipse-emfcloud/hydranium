@@ -32,7 +32,7 @@ async function serialize(harness: OrderFlowHarness, relativePath: string): Promi
    return services.serializer.Serializer.serializeAst(document.parseResult.value);
 }
 
-describe('order-flow serializers — one per grammar, routed per URI', () => {
+describe('order-flow per-grammar serializers routed per URI', () => {
    it('routes .domain and .process to different serializer implementations', async () => {
       const harness = await makeWorkspaceHarness();
 

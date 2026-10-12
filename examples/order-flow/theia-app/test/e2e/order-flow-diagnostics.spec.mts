@@ -42,7 +42,7 @@ import { loadOrderFlowApp, runCommand, test } from './order-flow-app.mjs';
  */
 const DUMP_SERVER_STATE = 'Order Flow: Dump Server State';
 
-test.describe('Order-flow memory diagnostics in Theia', () => {
+test.describe('order-flow memory diagnostics in Theia', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

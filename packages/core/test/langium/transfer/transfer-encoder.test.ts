@@ -41,7 +41,7 @@ function ref(refText: string): unknown {
 }
 
 describe('TransferEncoder.toTransfer', () => {
-   describe("'grammar' mode (persisted-shape projection)", () => {
+   describe("'grammar' mode projecting the persisted shape", () => {
       it('keeps only grammar-declared properties, dropping computed/synthetic own props', () => {
          const encoder = buildEncoder(makeFakeReflection({ Element: { id: {}, name: {} } }));
          const node = { $type: 'Element', id: 'E1', name: 'E1', _globalId: 'ns.E1' };
@@ -174,7 +174,7 @@ describe('TransferEncoder.toTransfer', () => {
       });
    });
 
-   describe("'full' mode (default)", () => {
+   describe("'full' mode by default", () => {
       it('includes computed/synthetic own properties the grammar walk drops', () => {
          const encoder = buildEncoder(makeFakeReflection({ Element: { id: {} } }));
          const node = { $type: 'Element', id: 'C', _globalId: 'ns.C', _members: [{ $type: 'M', id: 'm' }] };
@@ -376,7 +376,7 @@ describe('TransferEncoder.toTransferDocument', () => {
    });
 });
 
-describe('TransferEncoder.toTransferDocument (internal root cache)', () => {
+describe('TransferEncoder.toTransferDocument internal root cache', () => {
    it('memoizes the root per document and recomputes after a Linked-phase rebuild', () => {
       const bundle = makeTestServices();
       const encoder = bundle.transferEncoder;
@@ -466,7 +466,7 @@ describe('TransferEncoder.astDocumentToTransferDocument', () => {
    });
 });
 
-describe('TransferEncoder.assembleTransferDocument', () => {
+describe('DefaultTransferEncoder.assembleTransferDocument', () => {
    /**
     * Rewrites the root on its way into the envelope. One override has to cover
     * EVERY envelope the encoder emits, or the paths it misses ship the raw

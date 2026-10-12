@@ -112,7 +112,7 @@ describe('DefaultSelfSaveRegistry', () => {
    });
 });
 
-describe('path casing', () => {
+describe('DefaultSelfSaveRegistry path casing', () => {
    const realPlatform = process.platform;
    const asPlatform = (platform: string): void => {
       Object.defineProperty(process, 'platform', { value: platform, configurable: true });

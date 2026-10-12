@@ -57,8 +57,8 @@ export type StubModelService<
  * hand-rolling a subclass just to reach the constructor.
  *
  * Adopters that need richer override behaviour — the framework's own extension
- * surface is {@link ModelService.rewriteModel} alongside `serialize` — should
- * subclass {@link ModelService} directly instead.
+ * surface is {@link DefaultModelService.rewriteModel} alongside `serialize` —
+ * should subclass {@link DefaultModelService} directly instead.
  */
 export function makeStubModelService<
    TAst extends AstNode,

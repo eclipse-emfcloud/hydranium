@@ -271,7 +271,7 @@ afterAll(() => {
    }
 });
 
-describe('large workspace cold build (scaling)', () => {
+describe('large workspace cold build scaling', () => {
    bench(
       `cold build of ${SMALL_PROJECTS} projects`,
       async () => {
@@ -463,7 +463,7 @@ await warm.data.proxy.openModelDocument({ uri: watchedDocUri, clientId: 'bench-w
 await warm.data.proxy.watchModelDocument({ uri: watchedDocUri, clientId: 'bench-watch' });
 let watchedToggle = 0;
 
-describe('warm cross-head interaction (large workspace, 3 heads attached)', () => {
+describe('warm cross-head interaction on a large workspace with 3 heads attached', () => {
    bench(
       'text edit on a .domain document rebuilds and republishes to the LSP head',
       async () => {

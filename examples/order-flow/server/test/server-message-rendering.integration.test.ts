@@ -231,7 +231,7 @@ describe('order-flow server-side message rendering', () => {
       expect(messages).toEqual([RENDERED_SELF_TRANSITION]);
    });
 
-   it('publishes the English with no renderer installed — the control on the row above', async () => {
+   it('publishes the English with no renderer installed, as the control for the row above', async () => {
       // The control the design's table asks for, kept as a sibling assertion so
       // it cannot rot: a diagnostic COUNT is invariant under a missing render, so
       // the discriminating read is the rendered string.
@@ -267,7 +267,7 @@ describe('order-flow server-side message rendering', () => {
       expect(messages).toEqual(["RENDERED expected 'ID'"]);
    });
 
-   it('publishes the English parser sentence with no catalogue — the control above', async () => {
+   it('publishes the English parser sentence with no catalogue, as the control above', async () => {
       const active = await boot('framework');
 
       const messages = await publishedMessages(active, 'parse-error', PARSE_ERROR_SOURCE);
@@ -289,7 +289,7 @@ describe('order-flow server-side message rendering', () => {
       expect(messages).toEqual(["RENDERED unresolved 'Missing'"]);
    });
 
-   it('publishes the English linking sentence with no catalogue — the control above', async () => {
+   it('publishes the English linking sentence with no catalogue, as the control above', async () => {
       const active = await boot('framework');
 
       const messages = await publishedMessages(active, 'linking-error', LINKING_ERROR_SOURCE);
@@ -394,7 +394,7 @@ describe('the headless locale seam', () => {
       expect(await headlessMessages(TEST_LOCALE)).toEqual([RENDERED_SELF_TRANSITION]);
    });
 
-   it('renders English when the option is omitted — the control on the row above', async () => {
+   it('renders English when the option is omitted, as the control for the row above', async () => {
       // A default-English assertion passes in BOTH states unless a catalogue is
       // installed, so the renderer is the SAME one: only the option differs.
       expect(await headlessMessages(undefined)).toEqual([ENGLISH_SELF_TRANSITION]);
@@ -579,7 +579,7 @@ describe('the applyEdit undo label', () => {
       expect(await pushedEditLabel(TEST_LOCALE)).toBe('RENDERED edit');
    });
 
-   it('sends the English when the locale has no catalogue — the control above', async () => {
+   it('sends the English when the locale has no catalogue, as the control above', async () => {
       // Same renderer, no matching locale. Without this the row above would pass
       // against a label that was translated regardless of the locale.
       expect(await pushedEditLabel(undefined)).toBe(MODEL_UPDATE_EDIT.text);
@@ -595,7 +595,7 @@ describe('the applyEdit undo label', () => {
  * three are decisions an adopter copies. Module load alone would catch a broken
  * import; none of the rest.
  */
-describe('the shipped OrderFlowMessageRenderer', () => {
+describe('OrderFlowMessageRenderer', () => {
    afterEach(() => {
       scratch?.dispose();
       scratch = undefined;

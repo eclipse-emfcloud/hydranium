@@ -66,7 +66,7 @@ function servicesWithNameProvider(): LangiumCoreServices {
 }
 
 describe('createServerLanguageModule', () => {
-   describe('serializer.Serializer default (UnboundSerializer)', () => {
+   describe('serializer.Serializer default binding', () => {
       it('binds a default Serializer factory at the serializer.Serializer slot', () => {
          const module = moduleView(emptyContext);
          expect(module.serializer.Serializer).toBeDefined();

@@ -351,7 +351,7 @@ describe('order-flow properties model', () => {
       expect(model.dirty).toBe(true);
    });
 
-   it("follows the document's dirty state: its own write, then another client's save", async () => {
+   it("follows the document's dirty state through its own write and then another client's save", async () => {
       const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
       await model.open(uri);

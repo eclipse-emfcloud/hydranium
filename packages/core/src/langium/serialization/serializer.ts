@@ -34,7 +34,7 @@ import type { AstNode } from '@hydranium/langium';
  * Neither method requires the input to be the grammar root — the walker is
  * recursive and shape-agnostic, so any element from either tree serializes
  * correctly. Callers typically pass a root (that's what
- * `ModelService.serialize`
+ * `DefaultModelService.serialize`
  * and the GLSP source-model flows hand in), but sub-tree serialization works
  * for unit tests, snippet rendering, and tooling.
  */

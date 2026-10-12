@@ -18,7 +18,7 @@ describe('NoOpExternalMarkerManager', () => {
       expect(new NoOpExternalMarkerManager()).toBeInstanceOf(ExternalMarkerManager);
    });
 
-   it('does not propagate markers to Theia — setMarkers dispatches nothing', () => {
+   it('does not propagate markers to Theia, so setMarkers dispatches nothing', () => {
       const dispatch = vi.fn();
       const manager = new NoOpExternalMarkerManager();
       manager.connect({ dispatch } as unknown as IActionDispatcher);

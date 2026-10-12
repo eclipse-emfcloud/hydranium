@@ -35,7 +35,7 @@ import { EmptyFileSystem } from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 
-describe('order-flow shared composition — the reach of the override tier', () => {
+describe('order-flow shared composition and the reach of the override tier', () => {
    it('rebinds a framework-added shared slot', () => {
       // Distinguishable from the framework's own by identity alone, which is all
       // the assertion needs and keeps the stand-in from having to behave.

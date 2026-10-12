@@ -79,7 +79,7 @@ async function validate(harness: OrderFlowHarness, uri: URI): Promise<Diagnostic
    return document.diagnostics ?? [];
 }
 
-describe('validation.DocumentValidator — the framework validator on the stock Langium slot', () => {
+describe('validation.DocumentValidator with the framework validator bound', () => {
    let booted: ScratchOrderFlowHarness | undefined;
 
    afterEach(() => {

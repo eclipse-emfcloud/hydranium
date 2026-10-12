@@ -197,7 +197,7 @@ describe('PropertiesForm unsaved note', () => {
    });
 });
 
-describe('PropertiesForm write failures', () => {
+describe('PropertiesForm.write failures', () => {
    let failure: Error;
 
    beforeEach(() => {

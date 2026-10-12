@@ -288,7 +288,7 @@ describe('DefaultDocumentReleaseHandler', () => {
    });
 });
 
-describe('DefaultDocumentReleaseHandler — every exit settles and leaves no subscription', () => {
+describe('DefaultDocumentReleaseHandler every exit settles and leaves no subscription', () => {
    /** A handler whose build of the release throws `err` before any parse. */
    const failingWith = (err: unknown): typeof DefaultDocumentReleaseHandler =>
       class extends DefaultDocumentReleaseHandler {
@@ -302,14 +302,14 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
          (err: unknown) => `rejected: ${err instanceof Error ? err.message : String(err)}`
       );
 
-   it('reclaimed before the lock: resolves without building', async () => {
+   it('resolves without building when reclaimed before the lock', async () => {
       const { services, builds, liveListeners } = makeRig();
       expect(await outcome(new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased(() => true)))).toBe('resolved');
       expect(builds).toEqual([]);
       expect(liveListeners()).toBe(0);
    });
 
-   it('reclaimed once inside the lock: resolves without building', async () => {
+   it('resolves without building when reclaimed once inside the lock', async () => {
       const { services, builds, liveListeners } = makeRig();
       let asked = 0;
       const released = makeReleased(() => ++asked > 1);
@@ -318,14 +318,14 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(liveListeners()).toBe(0);
    });
 
-   it('removed for want of a file: resolves', async () => {
+   it('resolves when removed for want of a file', async () => {
       const { services, onDisk, liveListeners } = makeRig();
       onDisk.clear();
       expect(await outcome(new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased()))).toBe('resolved');
       expect(liveListeners()).toBe(0);
    });
 
-   it('cancelled before its parse: resolves once the recovery build parses', async () => {
+   it('resolves once the recovery build parses when cancelled before its parse', async () => {
       const { services, faults, liveListeners } = makeRig();
       faults.cancelWrites = true;
       const Handler = failingWith(new Error('cancelled'));
@@ -340,7 +340,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
          (err: unknown) => err
       );
 
-   it('skipped because the connection is gone: rejects at once with the skip', async () => {
+   it('rejects at once with the skip when skipped because the connection is gone', async () => {
       const { services, faults, builds, liveListeners } = makeRig();
       const gone = new Error('Connection is disposed.');
       faults.existsError = gone;
@@ -351,7 +351,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(liveListeners()).toBe(0);
    });
 
-   it('skipped because its workspace was torn down: rejects at once with the skip', async () => {
+   it('rejects at once with the skip when skipped because its workspace was torn down', async () => {
       const { services, liveListeners } = makeRig();
       const gone = Object.assign(new Error('gone'), { code: 'ENOENT', path: FILE.fsPath });
       const Handler = failingWith(gone);
@@ -361,7 +361,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(liveListeners()).toBe(0);
    });
 
-   it('failed removal: the recovery build removes the document, and the release settles', async () => {
+   it('settles after a failed removal, the recovery build removing the document', async () => {
       const rig = makeRig();
       class FailingRemoval extends DefaultDocumentReleaseHandler {
          protected override async decideRelease(): Promise<DocumentReleaseDecision> {
@@ -377,7 +377,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(rig.liveListeners()).toBe(0);
    });
 
-   it('reclaimed before its recovery build runs: settles though that build builds nothing', async () => {
+   it('settles when reclaimed before its recovery build runs, though that build builds nothing', async () => {
       const rig = makeRig();
       let reclaimed = false;
       rig.beforeRecovery.run = () => {
@@ -391,7 +391,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(rig.liveListeners()).toBe(0);
    });
 
-   it('skipped after its parse: resolves, since the build holds the file text', async () => {
+   it('resolves when skipped after its parse, since the build holds the file text', async () => {
       const rig = makeRig();
       class ParsedThenGone extends DefaultDocumentReleaseHandler {
          protected override async applyReleaseDecision(): Promise<void> {
@@ -423,7 +423,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
    });
 
    // No other build is bound to parse the document: the one that cancelled the write builds its own.
-   it('discarded while queued: resolves once the recovery build parses it', async () => {
+   it('resolves once the recovery build parses it when discarded while queued', async () => {
       const rig = makeRig();
       rig.faults.dropWrites = true;
       const settled = outcome(new DefaultDocumentReleaseHandler(rig.services).didReleaseDocument(makeReleased()));
@@ -433,7 +433,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(rig.liveListeners()).toBe(0);
    });
 
-   it('cancelled after its parse: requests no recovery build', async () => {
+   it('requests no recovery build when cancelled after its parse', async () => {
       const rig = makeRig();
       rig.faults.cancelWrites = true;
       class ParsedThenCancelled extends DefaultDocumentReleaseHandler {
@@ -447,7 +447,7 @@ describe('DefaultDocumentReleaseHandler — every exit settles and leaves no sub
       expect(rig.liveListeners()).toBe(0);
    });
 
-   it('failed for a document reclaimed by then: requests no recovery build', async () => {
+   it('requests no recovery build when failed for a document reclaimed by then', async () => {
       const rig = makeRig();
       let asked = 0;
       // Not reclaimed before the lock nor inside it, reclaimed once the build has failed.

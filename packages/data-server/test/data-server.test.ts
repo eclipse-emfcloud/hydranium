@@ -383,7 +383,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('accepts a serialised-string payload — parseModel handles deserialisation', async () => {
+      it('accepts a serialised-string payload, which parseModel deserialises', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
          const { proxy, pair } = makeHarness(bundle.services);
@@ -713,7 +713,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('filters per-URI: subscribers for one URI do not see other URIs', async () => {
+      it('filters per URI, so subscribers for one URI do not see other URIs', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
          const docB = bundle.documents.set(URI_B, { $type: 'FakeRoot', name: 'B' });
@@ -1926,7 +1926,7 @@ describe('DataServer', () => {
             expect(await rejectionMessage(bundle)).toBe('AA: kein Profil');
          });
 
-         it('sends the English when no catalogue matches — the control on the row above', async () => {
+         it('sends the English when no catalogue matches, as the control for the row above', async () => {
             // Same renderer, different locale: a default-English assertion would
             // otherwise pass with the render never happening at all.
             const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
@@ -2005,7 +2005,7 @@ describe('DataServer', () => {
             }
          });
 
-         it('consults the renderer for a ResponseError — the control on the row above', async () => {
+         it('consults the renderer for a ResponseError, as the control for the row above', async () => {
             // Same server, same recording renderer: only the thrown TYPE differs,
             // so an empty `consulted` above means the guard discriminated rather
             // than that the hook was never wired.
@@ -2148,7 +2148,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('excludedMethods composes with additionalMethods (rename pattern: exclude framework name, add domain-name equivalent)', async () => {
+      it('lets excludedMethods compose with additionalMethods, so a framework name can be excluded and its domain-name equivalent added', async () => {
          const bundle = buildBundle();
          const pair = makeDuplexConnectionPair();
          try {
@@ -2207,7 +2207,7 @@ function makeReferenceServices(bundle: Bundle, candidates: ReferenceCandidate[])
    return { ...bundle.services, ServiceRegistry: registry } as unknown as ServerSharedServices;
 }
 
-describe('DataServer — reference resolution', () => {
+describe('DataServer reference resolution', () => {
    const DIR_URI = 'file:///workspace/ns'; // extensionless directory: no language, no document
    const SYN_URI = 'file:///workspace/syn.fake';
 
@@ -2536,7 +2536,7 @@ function makeMultiLanguageServices(
    };
 }
 
-describe('DataServer — multi-language reference routing', () => {
+describe('DataServer multi-language reference routing', () => {
    const DIR_URI = 'file:///workspace/ns';
 
    it('routes an element source to the language of the document that holds it', async () => {
@@ -2764,7 +2764,7 @@ describe('DataServer — multi-language reference routing', () => {
 // methods would disagree about which language owns one source.
 // ============================================================
 
-describe('DataServer — findNextName routing', () => {
+describe('DataServer.findNextName routing', () => {
    const DIR_URI = 'file:///workspace/ns';
 
    /** Give `uri` an owning project, so the project tier is exercised rather than the unowned widening. */

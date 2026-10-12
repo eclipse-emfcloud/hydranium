@@ -108,7 +108,7 @@ function writeDuringBuildOf(harness: OrderFlowHarness, uri: string, write: () =>
 }
 
 describe('a session write answers with its document validated', () => {
-   it('when another client edits a dependency during the write’s build, which cancels it', async () => {
+   it('holds when another client edits a dependency during the write’s build, which cancels it', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;
       const panel = models.createSession('panel', 'panel');
@@ -130,7 +130,7 @@ describe('a session write answers with its document validated', () => {
       expect(answer.diagnostics).toHaveLength(2);
    });
 
-   it('when the writer’s own updateAll builds its documents together', async () => {
+   it('holds when the writer’s own updateAll builds its documents together', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;
       const writer = models.createSession('writer', 'writer');

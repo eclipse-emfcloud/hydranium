@@ -89,7 +89,7 @@ function projectsChanged(): ProjectsChangedEvent<Project> {
    return { project: PROJECT, reason: 'added' };
 }
 
-describe('makeDataServerHarness — subject construction', () => {
+describe('makeDataServerHarness subject construction', () => {
    it('invokes the server factory exactly once, synchronously, with the left side of the pair', () => {
       const calls: MessageConnection[] = [];
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({
@@ -112,7 +112,7 @@ describe('makeDataServerHarness — subject construction', () => {
    });
 });
 
-describe('makeDataServerHarness — the seam', () => {
+describe('makeDataServerHarness seam', () => {
    it('reaches the server through the default wire namespace', async () => {
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({ server: channel => new FakeServer(channel) });
 
@@ -145,7 +145,7 @@ describe('makeDataServerHarness — the seam', () => {
    });
 });
 
-describe('makeDataServerHarness — the capture arrays', () => {
+describe('makeDataServerHarness capture arrays', () => {
    it('captures each client channel separately, in arrival order', async () => {
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({ server: channel => new FakeServer(channel) });
 
@@ -227,7 +227,7 @@ describe('makeDataServerHarness — the capture arrays', () => {
    });
 });
 
-describe('makeDataServerHarness — teardown', () => {
+describe('makeDataServerHarness teardown', () => {
    it('releases the pair and tolerates a second dispose', async () => {
       const harness = makeDataServerHarness<FakeServer, FakeTransfer>({ server: channel => new FakeServer(channel) });
       await expect(harness.proxy.getProjects()).resolves.toEqual([PROJECT]);

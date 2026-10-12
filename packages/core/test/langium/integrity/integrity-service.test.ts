@@ -137,7 +137,7 @@ function registerRule(
    service.register(rule);
 }
 
-describe('IntegrityService.enforceIntegrity — cancellation', () => {
+describe('IntegrityService.enforceIntegrity cancellation', () => {
    it('returns early without invoking any rule when the token is already cancelled', async () => {
       const service = makeService();
       const calls: string[] = [];
@@ -161,7 +161,7 @@ describe('IntegrityService.enforceIntegrity — cancellation', () => {
       expect(calls).toEqual([]);
    });
 
-   it('honours cancellation at the next per-node interrupt — first node processed, later nodes skipped', async () => {
+   it('honours cancellation at the next per-node interrupt, processing the first node and skipping later ones', async () => {
       const service = makeService();
       const calls: string[] = [];
       const { token, cancel } = makeCancelToken();
@@ -261,7 +261,7 @@ describe('IntegrityService.enforceIntegrity — cancellation', () => {
    });
 });
 
-describe('IntegrityService — contribution group consumption', () => {
+describe('IntegrityService contribution group consumption', () => {
    it('reads `services.integrity.rules` and calls each contribution at construction', () => {
       const calls: string[] = [];
       const services = makeIntegrityServices({
@@ -303,7 +303,7 @@ class ExactMatchService extends DefaultIntegrityService<FakeNode> {
    }
 }
 
-describe('IntegrityService — node type matching', () => {
+describe('IntegrityService node type matching', () => {
    async function enforcedIds(service: DefaultIntegrityService<FakeNode>, nodeType: string): Promise<string[]> {
       const ids: string[] = [];
       registerRule(service, {
@@ -351,12 +351,14 @@ describe('IntegrityService — node type matching', () => {
       await expect(enforcedIds(new ExactMatchService(makeIntegrityServices()), 'BaseType')).resolves.toEqual([]);
    });
 
-   it.each([
-      { basePriority: 1, ownPriority: 2, expected: ['base', 'own'] },
-      { basePriority: 2, ownPriority: 1, expected: ['own', 'base'] }
-   ])(
-      'runs a supertype rule and a subtype rule on one node in priority order: $expected',
-      async ({ basePriority, ownPriority, expected }) => {
+   it.each(
+      [
+         { basePriority: 1, ownPriority: 2, expected: ['base', 'own'] },
+         { basePriority: 2, ownPriority: 1, expected: ['own', 'base'] }
+      ].map(entry => [entry.expected.join(' then '), entry] as const)
+   )(
+      'runs a supertype rule and a subtype rule on one node in priority order %s',
+      async (_order, { basePriority, ownPriority, expected }) => {
          const service = makeService();
          const order: string[] = [];
          const record = (id: string): boolean => {
@@ -865,7 +867,7 @@ function batchDocument(uri: string, nodes: FakeNode[]): LangiumDocument {
    return makeFakeDocument(uri, root);
 }
 
-describe('IntegrityService enforceBatch', () => {
+describe('IntegrityService.enforceBatch', () => {
    afterEach(() => Logger.setLevel('info'));
 
    it('never resyncs when no rule mutates a document', async () => {
@@ -929,7 +931,7 @@ describe('IntegrityService enforceBatch', () => {
       expect(probe.resyncedUris).toEqual(['file:///b.fake']);
    });
 
-   it('tolerates an undefined integrity slot — zero rules, empty phase bucket', async () => {
+   it('tolerates an undefined integrity slot with zero rules and an empty phase bucket', async () => {
       const service = new DefaultIntegrityService<FakeNode>(makeIntegrityServices());
       const document = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'a' })]);
 
@@ -1054,7 +1056,7 @@ describe('IntegrityService.enforceIntegrity empty-phase-bucket short-circuit', (
  * would survive without this: silent mode would then write unsaved store text
  * to disk.
  */
-describe('IntegrityService corrections sync — open-file branch isolation', () => {
+describe('IntegrityService corrections sync isolating the open-file branch', () => {
    it('does not stage pending content or rewrite authorship for an open file (editor mode)', async () => {
       const { probe, textDocuments } = makeCorrectionsProbe('editor');
       textDocuments.openInLanguageClient = true;
@@ -1069,7 +1071,7 @@ describe('IntegrityService corrections sync — open-file branch isolation', () 
    });
 
    for (const syncMode of ['silent', 'editor'] as const) {
-      it(`treats a file waiting out the release grace as held: its unsaved source reaches no disk and no stage (${syncMode} mode)`, async () => {
+      it(`treats a file waiting out the release grace as held, so its unsaved source reaches no disk and no stage (${syncMode} mode)`, async () => {
          const { probe, textDocuments, fileSystemProvider } = makeCorrectionsProbe(syncMode);
          textDocuments.releasePending = true;
          fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
@@ -1196,7 +1198,7 @@ function makeFormatNodeProbe(): FormatNodeProbe {
    return new FormatNodeProbe(makeIntegrityServices());
 }
 
-describe('IntegrityService.formatNode', () => {
+describe('DefaultIntegrityService.formatNode', () => {
    it("prefers a string name, wrapping it as Type('name')", () => {
       const probe = makeFormatNodeProbe();
       const node = makeFakeAstNode<AstNode>({ $type: 'TypeOne', name: 'ns.Element', id: 'element-1' });

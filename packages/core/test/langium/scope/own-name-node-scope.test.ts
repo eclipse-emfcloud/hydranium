@@ -95,7 +95,7 @@ function probe(): ProbeScopeProvider {
    return new ProbeScopeProvider(language);
 }
 
-describe('HydraniumScopeProvider.createScopeForNodes — own-name keying', () => {
+describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
    it('keys entries by the bare own-name, which is the text a member reference carries', () => {
       const { container } = makeContainer();
       const scope = probe().scopeFor(container.members);

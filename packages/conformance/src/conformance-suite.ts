@@ -63,7 +63,7 @@ export function summarizeChecks(checks: ReadonlyArray<ConformanceCheck>): Confor
  * inline instead of showing a bare greyed-out line.
  */
 export function skippedTitle(check: Pick<ConformanceCheck, 'title' | 'skipReason'>): string {
-   return `${check.title} [skipped: ${check.skipReason ?? NO_REASON}]`;
+   return `${check.title} (skipped, ${check.skipReason ?? NO_REASON})`;
 }
 
 /**

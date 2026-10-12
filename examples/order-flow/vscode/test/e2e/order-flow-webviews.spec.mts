@@ -21,7 +21,7 @@ import { launchOrderFlowVscode, quickOpen, runCommand, test, webview, type Order
  * (the repair undoes the break), and without serial mode a retry would re-run
  * `beforeAll` and only the failed test.
  */
-test.describe.serial('Order-flow webviews in VS Code', () => {
+test.describe.serial('order-flow webviews in VS Code', () => {
    let vscode: OrderFlowVscode;
 
    test.beforeAll(async () => {

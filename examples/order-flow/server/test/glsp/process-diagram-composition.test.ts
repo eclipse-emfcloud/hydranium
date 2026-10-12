@@ -167,7 +167,7 @@ describe('order-flow .process diagram composition', () => {
          expect(await thrownMessage(TEST_LOCALE)).toBe(RENDERED);
       });
 
-      it('sends the English when no locale matches — the control on the row above', async () => {
+      it('sends the English when no locale matches, as the control for the row above', async () => {
          // Same renderer, no locale. Without it the row above would pass against
          // a GLSP head that never consulted the binding, since an unrendered
          // message and a rendered-but-uncatalogued one are the same string.
@@ -208,7 +208,7 @@ describe('order-flow .process diagram composition', () => {
          expect(await paletteLabels('de')).toEqual(expect.arrayContaining(['Aufgabe', 'Verzweigung', 'Übergang', 'Effekt']));
       });
 
-      it('labels the palette in English with no locale — the control on the row above', async () => {
+      it('labels the palette in English with no locale, as the control for the row above', async () => {
          const labels = await paletteLabels(undefined);
 
          expect(labels).toEqual(expect.arrayContaining([PALETTE_TASK.text, PALETTE_GATEWAY.text, PALETTE_TRANSITION.text]));

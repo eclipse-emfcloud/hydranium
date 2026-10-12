@@ -57,15 +57,15 @@ describe('lintExitCode', () => {
 });
 
 describe('formatLintReport', () => {
-   it('json: emits the raw result', () => {
+   it('emits the raw result as json', () => {
       expect(JSON.parse(formatLintReport(WITH_ERROR, { json: true }))).toEqual(WITH_ERROR);
    });
 
-   it('human: a clean run reports the checked-target count', () => {
+   it('reports the checked-target count for a clean run as human text', () => {
       expect(formatLintReport(CLEAN)).toBe('No grammar-convention problems found (3 reference target types checked).');
    });
 
-   it('human: a finding renders severity, rule, and message, then the tally', () => {
+   it("renders a finding's severity, rule and message, then the tally, as human text", () => {
       const output = formatLintReport(WITH_ERROR);
       expect(output).toContain('error   [reference-target-unnameable]');
       expect(output).toContain("Type 'TypeOne' is a cross-reference target");

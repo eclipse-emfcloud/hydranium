@@ -74,7 +74,7 @@ function openInReal(store: HydraniumTextDocuments<TextDocument>, uri: string, te
    store.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'x', version: 1, text } }, clientId);
 }
 
-describe('makeStubHydraniumTextDocuments — signature conformance for the hand-declared members', () => {
+describe('makeStubHydraniumTextDocuments signature conformance for the hand-declared members', () => {
    it('keeps onDidClose real-shaped', () => {
       const stub = makeStubHydraniumTextDocuments();
       // `onDidClose` is documented as carrying the real event payload, unlike
@@ -91,7 +91,7 @@ describe('makeStubHydraniumTextDocuments — signature conformance for the hand-
    });
 });
 
-describe('makeStubHydraniumTextDocuments — differential against HydraniumTextDocuments', () => {
+describe('makeStubHydraniumTextDocuments differential against HydraniumTextDocuments', () => {
    it('steps the shared version on an authored write iff the text changed', () => {
       const real = realStore();
       const stub = makeStubHydraniumTextDocuments();
@@ -188,7 +188,7 @@ describe('makeStubHydraniumTextDocuments — differential against HydraniumTextD
    });
 });
 
-describe('makeStubHydraniumTextDocuments — the wire-path supersession rule', () => {
+describe('makeStubHydraniumTextDocuments wire-path supersession rule', () => {
    it('drops a wire change whose version does not advance, and records the one that does', () => {
       const stub = makeStubHydraniumTextDocuments();
       stub.seedOpen(URI_ONE, 'one', LANGUAGE_CLIENT_ID);
@@ -228,7 +228,7 @@ describe('makeStubHydraniumTextDocuments — the wire-path supersession rule', (
    });
 });
 
-describe('makeStubHydraniumTextDocuments — the push channel to the language client', () => {
+describe('makeStubHydraniumTextDocuments push channel to the language client', () => {
    it('records every push and answers accepted by default', async () => {
       const stub = makeStubHydraniumTextDocuments();
       stub.seedOpenInLanguageClient(URI_ONE);
@@ -280,7 +280,7 @@ describe('makeStubHydraniumTextDocuments — the push channel to the language cl
    });
 });
 
-describe('makeStubHydraniumTextDocuments — save and reset', () => {
+describe('makeStubHydraniumTextDocuments save and reset', () => {
    it('delivers a save to live listeners, records it, and stops at dispose', () => {
       const stub = makeStubHydraniumTextDocuments();
       const seen: string[] = [];
@@ -335,7 +335,7 @@ describe('makeStubHydraniumTextDocuments — save and reset', () => {
    });
 });
 
-describe('makeStubHydraniumTextDocuments — release order', () => {
+describe('makeStubHydraniumTextDocuments release order', () => {
    it("announces a last close released, then clean, in the real store's order", () => {
       const stub = makeStubHydraniumTextDocuments();
       const events: string[] = [];
@@ -348,7 +348,7 @@ describe('makeStubHydraniumTextDocuments — release order', () => {
    });
 });
 
-describe('makeStubHydraniumTextDocuments — client sessions', () => {
+describe('makeStubHydraniumTextDocuments client sessions', () => {
    it('keeps a session-closed subscription across reset, as a model service built on the stub holds one', () => {
       const stub = makeStubHydraniumTextDocuments();
       const closed: string[] = [];

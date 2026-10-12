@@ -36,8 +36,8 @@ const FIXTURE_URI = 'file:///fixture/A.fake';
 // so querying it reveals the log level the spawned child was launched with.
 const ENV_ECHO_URI = 'file:///fixture/env.fake';
 
-describe('CLI subprocess integration', () => {
-   it('projects: spawns the fixture and writes each project as NDJSON', async () => {
+describe('runProjects, runQuery and runSave against a spawned server', () => {
+   it('runProjects spawns the fixture and writes each project as NDJSON', async () => {
       const lines: string[] = [];
       await runProjects({
          serverCommand: 'node',
@@ -52,7 +52,7 @@ describe('CLI subprocess integration', () => {
       expect(projects[1].dependencies).toEqual(['fixture-p1']);
    });
 
-   it('query: spawns the fixture and prints the document envelope', async () => {
+   it('runQuery spawns the fixture and prints the document envelope', async () => {
       const lines: string[] = [];
       await runQuery({
          serverCommand: 'node',
@@ -66,7 +66,7 @@ describe('CLI subprocess integration', () => {
       expect(doc.model.root.name).toBe('initial');
    });
 
-   it('save: spawns the fixture, updates the document, returns the post-save envelope', async () => {
+   it('runSave spawns the fixture, updates the document and returns the post-save envelope', async () => {
       const lines: string[] = [];
       await runSave({
          serverCommand: 'node',
@@ -82,7 +82,7 @@ describe('CLI subprocess integration', () => {
       expect(doc.model.root.name).toBe('from-cli');
    });
 
-   it('logLevel: forwards the requested level onto the spawned server env', async () => {
+   it('forwards the requested logLevel onto the spawned server env', async () => {
       const lines: string[] = [];
       await runQuery({
          serverCommand: 'node',
@@ -94,7 +94,7 @@ describe('CLI subprocess integration', () => {
       expect(JSON.parse(lines[0]).model.root.name).toBe('debug');
    });
 
-   it('logLevel: omitted leaves the server env untouched', async () => {
+   it('leaves the server env untouched when logLevel is omitted', async () => {
       const lines: string[] = [];
       await runQuery({
          serverCommand: 'node',
@@ -106,7 +106,7 @@ describe('CLI subprocess integration', () => {
    });
 });
 
-describe('CLI subprocess hardening', () => {
+describe('runProjects against a failing server', () => {
    it('rejects with a clear message when the server command cannot be spawned', async () => {
       await expect(runProjects({ serverCommand: 'hydranium-cli-no-such-binary-xyz', write: () => undefined })).rejects.toThrow(
          /failed to start/

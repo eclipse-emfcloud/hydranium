@@ -163,7 +163,7 @@ describe('resolveInitComposition', () => {
    });
 });
 
-describe('resolveInitComposition, heads', () => {
+describe('resolveInitComposition with heads', () => {
    it('defaults to the LSP and data heads', () => {
       expect(resolveInitComposition('Bookstore').heads).toEqual(['lsp', 'data']);
    });
@@ -217,7 +217,7 @@ describe('resolveInitComposition, heads', () => {
    });
 });
 
-describe('planInitFiles, heads', () => {
+describe('planInitFiles with heads', () => {
    const filesFor = (heads: readonly InitHead[]): InitFile[] => planInitFiles(resolveInitComposition('Bookstore', [], heads));
    const contentOf = (files: readonly InitFile[], path: string): string | undefined => files.find(file => file.path === path)?.content;
 
@@ -527,7 +527,7 @@ describe('planInitFiles', () => {
    });
 });
 
-describe('planInitFiles, multi-grammar', () => {
+describe('planInitFiles with several grammars', () => {
    const composition = resolveInitComposition('OrderFlow', [
       { name: 'Domain' },
       { name: 'Process' },
@@ -695,7 +695,7 @@ describe('runInit', () => {
  * The detection rules have their own suite; a placement is supplied directly
  * here so neither half can pass by leaning on the other.
  */
-describe('planInitFiles, detected workspace facts', () => {
+describe('planInitFiles with detected workspace facts', () => {
    const plan = (workspace: {
       printWidth?: number;
       eslintConfig?: string;

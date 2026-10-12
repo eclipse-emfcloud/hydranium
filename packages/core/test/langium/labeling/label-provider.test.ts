@@ -44,7 +44,7 @@ describe('DefaultLabelProvider', () => {
          expect(provider.getLabel(makeFakeAstNode<AnyNode>({ $type: 'TypeOne', label: 'Element', id: 'element-1' }))).toBe('Element');
       });
 
-      it('is independent of nameProperties — labels by name even when the identifier is id', () => {
+      it('is independent of nameProperties, labelling by name even when the identifier is id', () => {
          // NameProvider reads `id`; LabelProvider (default ['name']) reads `name`.
          const provider = new DefaultLabelProvider(makeServices());
          const node = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', id: 'element-1', name: 'Element1' });

@@ -28,7 +28,7 @@ describe('parseProfileDimensions', () => {
    });
 });
 
-describe('buildDriverArgs (profiling flags)', () => {
+describe('buildDriverArgs with profiling flags', () => {
    it('threads --profile and --session-out through', () => {
       const args = buildDriverArgs({ servicesModule: 'm.js', workspace: '/ws', profile: 'cpu,alloc', sessionOut: '/out' });
       expect(args[args.indexOf('--profile') + 1]).toBe('cpu,alloc');
@@ -42,7 +42,7 @@ describe('buildDriverArgs (profiling flags)', () => {
    });
 });
 
-describe('buildDriverArgs (--json)', () => {
+describe('buildDriverArgs with --json', () => {
    it('forwards --json, which the driver and not the parent renders', () => {
       // Forwarded rather than handled here: the result object exists only inside
       // the child, so the parent has nothing to serialise.

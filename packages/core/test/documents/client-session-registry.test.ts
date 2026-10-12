@@ -16,7 +16,7 @@ import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.
 const A = 'file:///a.x' as CanonicalUri;
 const B = 'file:///b.x' as CanonicalUri;
 
-describe('ClientSessionRegistry — the session table', () => {
+describe('ClientSessionRegistry session table', () => {
    it('rejects an id that is already registered', () => {
       const registry = new ClientSessionRegistry();
       registry.register('form#1');
@@ -77,7 +77,7 @@ describe('ClientSessionRegistry — the session table', () => {
    });
 });
 
-describe('ClientSessionRegistry — opens', () => {
+describe('ClientSessionRegistry open tracking', () => {
    it('tracks opens in both directions, for registered and unregistered ids alike', () => {
       const registry = new ClientSessionRegistry();
       registry.register('session');
@@ -113,7 +113,7 @@ describe('ClientSessionRegistry — opens', () => {
    });
 });
 
-describe('ClientSessionRegistry — client versions', () => {
+describe('ClientSessionRegistry client versions', () => {
    it("keeps a writer's version, open or not, until it closes or the document is released", () => {
       const registry = new ClientSessionRegistry();
       registry.setClientVersion(A, 'form', 3);
