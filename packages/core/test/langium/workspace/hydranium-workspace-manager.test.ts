@@ -9,13 +9,16 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Logger, NoopLogger, type Project, type Tracer } from '@hydranium/protocol';
+import { tick } from '@hydranium/protocol/testing';
 import { type CapturedLine, makeCapturingLogger } from '../../../src/testing/make-test-tracer.js';
 import {
+   type AstNode,
    type DocumentBuilder,
    DocumentState,
    type LangiumDocument,
    type LangiumDocuments,
    OperationCancelled,
+   setInterruptionPeriod,
    URI
 } from '@hydranium/langium';
 import { Disposable } from 'vscode-languageserver';
@@ -28,7 +31,17 @@ import { getLogFilePath, setLogFilePath } from '../../../src/langium/diagnostics
 import { HydraniumWorkspaceManager } from '../../../src/langium/workspace/hydranium-workspace-manager.js';
 import type * as WorkspaceManagerModule from '../../../src/langium/workspace/hydranium-workspace-manager.js';
 import { DefaultDocumentUriPolicy, RealpathDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { makeCapturingTracer, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
+import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
+import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
+import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
+import type { ServerSharedServices } from '../../../src/langium/module.js';
+import {
+   makeCapturingTracer,
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeNoopSharedServices,
+   makeStubServiceRegistry
+} from '../../../src/testing/index.js';
 
 const URI_A = URI.parse('file:///workspace/A.a');
 const URI_B = URI.parse('file:///workspace/B.a');
@@ -548,6 +561,9 @@ describe('HydraniumWorkspaceManager after a failed initial build', () => {
       mgr.startupError = startupError;
       await expect(mgr.initializeWorkspace([])).rejects.toBe(startupError);
       await expect(mgr.workspaceInitialized).rejects.toBe(startupError);
+      // A rejected `ready` nobody waits on would reach the process listener,
+      // which logs through this tracer, on a later turn.
+      await tick();
       return lines.filter(line => line.level === 'error');
    }
 
@@ -555,6 +571,17 @@ describe('HydraniumWorkspaceManager after a failed initial build', () => {
       expect(await errorsFor(new Error('boom'))).toHaveLength(1);
       expect(await errorsFor(OperationCancelled)).toEqual([]);
       expect(await errorsFor(new Error('Connection is disposed.'))).toEqual([]);
+   });
+
+   it('rejects ready when startup throws, so its waiters fail rather than wait forever', async () => {
+      const mgr = new FailingWorkspaceManager(makeStubs(new FakeProjectManager()).services);
+      const startupError = new Error('boom');
+      mgr.startupError = startupError;
+
+      await expect(mgr.initializeWorkspace([])).rejects.toBe(startupError);
+
+      // Raced against a settled marker, so a pending `ready` fails here rather than timing out.
+      await expect(Promise.race([mgr.ready, Promise.resolve('pending')])).rejects.toBe(startupError);
    });
 });
 
@@ -728,5 +755,246 @@ describe('HydraniumWorkspaceManager descriptor documents in the initial build', 
       // what this pins is that a member-only traversal is not reordered or lost.
       expect(documents.map(document => document.uri.toString())).toContain(MEMBER.toString());
       expect(documents).toHaveLength(2);
+   });
+});
+
+// ============================================================
+// Loading the workspace documents
+// ============================================================
+
+describe('HydraniumWorkspaceManager loading the workspace documents', () => {
+   const FOLDERS: WorkspaceFolder[] = [{ uri: 'file:///workspace', name: 'workspace' }];
+   const FILES = Array.from({ length: 11 }, (_, i) => URI.parse(`file:///workspace/file${i}.test`));
+
+   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+      runPerformStartup(folders: WorkspaceFolder[]): Promise<LangiumDocument[]> {
+         return this.performStartup(folders);
+      }
+
+      runLoadTraversedDocument(uri: URI): Promise<LangiumDocument | undefined> {
+         return this.loadTraversedDocument(uri);
+      }
+   }
+
+   interface LoadOptions {
+      /** The files the traversal finds. */
+      readonly files: readonly URI[];
+      /** Loads one document. Defaults to a fresh document per URI. */
+      readonly load?: (uri: URI) => Promise<LangiumDocument>;
+      /** What the provider's `exists` answers. Defaults to `true`. */
+      readonly exists?: (uri: URI) => Promise<boolean>;
+      /** What the provider's `existsSettled` answers. Unset, the provider has none. */
+      readonly existsSettled?: (uri: URI) => Promise<boolean>;
+      /** What the document factory reads from a file. Unset, nothing reads through it. */
+      readonly fromUri?: (uri: URI) => Promise<LangiumDocument>;
+      /** Builds the `LangiumDocuments` slot from the services. Defaults to a store over `load`. */
+      readonly documents?: (services: ServerSharedServicesMinimal) => ServerSharedServicesMinimal['workspace']['LangiumDocuments'];
+      readonly tracer?: Tracer;
+      /** The chunk size a subclass sets. Unset, the default. */
+      readonly chunkSize?: number;
+   }
+
+   function setup(options: LoadOptions): ExposingWorkspaceManager {
+      const knownDocs = new Map<string, LangiumDocument>();
+      const load = options.load ?? (async (uri: URI) => ({ uri }) as LangiumDocument);
+      const services = makeNoopSharedServices({
+         Tracer: options.tracer,
+         ServiceRegistry: makeStubServiceRegistry([{ languageId: 'test', fileExtensions: ['.test'] }]),
+         workspace: {
+            LangiumDocuments: {
+               getDocument: (uri: URI) => knownDocs.get(uri.toString()),
+               hasDocument: (uri: URI) => knownDocs.has(uri.toString()),
+               addDocument: (document: LangiumDocument) => knownDocs.set(document.uri.toString(), document),
+               getOrCreateDocument: load,
+               get all() {
+                  return Array.from(knownDocs.values());
+               }
+            } as unknown,
+            DocumentBuilder: { resetToState: () => undefined } as unknown,
+            DocumentUriPolicy: new DefaultDocumentUriPolicy(),
+            CstResidencyService: { rehydrate: () => undefined },
+            LangiumDocumentFactory: { fromUri: options.fromUri } as unknown,
+            FileSystemProvider: {
+               readDirectory: async () => options.files.map(uri => ({ uri, isFile: true, isDirectory: false })),
+               exists: options.exists ?? (async () => true),
+               existsSettled: options.existsSettled
+            } as unknown,
+            WorkspaceLock: { write: <T>(fn: () => Promise<T>) => fn() } as unknown,
+            ProjectManager: new FakeProjectManager()
+         }
+      });
+      if (options.documents) {
+         services.workspace.LangiumDocuments = options.documents(services);
+      }
+      if (options.chunkSize !== undefined) {
+         const chunkSize: number = options.chunkSize;
+         return new (class extends ExposingWorkspaceManager {
+            protected override readonly loadChunkSize = chunkSize;
+         })(services);
+      }
+      return new ExposingWorkspaceManager(services);
+   }
+
+   async function atDebug<T>(run: () => Promise<T>): Promise<T> {
+      const previousLevel = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         return await run();
+      } finally {
+         Logger.setLevel(previousLevel);
+      }
+   }
+
+   /** The loads and a `setImmediate` probe, in the order they ran, under the given interruption period. */
+   async function loadOrderUnder(period: number, chunkSize?: number): Promise<string[]> {
+      const events: string[] = [];
+      const mgr = setup({
+         files: FILES,
+         chunkSize,
+         load: async uri => {
+            events.push(uri.toString());
+            return { uri } as LangiumDocument;
+         }
+      });
+      setInterruptionPeriod(period);
+      try {
+         // Everything before the load settles in microtasks, so the probe runs
+         // only once the load gives the event loop a turn.
+         setImmediate(() => events.push('probe'));
+         await mgr.runPerformStartup(FOLDERS);
+      } finally {
+         setInterruptionPeriod(10);
+      }
+      // Queued after the probe, so the probe has run when this resolves.
+      await new Promise(resolve => setImmediate(resolve));
+      return events;
+   }
+
+   it('yields to the event loop at each chunk boundary once the interruption period has passed', async () => {
+      const events = await loadOrderUnder(0);
+
+      // FILES is one more than the default chunk of 10.
+      const uris = FILES.map(uri => uri.toString());
+      expect(events).toEqual([...uris.slice(0, 10), 'probe', ...uris.slice(10)]);
+   });
+
+   it('yields at the chunk size a subclass sets', async () => {
+      const events = await loadOrderUnder(0, 4);
+
+      const uris = FILES.map(uri => uri.toString());
+      expect(events).toEqual([...uris.slice(0, 4), 'probe', ...uris.slice(4)]);
+   });
+
+   it('does not yield before the interruption period has passed', async () => {
+      const events = await loadOrderUnder(Number.POSITIVE_INFINITY);
+
+      expect(events).toEqual([...FILES.map(uri => uri.toString()), 'probe']);
+   });
+
+   it('collects once a document that a concurrent open created during its read', async () => {
+      const raced = FILES[0];
+      const wired: { documents?: HydraniumLangiumDocuments } = {};
+      const mgr = setup({
+         files: [raced],
+         fromUri: async uri => {
+            wired.documents?.addDocument(makeFakeDocument(uri, makeFakeAstNode<AstNode>({ $type: 'Raced' })));
+            return makeFakeDocument(uri, makeFakeAstNode<AstNode>({ $type: 'Loaded' }));
+         },
+         documents: services => {
+            const documents = new HydraniumLangiumDocuments(services);
+            wired.documents = documents;
+            services.workspace.ModelLedger = new DefaultModelLedger();
+            services.workspace.VersionSyncService = new DefaultVersionSyncService(services as unknown as ServerSharedServices);
+            return documents;
+         }
+      });
+
+      const documents = await mgr.runPerformStartup(FOLDERS);
+
+      expect(documents.map(document => [document.uri.toString(), document.parseResult.value.$type])).toEqual([[raced.toString(), 'Raced']]);
+   });
+
+   it('skips a file that vanished before its read, naming it at debug', async () => {
+      const vanished = FILES[1];
+      const { tracer, lines } = makeCapturingTracer();
+      const mgr = setup({
+         files: FILES.slice(0, 3),
+         tracer,
+         load: async uri => {
+            if (uri.toString() === vanished.toString()) {
+               throw new Error(`No such file: ${uri.toString()}`);
+            }
+            return { uri } as LangiumDocument;
+         },
+         exists: async uri => uri.toString() !== vanished.toString()
+      });
+
+      const documents = await atDebug(() => mgr.runPerformStartup(FOLDERS));
+
+      expect(documents.map(document => document.uri.toString())).toEqual([FILES[0].toString(), FILES[2].toString()]);
+      const named = lines.filter(line => line.message.includes(vanished.toString()));
+      expect(named.map(line => line.level)).toEqual(['debug']);
+   });
+
+   it('reads a file again when it is there once its name has settled, as after a replacing rename', async () => {
+      const replaced = FILES[0];
+      let reads = 0;
+      const mgr = setup({
+         files: [replaced],
+         load: async uri => {
+            reads++;
+            if (reads === 1) {
+               throw new Error(`No such file: ${uri.toString()}`);
+            }
+            return { uri } as LangiumDocument;
+         },
+         // A single `exists` misses during the rename; the settled answer finds the file back.
+         exists: async () => false,
+         existsSettled: async () => true
+      });
+
+      const documents = await mgr.runPerformStartup(FOLDERS);
+
+      expect(documents.map(document => document.uri.toString())).toEqual([replaced.toString()]);
+      expect(reads).toBe(2);
+   });
+
+   it('rejects with the second read error when the file is still there, or the provider cannot say', async () => {
+      // A fresh error per read, so only the second read's can match.
+      const failingReads = (): { readonly second: () => Error | undefined; readonly load: () => Promise<never> } => {
+         const errors: Error[] = [];
+         return {
+            second: () => errors[1],
+            load: async () => {
+               const error = new Error(`EACCES: permission denied (read ${errors.length + 1})`);
+               errors.push(error);
+               throw error;
+            }
+         };
+      };
+
+      const stillThere = failingReads();
+      const rejection = setup({ files: [], load: stillThere.load }).runLoadTraversedDocument(FILES[0]);
+      await expect(rejection).rejects.toThrow('read 2');
+      await expect(rejection).rejects.toBe(stillThere.second());
+      const unanswered = async (): Promise<boolean> => {
+         throw new Error('provider down');
+      };
+      const cannotSay = failingReads();
+      await expect(setup({ files: [], load: cannotSay.load, exists: unanswered }).runLoadTraversedDocument(FILES[0])).rejects.toThrow(
+         'read 2'
+      );
+   });
+
+   it('rejects on cancellation, even for a file that no longer exists', async () => {
+      const mgr = setup({
+         files: [],
+         load: async () => {
+            throw OperationCancelled;
+         },
+         exists: async () => false
+      });
+
+      await expect(mgr.runLoadTraversedDocument(FILES[0])).rejects.toBe(OperationCancelled);
    });
 });
