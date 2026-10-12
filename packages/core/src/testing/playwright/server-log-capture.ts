@@ -11,6 +11,7 @@ import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, unli
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+   DEFAULT_CPU_PROFILE_FILE_ENV,
    DEFAULT_LOG_FILE_ENV,
    DEFAULT_LOG_FILE_LEVEL_ENV,
    DEFAULT_LOG_LEVEL_ENV,
@@ -26,6 +27,13 @@ import { toLogFileWorkspaceToken } from '../../langium/diagnostics/log-file-toke
  * {@link attachServerLog}.
  */
 export const DEFAULT_SERVER_LOG_DIR_ENV = 'HYDRANIUM_SERVER_LOG_DIR';
+/**
+ * Default env var opting a capture into the servers' CPU profiles: any
+ * non-empty value makes {@link captureServerLog} name a
+ * `<token>.<pid>.cpuprofile` beside each log, which each server of that
+ * workspace writes when it ends.
+ */
+export const DEFAULT_SERVER_CPU_PROFILE_ENV = 'HYDRANIUM_SERVER_CPU_PROFILE';
 /**
  * Default env var providing a central {@link AttachServerLogOptions.attachOn}
  * policy (`'failure' | 'always' | 'never'`) for a whole run, so a debugging
@@ -65,6 +73,26 @@ function parseBrowserLogLevels(value: string | undefined): readonly string[] | u
 
 /** The `{workspace}` placeholder the file-tee expands once the workspace is known. */
 const WORKSPACE_PLACEHOLDER = '{workspace}';
+/**
+ * Name of each server's CPU profile beside `<token>.log`. Per process, since
+ * every server of a workspace writes one and a write replaces the file.
+ */
+const CPU_PROFILE_NAME = `${WORKSPACE_PLACEHOLDER}.{pid}.cpuprofile`;
+
+/** Matches the `.<pid>.cpuprofile` ending of a profile named by {@link CPU_PROFILE_NAME}. */
+const CPU_PROFILE_SUFFIX_PATTERN = /\.\d+\.cpuprofile$/;
+
+/** The `.<pid>.cpuprofile` suffixes of the profiles among `entries` written for `token`. */
+function cpuProfileSuffixes(entries: readonly string[], token: string): string[] {
+   const suffixes: string[] = [];
+   for (const entry of entries) {
+      const suffix = CPU_PROFILE_SUFFIX_PATTERN.exec(entry)?.[0];
+      if (suffix !== undefined && entry.slice(0, -suffix.length) === token) {
+         suffixes.push(suffix);
+      }
+   }
+   return suffixes.sort();
+}
 
 export interface CaptureServerLogOptions {
    /**
@@ -112,7 +140,8 @@ export interface ServerLogRenameReporterOptions {
  * plus the reporter entry that renames those files to spec names once the run
  * ends. Returns an **empty env, and no reporter, when no dir is configured**, so a
  * normal run is untouched. The `{workspace}` token is expanded server-side once
- * the workspace is known.
+ * the workspace is known. With {@link DEFAULT_SERVER_CPU_PROFILE_ENV} set, the
+ * env also names a `<token>.<pid>.cpuprofile` per server beside each log.
  *
  * **Publishes a resolved `options.dir` onto {@link DEFAULT_SERVER_LOG_DIR_ENV} in
  * the CALLING process, and that mutation is load-bearing rather than a
@@ -139,6 +168,9 @@ export function captureServerLog(options: CaptureServerLogOptions = {}): Capture
       parseLogLevel(process.env[DEFAULT_LOG_FILE_LEVEL_ENV]) ??
       parseLogLevel(process.env[DEFAULT_LOG_LEVEL_ENV]) ??
       'debug';
+   if (process.env[DEFAULT_SERVER_CPU_PROFILE_ENV]) {
+      env[DEFAULT_CPU_PROFILE_FILE_ENV] = join(dir, CPU_PROFILE_NAME);
+   }
    const reporterModule = fileURLToPath(new URL('./server-log-rename-reporter.js', import.meta.url));
    return { env, reporter: [reporterModule, { dir }] };
 }
@@ -176,16 +208,18 @@ export function serverLogSpecName(file: string): string {
 }
 
 /**
- * Rename each `<token>.log` (backend) and `<token>.browser.log` (forwarded
- * browser console) to the spec name recorded in its `<token>.spec` sidecar
- * (written by {@link markServerLog}), then delete the sidecar. Colliding names —
- * a spec that opened more than one workspace — get a `-2`, `-3`, … suffix. Run
- * once, after all server processes have exited (e.g. a reporter's `onEnd`).
- * Best-effort.
+ * Rename each `<token>.log` (backend), `<token>.browser.log` (forwarded
+ * browser console) and `<token>.<pid>.cpuprofile` (each server's CPU profile,
+ * when {@link DEFAULT_SERVER_CPU_PROFILE_ENV} is set) to the spec name recorded
+ * in its `<token>.spec` sidecar (written by {@link markServerLog}), then delete
+ * the sidecar. Colliding names — a spec that opened more than one workspace —
+ * get a `-2`, `-3`, … suffix. Run once, after all server processes have exited
+ * (e.g. a reporter's `onEnd`). Best-effort.
  *
- * Returns the workspace tokens left UNATTRIBUTED — a log the capture wrote that
- * no test claimed, because that spec never reached
- * {@link markServerLog} (no `serverLog` fixture, no `beforeEach` call).
+ * Returns the workspace tokens left UNATTRIBUTED — a log or CPU profile the
+ * capture wrote that no test claimed, because that spec never reached
+ * {@link markServerLog} (no `serverLog` fixture, no `beforeEach` call), or
+ * because its server never learned its workspace and named it `_startup-<pid>`.
  *
  * **Returned rather than ignored, because the unattributed state is the
  * misleading one.** Such a log still exists, still has content, and is named by
@@ -202,30 +236,38 @@ export function renameServerLogs(dir: string): string[] {
       // unattributed, since no log was observed at all.
       return [];
    }
-   // Per suffix (`.log`, `.browser.log`) a `taken` set guards collisions, so the
-   // backend and browser logs for one spec share the same friendly base name.
-   const taken: Record<string, Set<string>> = { '.log': new Set(), '.browser.log': new Set() };
-   const rename = (token: string, name: string, suffix: string): void => {
-      const source = join(dir, `${token}${suffix}`);
-      if (!existsSync(source)) {
-         return;
+   // One base name per token, free for every file the token has, so a spec's
+   // second workspace keeps its log, browser log and profiles paired under one
+   // `-N`. A base chosen per file pairs nothing: a profile's suffix carries its
+   // pid and never collides, so it would stay at the plain name beside a `-2` log.
+   const renameAll = (token: string, name: string): void => {
+      const suffixes = ['.log', '.browser.log', ...cpuProfileSuffixes(entries, token)].filter(suffix =>
+         existsSync(join(dir, `${token}${suffix}`))
+      );
+      let base = name;
+      for (let n = 2; suffixes.some(suffix => existsSync(join(dir, `${base}${suffix}`))); n++) {
+         base = `${name}-${n}`;
       }
-      let target = `${name}${suffix}`;
-      for (let n = 2; taken[suffix].has(target) || existsSync(join(dir, target)); n++) {
-         target = `${name}-${n}${suffix}`;
-      }
-      taken[suffix].add(target);
-      try {
-         renameSync(source, join(dir, target));
-      } catch {
-         // ignore
+      for (const suffix of suffixes) {
+         try {
+            renameSync(join(dir, `${token}${suffix}`), join(dir, `${base}${suffix}`));
+         } catch {
+            // ignore
+         }
       }
    };
-   // Every token the capture produced a backend log for, so the ones no sidecar
-   // claims can be reported rather than silently left behind.
-   const unattributed = new Set(
-      entries.filter(entry => entry.endsWith('.log') && !entry.endsWith('.browser.log')).map(entry => entry.slice(0, -'.log'.length))
-   );
+   // Every token the capture produced a backend log or a CPU profile for, so
+   // the ones no sidecar claims can be reported rather than silently left behind.
+   const unattributed = new Set<string>();
+   for (const entry of entries) {
+      if (entry.endsWith('.log') && !entry.endsWith('.browser.log')) {
+         unattributed.add(entry.slice(0, -'.log'.length));
+      }
+      const profileSuffix = CPU_PROFILE_SUFFIX_PATTERN.exec(entry)?.[0];
+      if (profileSuffix !== undefined) {
+         unattributed.add(entry.slice(0, -profileSuffix.length));
+      }
+   }
    for (const entry of entries) {
       if (!entry.endsWith('.spec')) {
          continue;
@@ -247,8 +289,7 @@ export function renameServerLogs(dir: string): string[] {
          continue;
       }
       unattributed.delete(token);
-      rename(token, name, '.log');
-      rename(token, name, '.browser.log');
+      renameAll(token, name);
    }
    return [...unattributed];
 }
@@ -437,8 +478,11 @@ export function findUnexpectedServerLogLines(text: string, allowlist: Readonly<R
  *   server log, so each test's region is delimited within the shared stream;
  * - attaches that log — and the separate browser-console log, when one exists —
  *   to the test, so it shows in the HTML report alongside the trace + screenshot.
- *   Which outcomes attach is {@link AttachServerLogOptions.attachOn}, failure-only
- *   by default.
+ *   Every CPU profile of the workspace's servers written by then is attached
+ *   too, so one of a server that ended in an earlier test of the same
+ *   workspace comes along, and one written after the test is only named after
+ *   the spec by {@link renameServerLogs}. Which outcomes attach is
+ *   {@link AttachServerLogOptions.attachOn}, failure-only by default.
  *
  * **No-op when no capture dir is configured** (`options.dir` and the default env
  * var both unset), so a normal run is untouched — no per-spec guard needed.
@@ -466,18 +510,31 @@ export async function attachServerLog(
    if (!shouldAttach) {
       return;
    }
-   // Attach both streams: the backend server log and (when present) the separate
-   // browser-console log, so a failing test carries the frontend side too.
-   const attachments: { name: string; path: string }[] = [
-      { name: 'server-log', path: file },
-      { name: 'browser-console-log', path: join(dir, `${toLogFileWorkspaceToken(workspacePath)}.browser.log`) }
+   // Attach every stream present: the backend server log, the separate
+   // browser-console log, so a failing test carries the frontend side too, and
+   // the CPU profile of each server of the workspace that has already ended.
+   const token = toLogFileWorkspaceToken(workspacePath);
+   let entries: string[] = [];
+   try {
+      entries = readdirSync(dir);
+   } catch {
+      // No profiles to attach; the logs below are checked one by one.
+   }
+   const attachments: { name: string; path: string; contentType: string }[] = [
+      { name: 'server-log', path: file, contentType: 'text/plain' },
+      { name: 'browser-console-log', path: join(dir, `${token}.browser.log`), contentType: 'text/plain' },
+      ...cpuProfileSuffixes(entries, token).map(suffix => ({
+         name: 'server-cpu-profile',
+         path: join(dir, `${token}${suffix}`),
+         contentType: 'application/json'
+      }))
    ];
    for (const attachment of attachments) {
       if (!existsSync(attachment.path)) {
          continue;
       }
       try {
-         await testInfo.attach(attachment.name, { path: attachment.path, contentType: 'text/plain' });
+         await testInfo.attach(attachment.name, { path: attachment.path, contentType: attachment.contentType });
       } catch {
          // Attaching must not break the test run.
       }

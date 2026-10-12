@@ -100,7 +100,11 @@ export const SERVER_SPAWN_VALUE_FLAGS: readonly string[] = ['--server', '--cwd',
 export function logHelpLines(padTo: number, head = 'the head this boots'): string[] {
    return [
       helpLine(`${LOG_LEVEL_FLAG} <lvl>`, `Log threshold for ${head} (off|error|warn|info|debug|trace).`, padTo),
-      helpLine(`${LOG_FILE_FLAG} <file>`, `Also write ${head}'s log to <file>; {workspace} expands to the workspace.`, padTo),
+      helpLine(
+         `${LOG_FILE_FLAG} <file>`,
+         `Also write ${head}'s log to <file>; {workspace} expands to the workspace, {pid} to the process id.`,
+         padTo
+      ),
       helpLine(`${LOG_FILE_LEVEL_FLAG} <lvl>`, `Threshold for that file, which the log-level setting does not change.`, padTo)
    ].flat();
 }

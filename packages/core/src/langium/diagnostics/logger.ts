@@ -70,6 +70,28 @@ const pendingLogLines: string[] = [];
 const PLACEHOLDER_PATTERN = /\{[^}]+\}/;
 
 /**
+ * `template` with `{pid}` replaced by the process id, known from the start, and
+ * each placeholder supplied so far by its value.
+ */
+function substituteLogFilePlaceholders(template: string): string {
+   let path = template.split('{pid}').join(String(processPid() ?? 'unknown'));
+   for (const [name, value] of logFilePlaceholders) {
+      path = path.split(`{${name}}`).join(value);
+   }
+   return path;
+}
+
+/**
+ * Expand `template` the way the file-tee names its file: `{pid}` and each
+ * supplied placeholder by its value, each one still missing by
+ * `_startup-<pid>`. A file written beside the log, such as the CPU profile,
+ * names itself through this so both carry the same workspace token.
+ */
+export function expandLogFilePlaceholders(template: string): string {
+   return substituteLogFilePlaceholders(template).replace(new RegExp(PLACEHOLDER_PATTERN, 'g'), `_startup-${processPid() ?? 'unknown'}`);
+}
+
+/**
  * Recompute {@link resolvedLogFilePath} from the template + known placeholders.
  * Resolves (and flushes the pending buffer) only once no `{...}` token remains.
  */
@@ -78,10 +100,7 @@ function tryResolveLogFilePath(): void {
       resolvedLogFilePath = undefined;
       return;
    }
-   let path = logFileTemplate;
-   for (const [name, value] of logFilePlaceholders) {
-      path = path.split(`{${name}}`).join(value);
-   }
+   const path = substituteLogFilePlaceholders(logFileTemplate);
    if (PLACEHOLDER_PATTERN.test(path)) {
       resolvedLogFilePath = undefined;
       // Target is pending — guarantee the buffer is flushed even if the process
@@ -116,7 +135,8 @@ function flushPendingLogLines(): void {
 /**
  * Set the file-tee target programmatically. Pass `undefined` to disable. The
  * path may contain `{placeholder}` tokens (e.g. `{workspace}`); lines buffer
- * until every token is supplied via {@link resolveLogFilePlaceholder}.
+ * until every token is supplied via {@link resolveLogFilePlaceholder}, except
+ * `{pid}`, which is the process id from the start.
  * Called by the `LspLogger` constructor's
  * one-time `HYDRANIUM_LOG_FILE` env baseline (and by tests).
  *
@@ -156,7 +176,7 @@ export function flushLogFileFallback(): void {
    if (!logFileTemplate || resolvedLogFilePath || pendingLogLines.length === 0) {
       return;
    }
-   resolvedLogFilePath = logFileTemplate.replace(/\{[^}]+\}/g, `_startup-${processPid() ?? 'unknown'}`);
+   resolvedLogFilePath = expandLogFilePlaceholders(logFileTemplate);
    ensureLogDir(resolvedLogFilePath);
    flushPendingLogLines();
 }

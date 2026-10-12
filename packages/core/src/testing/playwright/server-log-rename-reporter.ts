@@ -31,9 +31,10 @@ export default class ServerLogRenameReporter {
          // opaque workspace token and carry no test boundaries, so nothing
          // about them says which spec they belong to.
          console.warn(
-            `[server-log] ${unattributed.length} captured log(s) belong to no test: ${unattributed.join(', ')}.\n` +
-               '[server-log] Those specs never marked a boundary — apply the `serverLog` fixture, ' +
-               'or call `markServerLog`/`attachServerLog` from the suite, or their logs cannot be read per test.'
+            `[server-log] ${unattributed.length} workspace(s) left captured logs or profiles that belong to no test: ${unattributed.join(', ')}.\n` +
+               '[server-log] A workspace token means its spec never marked a boundary — apply the `serverLog` fixture, ' +
+               'or call `markServerLog`/`attachServerLog` from the suite, or its logs cannot be read per test. ' +
+               'A `_startup-<pid>` name is a server that never learned its workspace, so no spec can claim its files.'
          );
       }
    }

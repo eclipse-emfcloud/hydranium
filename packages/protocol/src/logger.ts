@@ -155,13 +155,23 @@ export function parseLogLevel(value: unknown): LogThreshold | undefined {
  * instead of duplicating the literal string.
  */
 export const DEFAULT_LOG_LEVEL_ENV = 'HYDRANIUM_LOG_LEVEL';
-/** Env var the server reads its log file-tee target from. See {@link DEFAULT_LOG_LEVEL_ENV}. */
+/**
+ * Env var the server reads its log file-tee target from. The path may hold
+ * `{workspace}`, filled in once the server knows its workspace, and `{pid}`.
+ * See {@link DEFAULT_LOG_LEVEL_ENV}.
+ */
 export const DEFAULT_LOG_FILE_ENV = 'HYDRANIUM_LOG_FILE';
 /**
  * Env var the server reads the file tee's own threshold from, which the LSP
  * log-level setting does not change. See {@link Logger.setFileLevel}.
  */
 export const DEFAULT_LOG_FILE_LEVEL_ENV = 'HYDRANIUM_LOG_FILE_LEVEL';
+/**
+ * Env var naming the file a Node server writes its CPU profile to when it
+ * ends. Takes `{workspace}` and `{pid}` as {@link DEFAULT_LOG_FILE_ENV} does;
+ * the write replaces the file, so `{pid}` keeps one per server.
+ */
+export const DEFAULT_CPU_PROFILE_FILE_ENV = 'HYDRANIUM_CPU_PROFILE_FILE';
 
 /**
  * Human-readable formatting helpers used in log lines and diagnostic output.

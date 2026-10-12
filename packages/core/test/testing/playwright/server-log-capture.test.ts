@@ -12,12 +12,13 @@ import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmS
 import type * as NodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
+import { DEFAULT_CPU_PROFILE_FILE_ENV, DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV } from '@hydranium/protocol';
 import {
    attachServerLog,
    captureServerLog,
    type ConsoleMessageLike,
    DEFAULT_BROWSER_LOG_LEVELS_ENV,
+   DEFAULT_SERVER_CPU_PROFILE_ENV,
    DEFAULT_SERVER_LOG_ATTACH_ENV,
    DEFAULT_SERVER_LOG_DIR_ENV,
    findUnexpectedServerLogLines,
@@ -162,6 +163,20 @@ describe('captureServerLog', () => {
       }
    });
 
+   it('names a per-server CPU profile beside the log only when the run opts in', () => {
+      const previous = process.env[DEFAULT_SERVER_CPU_PROFILE_ENV];
+      try {
+         delete process.env[DEFAULT_SERVER_CPU_PROFILE_ENV];
+         expect(captureServerLog({ dir: '/tmp/logs' }).env).not.toHaveProperty(DEFAULT_CPU_PROFILE_FILE_ENV);
+         process.env[DEFAULT_SERVER_CPU_PROFILE_ENV] = '1';
+         expect(captureServerLog({ dir: '/tmp/logs' }).env[DEFAULT_CPU_PROFILE_FILE_ENV]).toBe(
+            join('/tmp/logs', '{workspace}.{pid}.cpuprofile')
+         );
+      } finally {
+         restoreEnv(DEFAULT_SERVER_CPU_PROFILE_ENV, previous);
+      }
+   });
+
    it('reads the dir from the default env var when not passed', () => {
       const previous = process.env[DEFAULT_SERVER_LOG_DIR_ENV];
       process.env[DEFAULT_SERVER_LOG_DIR_ENV] = '/tmp/from-env';
@@ -217,6 +232,16 @@ describe('renameServerLogs', () => {
       expect(existsSync(join(dir, 'claimed-spec.log'))).toBe(true);
    });
 
+   it('reports a CPU profile no test claimed, once per workspace', () => {
+      // A server that never learned its workspace names its profile
+      // `_startup-<pid>`, which no sidecar can claim.
+      writeFileSync(join(dir, '_startup-123.123.cpuprofile'), '{}');
+      writeFileSync(join(dir, 'cloud-ws-orphan.log'), 'A');
+      writeFileSync(join(dir, 'cloud-ws-orphan.456.cpuprofile'), '{}');
+
+      expect(renameServerLogs(dir).sort()).toEqual(['_startup-123', 'cloud-ws-orphan']);
+   });
+
    it('reports nothing when every log was claimed', () => {
       writeFileSync(join(dir, 'cloud-ws-abc.log'), 'A');
       writeFileSync(join(dir, 'cloud-ws-abc.spec'), 'attributes-spec');
@@ -260,6 +285,27 @@ describe('renameServerLogs', () => {
       expect(logs).toEqual(['dual-2.log', 'dual.log']);
    });
 
+   it("keeps a spec's second workspace paired across its log, browser log and profiles", () => {
+      writeFileSync(join(dir, 'cloud-ws-1.log'), 'one');
+      writeFileSync(join(dir, 'cloud-ws-1.111.cpuprofile'), 'one-profile');
+      writeFileSync(join(dir, 'cloud-ws-1.spec'), 'dual');
+      writeFileSync(join(dir, 'cloud-ws-2.log'), 'two');
+      writeFileSync(join(dir, 'cloud-ws-2.browser.log'), 'two-browser');
+      writeFileSync(join(dir, 'cloud-ws-2.222.cpuprofile'), 'two-profile');
+      writeFileSync(join(dir, 'cloud-ws-2.spec'), 'dual');
+
+      renameServerLogs(dir);
+
+      expect(readdirSync(dir).sort()).toEqual([
+         'dual-2.222.cpuprofile',
+         'dual-2.browser.log',
+         'dual-2.log',
+         'dual.111.cpuprofile',
+         'dual.log'
+      ]);
+      expect(readFileSync(join(dir, 'dual-2.222.cpuprofile'), 'utf-8')).toBe('two-profile');
+   });
+
    it('leaves a token log without a sidecar untouched', () => {
       writeFileSync(join(dir, 'orphan.log'), 'x');
       expect(() => renameServerLogs(dir)).not.toThrow();
@@ -276,6 +322,26 @@ describe('renameServerLogs', () => {
       expect(existsSync(join(dir, 'cloud-ws-abc.browser.log'))).toBe(false);
       expect(readFileSync(join(dir, 'attributes-spec.log'), 'utf-8')).toBe('backend');
       expect(readFileSync(join(dir, 'attributes-spec.browser.log'), 'utf-8')).toBe('browser');
+   });
+
+   it("renames every server's CPU profile alongside the backend log", () => {
+      writeFileSync(join(dir, 'cloud-ws-abc.log'), 'backend');
+      writeFileSync(join(dir, 'cloud-ws-abc.111.cpuprofile'), 'first');
+      writeFileSync(join(dir, 'cloud-ws-abc.222.cpuprofile'), 'second');
+      // Another workspace whose token starts with this one's stays its own,
+      // unclaimed, so it is the one reported.
+      writeFileSync(join(dir, 'cloud-ws-abc.x.333.cpuprofile'), 'other');
+      writeFileSync(join(dir, 'cloud-ws-abc.spec'), 'attributes-spec');
+
+      expect(renameServerLogs(dir)).toEqual(['cloud-ws-abc.x']);
+
+      expect(readdirSync(dir).sort()).toEqual([
+         'attributes-spec.111.cpuprofile',
+         'attributes-spec.222.cpuprofile',
+         'attributes-spec.log',
+         'cloud-ws-abc.x.333.cpuprofile'
+      ]);
+      expect(readFileSync(join(dir, 'attributes-spec.222.cpuprofile'), 'utf-8')).toBe('second');
    });
 });
 
@@ -348,6 +414,21 @@ describe('attachServerLog', () => {
       expect(attached).toHaveLength(1);
       expect(attached[0].name).toBe('server-log');
       expect(attached[0].options.path).toBe(join(dir, 'cloud-ws-abc.log'));
+   });
+
+   it('attaches every CPU profile a server of the workspace has written', async () => {
+      writeFileSync(join(dir, 'cloud-ws-abc.log'), 'server output\n');
+      writeFileSync(join(dir, 'cloud-ws-abc.111.cpuprofile'), '{}');
+      writeFileSync(join(dir, 'cloud-ws-abc.222.cpuprofile'), '{}');
+      writeFileSync(join(dir, 'cloud-ws-abc.x.333.cpuprofile'), '{}');
+
+      await attachServerLog(fakeTestInfo('broken test', 'failed'), '/tmp/cloud-ws-abc', { dir });
+
+      expect(attached.map(attachment => attachment.name)).toEqual(['server-log', 'server-cpu-profile', 'server-cpu-profile']);
+      expect(attached.slice(1).map(attachment => attachment.options)).toEqual([
+         { path: join(dir, 'cloud-ws-abc.111.cpuprofile'), contentType: 'application/json' },
+         { path: join(dir, 'cloud-ws-abc.222.cpuprofile'), contentType: 'application/json' }
+      ]);
    });
 
    it('does not attach on a passing test', async () => {

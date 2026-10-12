@@ -20,7 +20,7 @@ import {
 export interface LogOptions {
    /** Threshold for the client sink; the server's log-level setting replaces it. */
    readonly logLevel?: LogThreshold;
-   /** File the server tees its log to; `{workspace}` expands once it is known. */
+   /** File the server tees its log to; `{workspace}` expands once it is known, `{pid}` from the start. */
    readonly logFile?: string;
    /** The file's own threshold, which the log-level setting does not change. */
    readonly logFileLevel?: LogThreshold;
