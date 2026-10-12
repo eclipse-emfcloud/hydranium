@@ -155,6 +155,9 @@ describe('DefaultFileSystemProvider.mtimeMs', () => {
  * `writeFile` under two racing writers. Contract:
  * - every state a reader can observe is one COMPLETE revision, never a
  *   truncated or half-written file;
+ * - on Windows only, a reader can also find the file missing or refused for a
+ *   moment, since the replacing rename leaves the name unresolvable while it
+ *   runs; elsewhere the file never vanishes;
  * - nothing is serialised, so which of the two writers wins is not asserted —
  *   a lost write is the framework's documented single-writer limit, and an
  *   assertion that both survived would test a promise nobody made.
@@ -174,6 +177,9 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
    const before = 'c'.repeat(SIZE);
    const first = 'a'.repeat(SIZE);
    const second = 'b'.repeat(SIZE);
+   // What a Windows reader gets inside the replacing rename's gap: the name
+   // missing, or the replaced file refused.
+   const WINDOWS_REPLACE_GAP = new Set(['ENOENT', 'EPERM']);
 
    beforeAll(() => {
       provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
@@ -203,10 +209,13 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
                if (!complete.has(seen)) {
                   torn.push(shape(seen));
                }
-            } catch {
-               // ENOENT is itself a torn state here: the file exists before the
-               // first round and must never vanish, so record it as one.
-               torn.push('absent');
+            } catch (err: unknown) {
+               // Any other failure is torn, with its errno, so a new code shows
+               // what the reader hit.
+               const code = err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : String(err);
+               if (!(process.platform === 'win32' && WINDOWS_REPLACE_GAP.has(code))) {
+                  torn.push(`unreadable (${code})`);
+               }
             }
             // A 1ms yield rather than `setImmediate`. Each sample reads two
             // megabytes, so a same-tick loop holds the destination open for
