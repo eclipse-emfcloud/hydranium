@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type HydraniumAstNodeDescriptionProvider, HydraniumScopeComputation, type NameProvider } from '@hydranium/core';
+import { HydraniumScopeComputation } from '@hydranium/core';
 import type { AstNode, AstNodeDescription, LangiumDocument } from '@hydranium/langium';
 import { isEntity, isEnumeration, isValueType } from './ast.js';
 
@@ -62,11 +62,10 @@ export class OrderFlowScopeComputation extends HydraniumScopeComputation {
       if (projectId === undefined) {
          return;
       }
-      const documentName = (this.nameProvider as NameProvider).getDocumentQualifiedName(node);
+      const documentName = this.nameProvider.getDocumentQualifiedName(node);
       if (!documentName) {
          return;
       }
-      const descriptions = this.descriptions as HydraniumAstNodeDescriptionProvider;
-      exports.push(descriptions.createPublic({ node, name: documentName, document, projectId }));
+      exports.push(this.descriptions.createPublic({ node, name: documentName, document, projectId }));
    }
 }

@@ -232,9 +232,22 @@ describe('HydraniumDocumentValidator', () => {
          expect(diag.element).toBe(`/parent${TransferDiagnostic.ELEMENT_INDEX_SEPARATOR}5`);
       });
 
+      it('gives the root its own path, "", without a warning', () => {
+         const warnSpy = vi.spyOn(DefaultTracer.prototype, 'warn');
+         const root = makeFakeAstNode({ $type: 'Root' });
+         // Langium's locator answers '' for the root, which is the root's path.
+         const validator = new TestValidator({ getAstNodePath: () => '' }, makeLogger());
+         expect(validator.callToDiagnostic('error', 'oops', diagnosticInfo(root)).element).toBe('');
+         expect(validator.callToDiagnostic('error', 'oops', diagnosticInfo(root, { property: 'refs', index: 1 })).element).toBe(
+            `${TransferDiagnostic.ELEMENT_SEGMENT_SEPARATOR}refs${TransferDiagnostic.ELEMENT_INDEX_SEPARATOR}1`
+         );
+         expect(warnSpy).not.toHaveBeenCalled();
+         warnSpy.mockRestore();
+      });
+
       it('returns element "" and warns when neither the node nor its container can be located', () => {
          const warnSpy = vi.spyOn(DefaultTracer.prototype, 'warn');
-         const node = makeFakeAstNode({ $type: 'Orphan' });
+         const node = makeFakeAstNode({ $type: 'Orphan', $container: makeFakeAstNode({ $type: 'Element' }) });
          // getAstNodePath returns '' for everything -> directPath '' and containerPath ''.
          const validator = new TestValidator({ getAstNodePath: () => '' }, makeLogger());
          const diag = validator.callToDiagnostic('error', 'oops', diagnosticInfo(node, { property: 'name', index: 1 }));

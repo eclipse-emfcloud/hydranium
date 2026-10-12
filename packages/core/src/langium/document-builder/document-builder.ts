@@ -7,7 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type Clock, type LogThreshold, type MaybeObservableValue, ObservableValue, type Tracer } from '@hydranium/protocol';
+import {
+   type Clock,
+   type LogThreshold,
+   type MaybeObservableValue,
+   ObservableValue,
+   type Tracer,
+   describeErrorWithStack
+} from '@hydranium/protocol';
 import {
    type AstNode,
    type BuildOptions,
@@ -356,7 +363,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          try {
             listener(event);
          } catch (error: unknown) {
-            this.tracer.error(`A build-ended listener failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+            this.tracer.error(`A build-ended listener failed: ${describeErrorWithStack(error)}`);
          }
       }
    }
@@ -488,12 +495,15 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          // land while a busy workspace keeps cancelling builds.
          let stalledRequeues = 0;
          let lastRequeueState: DocumentState | undefined;
-         const giveUp = (reason: string): void => {
+         let settled = false;
+         let cancelled = false;
+         const giveUp = (reason: string, cause?: unknown): void => {
             cleanup();
             reject(
                new Error(
                   `Gave up building ${this.formatUri(uri)} to '${DocumentState[state]}' ` +
-                     `(at '${DocumentState[document.state]}'): ${reason}`
+                     `(at '${DocumentState[document.state]}'): ${reason}`,
+                  { cause }
                )
             );
          };
@@ -517,9 +527,16 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                stalledRequeues = 0;
                lastRequeueState = document.state;
             }
-            void this.requeueOrphaned(document, state, reason).then(built => {
-               if (!built && rejectWhenStuck) {
-                  giveUp('its recovery build failed');
+            this.requeueOrphaned(document, state, reason).catch((error: unknown) => {
+               const line = `A recovery build of ${this.formatUri(uri)} failed. ${describeErrorWithStack(error)}`;
+               if (rejectWhenStuck && !settled) {
+                  giveUp('its recovery build failed', error);
+               } else if (settled && !cancelled) {
+                  // The wait ended with an outcome its caller reports, and the retry warned.
+                  this.tracer.withUri(uri.toString()).debug(line);
+               } else {
+                  // The waiter has gone, or waits on its cancellation token alone, so nothing else reports this.
+                  this.tracer.withUri(uri.toString()).error(line);
                }
             });
          };
@@ -559,10 +576,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          };
          const buildDisposable = this.onBuildEnded(buildEnded);
          const cancelDisposable = cancelToken.onCancellationRequested(() => {
+            cancelled = true;
             cleanup();
             reject(OperationCancelled);
          });
          const cleanup = (): void => {
+            settled = true;
             phaseDisposable.dispose();
             skipDisposable.dispose();
             buildDisposable.dispose();
@@ -628,11 +647,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * the build neither runs beside a locked one nor cancels the build a
     * re-queue is fired from, and skipped if a write that ran meanwhile carried
     * the document to `state`. The waiter resolves off the resulting phase
-    * notification; the answer only tells it whether the build was given up.
+    * notification; the promise only tells it whether the build was given up.
     */
-   protected requeueOrphaned(document: LangiumDocument, state: DocumentState, reason: string): Promise<boolean> {
+   protected requeueOrphaned(document: LangiumDocument, state: DocumentState, reason: string): Promise<void> {
       const tracer = this.tracer.withUri(document.uri.toString());
-      tracer.info(`Re-queuing orphaned document (at '${DocumentState[document.state]}', needs '${DocumentState[state]}'): ${reason}`);
+      tracer.debug(`Re-queuing orphaned document (at '${DocumentState[document.state]}', needs '${DocumentState[state]}'): ${reason}`);
       return this.versionSyncService().requestRecoveryBuild(document.uri, {
          // Skipped on purpose: a waiting caller is answered sooner, at the cost
          // of a possible duplicate build once the debounce fires.
@@ -1391,7 +1410,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       if (cancelledListeners > 0) {
          this.tracer
             .withUri(document.uri.toString())
-            .info(this.cancelledDocumentPhaseLine(document, state, cancelledListeners, listeners.length));
+            .debug(this.cancelledDocumentPhaseLine(document, state, cancelledListeners, listeners.length));
       }
       if (totalMs >= this.slowPhaseMs.value) {
          this.log(this.slowDocumentPhaseLine(document, state, listeners, perListenerMs, totalMs));

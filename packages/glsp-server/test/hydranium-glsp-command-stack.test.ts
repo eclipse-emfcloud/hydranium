@@ -8,9 +8,10 @@
  ********************************************************************************/
 
 import 'reflect-metadata';
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { Container } from 'inversify';
-import { type Command, Logger as GlspLogger, ModelState } from '@eclipse-glsp/server';
+import { type Command, DefaultCommandStack, Logger as GlspLogger, ModelState } from '@eclipse-glsp/server';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import { HydraniumGlspCommandStack } from '../src/command/hydranium-glsp-command-stack.js';
@@ -22,9 +23,9 @@ const SECONDARY = 'file:///secondary.b';
 const FOREIGN = 'file:///foreign.a';
 
 /** A command stack over a store where `opens` are held by client id, and `dirty` are the dirty URIs. */
-function makeStack(opens: Record<string, string[]>, dirty: Set<string>): HydraniumGlspCommandStack {
+function makeStack(opens: Record<string, string[]>, dirty: Set<string>, logger = makeNoopGlspLogger()): HydraniumGlspCommandStack {
    const container = new Container();
-   container.bind(GlspLogger).toConstantValue(makeNoopGlspLogger());
+   container.bind(GlspLogger).toConstantValue(logger);
    container.bind(ModelState).toConstantValue({ clientId: 'diagram-1' } as unknown as ModelState);
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(
       makeNoopSharedServices<ServerSharedServices>({
@@ -71,5 +72,31 @@ describe('HydraniumGlspCommandStack', () => {
 
       expect(stack.isDirty).toBe(true);
       expect(stack.canUndo()).toBe(true);
+   });
+
+   it('flushes on a failed command and leaves the log to whoever ends the failure', async () => {
+      const errors: unknown[] = [];
+      const logger = makeNoopGlspLogger();
+      logger.error = (...args: unknown[]): void => void errors.push(args);
+      const stack = makeStack({ [OWN]: ['diagram-1'] }, new Set(), logger);
+      await stack.execute(noopCommand);
+      const failure = new Error('step failed');
+
+      await expect(stack.execute({ ...noopCommand, execute: () => Promise.reject(failure) })).rejects.toBe(failure);
+
+      expect(stack.canUndo()).toBe(false);
+      expect(errors).toEqual([]);
+   });
+});
+
+describe('upstream handleError', () => {
+   it('still matches the body HydraniumGlspCommandStack was lifted from', () => {
+      // Whitespace-insensitive so a reformat alone does not redden.
+      const body = DefaultCommandStack.prototype['handleError'].toString().replace(/\s+/g, ' ').trim();
+      expect(
+         createHash('sha256').update(body).digest('hex'),
+         'upstream @eclipse-glsp/server changed DefaultCommandStack.handleError — re-lift the body into ' +
+            'HydraniumGlspCommandStack (keeping the flush without the error line) and update this digest'
+      ).toBe('9edbf2ea5a8565a8ee15d8ae64a6d873488ba9bf266ac7ad799b6f8d82d9e2eb');
    });
 });

@@ -303,6 +303,48 @@ sentence; a number or a technical error string is a safe parameter. Where a
 message would quote a name the UI owns, such as a command label, offer the
 command as an action instead.
 
+## Logs and failures
+
+**A problem reaches each reader once.** The client hears of it through its
+rejection or notification, and the log through one line, written where the
+outcome is decided. Code that rethrows does not log, since whoever ends the
+failure logs it again. A failure that arrives after the wait for it ended is an
+`error` only when the waiter has gone, cancelled or timed out; a waiter that
+ended with an outcome of its own reports that, so the late line is `debug`.
+Context goes into the error first, such as the versions a `ConflictError`
+carries or the documents a save failed for; a line beside it is for context
+the error cannot carry. The line that ends a thrown error takes
+`describeErrorWithStack` at any level, since a handled throw from adopter code
+needs its frame as much as a failure does; a conflict declined by design
+carries its versions instead. The client takes `describeError`, because only
+the log's reader can act on a stack.
+
+**A level states what was done about the problem**, so the reader of the
+default log, who runs an adopter's server and does not know its internals, can
+tell what needs them:
+
+- `error`: requested work failed.
+- `warn`: an anomaly was handled, or work was declined by design, such as a
+  conflict, a policy or a cap. A clean run logs none, so a `warn` always asks
+  for attention; routine concurrency and teardown are `debug`.
+- `info`: a milestone that reader would recognise.
+- `debug` and `trace`: diagnosis. The level decides whether a line is built,
+  never which code runs, because the e2e server log is captured at `debug` and
+  must exercise the code a default run takes. A microtask or timing hop to
+  build the line is accepted.
+
+A startup failure is logged by the code that owns it: a launcher given a
+logger logs its own, the workspace manager a failed workspace initialization;
+a rejected `started` is control flow for its caller.
+
+**The e2e tier enforces it.** With `serverLogClean` set, `serverLogFixtures`
+fails a spec whose server log holds a `Warn` or `Error` line that
+`serverLogAllowlist` does not match; that allowlist is keyed by the reason
+each line is expected. The order-flow e2e fixtures set it. Unit and
+integration tiers inject faults on purpose, so their output is not gated. The
+check reads the server's log file, which Langium's own `console.error` lines
+do not reach.
+
 ## Test support
 
 Commands, the runner and timeouts are in [Testing](testing.md).

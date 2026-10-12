@@ -26,6 +26,7 @@ import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server
 import { startGlspServer } from '@hydranium/glsp-server/node';
 import { NodeFileSystem, publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { describeErrorWithStack } from '@hydranium/protocol';
 // The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one. It is
 // signature-compatible and delegates straight through; what it adds first is
 // `assertLspHeadComposed`, which fails the start if the LSP head's SHARED module
@@ -61,19 +62,22 @@ const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: s
    return { dispose: () => undefined };
 });
 dataServer.started
-   .then(() => {
-      const { port } = dataServer;
-      if (port === undefined) {
-         // `started` resolves only once the address is resolved, so this is
-         // unreachable; a non-null assertion in its place would publish
-         // `undefined`, which the host cannot tell from an unreachable port.
-         throw new Error('the data head started without a resolved port');
-      }
-      publishPortOnLspConnection(shared.lsp.Connection, BOOKSTORE_DATA_SERVER_PORT_COMMAND, port);
-   })
+   .then(
+      () => {
+         const { port } = dataServer;
+         if (port === undefined) {
+            // `started` resolves only once the address is resolved, so this is
+            // unreachable; a non-null assertion in its place would publish
+            // `undefined`, which the host cannot tell from an unreachable port.
+            throw new Error('the data head started without a resolved port');
+         }
+         publishPortOnLspConnection(shared.lsp.Connection, BOOKSTORE_DATA_SERVER_PORT_COMMAND, port);
+      },
+      // The launcher logged its own bind failure; the rejection is control flow.
+      () => undefined
+   )
    .catch((error: unknown) => {
-      const reason = error instanceof Error ? error.message : String(error);
-      shared.Logger.error(`[ModelServer] Could not publish the data-server port: ${reason}`);
+      shared.Logger.error(`[ModelServer] Could not publish the data-server port: ${describeErrorWithStack(error)}`);
    });
 
 // GLSP head on the same shared workspace. `HydraniumGlspAppModule` is used

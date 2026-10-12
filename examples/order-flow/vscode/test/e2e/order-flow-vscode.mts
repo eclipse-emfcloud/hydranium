@@ -45,7 +45,8 @@ export const test = base.extend<OrderFlowFixtures>({
    // eslint-disable-next-line no-empty-pattern
    serverLogWorkspace: async ({}, use) => {
       await use(activeWorkspacePath);
-   }
+   },
+   serverLogClean: [true, { option: true }]
 });
 
 /** A running VS Code and what it owns. */

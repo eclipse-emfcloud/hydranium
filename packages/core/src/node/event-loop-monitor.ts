@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { describeErrorWithStack } from '@hydranium/protocol';
 import { formatMemory } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { formatServerState } from './server-state-snapshot.js';
@@ -74,7 +75,7 @@ export function startEventLoopMonitor(shared: ServerSharedServicesMinimal, optio
             try {
                onStallSnapshot(maxMs);
             } catch (error) {
-               logger.warn(`Stall snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+               logger.warn(`Stall snapshot failed: ${describeErrorWithStack(error)}`);
             }
          }
       }

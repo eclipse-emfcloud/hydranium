@@ -17,7 +17,8 @@ import {
    type ModelVersion,
    type TextVersion,
    type TransferElement,
-   type VersionedModel
+   type VersionedModel,
+   describeErrorWithStack
 } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { type OperationTransition, openOperationOf } from '../command/hydranium-glsp-operation-command.js';
@@ -292,7 +293,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
                   await session.close(uri);
                }
             } catch (closeError: unknown) {
-               this.logger.warn(`Could not close ${uri}, created for a write that failed: ${String(closeError)}`);
+               this.logger.warn(`Could not close ${uri}, created for a write that failed: ${describeErrorWithStack(closeError)}`);
             }
          }
          throw error;

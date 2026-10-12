@@ -7,7 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Debouncer, Deferred, type Logger, ObservableValue, type MaybeObservableValue, TIMED_OUT } from '@hydranium/protocol';
+import {
+   Debouncer,
+   Deferred,
+   type Logger,
+   ObservableValue,
+   type MaybeObservableValue,
+   TIMED_OUT,
+   describeErrorWithStack
+} from '@hydranium/protocol';
 import { URI, UriUtils } from '@hydranium/langium';
 import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
@@ -221,7 +229,9 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             for (const change of filtered.changes) {
                this.textDocuments
                   .reloadDiskBaseline(change.uri)
-                  .catch((err: unknown) => this.logger.error(`Disk baseline not reloaded for ${change.uri}. ${String(err)}`));
+                  .catch((err: unknown) =>
+                     this.logger.error(`Disk baseline not reloaded for ${change.uri}. ${describeErrorWithStack(err)}`)
+                  );
             }
             // External file-system changes are authoritative — overwrite any
             // pending reason (typically empty here; could be `didChangeContent`
@@ -238,7 +248,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             // `unhandledRejection` listener, which reports neither the URIs nor
             // the fact that a watched-file rebuild was dropped — leaving the
             // workspace diverged from disk with no diagnostic and no retry.
-            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+            const detail = describeErrorWithStack(err);
             const uris = params.changes.map(change => change.uri).join(', ');
             this.logger.error(`Watched-file update dropped for ${uris}. ${detail}`);
          });
@@ -293,9 +303,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             });
          } catch (err) {
             cap.dispose();
-            this.logger.error(
-               `willSaveWaitUntil for ${uri} answered without waiting. ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
-            );
+            this.logger.error(`willSaveWaitUntil for ${uri} answered without waiting. ${describeErrorWithStack(err)}`);
             release();
             resolve([]);
          }
@@ -417,7 +425,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
             if (isConnectionGoneError(err)) {
                return;
             }
-            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+            const detail = describeErrorWithStack(err);
             this.logger.error(`Workspace initialization failed. Could not perform document update. ${detail}`);
          });
    }

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Deferred, type Project, type Tracer, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
+import { Deferred, type Project, type Tracer, UNQUALIFIED_PROJECT_REFERENCE, describeErrorWithStack } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
@@ -226,7 +226,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       try {
          entries = await this.fileSystemProvider.readDirectory(folder);
       } catch (error) {
-         this.tracer.warn(`Failed to read directory ${folder.toString()}: ${error}`);
+         this.tracer.warn(`Failed to read directory ${folder.toString()}: ${describeErrorWithStack(error)}`);
          return;
       }
       for (const entry of entries) {
@@ -395,7 +395,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          }
          return project;
       } catch (error) {
-         this.tracer.error(`Failed to parse ${this.conceptName()} descriptor at ${uri.toString()}: ${error}`);
+         this.tracer.error(`Failed to parse ${this.conceptName()} descriptor at ${uri.toString()}: ${describeErrorWithStack(error)}`);
          return undefined;
       }
    }
@@ -620,7 +620,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          try {
             listener(event);
          } catch (error) {
-            this.tracer.error(`Project change listener failed: ${error}`);
+            this.tracer.error(`Project change listener failed: ${describeErrorWithStack(error)}`);
          }
       }
    }

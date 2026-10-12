@@ -31,7 +31,7 @@
  * parser rejects is an invocation that fails for no visible reason.
  */
 
-import type { LogThreshold } from '@hydranium/protocol';
+import { describeError, type LogThreshold } from '@hydranium/protocol';
 import { statSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -303,7 +303,7 @@ export function resolveWorkspaceArgument(workspace: string, commandName: string,
    try {
       stats = statSync(resolved, { throwIfNoEntry: false });
    } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = describeError(err);
       onError(`<workspace> is not reachable: '${workspace}' resolved to ${resolved} (${detail}) ${help}`);
    }
    if (stats === undefined) {
@@ -322,7 +322,7 @@ function toWorkspacePath(workspace: string, commandName: string, onError: UsageE
    try {
       return fileURLToPath(workspace);
    } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = describeError(err);
       onError(`<workspace> is not a usable file URI: '${workspace}' (${detail}) (hydranium-cli ${commandName} --help)`);
    }
 }

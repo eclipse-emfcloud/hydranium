@@ -35,12 +35,14 @@ import {
 import { ContainerModule, inject, injectable } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
+import { asModelVersion, ConflictError, ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
 import { HydraniumGlspServer } from '../src/launcher/hydranium-glsp-server.js';
+import { DiagramEditDroppedError } from '../src/command/diagram-edit-dropped-error.js';
 import { makeGlspHarness } from '../src/testing/glsp-harness.js';
+import { waitFor } from '@hydranium/protocol/testing';
 
 /** Reaches the protected projection without a container. */
 class ProbeServer extends HydraniumGlspServer {
@@ -87,9 +89,9 @@ describe('HydraniumGlspServer.requestFailureDetail', () => {
 // ---------------------------------------------------------------------------
 
 /** Whitespace-insensitive so a reformat alone does not redden. */
-function normalizedUpstreamBody(): string {
-   const prototype = DefaultGLSPServer.prototype as unknown as { handleClientRequest: (...args: never[]) => unknown };
-   return prototype.handleClientRequest.toString().replace(/\s+/g, ' ').trim();
+function normalizedUpstreamBody(method: 'handleClientRequest' | 'handleProcessError' | 'process' = 'handleClientRequest'): string {
+   const prototype = DefaultGLSPServer.prototype as unknown as Record<typeof method, (...args: never[]) => unknown>;
+   return prototype[method].toString().replace(/\s+/g, ' ').trim();
 }
 
 describe('DefaultGLSPServer.handleClientRequest', () => {
@@ -107,6 +109,28 @@ describe('DefaultGLSPServer.handleClientRequest', () => {
    // make the whole override redundant.
    it('still computes the reject detail from the cause alone', () => {
       expect(normalizedUpstreamBody()).toContain('error instanceof glsp_server_error_1.GLSPServerError');
+   });
+});
+
+describe('upstream handleProcessError', () => {
+   it('still matches the body HydraniumGlspServer was lifted from', () => {
+      const digest = createHash('sha256').update(normalizedUpstreamBody('handleProcessError')).digest('hex');
+      expect(
+         digest,
+         'upstream @eclipse-glsp/server changed DefaultGLSPServer.handleProcessError — re-lift the body into ' +
+            'HydraniumGlspServer (keeping the single log line) and update this digest'
+      ).toBe('dc3aec007c202c28d72bf37ee3cafe83d5d084b7a6022ea41dfc00b82cabb16c');
+   });
+});
+
+describe('upstream process', () => {
+   it('still matches the body HydraniumGlspServer was lifted from', () => {
+      const digest = createHash('sha256').update(normalizedUpstreamBody('process')).digest('hex');
+      expect(
+         digest,
+         'upstream @eclipse-glsp/server changed DefaultGLSPServer.process — re-lift the body into ' +
+            'HydraniumGlspServer (keeping the debug line and the ended-session check) and update this digest'
+      ).toBe('9a24decccecaaa98830a39b7089dfd7c669ae693981d29ad0cd415d8beb15769');
    });
 });
 
@@ -271,11 +295,13 @@ class ClosedConnectionServer extends HydraniumGlspServer {
       throw new Error('Connection is closed.');
    }
 
-   /** Sends a request of `kind` whose handler rejects. */
+   /** Sends a request of `kind` whose handler rejects, from a session still open. */
    failRequest(kind: string): Promise<void> {
       const clientSession = {
+         id: 'client_1',
          actionDispatcher: { request: () => Promise.reject(new Error('The diagram has closed')) }
       } as unknown as ClientSession;
+      this.clientSessions.set('client_1', clientSession);
       return this.handleClientRequest(clientSession, { kind, requestId: 'request_1' }, 'client_1');
    }
 }
@@ -287,6 +313,172 @@ describe('a failed request on a closed client connection', () => {
 
    it('settles without throwing for a save request, whose error notification also fails to send', async () => {
       await expect(new ClosedConnectionServer().failRequest(RequestSaveModelAction.KIND)).resolves.toBeUndefined();
+   });
+});
+
+// ---------------------------------------------------------------------------
+// One failure reaches the log once: GLSP's own handling logs a failed action
+// twice, and a failed save request three times.
+// ---------------------------------------------------------------------------
+
+/** A server whose log and client are recorded. */
+class RecordingServer extends HydraniumGlspServer {
+   readonly errors: string[] = [];
+   readonly warnings: string[] = [];
+   readonly infos: string[] = [];
+   readonly debugs: string[] = [];
+   readonly sent: ActionMessage[] = [];
+
+   constructor() {
+      super();
+      this.initializeResult = { protocolVersion: '1.0.0', serverActions: {} };
+      const logger = new NullLogger();
+      logger.info = (message: string): void => void this.infos.push(message);
+      logger.debug = (message: string): void => void this.debugs.push(message);
+      logger.error = (message: string, ...params: unknown[]): void => {
+         this.errors.push([message, ...params.map(String)].join(' '));
+      };
+      logger.warn = (message: string, ...params: unknown[]): void => {
+         this.warnings.push([message, ...params.map(String)].join(' '));
+      };
+      this.logger = logger;
+      this.glspClientProxy = { process: (message: ActionMessage): void => void this.sent.push(message) };
+   }
+
+   protected override sendResponseToClient(): void {
+      /* the reject is not under test */
+   }
+
+   failAction(reason: unknown): void {
+      void this.handleProcessError({ clientId: 'client_1', action: { kind: 'someAction' } }, reason);
+   }
+
+   failRequest(kind: string, reason: unknown): Promise<void> {
+      const clientSession = this.open({ request: () => Promise.reject(reason) });
+      return this.handleClientRequest(clientSession, { kind, requestId: 'request_1' }, 'client_1');
+   }
+
+   /** Open the session `client_1` over `dispatcher`, as `initializeClientSession` does. */
+   open(dispatcher: object): ClientSession {
+      const clientSession = { id: 'client_1', actionDispatcher: dispatcher } as unknown as ClientSession;
+      this.clientSessions.set('client_1', clientSession);
+      return clientSession;
+   }
+
+   /** End `client_1`, as a dispose or a reopen does before the dispatcher rejects what it held. */
+   end(): void {
+      this.clientSessions.delete('client_1');
+   }
+}
+
+describe('HydraniumGlspServer logging the failures it ends', () => {
+   it('logs a failed action once, with its stack, and still notifies the client', () => {
+      const server = new RecordingServer();
+      server.failAction(new Error('boom'));
+      expect(server.errors).toHaveLength(1);
+      expect(server.errors[0]).toMatch(/someAction[\s\S]*boom[\s\S]*\n\s+at /);
+      expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it('warns once for a conflict, which is declined rather than failed, naming both versions', () => {
+      const server = new RecordingServer();
+      server.failAction(new ConflictError('file:///a.x', asModelVersion(1), 2));
+      expect(server.errors).toEqual([]);
+      expect(server.warnings).toHaveLength(1);
+      expect(server.warnings[0]).toContain('model v1 / text v2');
+   });
+
+   it('leaves a dropped diagram edit to the warning its reconcile logged, and still notifies the client', () => {
+      const server = new RecordingServer();
+      server.failAction(new DiagramEditDroppedError('The undo of an operation was dropped'));
+      expect({ errors: server.errors, warnings: server.warnings }).toEqual({ errors: [], warnings: [] });
+      expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it('logs a failed request once', async () => {
+      const server = new RecordingServer();
+      await server.failRequest('someRequest', new Error('boom'));
+      expect(server.errors).toHaveLength(1);
+   });
+
+   it('logs a failed save request once, and still notifies, when its reject cannot be sent', async () => {
+      class RejectFailingServer extends RecordingServer {
+         protected override sendResponseToClient(): void {
+            throw new Error('reject refused');
+         }
+      }
+      const server = new RejectFailingServer();
+      await server.failRequest(RequestSaveModelAction.KIND, new Error('disk full'));
+      expect(server.errors.filter(line => line.includes('disk full'))).toHaveLength(1);
+      expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it('logs a failed save request once, beside the notification it adds', async () => {
+      const server = new RecordingServer();
+      await server.failRequest(RequestSaveModelAction.KIND, new Error('disk full'));
+      expect(server.errors).toHaveLength(1);
+      expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it('recognises a dropped diagram edit thrown by another installed copy of this package, by its name', () => {
+      const server = new RecordingServer();
+      const fromOtherCopy = Object.assign(new Error('The undo of an operation was dropped'), { name: 'DiagramEditDroppedError' });
+      server.failAction(fromOtherCopy);
+      expect({ errors: server.errors, warnings: server.warnings }).toEqual({ errors: [], warnings: [] });
+   });
+
+   it('names the request id in the one line about a failed save request, as for any failed request', async () => {
+      const server = new RecordingServer();
+      await server.failRequest(RequestSaveModelAction.KIND, new Error('disk full'));
+      expect(server.errors).toHaveLength(1);
+      expect(server.errors[0]).toContain(`'${RequestSaveModelAction.KIND}' (request_1)`);
+   });
+
+   it('logs each action it processes at debug, since that is diagnosis', () => {
+      const server = new RecordingServer();
+      server.open({ dispatch: () => Promise.resolve() });
+      server.process({ clientId: 'client_1', action: { kind: 'someAction' } });
+      expect(server.infos).toEqual([]);
+      expect(server.debugs.some(line => line.includes('someAction'))).toBe(true);
+   });
+
+   it('logs a request its ended session rejected at debug', async () => {
+      const server = new RecordingServer();
+      const clientSession = server.open({
+         request: () => {
+            server.end();
+            return Promise.reject(new Error("Request 'request_1' cancelled: dispatcher disposed"));
+         }
+      });
+      await server['handleClientRequest'](clientSession, { kind: 'someRequest', requestId: 'request_1' }, 'client_1');
+      expect(server.errors).toEqual([]);
+      expect(server.debugs.some(line => line.includes('dispatcher disposed'))).toBe(true);
+   });
+
+   it('logs an action its ended session rejected at debug, and tells no client', async () => {
+      const server = new RecordingServer();
+      server.open({
+         dispatch: () => {
+            server.end();
+            return Promise.reject(new Error('ActionDispatcher disposed'));
+         }
+      });
+      server.process({ clientId: 'client_1', action: { kind: 'someAction' } });
+      await waitFor(() => server.debugs.some(line => line.includes('ActionDispatcher disposed')));
+      expect({ errors: server.errors, sent: server.sent }).toEqual({ errors: [], sent: [] });
+   });
+
+   it('logs an action rejected after its session was opened again at debug, and tells the new one nothing', async () => {
+      const server = new RecordingServer();
+      server.open({
+         dispatch: () => {
+            server.open({});
+            return Promise.reject(new Error('ActionDispatcher disposed'));
+         }
+      });
+      server.process({ clientId: 'client_1', action: { kind: 'someAction' } });
+      await waitFor(() => server.debugs.some(line => line.includes('ActionDispatcher disposed')));
+      expect({ errors: server.errors, sent: server.sent }).toEqual({ errors: [], sent: [] });
    });
 });
 

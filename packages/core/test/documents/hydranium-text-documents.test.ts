@@ -111,7 +111,7 @@ function makeSharedServices(
          LangiumDocuments: makeStubLangiumDocuments(),
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
-         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
+         VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
          WorkspaceManager: { workspaceInitialized: Promise.resolve() },
          // The store always resolves keys through the canonicalizer; the framework
          // default (syntactic normalize) is what production binds absent a stronger identity.
@@ -583,9 +583,11 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
          const second = await docs.applyEditToLanguageClient(URI, 'a\nB\nC\n');
 
          expect(second).toEqual({ applied: false });
-         expect(logger.warnCalls.map(call => call.message)).toEqual([
+         // Routine while the user types, so diagnosis only.
+         expect(logger.warnCalls).toEqual([]);
+         expect(logger.debugCalls.map(call => call.message)).toContain(
             'Language client refused applyEdit addressed at version 2 (it last declared version 1)'
-         ]);
+         );
       });
 
       it('is addressed at a declared version that has overtaken the pushed one', async () => {
@@ -1297,6 +1299,19 @@ describe('HydraniumTextDocuments query helpers', () => {
    });
 });
 
+describe('HydraniumTextDocuments edit logging', () => {
+   it('logs each edit as diagnosis, since one comes with every keystroke', () => {
+      const { docs, logger } = makeDocs();
+      openInLanguageClient(docs, 'v1\n');
+
+      docs.notifyDidChangeTextDocument({ textDocument: { uri: URI, version: 2 }, contentChanges: [{ text: 'v2\n' }] }, LANGUAGE_CLIENT_ID);
+      docs.applyContentChange(URI, 'v3\n', 'form');
+
+      expect(logger.infoCalls.filter(call => call.message.startsWith('Update to version'))).toEqual([]);
+      expect(logger.debugCalls.filter(call => call.message.startsWith('Update to version'))).toHaveLength(2);
+   });
+});
+
 describe('HydraniumTextDocuments.getAuthor missing-version logging', () => {
    it('logs "Could not detect author" only when history exists but the version is absent', () => {
       // Kills getAuthor's `!clientId && history` guard and its message:
@@ -1967,7 +1982,7 @@ describe('HydraniumTextDocuments.get canonical lookup under symlink divergence',
             LangiumDocuments: makeStubLangiumDocuments(),
             DocumentBuilder: makeStubDocumentBuilder(),
             // The revert's fallback build is not under test here.
-            VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
+            VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
             WorkspaceManager: { workspaceInitialized: Promise.resolve() },
             DocumentUriPolicy: linkAware
          }
@@ -2035,7 +2050,7 @@ describe('HydraniumTextDocuments.get canonical lookup under symlink divergence',
             LangiumDocuments: makeStubLangiumDocuments(),
             DocumentBuilder: makeStubDocumentBuilder(),
             // The revert's fallback build is not under test here.
-            VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
+            VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
             WorkspaceManager: { workspaceInitialized: Promise.resolve() },
             DocumentUriPolicy: linkAware
          }

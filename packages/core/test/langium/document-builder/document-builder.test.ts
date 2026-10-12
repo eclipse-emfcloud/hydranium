@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { waitFor } from '@hydranium/protocol/testing';
 import { type CanonicalUri, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
 import {
    type BuildOptions,
@@ -33,6 +34,7 @@ import {
    HydraniumDocumentBuilder
 } from '../../../src/langium/document-builder/document-builder.js';
 import {
+   type CapturedLine,
    makeCapturingLogger,
    makeNoopLanguageServices,
    makeNoopLogger,
@@ -843,8 +845,13 @@ describe('HydraniumDocumentBuilder', () => {
             await this.lock.read(() => undefined);
             await this.lock.read(() => undefined);
          }
-         callAwaitDocumentState(state: DocumentState, uri: URI): Promise<URI> {
-            return this.awaitDocumentState(state, uri, CancellationToken.None);
+         callAwaitDocumentState(
+            state: DocumentState,
+            uri: URI,
+            cancelToken = CancellationToken.None,
+            rejectWhenStuck = false
+         ): Promise<URI> {
+            return this.awaitDocumentState(state, uri, cancelToken, { rejectWhenStuck });
          }
          /** Stand in for the build that a re-queue would have produced. */
          firePhase(document: LangiumDocument, state: DocumentState): Promise<void> {
@@ -860,9 +867,9 @@ describe('HydraniumDocumentBuilder', () => {
          }
       }
 
-      function makeServicesWithDocument(document: LangiumDocument | undefined): ServerSharedServicesMinimal {
+      function makeServicesWithDocument(document: LangiumDocument | undefined, logger = makeNoopLogger()): ServerSharedServicesMinimal {
          const services = makeNoopSharedServices({
-            Logger: makeNoopLogger(),
+            Logger: logger,
             workspace: {
                LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
                WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
@@ -989,6 +996,73 @@ describe('HydraniumDocumentBuilder', () => {
          builder.failBuild();
          await builder.drained();
          expect(builder.updateCalls.length).toBe(before + 1);
+      });
+
+      it('logs a recovery build that fails after its stuck-rejecting wait was cancelled, since the waiter has gone', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const stuck = documentAt(DocumentState.ComputedScopes);
+         let failRecovery!: (error: Error) => void;
+         class FailingRecoveryBuilder extends OrphanBuilder {
+            protected override requeueOrphaned(): Promise<void> {
+               return new Promise<void>((_resolve, reject) => (failRecovery = reject));
+            }
+         }
+         const builder = new FailingRecoveryBuilder(stuck, DocumentState.Validated, makeServicesWithDocument(stuck, logger));
+         const source = new CancellationTokenSource();
+         const waiting = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI, source.token, true);
+
+         source.cancel();
+         await expect(waiting).rejects.toBe(OperationCancelled);
+         failRecovery(new Error('recovery broke'));
+         await waitFor(() => lines.some(line => line.level === 'error'));
+
+         expect(lines.filter(line => line.level === 'error').map(line => line.message.split('\n')[0])).toEqual([
+            `A recovery build of ${DOC_URI.toString()} failed. Error: recovery broke`
+         ]);
+      });
+
+      it('logs a recovery build that fails after its wait reached the state at debug, since the waiter got what it asked for', async () => {
+         const previous = Logger.getLevel();
+         Logger.setLevel('debug');
+         try {
+            const { logger, lines } = makeCapturingLogger();
+            const stuck = documentAt(DocumentState.ComputedScopes);
+            let failRecovery!: (error: Error) => void;
+            class FailingRecoveryBuilder extends OrphanBuilder {
+               protected override requeueOrphaned(): Promise<void> {
+                  return new Promise<void>((_resolve, reject) => (failRecovery = reject));
+               }
+            }
+            const builder = new FailingRecoveryBuilder(stuck, DocumentState.Validated, makeServicesWithDocument(stuck, logger));
+            const waiting = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI, CancellationToken.None, true);
+
+            await builder.firePhase(stuck, DocumentState.Validated);
+            await waiting;
+            failRecovery(new Error('recovery broke'));
+            const isLate = (line: CapturedLine): boolean => line.message.includes('recovery broke');
+            await waitFor(() => lines.some(isLate));
+
+            expect(lines.filter(isLate).map(line => line.level)).toEqual(['debug']);
+         } finally {
+            Logger.setLevel(previous);
+         }
+      });
+
+      it('rejects a stuck-rejecting wait with its failed recovery build as the cause', async () => {
+         const stuck = documentAt(DocumentState.ComputedScopes);
+         let failRecovery!: (error: Error) => void;
+         class FailingRecoveryBuilder extends OrphanBuilder {
+            protected override requeueOrphaned(): Promise<void> {
+               return new Promise<void>((_resolve, reject) => (failRecovery = reject));
+            }
+         }
+         const builder = new FailingRecoveryBuilder(stuck, DocumentState.Validated);
+         const waiting = builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI, CancellationToken.None, true);
+         const failure = new Error('recovery broke');
+
+         failRecovery(failure);
+
+         await expect(waiting).rejects.toMatchObject({ cause: failure });
       });
 
       it('stops re-queuing a document whose build keeps failing', async () => {

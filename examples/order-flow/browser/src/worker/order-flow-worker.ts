@@ -61,13 +61,12 @@ import type {
 // check every other host does.
 import { lspLatencyOptions, startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
-import { createMessagePortTransport, LatencyCollector } from '@hydranium/protocol';
+import { createMessagePortTransport, describeErrorWithStack, LatencyCollector } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
 import {
    type BootstrapMessage,
-   formatError,
    isBootstrapMessage,
    isResetWorkspaceMessage,
    WORKER_ERROR_MESSAGE_TYPE,
@@ -83,7 +82,7 @@ import { IndexedDbFileSystemStore } from '../workspace/indexeddb-file-system-sto
  * allowed to bind, which is what keeps it available for this.
  */
 function reportError(phase: string, error: unknown): void {
-   postMessage({ type: WORKER_ERROR_MESSAGE_TYPE, phase, message: formatError(error) });
+   postMessage({ type: WORKER_ERROR_MESSAGE_TYPE, phase, message: describeErrorWithStack(error) });
 }
 
 // Both handlers exist because the interesting failures here are asynchronous and

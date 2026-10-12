@@ -73,6 +73,7 @@ interface RevertRig {
    /** How many existence checks the revert has made. */
    readonly existenceChecks: () => number;
    readonly errors: string[];
+   readonly warnings: string[];
    /** Hold the disk queue: every task queued until `release()` waits behind it. */
    holdQueue(): { release: () => void };
    /** Hold the write lock, as a build already running does, until `release()`. */
@@ -91,6 +92,7 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
    const clock = makeFakeClock();
    const builds: Array<{ changed: string[]; deleted?: string[]; reason: string | undefined }> = [];
    const errors: string[] = [];
+   const warnings: string[] = [];
    let staged: string | undefined;
    const uriPolicy = new DefaultDocumentUriPolicy();
    const fileSystemTaskQueue = new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } });
@@ -103,11 +105,15 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
    const recordError = (message: string): void => {
       errors.push(message);
    };
+   const recordWarning = (message: string): void => {
+      warnings.push(message);
+   };
    // Layered over the no-op tracer rather than spread from it: its methods live
    // on a prototype, which a spread drops.
-   const scoped = Object.assign(Object.create(noop.with(FILE)) as object, { error: recordError });
+   const scoped = Object.assign(Object.create(noop.with(FILE)) as object, { error: recordError, warn: recordWarning });
    const tracer: object = Object.assign(Object.create(noop) as object, {
       error: recordError,
+      warn: recordWarning,
       with: () => scoped,
       trace: () => tracer
    });
@@ -165,6 +171,7 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
       clock,
       builds,
       errors,
+      warnings,
       onDisk,
       existenceChecks: () => existenceChecks,
       holdQueue: () => {
@@ -300,8 +307,8 @@ describe('HydraniumTextDocuments revert on release', () => {
       expect(errors).toEqual([]);
    });
 
-   it("keeps a document whose rebuild fails on another document's missing file, logs it, and builds it once more", async () => {
-      const { docs, builds, errors, failNextBuild } = makeRig();
+   it("keeps a document whose rebuild fails on another document's missing file, warns, and builds it once more", async () => {
+      const { docs, builds, errors, warnings, failNextBuild } = makeRig();
       open(docs, 'form');
       failNextBuild(
          Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT', path: URI.file('/hydranium-test/other.a').fsPath })
@@ -311,8 +318,8 @@ describe('HydraniumTextDocuments revert on release', () => {
       await settle();
 
       expect(builds).toEqual([{ changed: [FILE], reason: 'didRelease' }]);
-      expect(errors.filter(message => message.startsWith('Revert on release dropped'))).toHaveLength(1);
-      expect(errors.some(message => message.includes('ENOENT'))).toBe(true);
+      expect(warnings.filter(message => message.startsWith('Revert on release failed') && message.includes('ENOENT'))).toHaveLength(1);
+      expect(errors).toEqual([]);
    });
 
    it('removes, rather than rebuilds, a document with no file behind it after its removal fails', async () => {
@@ -406,8 +413,8 @@ describe('HydraniumTextDocuments revert on release', () => {
       expect(builds).toEqual([{ changed: [], deleted: [FILE], reason: 'didRelease' }]);
    });
 
-   it('logs a revert whose queue wait fails', async () => {
-      const { docs, errors } = makeRig();
+   it('warns about a revert whose queue wait fails', async () => {
+      const { docs, warnings } = makeRig();
       const services = docs['services'] as unknown as { workspace: { FileSystemTaskQueue: { enqueue: () => Promise<never> } } };
       services.workspace.FileSystemTaskQueue.enqueue = () => Promise.reject(new Error('queue broke'));
       open(docs, 'form');
@@ -415,7 +422,7 @@ describe('HydraniumTextDocuments revert on release', () => {
       close(docs, 'form');
       await settle();
 
-      expect(errors.some(message => message.includes('queue broke'))).toBe(true);
+      expect(warnings.some(message => message.includes('queue broke'))).toBe(true);
    });
 
    it('releases the document at once when the grace is 0, even for a lost client', () => {

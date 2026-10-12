@@ -66,7 +66,8 @@ import {
    type LatencyReport,
    type Locale,
    type Logger,
-   type TransferDocument
+   type TransferDocument,
+   describeError
 } from '@hydranium/protocol';
 import {
    type DomainModel,
@@ -718,7 +719,7 @@ async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, edit
       // a quota is finite and the origin's storage may have been evicted. A page
       // that reported success here would lose the workspace on the next load
       // with nothing anywhere to say why.
-      setWorkspaceReport(`save failed: ${error instanceof Error ? error.message : String(error)}`);
+      setWorkspaceReport(`save failed: ${describeError(error)}`);
    }
 }
 
@@ -1065,7 +1066,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
          true
       );
    } catch (error: unknown) {
-      setGlspReport(`failed: ${error instanceof Error ? error.message : String(error)}`);
+      setGlspReport(`failed: ${describeError(error)}`);
    }
 
    // The diagnostics report does NOT depend on the editors above. Langium

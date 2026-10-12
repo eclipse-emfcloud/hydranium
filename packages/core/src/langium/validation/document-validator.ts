@@ -698,9 +698,11 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
     */
    protected buildElementPath<N extends AstNode>(node: N, info: DiagnosticInfo<N, string>): string {
       const directPath = this.astNodeLocator.getAstNodePath(node);
-      const containerPath = directPath ? undefined : this.astNodeLocator.getAstNodePath(node.$container ?? ({ $type: 'Dummy' } as AstNode));
-      const nodePath = directPath || containerPath;
-      if (!nodePath) {
+      // The locator answers '' for the root, which is the root's path rather than a miss.
+      const isRoot = node.$container === undefined;
+      const containerPath = directPath || isRoot ? undefined : this.astNodeLocator.getAstNodePath(node.$container);
+      const nodePath = directPath || containerPath || '';
+      if (!nodePath && !isRoot) {
          this.tracer.warn('Cannot create diagnostic element path: Unable to determine AST node path.');
          return '';
       }

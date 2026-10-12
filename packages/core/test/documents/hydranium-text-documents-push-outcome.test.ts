@@ -165,7 +165,7 @@ function makeStore(uriPolicy: unknown = new DefaultDocumentUriPolicy()): {
          LangiumDocuments: makeStubLangiumDocuments(),
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
-         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
+         VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
          WorkspaceManager: { workspaceInitialized: Promise.resolve() }
       }
    } as unknown as ServerSharedServices;

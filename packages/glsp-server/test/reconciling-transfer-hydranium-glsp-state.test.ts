@@ -20,6 +20,7 @@ import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspOperationCommand, runOperation } from '../src/command/hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
+import { DiagramEditDroppedError } from '../src/command/diagram-edit-dropped-error.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -416,7 +417,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(harness.warns.some(msg => msg.includes('conflict'))).toBe(true);
       });
 
-      it('on an unavailable outcome, writes nothing more, throws the conflict and warns', async () => {
+      it('on an unavailable outcome, writes nothing more and throws the conflict, leaving the log to whoever ends it', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.resolve = async () => ({ status: 'unavailable' });
@@ -430,7 +431,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
 
          expect(harness.updateCalls).toHaveLength(1);
          expect(state.sourceRoot).toBe(before);
-         expect(harness.warns.some(msg => msg.includes('unavailable'))).toBe(true);
+         expect(harness.warns).toEqual([]);
       });
 
       it('re-throws a non-conflict error from persist', async () => {
@@ -579,6 +580,31 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
          warned: harness.warns.filter(message => message.includes("Normalizing an operation's transition failed")).length,
          resolved
       }).toEqual({ outcome: 'executed', writes: 2, warned: 1, resolved: [{ base: ' edited ', ours: ' built ' }] });
+      // With its stack, since this line ends the failure.
+      expect(harness.warns.find(message => message.includes("Normalizing an operation's transition failed"))).toMatch(/\n\s+at /);
+   });
+
+   it('fails an undo whose write the reconcile drops with a DiagramEditDroppedError', async () => {
+      const harness = makeHarness();
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', makeRoot('built'));
+      const operation = new HydraniumGlspOperationCommand<TestSourceModel>(state);
+      await runOperation(
+         operation,
+         () =>
+            new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Edit', () => {
+               (state.sourceRoot as { label: string }).label = 'edited';
+            })
+      );
+      // The transition resolves; the undo's write then conflicts, and its reconcile drops it.
+      const outcomes = [
+         { status: 'merged' as const, merged: { $type: 'TestRoot' as const, label: 'built' } },
+         { status: 'conflict' as const, theirs: { $type: 'TestRoot' as const, label: 'foreign' } }
+      ];
+      harness.resolve = async () => outcomes.shift()!;
+      harness.throwConflictOnNextUpdate = true;
+
+      await expect(state.runExclusive(() => operation.undo())).rejects.toBeInstanceOf(DiagramEditDroppedError);
    });
 
    it('refuses setSourceRoot while an operation is open', async () => {

@@ -175,11 +175,3 @@ export function isWorkerErrorMessage(value: unknown): value is WorkerErrorMessag
    const candidate = value as Partial<WorkerErrorMessage>;
    return candidate.type === WORKER_ERROR_MESSAGE_TYPE && typeof candidate.message === 'string';
 }
-
-/** Render an unknown thrown value, keeping the stack when there is one. */
-export function formatError(error: unknown): string {
-   if (error instanceof Error) {
-      return error.stack ?? `${error.name}: ${error.message}`;
-   }
-   return String(error);
-}

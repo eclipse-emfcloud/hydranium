@@ -236,9 +236,39 @@ export function resolvedFromResponseError(error: ResponseError<unknown>): Resolv
  * to pass as a parameter for the same reason a number is: it is not itself
  * translatable text, so it needs no code of its own. A PROSE fragment is not,
  * and must become one code per value instead.
+ *
+ * For a reader of the client; the log takes {@link describeErrorWithStack}.
  */
 export function describeError(error: unknown): string {
    return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * An error for the log: its stack where it has one, which names where it was
+ * thrown, and its causes, which name what failed when an error wraps another.
+ * Never for the client, whose reader cannot act on a stack.
+ */
+export function describeErrorWithStack(error: unknown): string {
+   // A cause chain may loop back on itself.
+   return describeChain(error, new Set());
+}
+
+function describeChain(error: unknown, seen: Set<unknown>): string {
+   const lines: string[] = [];
+   let current: unknown = error;
+   let prefix = '';
+   do {
+      seen.add(current);
+      lines.push(prefix + (current instanceof Error ? (current.stack ?? current.message) : String(current)));
+      // Node fails a connect to several addresses with one, whose own message is empty.
+      if (current instanceof AggregateError) {
+         const errors: unknown[] = current.errors;
+         lines.push(...errors.filter(inner => !seen.has(inner)).map(inner => `Including: ${describeChain(inner, seen)}`));
+      }
+      current = current instanceof Error ? current.cause : undefined;
+      prefix = 'Caused by: ';
+   } while (current !== undefined && current !== null && !seen.has(current));
+   return lines.join('\n');
 }
 
 /**

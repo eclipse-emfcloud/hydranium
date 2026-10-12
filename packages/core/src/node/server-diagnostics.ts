@@ -49,7 +49,7 @@ export function startServerDiagnostics(shared: ServerSharedServicesMinimal, opti
       productName,
       version,
       phaseDetailThresholdMs,
-      ...nodeLogPreambleSections(phaseDetailThresholdMs)
+      ...nodeLogPreambleSections(phaseDetailThresholdMs, options)
    });
    if (options.logInitialMemory ?? true) {
       shared.Tracer.for('Process').memory('Initial Memory');

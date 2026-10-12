@@ -17,9 +17,10 @@ import {
    ObservableValue,
    type TextVersion,
    type Tracer,
-   type TransferElement
+   type TransferElement,
+   describeErrorWithStack
 } from '@hydranium/protocol';
-import { type AstNode, UriUtils } from '@hydranium/langium';
+import { type AstNode, isOperationCancelled, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable, Emitter, type Event } from 'vscode-languageserver';
 import { type AstDocument, type SavedAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
@@ -410,7 +411,23 @@ export class DefaultClientSession<
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], this.clientId));
       await Promise.all(applied);
       const state = this.services.workspace.DocumentBuilder.finalBuildState();
-      return Promise.all(uris.map(uri => service.rebuild(uri, state, cancelToken)));
+      const rebuilt = await Promise.allSettled(uris.map(uri => service.rebuild(uri, state, cancelToken)));
+      const failures = rebuilt.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: uris[i], reason: result.reason }] : []));
+      if (failures.length === 0) {
+         return rebuilt.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
+      }
+      // The first is thrown as it is, so a typed failure keeps its type; one build
+      // usually carries the set and fails each with the same error. Any other
+      // failure reaches no one else, so it is logged here.
+      const [{ uri: firstUri, reason: firstReason }] = failures;
+      for (const { uri, reason } of failures.slice(1)) {
+         if (isOperationCancelled(reason)) {
+            this.tracer.with(uri).debug(`Rebuild of ${uri} cancelled beside that of ${firstUri}`);
+         } else if (reason !== firstReason) {
+            this.tracer.with(uri).error(`Rebuild of ${uri} failed beside that of ${firstUri}. ${describeErrorWithStack(reason)}`);
+         }
+      }
+      throw firstReason;
    }
 
    /**

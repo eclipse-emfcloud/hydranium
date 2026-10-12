@@ -587,7 +587,10 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                asModelVersion(4)
             )
          ).rejects.toThrow('disk full');
-         expect(harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`))).toHaveLength(1);
+         const warned = harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`));
+         expect(warned).toHaveLength(1);
+         // With its stack, since this line ends the failure.
+         expect(warned[0]).toMatch(/\n\s+at /);
       });
 
       it('keeps the write error when closing the created secondary fails, and warns', async () => {
@@ -611,7 +614,10 @@ describe('ReconcilingMultiDocumentGlspState', () => {
                asModelVersion(4)
             )
          ).rejects.toThrow('disk full');
-         expect(harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`))).toHaveLength(1);
+         const warned = harness.warns.filter(message => message.includes(`Could not close ${SEMANTIC_URI}`));
+         expect(warned).toHaveLength(1);
+         // With its stack, since this line ends the failure.
+         expect(warned[0]).toMatch(/\n\s+at /);
       });
 
       it('keeps the primary based on the root it holds when a secondary-only write follows a foreign build of the primary', async () => {

@@ -33,4 +33,15 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
       const clientId = this.modelState.clientId;
       return textDocuments.openDocuments().some(open => open.clients.includes(clientId) && textDocuments.isDirty(open.uri));
    }
+
+   /**
+    * Lifted from `@eclipse-glsp/server` 2.7.0's `DefaultCommandStack.handleError`
+    * without its `error` line: the failure is rethrown, and whoever ends it
+    * logs it. The accompanying test pins upstream's source.
+    */
+   protected override handleError(error: unknown): never {
+      this.flush();
+      this.logger.debug('A command failed; the command stack was flushed');
+      throw error;
+   }
 }

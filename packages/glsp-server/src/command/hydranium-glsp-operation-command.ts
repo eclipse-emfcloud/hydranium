@@ -19,7 +19,8 @@ import {
    type MultiReferenceItem,
    type Reference
 } from '@hydranium/langium';
-import { type ModelVersion } from '@hydranium/protocol';
+import { type ModelVersion, describeErrorWithStack } from '@hydranium/protocol';
+import { DiagramEditDroppedError } from './diagram-edit-dropped-error.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
 /**
@@ -227,9 +228,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       try {
          this.transition = recorded && (await this.modelState.normalizeTransition(recorded));
       } catch (error: unknown) {
-         this.modelState.logger.warn(
-            `Normalizing an operation's transition failed: ${error instanceof Error ? error.message : String(error)}`
-         );
+         this.modelState.logger.warn(`Normalizing an operation's transition failed: ${describeErrorWithStack(error)}`);
          this.transition = recorded;
       }
       return 'executed';
@@ -367,7 +366,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             await this.checkpoint(point);
             await action();
          } catch (error: unknown) {
-            this.modelState.logger.error(`${what} failed at one step: ${error instanceof Error ? error.message : String(error)}`);
+            this.modelState.logger.error(`${what} failed at one step: ${describeErrorWithStack(error)}`);
          }
       }
    }
@@ -483,7 +482,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             done.unshift(step);
          }
          if (merged !== undefined && !(await this.write(merged))) {
-            throw new Error(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
+            throw new DiagramEditDroppedError(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
          }
       } catch (error: unknown) {
          await this.compensate(done, direction);

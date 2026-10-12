@@ -333,10 +333,11 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
          notifyOutcome: outcome => {
             if (!settled) {
                settled = true;
+               // Routine: an edit in the editor moved the version on before the push arrived.
                if (outcome === 'refused' && version !== null) {
                   this.tracer
                      .with(key)
-                     .warn(
+                     .debug(
                         `Language client refused applyEdit addressed at version ${version} (it last declared version ${state.declaredVersion})`
                      );
                }

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type CanonicalUri, UNRECORDED_VERSION } from '@hydranium/protocol';
+import { type CanonicalUri, type Logger, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, URI, UriUtils } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
@@ -20,7 +20,7 @@ import { DefaultVersionSyncService } from '../../src/documents/version-sync-serv
 import { DefaultModelService } from '../../src/langium/model-service/model-service.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { CancellationToken } from 'vscode-languageserver';
-import { makeFakeAstNode, makeFakeDocument, makeTestServices } from '../../src/testing/index.js';
+import { makeCapturingLogger, makeFakeAstNode, makeFakeDocument, makeTestServices } from '../../src/testing/index.js';
 
 interface FakeRoot extends AstNode {
    readonly $type: 'FakeRoot';
@@ -41,7 +41,9 @@ const URI_B = 'file:///B.fake';
  * `LangiumDocuments` (seeded with `URI_A`) stay, since the real manager reads
  * them as plain slots.
  */
-function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; managerOptions?: AstDocumentManagerOptions } = {}): {
+function makeManagerHarness(
+   opts: { documentUriPolicy?: DocumentUriPolicy; managerOptions?: AstDocumentManagerOptions; logger?: Logger } = {}
+): {
    manager: DefaultAstDocumentManager<FakeRoot>;
    models: DefaultModelService<FakeRoot>;
    textDocuments: HydraniumTextDocuments;
@@ -54,7 +56,8 @@ function makeManagerHarness(opts: { documentUriPolicy?: DocumentUriPolicy; manag
 } {
    const bundle = makeTestServices<FakeRoot>({
       seedDocuments: [{ uri: URI_A, root: makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'a' }) }],
-      documentUriPolicy: opts.documentUriPolicy
+      documentUriPolicy: opts.documentUriPolicy,
+      logger: opts.logger
    });
    // Swap in a REAL HydraniumTextDocuments (constructs from services.Logger only):
    const textDocuments = new HydraniumTextDocuments(bundle.services);
@@ -641,6 +644,21 @@ describe('AstDocumentManager open and close lifecycle', () => {
       });
 
       expect(asked).toEqual([{ uri: URI_A, version: opened }]);
+   });
+});
+
+describe('AstDocumentManager.open with a sync build that is given up', () => {
+   it('logs the failure, since nothing waits on that build', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const { manager, sync } = makeManagerHarness({ logger });
+      sync.syncTo = () => Promise.reject(new Error('build given up'));
+
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 3, text: 'other\n' });
+      await waitFor(() => lines.some(line => line.level === 'error'));
+
+      const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('build given up');
    });
 });
 

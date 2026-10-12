@@ -31,7 +31,7 @@ function makeDocs(): { docs: HydraniumTextDocuments<TextDocument>; lines: Captur
          LangiumDocuments: makeStubLangiumDocuments(),
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
-         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
+         VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) }
       }
    } as unknown as ServerSharedServices;
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);

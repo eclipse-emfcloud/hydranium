@@ -801,6 +801,8 @@ describe('AbstractProjectManager default FS descriptor walk', () => {
       expect(mgr.getProjects()).toEqual([]);
       // Kills the warn StringLiteral→'' mutant (message must mention the failure).
       expect(stubs.logs.some(l => l.level === 'warn' && l.message.includes('Failed to read directory'))).toBe(true);
+      // With its stack, since this line ends the failure.
+      expect(stubs.logs.find(l => l.message.includes('Failed to read directory'))?.message).toMatch(/\n\s+at /);
    });
 
    it('collects descriptors from multiple workspace folders', async () => {

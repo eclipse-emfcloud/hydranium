@@ -42,13 +42,15 @@ interface TestRoot extends AstNode {
 
 interface InfoLog {
    readonly messages: string[];
+   /** Debug lines, kept apart so a test can tell the level a line was logged at. */
+   readonly debug?: string[];
 }
 
 interface FakeState {
    sourceRoot: TestRoot | undefined;
    root: GModelRoot | undefined;
    readyCalls: DocumentState[];
-   readonly logger: { info(msg: string): void };
+   readonly logger: { info(msg: string): void; debug(msg: string): void };
    ready(state: DocumentState): Promise<void>;
 }
 
@@ -60,6 +62,9 @@ function makeState(infoLog: InfoLog): FakeState {
       logger: {
          info(msg: string): void {
             infoLog.messages.push(msg);
+         },
+         debug(msg: string): void {
+            infoLog.debug?.push(msg);
          }
       },
       async ready(documentState: DocumentState): Promise<void> {
@@ -348,17 +353,24 @@ describe('HydraniumGlspSubmissionHandler', () => {
          await expect(
             throwing.handler.validateForTest({ validate: () => Promise.reject(new Error('validator bug')) })
          ).resolves.toBeUndefined();
-         expect(throwing.logged()).toEqual([['error', 'Live validation failed: Error: validator bug']]);
+         // With its stack, since this line ends the failure.
+         expect(throwing.logged().map(([level, message]) => [level, message.split('\n')[0]])).toEqual([
+            ['error', 'Live validation failed: Error: validator bug']
+         ]);
+         expect(throwing.logged()[0][1]).toContain('\n    at ');
 
          const unsendable = makeLiveValidatingHandler(() => Promise.reject(new Error('Connection is disposed.')));
          await expect(unsendable.handler.validateForTest({ validate: () => Promise.resolve([]) })).resolves.toBeUndefined();
-         expect(unsendable.logged()).toEqual([['warn', 'Could not send the live-validation markers: Error: Connection is disposed.']]);
+         expect(unsendable.logged().map(([level, message]) => [level, message.split('\n')[0]])).toEqual([
+            ['warn', 'Could not send the live-validation markers: Error: Connection is disposed.']
+         ]);
+         expect(unsendable.logged()[0][1]).toContain('\n    at ');
       });
    });
 
    describe('logSubmit', () => {
       it('emits a Submit-model line with default formatSourceRoot returning $type', async () => {
-         const log: InfoLog = { messages: [] };
+         const log: InfoLog = { messages: [], debug: [] };
          const state = makeState(log);
          state.sourceRoot = { $type: 'TestRoot', label: 'L' };
          state.root = { type: 'graph', children: [{ id: 'n1' }, { id: 'n2' }] } as unknown as GModelRoot;
@@ -370,7 +382,9 @@ describe('HydraniumGlspSubmissionHandler', () => {
 
          try {
             await handler.submitModel('operation');
-            const line = log.messages.find(m => m.startsWith('Submit model'));
+            // Logged per submit, so diagnosis only.
+            expect(log.messages.find(message => message.startsWith('Submit model'))).toBeUndefined();
+            const line = log.debug?.find(message => message.startsWith('Submit model'));
             expect(line).toBeDefined();
             expect(line).toContain('reason=operation');
             expect(line).toContain('actions=[setModel,requestBounds]');
@@ -382,7 +396,7 @@ describe('HydraniumGlspSubmissionHandler', () => {
       });
 
       it('uses an overridden formatSourceRoot from a subclass', async () => {
-         const log: InfoLog = { messages: [] };
+         const log: InfoLog = { messages: [], debug: [] };
          const state = makeState(log);
          state.sourceRoot = { $type: 'TestRoot', label: 'hello' };
          state.root = { type: 'graph', children: [] } as unknown as GModelRoot;
@@ -394,7 +408,9 @@ describe('HydraniumGlspSubmissionHandler', () => {
 
          try {
             await handler.submitModel();
-            const line = log.messages.find(m => m.startsWith('Submit model'));
+            // Logged per submit, so diagnosis only.
+            expect(log.messages.find(message => message.startsWith('Submit model'))).toBeUndefined();
+            const line = log.debug?.find(message => message.startsWith('Submit model'));
             expect(line).toContain('ast={TestRoot label=hello}');
             expect(line).toContain('reason=initial');
          } finally {
@@ -403,7 +419,7 @@ describe('HydraniumGlspSubmissionHandler', () => {
       });
 
       it('reports ast=none when the source root is undefined', async () => {
-         const log: InfoLog = { messages: [] };
+         const log: InfoLog = { messages: [], debug: [] };
          const state = makeState(log);
          state.sourceRoot = undefined;
          state.root = undefined;
@@ -415,7 +431,9 @@ describe('HydraniumGlspSubmissionHandler', () => {
 
          try {
             await handler.submitModel();
-            const line = log.messages.find(m => m.startsWith('Submit model'));
+            // Logged per submit, so diagnosis only.
+            expect(log.messages.find(message => message.startsWith('Submit model'))).toBeUndefined();
+            const line = log.debug?.find(message => message.startsWith('Submit model'));
             expect(line).toContain('ast={none}');
             expect(line).toContain('gmodel={type=none, children=0}');
             expect(line).toContain('actions=[]');

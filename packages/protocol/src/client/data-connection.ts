@@ -21,7 +21,7 @@ import {
 } from '../data';
 import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
 import type { Logger } from '../logger';
-import { defineMessage, describeError, resolve } from '../messages/primitives';
+import { defineMessage, describeError, describeErrorWithStack, resolve } from '../messages/primitives';
 import { NoopLogger } from '../noop-logger';
 import { randomUuid } from '../random-uuid';
 import type { TransferElement } from '../transfer-element';
@@ -388,7 +388,7 @@ export class DataConnection<
             // Reported, so it reaches the user on a port without a logger;
             // logged too, since only the log names the session.
             this.reportError(error, resolve(DATA_CONNECTION_SESSION_RESTORE_FAILED, { detail: describeError(error) }));
-            this.logger.error(`Could not restore session ${session.clientId}: ${describeError(error)}`);
+            this.logger.error(`Could not restore session ${session.clientId}: ${describeErrorWithStack(error)}`);
          }
       }
    }

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type URI, UriUtils } from '@hydranium/langium';
-import { type CanonicalUri, type Tracer } from '@hydranium/protocol';
+import { type CanonicalUri, type Tracer, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { HYDRANIUM_BUILD_REASONS } from '../langium/document-builder/document-builder.js';
@@ -38,7 +38,7 @@ export interface ReleasedDocument {
  */
 export class DocumentReleaseSkippedError extends Error {
    constructor(cause: unknown) {
-      super(`Release skipped: the connection or the workspace went away. ${cause instanceof Error ? cause.message : String(cause)}`, {
+      super(`Release skipped: the connection or the workspace went away. ${describeError(cause)}`, {
          cause
       });
       this.name = 'DocumentReleaseSkippedError';
@@ -149,16 +149,13 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
          }
          // The build holds the file's text: only what followed its parse, such as the diagnostics publish, was lost.
          const { error } = outcome;
-         this.tracer
-            .with(released.uri)
-            .debug(`Revert on release skipped after its parse: ${error instanceof Error ? error.message : String(error)}`);
+         this.tracer.with(released.uri).debug(`Revert on release skipped after its parse: ${describeError(error)}`);
          return;
       }
       if (outcome.kind === 'failed') {
+         // Handled below, by a recovery build or the client holding the document again; one that fails rejects on its own.
          const { error } = outcome;
-         this.tracer
-            .with(released.uri)
-            .error(`Revert on release dropped. ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+         this.tracer.with(released.uri).warn(`Revert on release failed; building in its place. ${describeErrorWithStack(error)}`);
       }
       const parsed = 'parsed' in outcome && outcome.parsed;
       // Without it, a revert stopped short, or an override that built nothing,
@@ -171,15 +168,12 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
             this.services.workspace.LangiumDocuments.getDocument(target) !== undefined) ||
          outcome.kind === 'failed';
       const recover = async (): Promise<void> => {
-         const failure = 'Build after a revert that stopped short failed; the build keeps the released text';
-         let built: boolean;
          try {
-            built = await this.requestRecoveryBuild(released, target, 'decision' in outcome && outcome.decision === 'remove');
+            await this.requestRecoveryBuild(released, target, 'decision' in outcome && outcome.decision === 'remove');
          } catch (err: unknown) {
-            throw new Error(`${failure}. ${err instanceof Error ? err.message : String(err)}`, { cause: err });
-         }
-         if (!built) {
-            throw new Error(failure);
+            throw new Error(`Build after a revert that stopped short failed; the build keeps the released text. ${describeError(err)}`, {
+               cause: err
+            });
          }
       };
       await this.waitForReleaseBuild(released, target, parsed, stoppedShort && !released.isReclaimed() ? recover : undefined);
@@ -290,8 +284,8 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
       }
    }
 
-   /** The build in place of a release that stopped short; answers whether it ran. */
-   protected requestRecoveryBuild(released: ReleasedDocument, target: URI, deleted: boolean): Promise<boolean> {
+   /** The build in place of a release that stopped short; rejects with its error when it was given up. */
+   protected requestRecoveryBuild(released: ReleasedDocument, target: URI, deleted: boolean): Promise<void> {
       return this.services.workspace.VersionSyncService.requestRecoveryBuild(target, {
          deleted,
          reason: HYDRANIUM_BUILD_REASONS.didRelease,
@@ -319,8 +313,8 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
       const workspace = this.services.workspace;
       // A client holding the document again keeps what the build holds for it.
       if (parsed || workspace.LangiumDocuments.getDocument(target) === undefined || released.isReclaimed()) {
-         // Settled now, so a failed recovery build is only logged.
-         startRecovery?.().catch((err: unknown) => this.tracer.with(released.uri).error(err instanceof Error ? err.message : String(err)));
+         // The release got what it waits for, so a failed recovery build is diagnosis; its retry warned.
+         startRecovery?.().catch((err: unknown) => this.tracer.with(released.uri).debug(describeErrorWithStack(err)));
          return Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
@@ -352,9 +346,9 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
                }
             },
             (err: unknown) => {
-               // Settled by a parse that came first, so only logged.
+               // Settled by a parse or removal that came first, so diagnosis; its retry warned.
                if (ended) {
-                  this.tracer.with(released.uri).error(err instanceof Error ? err.message : String(err));
+                  this.tracer.with(released.uri).debug(describeErrorWithStack(err));
                } else {
                   finish(() => reject(err));
                }

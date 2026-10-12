@@ -95,6 +95,22 @@ function open(rig: SyncRig, uri: string, version: number, text: string): void {
 }
 
 describe('DefaultVersionSyncService.modelProduced', () => {
+   it('logs once that the sync build it requested failed, since nothing waits on that build', async () => {
+      const rig = makeRig();
+      open(rig, URI_A, 2, 'newer');
+      rig.outcomes.push('fail', 'fail');
+      // Parsed from older text than the store holds, so the root is behind.
+      const document = register(rig, URI_A, 'older', 1);
+
+      rig.sync.modelProduced(document, { version: 1, text: 'older' });
+      await settle(rig);
+
+      expect({ builds: rig.builds.length, errors: rig.errors().map(error => error.split('\n')[0]) }).toEqual({
+         builds: 2,
+         errors: ['The build that would sync the root to its text failed. Error: build 2 failed']
+      });
+   });
+
    it('re-stamps a rebuilt closed document with the stepped sequence version', () => {
       const rig = makeRig();
       open(rig, URI_A, 1, '');
@@ -261,7 +277,8 @@ describe('DefaultVersionSyncService.syncTo', () => {
       const answer = rig.sync.syncTo(uri, 2);
       await settle(rig);
 
-      expect({ answer: await answer, builds: rig.builds }).toEqual({ answer: true, builds: [] });
+      await expect(answer).resolves.toBeUndefined();
+      expect(rig.builds).toEqual([]);
    });
 
    it('builds nothing for a root a build synced before the lock read ran', async () => {
@@ -290,6 +307,12 @@ describe('DefaultVersionSyncService.syncTo', () => {
 describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
    const uri = URI.parse(URI_A);
    const needed = (overrides: Partial<RecoveryBuildRequest> = {}): RecoveryBuildRequest => ({ stillNeeded: () => true, ...overrides });
+   /** How a request settled: `built`, or the message of the build error it was rejected with. */
+   const outcome = (request: Promise<void>): Promise<string> =>
+      request.then(
+         () => 'built',
+         (error: unknown) => `failed: ${error instanceof Error ? error.message : String(error)}`
+      );
 
    it('builds once for requests made while the first waits for the lock', async () => {
       const rig = makeRig();
@@ -305,7 +328,10 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       release();
       await building;
 
-      expect({ answers: await Promise.all(answers), builds: rig.builds.length }).toEqual({ answers: [true, true, true], builds: 1 });
+      expect({ answers: await Promise.all(answers.map(outcome)), builds: rig.builds.length }).toEqual({
+         answers: ['built', 'built', 'built'],
+         builds: 1
+      });
    });
 
    it('builds once more after a build that a request arrived during, asking that request again first', async () => {
@@ -331,10 +357,10 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       const skipped = rig.sync.requestRecoveryBuild(uri, { stillNeeded: () => stillNeeded });
       await settle(rig);
 
-      expect({ asked, builds: rig.builds.length, answers: await Promise.all([second, third, skipped]) }).toEqual({
+      expect({ asked, builds: rig.builds.length, answers: await Promise.all([second, third, skipped].map(outcome)) }).toEqual({
          asked: 1,
          builds: 2,
-         answers: [true, true, true]
+         answers: ['built', 'built', 'built']
       });
    });
 
@@ -369,31 +395,31 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       const rig = makeRig();
       rig.outcomes.push('fail');
 
-      const answer = await rig.sync.requestRecoveryBuild(uri, needed());
+      const answer = await outcome(rig.sync.requestRecoveryBuild(uri, needed()));
 
       expect({ answer, builds: rig.builds.length, warnings: rig.warnings().length, errors: rig.errors() }).toEqual({
-         answer: true,
+         answer: 'built',
          builds: 2,
          warnings: 1,
          errors: []
       });
    });
 
-   it('gives up on a build that fails again, answering false and logging an error', async () => {
+   it('gives up on a build that fails again, rejecting with its error and leaving the log to the requester', async () => {
       const rig = makeRig();
       rig.outcomes.push('fail', 'fail');
 
-      const answer = await rig.sync.requestRecoveryBuild(uri, needed());
+      const answer = await outcome(rig.sync.requestRecoveryBuild(uri, needed()));
       await settle(rig);
 
-      expect({ answer, builds: rig.builds.length, errors: rig.errors().map(error => error.split('\n')[0]) }).toEqual({
-         answer: false,
+      expect({ answer, builds: rig.builds.length, errors: rig.errors() }).toEqual({
+         answer: 'failed: build 2 failed',
          builds: 2,
-         errors: ['Requested build failed again; giving up. Error: build 2 failed']
+         errors: []
       });
    });
 
-   it('answers a request whose build succeeded true, though a later batch gives up', async () => {
+   it('resolves a request whose build succeeded, though a later batch gives up', async () => {
       const rig = makeRig();
       let finish!: () => void;
       rig.outcomes.push(() => new Promise<void>(resolve => (finish = resolve)), 'fail', 'fail');
@@ -403,7 +429,11 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       const second = rig.sync.requestRecoveryBuild(uri, needed());
       finish();
 
-      expect({ first: await first, second: await second, builds: rig.builds.length }).toEqual({ first: true, second: false, builds: 3 });
+      expect({ first: await outcome(first), second: await outcome(second), builds: rig.builds.length }).toEqual({
+         first: 'built',
+         second: 'failed: build 3 failed',
+         builds: 3
+      });
    });
 
    it('gives a request that joins a failing batch retries of its own', async () => {
@@ -416,7 +446,11 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       const late = rig.sync.requestRecoveryBuild(uri, needed());
       failFirst();
 
-      expect({ first: await first, late: await late, builds: rig.builds.length }).toEqual({ first: false, late: true, builds: 3 });
+      expect({ first: await outcome(first), late: await outcome(late), builds: rig.builds.length }).toEqual({
+         first: 'failed: build 2 failed',
+         late: 'built',
+         builds: 3
+      });
    });
 
    it('builds a request again, spending no retry, when a later write cancels its build before it runs', async () => {
@@ -436,10 +470,10 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
          return build;
       });
 
-      const answer = await rig.sync.requestRecoveryBuild(uri, needed());
+      const answer = await outcome(rig.sync.requestRecoveryBuild(uri, needed()));
 
       expect({ answer, completed, builds: rig.builds.length, warnings: rig.warnings(), errors: rig.errors() }).toEqual({
-         answer: true,
+         answer: 'built',
          completed: 0,
          builds: 2,
          warnings: [],

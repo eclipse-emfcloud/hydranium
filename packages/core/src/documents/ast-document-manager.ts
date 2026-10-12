@@ -17,7 +17,8 @@ import {
    asModelVersion,
    type ModelVersion,
    type TextVersion,
-   UNRECORDED_VERSION
+   UNRECORDED_VERSION,
+   describeErrorWithStack
 } from '@hydranium/protocol';
 import { type AstNode, DocumentState, type LangiumDocument, type LangiumDocuments, URI, UriUtils } from '@hydranium/langium';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
@@ -443,8 +444,11 @@ export class DefaultAstDocumentManager<
          }
          const built = this.getDocument(args.uri);
          if (creates && built) {
-            // Without an LSP head nothing else builds the opened text.
-            void this.services.workspace.VersionSyncService.syncTo(built.uri, this.textDocuments.version(args.uri));
+            // Without an LSP head nothing else builds the opened text. Nothing
+            // waits on the build either, so its failure ends here.
+            this.services.workspace.VersionSyncService.syncTo(built.uri, this.textDocuments.version(args.uri))?.catch((error: unknown) =>
+               this.tracer.with(args.uri).error(`The build of the opened text failed. ${describeErrorWithStack(error)}`)
+            );
          }
       }
       return Disposable.create(() => this.close(args));

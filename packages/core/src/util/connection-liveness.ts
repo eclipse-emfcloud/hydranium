@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { describeError } from '@hydranium/protocol';
+
 /**
  * Phrases that mean a call lost its connection. Matched on the message because
  * the condition surfaces in shapes that share no discriminator:
@@ -64,7 +66,7 @@ export function isConnectionGoneError(err: unknown): boolean {
    if (isDestroyedStreamError(err)) {
       return true;
    }
-   const message = err instanceof Error ? err.message : String(err);
+   const message = describeError(err);
    const normalized = message.toLowerCase();
    return CONNECTION_GONE_PATTERNS.some(pattern => pattern.test(normalized));
 }
@@ -92,6 +94,6 @@ export function isClientGoneError(err: unknown): boolean {
    if (err instanceof Error && 'code' in err && typeof err.code === 'string' && SOCKET_GONE_CODES.has(err.code)) {
       return true;
    }
-   const message = err instanceof Error ? err.message : String(err);
+   const message = describeError(err);
    return SOCKET_GONE_PATTERN.test(message.toLowerCase());
 }

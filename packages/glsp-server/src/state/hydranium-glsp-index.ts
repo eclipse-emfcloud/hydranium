@@ -373,7 +373,7 @@ export class HydraniumGlspIndex extends GModelIndex {
     */
    protected override doIndex(element: GModelElement): void {
       if (this.idToElement.has(element.id)) {
-         this.sharedServices.Logger.for('Index').error('Duplicate element id in graph: ' + element.id);
+         this.sharedServices.Logger.for('Index').warn('Skipping duplicate element id in graph: ' + element.id);
          return;
       }
       super.doIndex(element);

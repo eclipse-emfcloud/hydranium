@@ -23,6 +23,7 @@ import {
 import { IntegrityService } from '@hydranium/core';
 import { inject, injectable } from 'inversify';
 import { type AstNode, type DocumentState } from '@hydranium/langium';
+import { describeErrorWithStack } from '@hydranium/protocol';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { DiagramStatus } from '../state/diagram-status.js';
 
@@ -182,9 +183,11 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
          const markers = await validator.validate([this.modelState.root], MarkersReason.LIVE);
          await this.actionDispatcher
             .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }))
-            .catch((error: unknown) => this.modelState.logger.warn(`Could not send the live-validation markers: ${String(error)}`));
+            .catch((error: unknown) =>
+               this.modelState.logger.warn(`Could not send the live-validation markers: ${describeErrorWithStack(error)}`)
+            );
       } catch (error: unknown) {
-         this.modelState.logger.error(`Live validation failed: ${String(error)}`);
+         this.modelState.logger.error(`Live validation failed: ${describeErrorWithStack(error)}`);
       } finally {
          this.modelState.setStatus(DiagramStatus.VALIDATION, undefined);
       }
@@ -217,9 +220,9 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
    }
 
    /**
-    * Logs the {@link SetModelAction} dispatch so the initial
-    * `requestModel → setModel` handshake is observable in the server log
-    * alongside `Submit model` and `ComputedBounds accepted`.
+    * Logs the {@link SetModelAction} dispatch, so a diagram's initial
+    * `requestModel → setModel` handshake is a milestone in the server log; the
+    * submit and computed-bounds lines around it are diagnosis.
     */
    protected override createSetModeAction(newRoot: GModelRootSchema): SetModelAction {
       const action = super.createSetModeAction(newRoot);
@@ -234,7 +237,7 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
       const gChildren = root?.children?.length ?? 0;
       const sourceRoot = this.modelState.sourceRoot;
       const kinds = actions.map(a => a.kind).join(',');
-      this.modelState.logger.info(
+      this.modelState.logger.debug(
          `Submit model [reason=${reason ?? 'initial'}, actions=[${kinds}], ` +
             `gmodel={type=${root?.type ?? 'none'}, children=${gChildren}}, ` +
             `ast={${this.formatSourceRoot(sourceRoot)}}]`

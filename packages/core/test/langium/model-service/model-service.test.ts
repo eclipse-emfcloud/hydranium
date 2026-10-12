@@ -20,7 +20,16 @@ import {
 } from '@hydranium/protocol';
 import type { AstDiagnostic } from '../../../src/langium/validation/document-validator.js';
 import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
-import { type AstNode, DocumentState, type LangiumDocument, UriUtils, type WorkspaceLock } from '@hydranium/langium';
+import {
+   type AstNode,
+   DocumentState,
+   type LangiumDocument,
+   OperationCancelled,
+   type URI,
+   UriUtils,
+   type WorkspaceLock
+} from '@hydranium/langium';
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver-protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { IntegrityService } from '../../../src/langium/integrity/integrity-service.js';
@@ -49,6 +58,13 @@ interface FakeRoot extends AstNode {
 }
 
 const URI_A = 'file:///A.fake';
+
+/** Reaches the protected wait for a parse or deletion. */
+class ProbeModelService<TAst extends AstNode> extends DefaultModelService<TAst> {
+   waitForParse(uri: URI, cancelToken: CancellationToken, build: Promise<void>): Promise<void> {
+      return this.nextParseOrDeletion(uri, cancelToken, build);
+   }
+}
 
 /**
  * ModelService variant whose `rebuild` advances the injected fake clock by a
@@ -644,6 +660,122 @@ describe('ModelService write-lock reentrancy detection', () => {
       }
    );
 
+   it('rejects a wait whose sync build is given up first, with that failure as the cause', async () => {
+      const bundle = makeTestServices<FakeRoot>({ modelService: services => new ProbeModelService<FakeRoot>(services) });
+      const service = bundle.modelService as ProbeModelService<FakeRoot>;
+      const failure = new Error('given up');
+
+      await expect(service.waitForParse(UriUtils.toUri(URI_A), CancellationToken.None, Promise.reject(failure))).rejects.toMatchObject({
+         cause: failure
+      });
+   });
+
+   it('logs a sync build given up after its wait was already cancelled, rather than leaving it unhandled', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const bundle = makeTestServices<FakeRoot>({ logger, modelService: services => new ProbeModelService<FakeRoot>(services) });
+      const service = bundle.modelService as ProbeModelService<FakeRoot>;
+      const source = new CancellationTokenSource();
+      source.cancel();
+      let giveUp!: (error: Error) => void;
+      const build = new Promise<void>((_resolve, reject) => (giveUp = reject));
+
+      await expect(service.waitForParse(UriUtils.toUri(URI_A), source.token, build)).rejects.toBe(OperationCancelled);
+      giveUp(new Error('given up'));
+      await waitFor(() => lines.some(line => line.level === 'error'));
+
+      expect(lines.filter(line => line.level === 'error').map(line => line.message.split('\n')[0])).toEqual([
+         'The build that would sync the root to its text failed. Error: given up'
+      ]);
+   });
+
+   it('logs a sync build given up after its wait was cancelled midway, since the waiter has gone', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const bundle = makeTestServices<FakeRoot>({ logger, modelService: services => new ProbeModelService<FakeRoot>(services) });
+      const service = bundle.modelService as ProbeModelService<FakeRoot>;
+      const source = new CancellationTokenSource();
+      let giveUp!: (error: Error) => void;
+      const build = new Promise<void>((_resolve, reject) => (giveUp = reject));
+
+      const waiting = service.waitForParse(UriUtils.toUri(URI_A), source.token, build);
+      source.cancel();
+      await expect(waiting).rejects.toBe(OperationCancelled);
+      giveUp(new Error('given up'));
+      await waitFor(() => lines.some(line => line.message.includes('given up')));
+
+      expect(lines.filter(line => line.message.includes('given up')).map(line => line.level)).toEqual(['error']);
+   });
+
+   it('logs a sync build given up after a deletion ended its wait at debug, since the waiter goes on and reports its own outcome', async () => {
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const { logger, lines } = makeCapturingLogger();
+         const bundle = makeTestServices<FakeRoot>({ logger, modelService: services => new ProbeModelService<FakeRoot>(services) });
+         const service = bundle.modelService as ProbeModelService<FakeRoot>;
+         let giveUp!: (error: Error) => void;
+         const build = new Promise<void>((_resolve, reject) => (giveUp = reject));
+         const uri = UriUtils.toUri(URI_A);
+
+         const waiting = service.waitForParse(uri, CancellationToken.None, build);
+         bundle.documentBuilder.fireOnUpdate([], [uri]);
+         await waiting;
+         giveUp(new Error('given up'));
+         const isLate = (line: CapturedLine): boolean => line.message.includes('given up');
+         await waitFor(() => lines.some(isLate));
+
+         expect(lines.filter(isLate).map(line => line.level)).toEqual(['debug']);
+      } finally {
+         Logger.setLevel(previous);
+      }
+   });
+
+   it('fails an updateAll with the first rebuild failure as it is, and logs the others, which nothing else reports', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const bundle = makeTestServices<FakeRoot>({ logger });
+      const uriB = 'file:///B.fake';
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'client-1');
+      bundle.textDocuments.seedOpen(uriB, 'name: b\n', 'client-1');
+      const first = new Error(`broke ${URI_A}`);
+      bundle.modelService.rebuild = uri => Promise.reject(String(uri) === URI_A ? first : new Error(`broke ${String(uri)}`));
+
+      const failure = await session
+         .updateAll({
+            updates: [
+               { uri: URI_A, model: 'name: a2\n', baseVersion: 'any' },
+               { uri: uriB, model: 'name: b2\n', baseVersion: 'any' }
+            ]
+         })
+         .then(
+            () => undefined,
+            (error: unknown) => error
+         );
+
+      expect(failure).toBe(first);
+      expect(lines.filter(line => line.level === 'error').map(line => line.message.split('\n')[0])).toEqual([
+         `Rebuild of ${uriB} failed beside that of ${URI_A}. Error: broke ${uriB}`
+      ]);
+   });
+
+   it('logs a rebuild of an updateAll cancelled beside a failed one at debug', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const bundle = makeTestServices<FakeRoot>({ logger });
+      const uriB = 'file:///B.fake';
+      const session = openSession(bundle.modelService, bundle.textDocuments, 'client-1');
+      bundle.textDocuments.seedOpen(uriB, 'name: b\n', 'client-1');
+      bundle.modelService.rebuild = uri => Promise.reject(String(uri) === URI_A ? new Error(`broke ${URI_A}`) : OperationCancelled);
+
+      await expect(
+         session.updateAll({
+            updates: [
+               { uri: URI_A, model: 'name: a2\n', baseVersion: 'any' },
+               { uri: uriB, model: 'name: b2\n', baseVersion: 'any' }
+            ]
+         })
+      ).rejects.toThrow(`broke ${URI_A}`);
+
+      expect(lines.filter(line => line.level === 'error')).toEqual([]);
+   });
+
    it('allows the same rebuild from outside a write-lock holder', async () => {
       // The control that makes the rejection above meaningful: without it, a
       // guard that rejected unconditionally would pass that test too.
@@ -966,8 +1098,8 @@ describe('ModelService rebuild and save', () => {
 
 /** Exposes the protected `settleSave` and the sync chain it drains. */
 class SettlingModelService extends DefaultModelService<FakeRoot> {
-   settle(uri: string): Promise<void> {
-      return this.settleSave(uri);
+   settle(uri: string, cancelToken?: CancellationToken): Promise<void> {
+      return this.settleSave(uri, cancelToken);
    }
 
    holdSyncChain(uri: string, chain: Promise<void>): void {
@@ -1055,7 +1187,7 @@ describe('DefaultModelService.settleSave', () => {
       bundle.services.workspace.VersionSyncService.syncTo = (uri, version) => {
          asked.push({ uri: uri.toString(), version });
          // Given up, so the settle returns without a parse to wait for.
-         return Promise.resolve(false);
+         return Promise.reject(new Error('build failed'));
       };
 
       const settling = service.settle(URI_A);
@@ -1067,7 +1199,27 @@ describe('DefaultModelService.settleSave', () => {
       expect(asked).toEqual([{ uri: URI_A, version: 1 }]);
    });
 
-   it('logs a wait that fails inside the bound apart from the timeout, and returns', async () => {
+   it('logs a sync build given up after the bound, which nothing else reports', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service, lines } = buildSettling(clock);
+      bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
+      bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(URI_A))!.parseResult.value, 0);
+      let giveUp!: (error: Error) => void;
+      bundle.services.workspace.VersionSyncService.syncTo = () => new Promise<void>((_resolve, reject) => (giveUp = reject));
+
+      const settling = service.settle(URI_A);
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await settling;
+      giveUp(new Error('build given up'));
+      await waitFor(() => lines.some(line => line.level === 'error'));
+
+      const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('Caused by: Error: build given up');
+   });
+
+   it('logs a wait that fails inside the bound at error, apart from the timeout, and returns', async () => {
       const { service, lines } = buildSettling(makeFakeClock());
       const chain = Promise.reject(new Error('chain failed'));
       // Observed here, so the rejection is not reported before the settle reaches the chain.
@@ -1076,11 +1228,89 @@ describe('DefaultModelService.settleSave', () => {
 
       await service.settle(URI_A);
 
-      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
-      expect(warnings.some(message => message.includes('failed before the timeout') && message.includes('chain failed'))).toBe(true);
-      expect(warnings.some(message => message.includes('exceeded'))).toBe(false);
+      const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+      expect(errors.some(message => message.includes('failed before the timeout') && message.includes('chain failed'))).toBe(true);
+      expect(lines.some(line => line.message.includes('exceeded'))).toBe(false);
+   });
+
+   it('logs a sync build given up inside the bound at error', async () => {
+      const { bundle, service, lines } = buildSettling(makeFakeClock());
+      behindItsText(bundle);
+      bundle.services.workspace.VersionSyncService.syncTo = () => Promise.reject(new Error('build given up'));
+
+      await service.settle(URI_A);
+
+      const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('Caused by: Error: build given up');
+      expect(lines.some(line => line.level === 'warn')).toBe(false);
+   });
+
+   it('warns about a failed wait once the document is gone', async () => {
+      const { bundle, service, lines } = buildSettling(makeFakeClock());
+      behindItsText(bundle);
+      bundle.services.workspace.VersionSyncService.syncTo = () => {
+         bundle.documents.clear();
+         return Promise.reject(new Error('build given up'));
+      };
+
+      await service.settle(URI_A);
+
+      const logged = lines.filter(line => line.level === 'warn' || line.level === 'error');
+      expect(logged.map(line => line.level)).toEqual(['warn']);
+      // With its stack, since this line ends the failure.
+      expect(logged[0].message).toMatch(/\n\s+at /);
+   });
+
+   it('logs a wait cancelled inside the bound at debug', async () => {
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const { bundle, service, lines } = buildSettling(makeFakeClock());
+         behindItsText(bundle);
+         bundle.services.workspace.VersionSyncService.syncTo = () => new Promise<void>(() => undefined);
+         const source = new CancellationTokenSource();
+         source.cancel();
+
+         await service.settle(URI_A, source.token);
+
+         expect(lines.filter(line => line.level === 'warn' || line.level === 'error')).toEqual([]);
+         expect(lines.some(line => line.level === 'debug' && line.message.includes('cancelled'))).toBe(true);
+      } finally {
+         Logger.setLevel(previous);
+      }
+   });
+
+   it('logs a wait cancelled after the bound at debug', async () => {
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
+      try {
+         const clock = makeFakeClock();
+         const { bundle, service, lines } = buildSettling(clock);
+         behindItsText(bundle);
+         bundle.services.workspace.VersionSyncService.syncTo = () => new Promise<void>(() => undefined);
+         const source = new CancellationTokenSource();
+
+         const settling = service.settle(URI_A, source.token);
+         await tick();
+         clock.advance(SETTLE_BOUND_MS);
+         await settling;
+         source.cancel();
+         const isLate = (line: AttributedLine): boolean => line.message.startsWith('Save settle') && !line.message.includes('exceeded');
+         await waitFor(() => lines.some(isLate));
+
+         expect(lines.filter(isLate).map(line => line.level)).toEqual(['debug']);
+      } finally {
+         Logger.setLevel(previous);
+      }
    });
 });
+
+/** Leave `URI_A`'s root parsed from v0 of a text at v1, so a settle requests a sync build. */
+function behindItsText(bundle: ReturnType<typeof buildSettling>['bundle']): void {
+   bundle.textDocuments.seedOpen(URI_A, 'name: a\n', 'editor-1');
+   bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(URI_A))!.parseResult.value, 0);
+}
 
 /**
  * The LSP-client sync. One persistent

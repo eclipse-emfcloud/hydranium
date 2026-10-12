@@ -19,7 +19,7 @@ import { DiagramStatus } from '../src/state/diagram-status.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { ModelReadyTimeoutError } from '../src/state/model-ready-timeout-error.js';
 import { ReconcilingConflictResolver, UNRECORDED_VERSION } from '@hydranium/protocol';
-import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
+import { type FakeClock, makeFakeClock, waitFor } from '@hydranium/protocol/testing';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 
 interface TestRoot extends AstNode {
@@ -29,6 +29,7 @@ interface TestRoot extends AstNode {
 
 interface LoggerHarness {
    readonly warns: string[];
+   readonly errors: string[];
    readonly timeLabels: string[];
    readonly withUris: string[];
 }
@@ -89,7 +90,7 @@ class TestState extends AbstractHydraniumGlspState<TestRoot> {
 
 function makeHarness(): StateHarness {
    return {
-      logger: { warns: [], timeLabels: [], withUris: [] },
+      logger: { warns: [], errors: [], timeLabels: [], withUris: [] },
       idMap: new Map(),
       documents: new Map(),
       documentLookups: [],
@@ -107,8 +108,8 @@ function createState(harness: StateHarness): { state: TestState; container: Cont
       warn(msg: string): void {
          harness.logger.warns.push(msg);
       },
-      error(_msg: string): void {
-         /* swallow */
+      error(msg: string): void {
+         harness.logger.errors.push(msg);
       },
       debug(_msg: string): void {
          /* swallow */
@@ -436,6 +437,28 @@ describe('AbstractHydraniumGlspState', () => {
          harness.clock.advance(10);
          await expect(pending).resolves.toBeUndefined();
          expect(harness.logger.warns.some(msg => msg.includes('Missed') && msg.includes('Validated'))).toBe(true);
+      });
+
+      it('logs a wait that fails after its timeout, which nothing else reports', async () => {
+         const harness = makeHarness();
+         let fail!: (error: Error) => void;
+         harness.ensureDocumentStatePromise = () => new Promise((_resolve, reject) => (fail = reject));
+         const { state } = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot());
+         state.setReadyTimeoutMs(10);
+         harness.documents.set('file:///a.a', {
+            uri: { toString: () => 'file:///a.a' },
+            state: DocumentState.Validated,
+            parseResult: { value: makeRoot() }
+         });
+         const pending = state.ready(DocumentState.Validated);
+         harness.clock.advance(10);
+         await expect(pending).resolves.toBeUndefined();
+         fail(new Error('sync build given up'));
+         await waitFor(() => harness.logger.errors.length > 0);
+
+         expect(harness.logger.errors).toHaveLength(1);
+         expect(harness.logger.errors[0]).toContain('sync build given up');
       });
 
       it('names a root behind its text as the cause when the timeout fires at the target state', async () => {

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Deferred, type Logger, type Tracer } from '@hydranium/protocol';
+import { Deferred, type Logger, type Tracer, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import {
    DefaultWorkspaceManager,
    DocumentState,
@@ -69,7 +69,7 @@ export function handleProcessUnhandledRejection(reason: unknown, logger: Logger)
    if (typeof reason === 'symbol' && String(reason) === 'Symbol(OperationCancelled)') {
       return;
    }
-   logger.error('Unhandled promise rejection: ' + (reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)));
+   logger.error('Unhandled promise rejection: ' + describeErrorWithStack(reason));
 }
 
 /**
@@ -507,11 +507,10 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
          await super.initializeWorkspace(folders, cancelToken);
          this.workspaceInitializedDeferred.resolve(undefined);
       } catch (error: unknown) {
-         const message = error instanceof Error ? error.message : String(error);
          if (isOperationCancelled(error) || isConnectionGoneError(error)) {
-            this.tracer.debug(`Initial workspace build did not complete: ${message}`);
+            this.tracer.debug(`Initial workspace build did not complete: ${describeError(error)}`);
          } else {
-            this.tracer.error(`Initial workspace build failed: ${message}`);
+            this.tracer.error(`Initial workspace build failed: ${describeErrorWithStack(error)}`);
          }
          this.workspaceInitializedDeferred.reject(error);
          throw error;

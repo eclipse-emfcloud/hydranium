@@ -17,8 +17,8 @@ export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<
 }
 
 /**
- * {@link reconcileWrite} for a diagram edit: logs the outcome, and resyncs
- * through `onConflictDropped` when the edit is dropped.
+ * {@link reconcileWrite} for a diagram edit: logs the outcome it ends, and
+ * resyncs through `onConflictDropped` when the edit is dropped.
  *
  * A conflict whose refetch is unavailable, the current text not readable to
  * reconcile against, throws the `ConflictError` the write raised: forcing the
@@ -43,7 +43,8 @@ export async function reconcileSourceModelWrite<TModel extends object>(
    const { conflict, writes } = outcome;
    const versions = `model v${conflict.baseVersion} / text v${conflict.actualVersion}`;
    if (outcome.status === 'unavailable') {
-      hooks.logger.warn(`updateSourceModel refetch unavailable (${versions}); the diagram edit fails rather than overwrite unread text`);
+      // The conflict carries both versions to whoever ends the failure, which logs it; why it was not reconciled is diagnosis.
+      hooks.logger.debug(`updateSourceModel refetch unavailable (${versions}); the diagram edit fails rather than overwrite unread text`);
       throw conflict;
    }
    switch (outcome.status) {

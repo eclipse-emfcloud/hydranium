@@ -16,10 +16,11 @@ interface LogCapture {
    debug: string[];
    trace: string[];
    warn: string[];
+   error: string[];
 }
 
 function makeLog(): LogCapture {
-   return { debug: [], trace: [], warn: [] };
+   return { debug: [], trace: [], warn: [], error: [] };
 }
 
 interface FakeState {
@@ -28,6 +29,7 @@ interface FakeState {
       debug(msg: string): void;
       trace(msg: string): void;
       warn(msg: string): void;
+      error(msg: string): void;
    };
 }
 
@@ -47,6 +49,9 @@ function makeState(root: GModelRoot, log: LogCapture): FakeState {
          },
          warn(msg: string): void {
             log.warn.push(msg);
+         },
+         error(msg: string): void {
+            log.error.push(msg);
          }
       }
    };
@@ -76,7 +81,7 @@ function makeAction(revision: number): ComputedBoundsAction {
 }
 
 describe('HydraniumGlspComputedBoundsActionHandler', () => {
-   it('warns when revision mismatches AND initial handshake is pending', () => {
+   it('logs an error when revision mismatches AND initial handshake is pending, since the diagram stays empty', () => {
       const log = makeLog();
       const state = makeState(makeRoot(7), log);
       const handler = bindFakes(new HydraniumGlspComputedBoundsActionHandler(), state, { hasPendingInitialRequest: () => true });
@@ -84,10 +89,11 @@ describe('HydraniumGlspComputedBoundsActionHandler', () => {
       const result = handler.execute(makeAction(3)) as Action[];
 
       expect(result).toEqual([]);
-      expect(log.warn).toHaveLength(1);
-      expect(log.warn[0]).toContain('initial handshake');
-      expect(log.warn[0]).toContain('action.revision=3');
-      expect(log.warn[0]).toContain('model.revision=7');
+      expect(log.warn).toEqual([]);
+      expect(log.error).toHaveLength(1);
+      expect(log.error[0]).toContain('initial handshake');
+      expect(log.error[0]).toContain('action.revision=3');
+      expect(log.error[0]).toContain('model.revision=7');
       expect(log.debug).toHaveLength(1); // entry log
       expect(log.debug[0]).toContain('execute entered');
    });
@@ -113,7 +119,7 @@ describe('HydraniumGlspComputedBoundsActionHandler', () => {
 
       handler.execute(makeAction(11));
 
-      expect(log.warn[0]).toContain('action.revision=11');
-      expect(log.warn[0]).toContain('model.revision=12');
+      expect(log.error[0]).toContain('action.revision=11');
+      expect(log.error[0]).toContain('model.revision=12');
    });
 });

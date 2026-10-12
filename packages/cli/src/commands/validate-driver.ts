@@ -16,6 +16,7 @@
  * `--strict` also fails on warnings). Never imported — only spawned.
  */
 
+import { describeError } from '@hydranium/protocol';
 import { emitReport, loadHeadlessContext, OUT_FILE_FLAG } from './headless-harness.js';
 import { formatValidationReport, validationExitCode } from './validate-report.js';
 
@@ -79,6 +80,6 @@ async function main(argv: string[]): Promise<number> {
 main(process.argv.slice(2))
    .then(code => process.exit(code))
    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeError(error));
       process.exit(1);
    });

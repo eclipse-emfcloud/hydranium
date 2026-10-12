@@ -13,7 +13,7 @@ import { type ServerSharedServicesMinimal } from '../langium/shared-services.js'
 
 /** Heap usage ratio (heapUsed / heap_size_limit) above which we emit a warning. */
 export const DEFAULT_MEMORY_WARN_THRESHOLD = 0.85;
-/** Heap usage ratio above which we emit an error-level warning (imminent OOM likely). */
+/** Heap usage ratio above which the warning says out-of-memory is imminent. */
 export const DEFAULT_MEMORY_CRITICAL_THRESHOLD = 0.95;
 /** Cooldown between repeated warnings at the same level, in ms. */
 export const DEFAULT_COOLDOWN_MS = 30_000;
@@ -25,7 +25,7 @@ type Severity = 'ok' | 'warn' | 'critical';
 export interface MemoryMonitorOptions {
    /** Heap-usage ratio (0..1) above which a warning is emitted. Default {@link DEFAULT_MEMORY_WARN_THRESHOLD}. */
    warnThreshold?: number;
-   /** Heap-usage ratio above which an error is emitted (imminent OOM likely). Default {@link DEFAULT_MEMORY_CRITICAL_THRESHOLD}. */
+   /** Heap-usage ratio above which the warning says out-of-memory is imminent. Default {@link DEFAULT_MEMORY_CRITICAL_THRESHOLD}. */
    criticalThreshold?: number;
    /** Sample interval, in ms. Default {@link DEFAULT_MEMORY_INTERVAL_MS}. */
    intervalMs?: number;
@@ -86,9 +86,8 @@ export function startMemoryMonitor(shared: ServerSharedServicesMinimal, options:
             : severity === 'warn'
               ? ' - garbage collection pressure may slow operations'
               : ' - recovered below warning threshold');
-      if (severity === 'critical') {
-         logger.error(message);
-      } else if (severity === 'warn') {
+      // Critical is still a warning: nothing has failed yet.
+      if (severity !== 'ok') {
          logger.warn(message);
       } else {
          logger.info(message);

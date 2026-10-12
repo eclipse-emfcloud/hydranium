@@ -9,7 +9,7 @@
 
 import { DiagramLoader, type DiagramLoadingOptions, StatusAction } from '@eclipse-glsp/client';
 import { ChannelLogger } from '@hydranium/client-theia/browser';
-import { Deferred } from '@hydranium/protocol';
+import { Deferred, describeError } from '@hydranium/protocol';
 import { nls } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';
 
@@ -175,6 +175,6 @@ export class HydraniumDiagramLoader extends DiagramLoader {
    /** Render a thrown value as a message. Shared so the channel line, the status
     *  overlay and any consumer rendering {@link DiagramLoadFailure.error} agree. */
    protected formatError(err: unknown): string {
-      return err instanceof Error ? err.message : String(err);
+      return describeError(err);
    }
 }

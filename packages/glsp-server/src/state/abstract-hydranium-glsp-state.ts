@@ -30,7 +30,9 @@ import {
    type TransferElement,
    asModelVersion,
    TIMED_OUT,
-   UNRECORDED_VERSION
+   UNRECORDED_VERSION,
+   describeError,
+   describeErrorWithStack
 } from '@hydranium/protocol';
 import { type OperationTransition, openOperationOf } from '../command/hydranium-glsp-operation-command.js';
 import { type DiagramStatus, type DiagramStatusEntry } from './diagram-status.js';
@@ -755,7 +757,12 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     */
    protected async readCurrentRoot(uri: string): Promise<{ root: AstNode; version: ModelVersion } | undefined> {
       const modelService = this.sharedServices.model.ModelService;
-      if (!(await modelService.validated(uri).catch(() => undefined))) {
+      // Unreadable here is the conflict the caller then raises, which is logged where it ends; the reason is diagnosis.
+      const validated = await modelService.validated(uri).catch((error: unknown) => {
+         this.logger.debug(`The current text of ${uri} cannot be read: ${describeError(error)}`);
+         return undefined;
+      });
+      if (!validated) {
          return undefined;
       }
       const store = this.sharedServices.workspace.TextDocuments;
@@ -795,6 +802,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       if ((await this.sharedServices.Clock.raceTimer(reached, this.readyTimeoutMs)) !== TIMED_OUT) {
          return;
       }
+      // The race has settled, so a later failure of the wait, such as a given-up sync build, reaches no one else.
+      void reached.catch((error: unknown) =>
+         this.logger.error(`The wait for '${DocumentState[state]}' failed after it timed out: ${describeErrorWithStack(error)}`)
+      );
       const elapsed = Math.round(stopwatch.elapsedMs);
       // Through the model service's canonicalizing gateway, so a symlinked
       // `_sourceUri` is not reported as a hard timeout.

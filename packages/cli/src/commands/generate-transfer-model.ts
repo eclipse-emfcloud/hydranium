@@ -19,6 +19,7 @@ import {
    type InterfaceDeclaration,
    type SourceFile
 } from 'ts-morph';
+import { describeError } from '@hydranium/protocol';
 
 /**
  * Options for the transfer-model generator.
@@ -109,7 +110,7 @@ export function watchTransferModel(options: GenerateTransferModelOptions, contex
       try {
          generateTransferModel(options);
       } catch (error: unknown) {
-         console.error(`Transfer-model generation failed: ${error instanceof Error ? error.message : String(error)}`);
+         console.error(`Transfer-model generation failed: ${describeError(error)}`);
       }
    };
    runSafely();
