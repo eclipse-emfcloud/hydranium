@@ -129,6 +129,10 @@ interface ServicesStubOptions {
    reloadedBaselines?: string[];
    /** Receives each check the handler registers through `VersionSyncService.registerDeferredBuilds`. */
    deferredBuilds?: Array<(uri: URI) => boolean>;
+   /** Drives `ModelService.settleLanguageClient`. Defaults to settled at once. */
+   settleLanguageClient?: (uri: string) => Promise<void>;
+   /** Answers `ModelService.isLanguageClientPushPending`. Defaults to no push pending. */
+   pushPending?: boolean;
 }
 
 function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices {
@@ -138,7 +142,7 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
    const loggedErrors = opts.loggedErrors;
    const loggedWarnings = opts.loggedWarnings;
    const fileSystemTaskQueue = opts.enqueue
-      ? { enqueue: opts.enqueue }
+      ? { enqueue: opts.enqueue, isIdle: () => true }
       : new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() } });
    // `DefaultDocumentUpdateHandler` constructor subscribes to
    // `services.lsp.LanguageServer.onInitialize` / `onInitialized` — stub
@@ -157,6 +161,12 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
       Tracer: makeNoopTracer(),
       lsp: {
          LanguageServer: { onInitialize: noOpEvent, onInitialized: noOpEvent }
+      },
+      model: {
+         ModelService: {
+            settleLanguageClient: opts.settleLanguageClient ?? (async () => undefined),
+            isLanguageClientPushPending: () => opts.pushPending ?? false
+         }
       },
       workspace: {
          WorkspaceManager: { ready: Promise.resolve() },
@@ -701,7 +711,7 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       const { handler, queue } = makeHandler();
       const serverSave = new Deferred();
       void queue(() => serverSave.promise);
-      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
       await tick(0);
       expect(answer.settled).toBe(false);
       serverSave.resolve();
@@ -714,7 +724,7 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       const loggedWarnings: string[] = [];
       const { handler, queue } = makeHandler({ clock, loggedWarnings });
       void queue(() => new Deferred().promise);
-      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
       clock.advance(999);
       await tick(0);
       expect(answer.settled).toBe(false);
@@ -728,7 +738,7 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       const clock = makeFakeClock();
       const { handler, queue } = makeHandler({ clock }, { willSaveGateMs: 200 });
       void queue(() => new Deferred().promise);
-      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
       clock.advance(200);
       await tick(0);
       expect(answer.settled).toBe(true);
@@ -782,7 +792,7 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       const { handler, queue, editorSaved } = makeHandler({ clock });
       const serverSave = new Deferred();
       void queue(() => serverSave.promise);
-      const answer = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
       clock.advance(1000);
       await tick(0);
       expect(answer.settled).toBe(true);
@@ -796,7 +806,7 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
    it('answers a second willSaveWaitUntil of the document at once, releasing the first save that never reported', async () => {
       const { handler } = makeHandler();
       await handler.willSaveDocumentWaitUntil(willSave);
-      const second = track(Promise.resolve(handler.willSaveDocumentWaitUntil(willSave)));
+      const second = track(handler.willSaveDocumentWaitUntil(willSave));
       await tick(0);
       expect(second).toEqual({ settled: true, value: [] });
    });
@@ -823,5 +833,185 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       });
       await expect(handler.willSaveDocumentWaitUntil(willSave)).resolves.toEqual([]);
       expect(loggedErrors.some(line => line.includes('queue gone'))).toBe(true);
+   });
+
+   it('answers only once the push of the document into the editor has settled', async () => {
+      const settled = new Deferred();
+      const settledUris: string[] = [];
+      const { handler } = makeHandler({
+         settleLanguageClient: uri => {
+            settledUris.push(uri);
+            return settled.promise;
+         }
+      });
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      settled.resolve();
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+      expect(settledUris).toEqual([SAVED_URI]);
+   });
+
+   it('answers after willSaveGateMs when the settle outlasts it on a build, logging at debug', async () => {
+      const clock = makeFakeClock();
+      const loggedWarnings: string[] = [];
+      const loggedDebug: string[] = [];
+      const { handler } = makeHandler({ clock, loggedWarnings, loggedDebug, settleLanguageClient: () => new Deferred().promise });
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(999);
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      clock.advance(1);
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+      expect(loggedDebug.some(line => line.includes(SAVED_URI) && /settle still pending/.test(line))).toBe(true);
+      expect(loggedWarnings).toEqual([]);
+   });
+
+   it('warns when the settle outlasts willSaveGateMs on a push the editor has not answered', async () => {
+      const clock = makeFakeClock();
+      const loggedWarnings: string[] = [];
+      const { handler } = makeHandler({ clock, loggedWarnings, pushPending: true, settleLanguageClient: () => new Deferred().promise });
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(999);
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      clock.advance(1);
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+      expect(loggedWarnings.filter(line => line.includes(SAVED_URI) && /push of it still pending/.test(line))).toHaveLength(1);
+   });
+
+   it('warns when the settle outlasts willSaveGateMs with server writes of the document queued', async () => {
+      const clock = makeFakeClock();
+      const loggedWarnings: string[] = [];
+      const { handler, queue } = makeHandler({ clock, loggedWarnings, settleLanguageClient: () => new Deferred().promise });
+      void queue(() => new Deferred().promise);
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(999);
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      clock.advance(1);
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+      expect(loggedWarnings.filter(line => line.includes(SAVED_URI) && /server writes of it queued/.test(line))).toHaveLength(1);
+   });
+
+   it('caps the push and the queued disk writes together at willSaveGateMs', async () => {
+      const clock = makeFakeClock();
+      const settled = new Deferred();
+      const { handler, queue } = makeHandler({ clock, settleLanguageClient: () => settled.promise });
+      void queue(() => new Deferred().promise);
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(600);
+      settled.resolve();
+      await tick(0);
+      expect(answer.settled).toBe(false);
+      clock.advance(400);
+      await tick(0);
+      expect(answer.settled).toBe(true);
+   });
+
+   it('lets server writes of the document run while the push is pending', async () => {
+      const { handler, queue } = makeHandler({ settleLanguageClient: () => new Deferred().promise });
+      void handler.willSaveDocumentWaitUntil(willSave);
+      await tick(0);
+      const serverSave = track(queue(async () => 'written'));
+      await tick(0);
+      expect(serverSave).toEqual({ settled: true, value: 'written' });
+   });
+
+   it('answers once the disk queue is clear when the settle rejects, logging the failure', async () => {
+      const loggedErrors: string[] = [];
+      const { handler } = makeHandler({ loggedErrors, settleLanguageClient: () => Promise.reject(new Error('wait cancelled')) });
+      await expect(handler.willSaveDocumentWaitUntil(willSave)).resolves.toEqual([]);
+      expect(loggedErrors.some(line => line.includes(SAVED_URI) && line.includes('wait cancelled'))).toBe(true);
+   });
+
+   it('logs a settle that rejects after willSaveGateMs answered the save', async () => {
+      const clock = makeFakeClock();
+      const loggedErrors: string[] = [];
+      const settle = new Deferred();
+      const { handler } = makeHandler({ clock, loggedErrors, settleLanguageClient: () => settle.promise });
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(1000);
+      await tick(0);
+      expect(answer).toEqual({ settled: true, value: [] });
+
+      settle.reject(new Error('late settle failure'));
+      await tick(0);
+
+      expect(loggedErrors.filter(line => line.includes(SAVED_URI) && line.includes('late settle failure'))).toHaveLength(1);
+   });
+
+   it('answers once the disk queue is clear when the settle throws, logging the failure', async () => {
+      const loggedErrors: string[] = [];
+      const { handler } = makeHandler({
+         loggedErrors,
+         settleLanguageClient: () => {
+            throw new Error('settle gone');
+         }
+      });
+      await expect(handler.willSaveDocumentWaitUntil(willSave)).resolves.toEqual([]);
+      expect(loggedErrors.some(line => line.includes(SAVED_URI) && line.includes('settle gone'))).toBe(true);
+   });
+
+   it('holds disk tasks under the second of two saves that both waited for the push', async () => {
+      const settled = new Deferred();
+      const { handler, queue, editorSaved } = makeHandler({ settleLanguageClient: () => settled.promise });
+      const first = track(handler.willSaveDocumentWaitUntil(willSave));
+      const second = track(handler.willSaveDocumentWaitUntil(willSave));
+      settled.resolve();
+      await tick(0);
+      expect([first.settled, second.settled]).toEqual([true, true]);
+      const serverSave = track(queue(async () => undefined));
+      await tick(0);
+      expect(serverSave.settled).toBe(false);
+      editorSaved();
+      await tick(0);
+      expect(serverSave.settled).toBe(true);
+   });
+
+   it('leaves later disk tasks unheld when the editor reported its save while a settle past the cap was still running', async () => {
+      const clock = makeFakeClock();
+      const settled = new Deferred();
+      const { handler, queue, editorSaved } = makeHandler({ clock, settleLanguageClient: () => settled.promise });
+      const answer = track(handler.willSaveDocumentWaitUntil(willSave));
+      clock.advance(1000);
+      await tick(0);
+      expect(answer.settled).toBe(true);
+      editorSaved();
+      settled.resolve();
+      await tick(0);
+      const later = track(queue(async () => undefined));
+      await tick(0);
+      expect(later.settled).toBe(true);
+   });
+
+   it('builds a debounced change of the saved document before it settles, without waiting out the debounce', async () => {
+      const clock = makeFakeClock();
+      let dispatchedBeforeSettle: string[] | undefined;
+      const services = makeServicesStub({
+         clock,
+         settleLanguageClient: async () => {
+            dispatchedBeforeSettle = handler.dispatchCalls.flatMap(call => call.changed.map(uri => uri.toString()));
+         }
+      });
+      const handler = new CapturingHandler(services, { debounceMs: 2000 });
+      handler.triggerChange(SAVED_URI);
+      handler.triggerChange(WATCHED_URI);
+      await expect(handler.willSaveDocumentWaitUntil(willSave)).resolves.toEqual([]);
+      expect(dispatchedBeforeSettle).toEqual([SAVED_URI, WATCHED_URI]);
+   });
+
+   it('leaves debounced changes of other documents to the debounce', async () => {
+      const clock = makeFakeClock();
+      const handler = new CapturingHandler(makeServicesStub({ clock }), { debounceMs: 2000 });
+      handler.triggerChange(WATCHED_URI);
+      await handler.willSaveDocumentWaitUntil(willSave);
+      expect(handler.dispatchCalls).toEqual([]);
+      clock.advance(2000);
+      expect(handler.dispatchCalls).toHaveLength(1);
    });
 });

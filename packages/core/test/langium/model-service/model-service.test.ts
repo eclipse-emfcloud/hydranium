@@ -1404,6 +1404,29 @@ function behindItsText(bundle: ReturnType<typeof buildSettling>['bundle']): void
    bundle.modelLedger.record(bundle.documents.getDocument(UriUtils.toUri(URI_A))!.parseResult.value, 0);
 }
 
+describe('ModelService isLanguageClientPushPending', () => {
+   it('answers whether a push of the document awaits the client', () => {
+      const { service } = buildSettling();
+      expect(service.isLanguageClientPushPending(URI_A)).toBe(false);
+
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), new Deferred().promise);
+
+      expect(service.isLanguageClientPushPending(URI_A)).toBe(true);
+   });
+
+   it('does not count a push a settle already timed out on', async () => {
+      const clock = makeFakeClock();
+      const { service } = buildSettling(clock);
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), new Deferred().promise);
+      const settling = service.settleLanguageClient(URI_A);
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await settling;
+
+      expect(service.isLanguageClientPushPending(URI_A)).toBe(false);
+   });
+});
+
 /**
  * The LSP-client sync. One persistent
  * `onDocumentPhase(IntegrityService.SettledState)` listener mirrors server-side

@@ -256,11 +256,18 @@ the newer save's outcome.
 ## Editor saves
 
 An editor behind the LSP head writes the file itself, and the server joins
-that save to the file's disk queue: the answer to `willSaveWaitUntil` waits for
-the server's writes already queued, so the editor writes after them, and server
-writes queued after the editor's save wait for its `didSave`, so they land
-after the editor's write. `willSaveGateMs` caps each wait, and the answer never
-fails, since VS Code stops asking for the rest of the session after repeated
+that save to the file's disk queue: the answer to `willSaveWaitUntil` waits
+for `settleLanguageClient`, as the other heads' saves do (see
+[Writes need an open](#writes-need-an-open)), so the editor's save does not
+race the push of the server's text, then for the server's writes already
+queued, so the editor writes after them. The settle runs before the save
+joins the queue, since it waits on a build, and a debounced change of the
+document is built at once, or the settle would wait out the debounce. Past the
+cap the save joins the queue while the settle still runs, so a write its build
+queues waits behind the save. Server writes queued after the editor's save
+wait for its `didSave`, so they land after the editor's write.
+`willSaveGateMs` caps the answer and the hold each, and the answer never fails,
+since VS Code stops asking for the rest of the session after repeated
 timed-out or failed answers.
 
 On `didSave` the store reads the file back through its disk queue and fires

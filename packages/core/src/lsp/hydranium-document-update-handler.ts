@@ -63,13 +63,15 @@ export interface HydraniumDocumentUpdateHandlerOptions {
    readonly bypassNonLanguageClientChanges?: boolean;
    /**
     * Longest an editor's save waits on the server, in milliseconds, at each of
-    * its two steps: the `willSaveWaitUntil` answer waits for the server's disk
-    * writes of the document already queued, and server writes queued after the
-    * answer wait for the editor's `didSave`. Either wait that runs out is
-    * logged, and the editor's write and the server's can then land in either
-    * order. Default `1000`: VS Code gives up on an answer after about 1.5 s,
-    * and switches the listener off for the session once four answers, over
-    * all documents, timed out or failed.
+    * its two steps: the `willSaveWaitUntil` answer waits for the language
+    * client's answer to the push of the server's text and for the server's
+    * disk writes of the document already queued, and server writes queued
+    * after the answer wait for the editor's `didSave`. Either wait that runs
+    * out is logged, and the editor can then save without the server's text,
+    * or its write and the server's land in either order. Default `1000`: VS
+    * Code gives up on an answer after about 1.5 s, and switches the listener
+    * off for the session once four answers, over all documents, timed out or
+    * failed.
     */
    readonly willSaveGateMs?: number;
 }
@@ -96,10 +98,11 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *     runs, so a subclass that formats build logs can tag its line with the
  *     event that caused the build without per-adopter wiring to capture it.
  *  4. **Editor save gate** ({@link willSaveDocumentWaitUntil}) — the editor
- *     writes the file itself, so the server's disk writes of that document
- *     are ordered around it: the editor's save waits for the ones already
- *     queued, and the ones queued during its save wait for its `didSave`.
- *     Both waits are capped by
+ *     writes the file itself, so its save waits for the language client to
+ *     answer the push of the server's newer text, and the server's disk
+ *     writes of that document are ordered around it: the editor's save waits
+ *     for the ones already queued, and the ones queued during its save wait
+ *     for its `didSave`. The answer and the hold are each capped by
  *     {@link HydraniumDocumentUpdateHandlerOptions.willSaveGateMs}.
  *
  * What the build keeps after a document's last close is not dispatched here:
@@ -257,23 +260,27 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
    }
 
    /**
-    * Answer an editor's `willSaveWaitUntil` with no edits once the server's
-    * disk writes of the document already queued have landed, or after
-    * {@link willSaveGateMs}, whichever is first. From the moment the queue
-    * reaches this save, disk tasks of the document queued behind it wait for
-    * the editor's `didSave`, reported through
+    * Answer an editor's `willSaveWaitUntil` with no edits once
+    * {@link settleBeforeSave} has resolved and then the server's disk writes
+    * of the document already queued have landed, or after
+    * {@link willSaveGateMs} for both together, whichever is first. From the
+    * moment the queue reaches this save, disk tasks of the document queued
+    * behind it wait for the editor's `didSave`, reported through
     * `HydraniumTextDocuments.onDidSaveInLanguageClient`, or for
     * {@link willSaveGateMs} more.
     *
     * The hold is a disk task that waits only for that signal or its timer:
     * waiting on a build, a save or anything else queued for the document would
-    * wedge its queue. Resolves in every case, since a failed request counts
-    * against the listener in VS Code; Langium drops the request's cancellation,
-    * so an abandoned request still runs to the cap. A hold that runs out is
-    * logged at debug only: an editor skips `didSave` for a save it cancels or
-    * that changed nothing.
+    * wedge its queue, so the settle runs before it is queued. Past the cap the
+    * hold is queued while the settle still runs, so a write that build queues,
+    * such as an integrity repair, waits behind the hold. A settle that fails is
+    * logged and the save goes on. Resolves in every case, since a
+    * failed request counts against the listener in VS Code; Langium drops the
+    * request's cancellation, so an abandoned request still runs to the cap. A
+    * hold that runs out is logged at debug only: an editor skips `didSave` for
+    * a save it cancels or that changed nothing.
     */
-   willSaveDocumentWaitUntil(event: TextDocumentWillSaveEvent<TextDocument>): Promise<TextEdit[]> {
+   async willSaveDocumentWaitUntil(event: TextDocumentWillSaveEvent<TextDocument>): Promise<TextEdit[]> {
       const uri = event.document.uri;
       this.editorSaves.get(uri)?.();
       const hold = new Deferred();
@@ -284,32 +291,83 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
          hold.resolve();
       };
       this.editorSaves.set(uri, release);
-      return new Promise<TextEdit[]>(resolve => {
-         const clock = this.services.Clock;
-         const cap = clock.setTimer(() => {
+      const clock = this.services.Clock;
+      const answer = new Deferred<TextEdit[]>();
+      let settling = true;
+      const cap = clock.setTimer(() => {
+         if (settling) {
+            // A push unanswered past the cap is the stale-save case, and server
+            // writes queued ahead of the hold race the save; a build past the
+            // cap alone is routine on a large model.
+            if (this.services.model.ModelService.isLanguageClientPushPending(uri)) {
+               this.logger.warn(
+                  `willSaveWaitUntil for ${uri} answered after ${this.willSaveGateMs} ms with the language client's answer to a push of it still pending; the editor may save text older than the server's.`
+               );
+            } else if (!this.services.workspace.FileSystemTaskQueue.isIdle(uri)) {
+               this.logger.warn(
+                  `willSaveWaitUntil for ${uri} answered after ${this.willSaveGateMs} ms with its settle still pending and server writes of it queued; the editor's save may race them.`
+               );
+            } else {
+               this.logger.debug(
+                  `willSaveWaitUntil for ${uri} answered after ${this.willSaveGateMs} ms with its settle still pending, on its build or on a push a settle already timed out on.`
+               );
+            }
+         } else {
             this.logger.warn(
                `willSaveWaitUntil for ${uri} answered after ${this.willSaveGateMs} ms with server writes of it still queued; the editor's save may race them.`
             );
-            resolve([]);
-         }, this.willSaveGateMs);
-         try {
-            void this.services.workspace.FileSystemTaskQueue.enqueue(uri, async () => {
-               cap.dispose();
-               resolve([]);
-               if ((await clock.raceTimer(hold.promise, this.willSaveGateMs)) === TIMED_OUT) {
-                  this.logger.debug(
-                     `No didSave for ${uri} within ${this.willSaveGateMs} ms; server writes of it no longer wait for the editor's save.`
-                  );
-                  release();
-               }
-            });
-         } catch (err) {
-            cap.dispose();
-            this.logger.error(`willSaveWaitUntil for ${uri} answered without waiting. ${describeErrorWithStack(err)}`);
-            release();
-            resolve([]);
          }
-      });
+         answer.resolve([]);
+      }, this.willSaveGateMs);
+      // Caught on the settle itself, since a race that the cap has won drops a
+      // later rejection without a trace.
+      const settled = (async (): Promise<void> => {
+         try {
+            await this.settleBeforeSave(uri);
+         } catch (err: unknown) {
+            this.logger.error(`The settle before an editor save of ${uri} failed. ${describeErrorWithStack(err)}`);
+         }
+      })();
+      await Promise.race([settled, answer.promise]);
+      settling = false;
+      try {
+         void this.services.workspace.FileSystemTaskQueue.enqueue(uri, async () => {
+            cap.dispose();
+            answer.resolve([]);
+            if ((await clock.raceTimer(hold.promise, this.willSaveGateMs)) === TIMED_OUT) {
+               this.logger.debug(
+                  `No didSave for ${uri} within ${this.willSaveGateMs} ms; server writes of it no longer wait for the editor's save.`
+               );
+               release();
+            }
+         });
+      } catch (err: unknown) {
+         cap.dispose();
+         this.logger.error(`willSaveWaitUntil for ${uri} answered without waiting for server writes. ${describeErrorWithStack(err)}`);
+         release();
+         answer.resolve([]);
+      }
+      return answer.promise;
+   }
+
+   /**
+    * What an editor's save of `uri` waits for before it joins the document's
+    * disk queue: the language client's answer to the push of the server's
+    * newer text, applied or refused and logged
+    * (`ModelService.settleLanguageClient`). The editor saves its own buffer,
+    * so without it the editor can save text older than the server's. The
+    * settle waits for a build of the document's latest text, so a change of it
+    * still debounced is flushed first, along with every other debounced
+    * change. Runs outside the disk queue, under the save's cap; an override
+    * must not wait on a disk task of the document, which past the cap queues
+    * behind the save's hold.
+    */
+   protected async settleBeforeSave(uri: string): Promise<void> {
+      const key = URI.parse(uri).toString();
+      if (this.pendingChanged.has(key) || this.pendingDeleted.has(key)) {
+         this.flushPending();
+      }
+      await this.services.model.ModelService.settleLanguageClient(uri);
    }
 
    /**

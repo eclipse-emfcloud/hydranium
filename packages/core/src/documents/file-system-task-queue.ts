@@ -33,6 +33,8 @@ export interface FileSystemTaskQueue {
     * which wedges the file's queue for good.
     */
    enqueue<T>(uri: string, task: () => Promise<T>): Promise<T>;
+   /** Whether no task of `uri` is running or waiting. */
+   isIdle(uri: string): boolean;
 }
 
 export class DefaultFileSystemTaskQueue implements FileSystemTaskQueue {
@@ -64,5 +66,9 @@ export class DefaultFileSystemTaskQueue implements FileSystemTaskQueue {
          }
       });
       return result;
+   }
+
+   isIdle(uri: string): boolean {
+      return !this.queues.has(this.uriPolicy.canonicalUri(uri));
    }
 }

@@ -23,7 +23,7 @@ import type { AppliedEdit, NextAppliedEditOptions } from './lsp-server-connectio
 export interface AppliedEditCapture {
    readonly appliedEdits: ReadonlyArray<AppliedEdit>;
    nextAppliedEdit(uri: string, timeoutMsOrOptions?: number | NextAppliedEditOptions): Promise<AppliedEdit>;
-   setApplyEditHandler(handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult): void;
+   setApplyEditHandler(handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult | Promise<ApplyWorkspaceEditResult>): void;
    dispose(): void;
 }
 
@@ -37,7 +37,9 @@ export interface AppliedEditCapture {
 export function captureAppliedEdits(client: ProtocolConnection, defaultTimeoutMs: number): AppliedEditCapture {
    const appliedEdits: AppliedEdit[] = [];
    const waiters: Array<(edit: AppliedEdit) => boolean> = [];
-   let handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult = () => ({ applied: true });
+   let handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult | Promise<ApplyWorkspaceEditResult> = () => ({
+      applied: true
+   });
    const subscription = client.onRequest(ApplyWorkspaceEditRequest.type, (params: ApplyWorkspaceEditParams) => {
       const edit: AppliedEdit = { params, uris: editedUris(params.edit), text: insertedText(params.edit) };
       // Record before the handler runs, so a handler that rejects the edit or
@@ -92,7 +94,7 @@ export function captureAppliedEdits(client: ProtocolConnection, defaultTimeoutMs
          });
       },
 
-      setApplyEditHandler(next: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult): void {
+      setApplyEditHandler(next: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult | Promise<ApplyWorkspaceEditResult>): void {
          handler = next;
       },
 
