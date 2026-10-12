@@ -25,6 +25,7 @@
 
 import { INTEGRITY_CLIENT_ID } from '@hydranium/core';
 import { DocumentState, URI } from '@hydranium/langium';
+import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isDomainModel } from '../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -47,21 +48,6 @@ entity Twin {
 `;
 
 let scratch: ScratchOrderFlowHarness | undefined;
-
-/**
- * Poll until `predicate` holds. A `didChange` is debounced before it reaches the
- * builder, so `waitUntil(Validated)` returns against the PREVIOUS build and
- * proves nothing about this edit.
- */
-async function until(predicate: () => boolean, what: string): Promise<void> {
-   for (let attempt = 0; attempt < 200; attempt++) {
-      if (predicate()) {
-         return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-   }
-   throw new Error(`Timed out waiting for ${what}`);
-}
 
 /** The declaration names currently on the document's AST, re-read each call. */
 function declarationNames(harness: ScratchOrderFlowHarness['harness'], uri: URI): string[] {
@@ -109,8 +95,12 @@ describe('an integrity repair of an open document', () => {
 
       // Waiting for the repair IS the vacuity guard: a timeout here means the
       // edit never reached the build, and the version assertions below would
-      // otherwise pass against a document nothing had repaired.
-      await until(() => declarationNames(harness, uri).includes('Twin__1'), 'the duplicate to be repaired');
+      // otherwise pass against a document nothing had repaired. A `didChange`
+      // is debounced before the builder sees it, so `waitUntil(Validated)` can
+      // return against the previous build.
+      await waitFor(() => declarationNames(harness, uri).includes('Twin__1'), {
+         message: () => `the duplicate was never repaired; declarations: ${declarationNames(harness, uri).join(', ')}`
+      });
 
       const document = harness.shared.workspace.LangiumDocuments.getDocument(uri)!;
 

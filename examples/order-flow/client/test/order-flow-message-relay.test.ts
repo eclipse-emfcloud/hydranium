@@ -252,8 +252,12 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       // Raw sends, because the point is to bypass the proxy — so they have to
       // apply the wire prefix the proxy would have applied, from the constant
       // rather than a literal that could drift away from the server's default.
-      const pending = connection.sendRequest<Array<{ id: string }>>(`${DATA_SERVER_WIRE_PREFIX}getProjects`);
-      await new Promise<void>(resolve => setTimeout(resolve, 25));
+      const method = `${DATA_SERVER_WIRE_PREFIX}getProjects`;
+      const pending = connection.sendRequest<Array<{ id: string }>>(method);
+      // Crossed the clone pipe, so the relay holds it while its socket is gated.
+      await waitFor(() => crossed.some(message => Message.isRequest(message) && message.method === method), {
+         message: 'the early request never crossed the clone pipe'
+      });
       expect(gatedPort.relay).toBeDefined();
 
       release();

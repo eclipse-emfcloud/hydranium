@@ -33,8 +33,13 @@ export interface WaitForOptions {
    readonly timeoutMs?: number;
    /** Poll the predicate every this-many milliseconds. Default 5. */
    readonly intervalMs?: number;
-   /** Error message on timeout, and when the predicate throws. Default a generic phrasing. */
-   readonly message?: string;
+   /**
+    * Error message on timeout, and when the predicate throws. A function is
+    * called only then, so it can report the state the wait ended on; when it
+    * throws, the default text is used, with its throw as the error's `cause`
+    * unless the predicate threw. Default a generic phrasing.
+    */
+   readonly message?: string | (() => string);
 }
 
 /**
@@ -57,11 +62,13 @@ export interface WaitForOptions {
 export function waitFor(predicate: () => boolean, options: WaitForOptions = {}): Promise<void> {
    const timeoutMs = options.timeoutMs ?? 2000;
    const intervalMs = options.intervalMs ?? 5;
-   const message = options.message ?? `Timed out after ${timeoutMs}ms waiting for a condition`;
+   const defaultMessage = `Timed out after ${timeoutMs}ms waiting for a condition`;
    return new Promise<void>((resolve, reject) => {
-      // A throw would leave the promise unsettled from a timer, or escape
-      // `waitFor` itself on the first check; it rejects as the timeout instead,
-      // with the throw as cause. True once the promise is settled.
+      // A throw from the predicate or the message function would leave the
+      // promise unsettled from the poll's or the deadline's timer, or escape
+      // `waitFor` itself on the first check; it rejects instead, with the
+      // predicate's throw, else the message function's, as cause. True once
+      // the promise is settled.
       const settle = (timedOut: boolean): boolean => {
          let met = false;
          let threw = false;
@@ -74,11 +81,25 @@ export function waitFor(predicate: () => boolean, options: WaitForOptions = {}):
          }
          if (met) {
             resolve();
-         } else if (timedOut || threw) {
-            reject(new Error(message, threw ? { cause } : undefined));
-         } else {
+            return true;
+         }
+         if (!timedOut && !threw) {
             return false;
          }
+         let message = defaultMessage;
+         try {
+            if (typeof options.message === 'function') {
+               message = options.message();
+            } else if (options.message !== undefined) {
+               message = options.message;
+            }
+         } catch (error: unknown) {
+            if (!threw) {
+               threw = true;
+               cause = error;
+            }
+         }
+         reject(new Error(message, threw ? { cause } : undefined));
          return true;
       };
       if (settle(false)) {
