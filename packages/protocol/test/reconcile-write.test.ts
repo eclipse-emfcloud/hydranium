@@ -134,6 +134,13 @@ describe('reconcileWrite', () => {
       expect(recorder.writes).toHaveLength(1);
    });
 
+   test('reports an edit the refetch already holds as already-applied without writing again', async () => {
+      const recorder = record({ conflicts: 1, refetches: [{ model: OURS, baseVersion: asModelVersion(7) }] });
+
+      expect(await reconcileWrite(OURS, asModelVersion(5), recorder.hooks)).toMatchObject({ status: 'already-applied', writes: 1 });
+      expect(recorder.writes).toHaveLength(1);
+   });
+
    test('reports an empty edit as unchanged', async () => {
       const recorder = record({ conflicts: 1 });
 

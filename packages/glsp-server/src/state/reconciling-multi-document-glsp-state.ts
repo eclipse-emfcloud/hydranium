@@ -233,6 +233,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
          conflictResolver: this.conflictResolver,
          logger: this.logger,
          onConflictDropped: () => this.writeDropped(),
+         onAlreadyApplied: () => this.captureBuiltRoot(),
          maxWrites: this.maxSourceModelWrites
       });
    }

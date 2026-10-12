@@ -554,6 +554,20 @@ describe('order-flow properties model', () => {
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('WonByTheOtherWriter');
    });
 
+   it('settles a write a foreign writer already made, and takes the version it made it at', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = pinnedModel();
+      await model.open(uri);
+
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, name: 'Fulfilment', subject: 'LineItem' });
+
+      expect(await model.setField('name', 'Fulfilment')).toEqual({ status: 'unchanged' });
+      expect(model.fields.find(field => field.name === 'subject')?.value).toBe('LineItem');
+      // Based on the server's version now, the next write lands first time.
+      expect(await model.setField('name', 'Fulfillment')).toEqual({ status: 'applied' });
+   });
+
    it('closes the document and clears its fields', async () => {
       const model = followingModel();
       await model.open(uriOf(FULFILLMENT_PROCESS));

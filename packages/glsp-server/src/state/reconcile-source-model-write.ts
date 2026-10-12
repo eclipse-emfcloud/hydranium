@@ -14,11 +14,14 @@ export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<
    readonly logger: Logger;
    /** Invoked when the edit is dropped, so the caller can resync its own state. */
    onConflictDropped(): void;
+   /** Invoked when the document already held the edit, so the caller can take its built root. */
+   onAlreadyApplied(): void;
 }
 
 /**
  * {@link reconcileWrite} for a diagram edit: logs the outcome it ends, and
- * resyncs through `onConflictDropped` when the edit is dropped.
+ * resyncs through `onConflictDropped` when the edit is dropped, through
+ * `onAlreadyApplied` when the document already held it.
  *
  * A conflict whose refetch is unavailable, the current text not readable to
  * reconcile against, throws the `ConflictError` the write raised: forcing the
@@ -50,6 +53,10 @@ export async function reconcileSourceModelWrite<TModel extends object>(
    switch (outcome.status) {
       case 'merged':
          hooks.logger.debug(`updateSourceModel merged (${versions}); landed on write ${writes}`);
+         return;
+      case 'already-applied':
+         hooks.logger.debug(`updateSourceModel already applied (${versions}); the document already holds the diagram edit`);
+         hooks.onAlreadyApplied();
          return;
       case 'unchanged':
          hooks.logger.debug(`updateSourceModel no-op (${versions}); the diagram is behind, its update catches it up`);

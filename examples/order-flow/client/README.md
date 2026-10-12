@@ -155,8 +155,8 @@ returns a status rather than `void`:
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
 | `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit to the *same* field, or kept racing foreign edits; the write was dropped and the panel now shows the server's value. |
-| `unchanged` | The value already matched; nothing was sent. |
+| `conflict` | Raced a foreign edit of the *same* field to a different value, or kept racing foreign edits; the write was dropped and the panel now shows the server's value. |
+| `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
 | `unavailable` | The document could not be refetched to reconcile against. |
 
 ## The contract with the server

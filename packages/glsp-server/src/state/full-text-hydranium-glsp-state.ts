@@ -11,7 +11,7 @@ import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { type BaseVersion, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
+import { type BaseVersion, isConflictError, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 
 /** Whole-document-text source model: the serialised text of the source root. */
@@ -39,7 +39,8 @@ export interface FullTextSourceModel {
  *
  * No `base` / conflict reconcile: a whole-document model has exactly one
  * field, so every concurrent edit is a same-field collision and undo / redo
- * degrade to drop-on-divergence. Adopters that need field-level undo use
+ * degrade to drop-on-divergence, unless the text already holds what they
+ * write. Adopters that need field-level undo use
  * `ReconcilingTransferHydraniumGlspState` instead.
  */
 @injectable()
@@ -66,8 +67,25 @@ export class FullTextHydraniumGlspState<TRoot extends AstNode>
       return isPromiseLike(text) ? text.then(withTrivia) : withTrivia(text);
    }
 
+   /**
+    * A write that conflicts while the store already holds `model.text`, as
+    * when an undo's side effect brought the text to the undo's result, is
+    * taken as applied; any other conflict is thrown.
+    */
    async updateSourceModel(model: FullTextSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
-      const document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, baseVersion });
+      let document: { root: AstNode };
+      try {
+         document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, baseVersion });
+      } catch (error: unknown) {
+         if (isConflictError(error) && this.sharedServices.workspace.TextDocuments.get(this._sourceUri)?.getText() === model.text) {
+            this.logger.debug(
+               `updateSourceModel already applied (model v${error.baseVersion} / text v${error.actualVersion}); the document already holds the diagram edit`
+            );
+            this.captureBuiltRoot();
+            return;
+         }
+         throw error;
+      }
       this.captureWrittenRoot(document.root as TRoot);
    }
 }

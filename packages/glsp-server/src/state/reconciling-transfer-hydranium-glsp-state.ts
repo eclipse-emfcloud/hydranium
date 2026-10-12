@@ -33,7 +33,7 @@ import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
  *   intent (base → ours) against the server's current root (theirs).
  * - {@link updateSourceModel} — the concrete reconcile template: persist,
  *   and on a `ConflictError` consult the injected `conflictResolver` and act
- *   on the merged / no-op / conflict / unavailable outcome.
+ *   on its outcome.
  * - {@link persist} / {@link refetch} — the only I/O seams. Defaults route
  *   through the diagram session's `update` and `ModelService.validated`;
  *   adopters whose document round-trip differs override these without
@@ -115,6 +115,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
          conflictResolver: this.conflictResolver,
          logger: this.logger,
          onConflictDropped: () => this.writeDropped(),
+         onAlreadyApplied: () => this.captureBuiltRoot(),
          maxWrites: this.maxSourceModelWrites
       });
    }

@@ -416,6 +416,26 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
+    * Take the document's built root as the source root; during an operation,
+    * as the root the operation closes on. A write the document already held,
+    * and an undo or redo that wrote nothing while its steps may have rebuilt
+    * the document, leave this state on a root that predates the document. The
+    * built root can lag the text until the next build, whose refresh captures
+    * that, as after {@link writeDropped}.
+    */
+   captureBuiltRoot(): void {
+      const operation = openOperationOf(this);
+      if (!operation) {
+         this.refreshSourceRoot();
+         return;
+      }
+      const current = this.sharedServices.model.ModelService.getDocument(this._sourceUri)?.parseResult.value;
+      if (current !== undefined) {
+         operation.recordWrittenRoot(current);
+      }
+   }
+
+   /**
     * Whether `node` belongs to the root its document is built to now, or to no
     * document; a root a rebuild replaced holds only stale nodes.
     */

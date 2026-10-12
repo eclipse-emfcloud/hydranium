@@ -174,6 +174,148 @@ describe('reconcileByPatchReplay', () => {
       expect(result).toEqual({ status: 'merged', merged: { entity: { other: 2, name: 1 } } });
    });
 
+   test('reports already-applied with theirs when the refetch holds the value the user wrote', async () => {
+      const result = await reconcileByPatchReplay({ name: 'Old' }, { name: 'New' }, async () => ({ name: 'New' }));
+
+      expect(result).toEqual({ status: 'already-applied', theirs: { name: 'New' } });
+   });
+
+   test('reports already-applied when the refetch holds the key the user adds, at the same value', async () => {
+      const base: { entity: Record<string, number> } = { entity: {} };
+
+      const result = await reconcileByPatchReplay(base, { entity: { name: 1 } }, async () => ({ entity: { name: 1 } }));
+
+      expect(result.status).toBe('already-applied');
+   });
+
+   test('reports already-applied when the refetch lacks the key the user removes', async () => {
+      const result = await reconcileByPatchReplay({ name: 'X', note: 'N' }, { name: 'X' }, async () => ({ name: 'X' }));
+
+      expect(result.status).toBe('already-applied');
+   });
+
+   test('reports already-applied when a foreign writer replaced the parent with an object lacking the removed key', async () => {
+      // In JSON a replaced object reads as edits to its fields, so only the key the user removed decides.
+      const result = await reconcileByPatchReplay<{ a: Record<string, number> }>({ a: { b: 1, c: 1 } }, { a: { c: 1 } }, async () => ({
+         a: { z: 9 }
+      }));
+
+      expect(result).toEqual({ status: 'already-applied', theirs: { a: { z: 9 } } });
+   });
+
+   test('reports already-applied with the foreign edit when the refetch also changed another path', async () => {
+      // The caller takes theirs as its new base; ours lacks the foreign edit.
+      const theirs = { name: 'New', note: 'FOREIGN' };
+
+      const result = await reconcileByPatchReplay({ name: 'Old', note: 'N' }, { name: 'New', note: 'N' }, async () => theirs);
+
+      expect(result).toEqual({ status: 'already-applied', theirs });
+   });
+
+   test('replays only the paths the refetch does not already hold', async () => {
+      const result = await reconcileByPatchReplay({ a: 1, b: 1, c: 1 }, { a: 2, b: 2, c: 1 }, async () => ({ a: 2, b: 1, c: 3 }));
+
+      expect(result).toEqual({ status: 'merged', merged: { a: 2, b: 2, c: 3 } });
+   });
+
+   test('compares an array once however many ops run through it, so a bulk edit the refetch holds stays fast', async () => {
+      // Compared once per op, 20,000 nodes take far longer than the test timeout.
+      const base = { nodes: Array.from({ length: 20_000 }, (_, i) => ({ x: i, y: i })) };
+      const ours = { nodes: base.nodes.map(node => ({ x: node.x + 1, y: node.y + 1 })) };
+
+      const result = await reconcileByPatchReplay(base, ours, async () => structuredClone(ours));
+
+      expect(result.status).toBe('already-applied');
+   });
+
+   test('counts an array once however many elements are inserted into it, so a bulk insert stays fast', async () => {
+      // Counted once per insert, 20,000 elements take far longer than the test timeout.
+      const base = { nodes: Array.from({ length: 20_000 }, (_, i) => ({ id: `n${i}` })) };
+      const ours = { nodes: [...base.nodes, ...Array.from({ length: 20_000 }, (_, i) => ({ id: `m${i}` }))] };
+
+      const result = await reconcileByPatchReplay(base, ours, async () => ({ ...structuredClone(base), name: 'renamed' }));
+
+      expect(result).toEqual({ status: 'merged', merged: { ...ours, name: 'renamed' } });
+   });
+
+   test('checks for inserts once however many arrays the patch inserts into, so a bulk insert across arrays stays fast', async () => {
+      // Each key owns its own array, so every array is a separate outermost one.
+      const keys = Array.from({ length: 40_000 }, (_, i) => `k${i}`);
+      const base = Object.fromEntries(keys.map(key => [key, [`${key}-a`]]));
+      const ours = Object.fromEntries(keys.map(key => [key, [`${key}-a`, `${key}-b`]]));
+
+      // A refetch already holding every insert stops at the collision check, so the time is the agreement check's.
+      const result = await reconcileByPatchReplay(base, ours, async () => structuredClone(ours));
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('reports already-applied when the refetch holds the array the user removed a middle element from', async () => {
+      const [first, second, third] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+      const result = await reconcileByPatchReplay({ items: [first, second, third] }, { items: [first, third] }, async () => ({
+         items: [first, third]
+      }));
+
+      expect(result.status).toBe('already-applied');
+   });
+
+   test('reports conflict when the refetch lost a different element of the array the user removed one from', async () => {
+      // By index, the user's `remove /items/2` finds no `/items/2` in theirs:
+      // agreeing would keep the third element, which the user removed.
+      const [first, second, third] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+      const result = await reconcileByPatchReplay({ items: [first, second, third] }, { items: [first, second] }, async () => ({
+         items: [first, third]
+      }));
+
+      expect(result).toEqual({ status: 'conflict', theirs: { items: [first, third] } });
+   });
+
+   test("reports conflict when the refetch holds the user's change to one element and another change elsewhere in the array", async () => {
+      const result = await reconcileByPatchReplay({ items: [{ x: 1 }, { y: 1 }] }, { items: [{ x: 2 }, { y: 1 }] }, async () => ({
+         items: [{ x: 2 }, { y: 5 }]
+      }));
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('reports conflict rather than insert again into an array whose other edits the refetch holds', async () => {
+      // Skipping `replace /items/0` and replaying `add /items/2` would make it [1, 1, 2, 2].
+      const ours = { items: [1, 1, 2] };
+
+      const result = await reconcileByPatchReplay({ items: [2, 1] }, ours, async () => ({ items: [1, 1, 2] }));
+
+      expect(result.status).toBe('conflict');
+   });
+
+   test('reports conflict when the refetch lacks the object the user removes a key from', async () => {
+      // A foreign writer deleted `a`; the user kept `a.c`.
+      const result = await reconcileByPatchReplay({ a: { b: 1, c: 1 } }, { a: { c: 1 } }, async () => ({}));
+
+      expect(result).toEqual({ status: 'conflict', theirs: {} });
+   });
+
+   test('reports conflict when the refetch omits the document the user removes a key from', async () => {
+      // A multi-document refetch omits a secondary it could not read.
+      const document = 'file:///a.x';
+      const base = { primary: { name: 'P' }, secondaries: { [document]: { note: 'N', width: 1 } } };
+      const ours = { primary: { name: 'P' }, secondaries: { [document]: { width: 1 } } };
+      const theirs = { primary: { name: 'P' }, secondaries: {} };
+
+      const result = await reconcileByPatchReplay(base, ours, async () => theirs);
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports already-applied when the refetch lacks a removed key that names an Object.prototype member', async () => {
+      const base: Record<string, number> = { constructor: 1, other: 1 };
+
+      const result = await reconcileByPatchReplay(base, { other: 1 }, async () => ({ other: 1 }));
+
+      expect(result.status).toBe('already-applied');
+   });
+
    test('reports unavailable when the refetch yields nothing', async () => {
       const base = { entity: { name: 'X' } };
       const ours = { entity: { name: 'Y' } };

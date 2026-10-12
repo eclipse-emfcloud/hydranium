@@ -38,9 +38,9 @@ export type SetFieldOutcome =
    | { readonly status: 'applied' }
    /** The write raced a foreign edit to a DIFFERENT field; both intents survive. */
    | { readonly status: 'merged' }
-   /** The write raced a foreign edit to the SAME field, or kept racing foreign edits; it was dropped and the panel now shows the server's value. */
+   /** The write raced a foreign edit of the SAME field to a different value, or kept racing foreign edits; it was dropped and the panel now shows the server's value. */
    | { readonly status: 'conflict' }
-   /** The value was already what was asked for; nothing was sent. */
+   /** Nothing was written: the panel's value already matched, or the server turned out to hold it. */
    | { readonly status: 'unchanged' }
    /** The conflict could not be reconciled because the document could not be refetched. */
    | { readonly status: 'unavailable' };
@@ -326,6 +326,12 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
             // The last refetch is older than the write that conflicted after it.
             this.adopt(await (await this.session.connected()).getModelDocument({ uri: base.uri }));
             return { status: 'conflict' };
+         case 'already-applied':
+            // The server holds the value at a later version than the snapshot's.
+            if (theirs) {
+               this.adopt(theirs);
+            }
+            return { status: 'unchanged' };
          case 'unchanged':
             return { status: 'unchanged' };
          case 'unavailable':
