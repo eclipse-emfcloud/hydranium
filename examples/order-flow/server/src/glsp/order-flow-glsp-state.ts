@@ -9,7 +9,7 @@
 
 import type { ClientSession } from '@hydranium/core';
 import { type MultiDocumentSourceModel, ReconcilingMultiDocumentGlspState } from '@hydranium/glsp-server';
-import { type AstNode, URI } from '@hydranium/langium';
+import { type AstNode } from '@hydranium/langium';
 import { type TransferElement } from '@hydranium/protocol';
 import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
@@ -135,9 +135,8 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
       if (uri !== this.layoutUri || this.sharedServices.model.ModelService.getDocument(uri)) {
          return super.openForWrite(session, uri);
       }
-      const serializer = this.sharedServices.ServiceRegistry.getServices(URI.parse(uri)).serializer.Serializer;
       // Outside the `try`: only a failed create means the layout may exist.
-      const text = await serializer.serializeTransfer(this.projectRoot(this.createLayoutRoot()));
+      const text = await this.sharedServices.model.ModelService.modelToText(uri, this.projectRoot(this.createLayoutRoot()));
       try {
          await this.createSecondaryDocument(session, uri, text);
       } catch {

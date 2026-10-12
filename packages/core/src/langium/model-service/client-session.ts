@@ -95,9 +95,11 @@ export interface ClientSession<
    openOptions(uri: string): TOpenOptions | undefined;
    /**
     * Create a document with `text` and open it for this session. It reaches
-    * disk on the first `save`. Fails when the file exists, any client has the
-    * URI open, or the URI waits out the release grace, and of two creates of one
-    * URI at most one succeeds.
+    * disk on the first `save`. `text` is written as given: make it from a
+    * model with {@link ModelService.modelToText}, which gives it the ending a
+    * write would. Fails when the file exists, any client has the URI open, or
+    * the URI waits out the release grace, and of two creates of one URI at
+    * most one succeeds.
     *
     * Resolves with the version the created document took, which a write based
     * on it names: once this resolves, the store's version may already be

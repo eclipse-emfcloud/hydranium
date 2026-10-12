@@ -42,10 +42,37 @@ describe('DocumentEndingPreserver', () => {
       expect(roundTrip('body\n   \n', 'body')).toBe('body\n   \n');
    });
 
-   it('reduces a CRLF ending to the LF the serializer emits', () => {
-      // Kept verbatim, a rewritten CRLF document would carry its only CRLFs at
-      // the very end — the one thing here that cannot be preserved.
-      expect(roundTrip('body\r\n\r\n', 'body')).toBe('body\n\n');
+   it('keeps the CRLF ending of a file whose body has no line break to match', () => {
+      expect(roundTrip('body\r\n\r\n', 'body')).toBe('body\r\n\r\n');
+   });
+
+   it('gives a CRLF ending the LF line terminators of a body the serializer emits with LF', () => {
+      // Kept verbatim, a rewritten document would carry its only CRLFs at the very end.
+      expect(roundTrip('a\r\nb\r\n\r\n', 'a\nb')).toBe('a\nb\n\n');
+   });
+
+   it('gives the ending the CRLF line terminators of a body the serializer emits with them', () => {
+      expect(roundTrip('a\r\nb\r\n\r\n', 'a\r\nb')).toBe('a\r\nb\r\n\r\n');
+   });
+
+   it('gives a created document the CRLF line terminator of a body emitted with CRLF', () => {
+      expect(roundTrip('', 'a\r\nb')).toBe('a\r\nb\r\n');
+   });
+
+   it("takes the terminator of the body's first line break, not a CRLF inside a value", () => {
+      expect(roundTrip('x {\n  d "l1\r\nl2"\n}\n', 'x {\n  d "l1\r\nl2"\n}')).toBe('x {\n  d "l1\r\nl2"\n}\n');
+   });
+
+   it.each([
+      ['a CRLF body', 'a\r\nb', 'a\r\nb\r\n'],
+      ['an LF body', 'a\nb', 'a\nb\n'],
+      ['a body with no line break', 'ab', 'ab\r\n']
+   ])("matches a subclass's CRLF default ending to %s", (_body, serialized, expected) => {
+      class CrlfDefault extends DocumentEndingPreserver {
+         protected override readonly defaultEnding = '\r\n';
+      }
+      const preserver = new CrlfDefault();
+      expect(preserver.apply(serialized, preserver.extract(documentOf('')))).toBe(expected);
    });
 
    it('leaves an LF ending alone rather than touching every document', () => {
@@ -60,5 +87,10 @@ describe('DocumentEndingPreserver', () => {
 
    it('answers an empty ending for a document with none', () => {
       expect(new DocumentEndingPreserver().extract(documentOf('body'))).toBe('');
+   });
+
+   it.each(['', '\n\n', ' \r\n'])('answers the default ending for a blank document %j', source => {
+      // A created document has no ending of its own to keep.
+      expect(new DocumentEndingPreserver().extract(documentOf(source))).toBe('\n');
    });
 });

@@ -267,16 +267,13 @@ describe('ClientSession writes', () => {
    });
 });
 
-/** `modelToText` is protected; the updateAll race tests step into it by name. */
-type ModelToText = (uri: string, model: unknown, cancelToken?: unknown) => Promise<string>;
-
 /**
  * Run `intervene` once, when the service starts serialising a document whose URI
  * ends with `file`, before that serialisation continues: a write that has passed
  * its door check and has not applied yet.
  */
 function interveneWhileSerialising(harness: OrderFlowHarness, file: string, intervene: () => Promise<unknown>): void {
-   const models = harness.shared.model.ModelService as unknown as { modelToText: ModelToText };
+   const models = harness.shared.model.ModelService;
    const modelToText = models.modelToText.bind(models);
    let done = false;
    models.modelToText = async (uri, model, cancelToken) => {

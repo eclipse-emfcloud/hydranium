@@ -26,7 +26,9 @@ import { type RegistryItem } from '../../util/registry.js';
 export interface TriviaPreserver<T = unknown> extends RegistryItem {
    /**
     * Take this preserver's trivia off `document`, while it still holds the text
-    * the write is about to replace.
+    * the write is about to replace. For a document being created, or one the
+    * store holds no text for, `document` is parsed from empty text, so its root
+    * may carry parser errors; a preserver answers its default for it.
     */
    extract(document: LangiumDocument): T;
 

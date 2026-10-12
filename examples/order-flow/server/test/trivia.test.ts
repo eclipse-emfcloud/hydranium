@@ -954,6 +954,15 @@ describe('trivia preservation', () => {
          expect(text.endsWith('}')).toBe(true);
          expect(text.endsWith('\n')).toBe(false);
       });
+
+      it('gives a document with no prior text the default ending', async () => {
+         const services = makeServices();
+         const source = 'process P for Order {\n   task Pay\n}';
+         const parsed = services.shared.workspace.LangiumDocumentFactory.fromString(source, URI.parse('memory:///source.process'));
+         const transfer = services.shared.model.TransferEncoder.toTransfer(parsed.parseResult.value, 'grammar');
+         const text = await services.shared.model.ModelService.modelToText('memory:///created.process', transfer);
+         expect(text).toMatch(/\}\n$/);
+      });
    });
 
    it('finds `//` comments, which GrammarConfig.multilineCommentRules does not', async () => {

@@ -178,6 +178,7 @@ describe('order-flow .process change-bounds', () => {
       expect(layout).toBeDefined();
       expect(layout).toContain('layout {');
       expect(layout).toContain('node Receive at 20, 20 size 140, 50');
+      expect(layout).toMatch(/\}\n$/);
       expect(diagram.harness.state.layoutRoot.nodes).toHaveLength(1);
    });
 

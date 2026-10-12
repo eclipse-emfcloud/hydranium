@@ -350,6 +350,8 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * Create the secondary `uri` holding `text` through `session.create`, and
     * base its write on the version the created document took. The version
     * recorded while it did not exist matches no write, so the write conflicts.
+    * Make `text` with `ModelService.modelToText`, not the bare serializer,
+    * which leaves the file without the ending a write would give it.
     */
    protected async createSecondaryDocument(session: ClientSession<AstNode>, uri: string, text: string): Promise<void> {
       const created = await session.create(uri, text);
