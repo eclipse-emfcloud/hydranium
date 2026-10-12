@@ -217,8 +217,16 @@ describe('HydraniumGlspRequestSaveModelActionHandler', () => {
 
       server.dispatch(SaveModelAction.create());
       await server.nextAction(SetDirtyStateAction.KIND);
-
       expect(savedActions).toHaveLength(1);
-      expect(server.actions.some(action => action.kind === ModelSavedAction.KIND)).toBe(false);
+
+      // Not settled at the dirty state: a second handler's answer is dispatched
+      // after it, so an absence read there passes with the answer on its way.
+      // The request's answer comes after every answer to the action before it.
+      server.dispatch(RequestSaveModelAction.create({ requestId: 'settle' }));
+      const answers = (): ModelSavedAction[] =>
+         server.actions.filter((action): action is ModelSavedAction => action.kind === ModelSavedAction.KIND);
+      await waitFor(() => answers().some(answer => answer.responseId === 'settle'));
+
+      expect(answers().map(answer => answer.responseId)).toEqual(['settle']);
    });
 });
