@@ -8,14 +8,17 @@
  ********************************************************************************/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-   Action,
-   ActionDispatchScope,
-   ActionHandlerRegistry,
-   ClientActionForwarder,
-   Logger as GlspLogger
+import {
+   type Action,
+   type ActionDispatchScope,
+   type ActionHandlerRegistry,
+   CheckEdgeResultAction,
+   type ClientActionForwarder,
+   type Logger as GlspLogger,
+   ResponseAction
 } from '@eclipse-glsp/server/node.js';
 import { Logger, type LogThreshold, type Tracer } from '@hydranium/protocol';
+import { makeCapturingTracer } from '@hydranium/core/testing';
 import { HydraniumGlspServerActionDispatcher } from '../src/dispatcher/server-action-dispatcher.js';
 import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
@@ -28,7 +31,8 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
    public override loggedKinds: ReadonlySet<string> | undefined = undefined;
    public summaries = new Map<string, string>();
 
-   constructor() {
+   /** Pass a real tracer to assert on emitted lines; the default stub records only what `time` is given. */
+   constructor(tracer?: Tracer) {
       super();
       // Stub the parent-class DI fields directly — bypasses Inversify so the
       // override's logging logic can be exercised in isolation. `logger` is
@@ -42,16 +46,20 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
          dispatchScope: ActionDispatchScope;
       };
       writable.logger = makeNoopGlspLogger();
-      // Dispatch timing goes through the injected, caller-tagged `Tracer`.
-      writable.tracer = {
-         time: <T>(label: string, callback: () => T, logLevel?: LogThreshold) => {
-            this.timedLabels.push(label);
-            this.timedLevels.push(logLevel);
-            return Promise.resolve(callback() as Awaited<T>);
-         }
-      } as unknown as Tracer;
+      // Records the arguments of each `time` call, not what the real tracer
+      // emits: a fast success there is silent, so line assertions use one.
+      writable.tracer =
+         tracer ??
+         ({
+            time: <T>(label: string, callback: () => T, logLevel?: LogThreshold) => {
+               this.timedLabels.push(label);
+               this.timedLevels.push(logLevel);
+               return Promise.resolve(callback() as Awaited<T>);
+            }
+         } as unknown as Tracer);
       writable.clientActionForwarder = {
-         shouldForwardToClient: (action: Action) => action.kind.endsWith('-out'),
+         // As GLSP's: a client action kind, or a response to a client request.
+         shouldForwardToClient: (action: Action) => action.kind.endsWith('-out') || ResponseAction.hasValidResponseId(action),
          handle: () => true
       } as unknown as ClientActionForwarder & { handle: (a: Action) => boolean };
       writable.actionHandlerRegistry = {
@@ -81,7 +89,7 @@ class TestableDispatcher extends HydraniumGlspServerActionDispatcher {
 
    protected override summarize(action: Action): string {
       this.summarizeCalls++;
-      return this.summaries.get(action.kind) ?? '';
+      return this.summaries.get(action.kind) ?? super.summarize(action);
    }
 
    public override dispatch(action: Action): Promise<void> {
@@ -100,7 +108,7 @@ describe('HydraniumGlspServerActionDispatcher', () => {
       Logger.setLevel(previousLevel);
    });
 
-   it('logs every dispatched action by default with `→ server` direction', async () => {
+   it('times every dispatch by default with `→ server` direction', async () => {
       const dispatcher = new TestableDispatcher();
       await dispatcher.dispatch({ kind: 'foo' });
       expect(dispatcher.timedLabels).toEqual([`Dispatch action 'foo' → server`]);
@@ -127,32 +135,66 @@ describe('HydraniumGlspServerActionDispatcher', () => {
       expect(dispatcher.timedLabels).toEqual([`Dispatch action 'bar-out' → client`]);
    });
 
-   it('skips the timing line when loggedKinds excludes the action kind', async () => {
+   it('neither times nor summarizes a dispatch when loggedKinds excludes the action kind', async () => {
       const dispatcher = new TestableDispatcher();
       dispatcher.setLoggedKinds(new Set(['only-this']));
       await dispatcher.dispatch({ kind: 'noisy' });
       expect(dispatcher.timedLabels).toEqual([]);
+      expect(dispatcher.summarizeCalls).toBe(0);
       // Dispatch still happens (the base class still receives the action).
       expect(dispatcher.dispatched).toHaveLength(1);
    });
 
-   it('emits the timing line when loggedKinds includes the action kind', async () => {
+   it('times the dispatch when loggedKinds includes the action kind', async () => {
       const dispatcher = new TestableDispatcher();
       dispatcher.setLoggedKinds(new Set(['only-this']));
       await dispatcher.dispatch({ kind: 'only-this' });
       expect(dispatcher.timedLabels).toEqual([`Dispatch action 'only-this' → server`]);
    });
 
-   it('appends `[summary]` bracket when summarize() returns a non-empty string', async () => {
-      const dispatcher = new TestableDispatcher();
+   it('logs a non-empty summary of a fast dispatch as its own debug line', async () => {
+      const { tracer, lines } = makeCapturingTracer();
+      const dispatcher = new TestableDispatcher(tracer);
       dispatcher.setSummary('big-payload', 'rootType=Foo children=4');
       await dispatcher.dispatch({ kind: 'big-payload' });
-      expect(dispatcher.timedLabels).toEqual([`Dispatch action 'big-payload' → server [rootType=Foo children=4]`]);
+      expect(lines).toEqual([{ level: 'debug', message: `Dispatch action 'big-payload' → server [rootType=Foo children=4]` }]);
    });
 
-   it('does NOT append the summary bracket when summarize() returns an empty string', async () => {
-      const dispatcher = new TestableDispatcher();
-      await dispatcher.dispatch({ kind: 'no-summary' });
-      expect(dispatcher.timedLabels).toEqual([`Dispatch action 'no-summary' → server`]);
+   it('logs nothing for a fast dispatch with an empty summary', async () => {
+      const { tracer, lines } = makeCapturingTracer();
+      await new TestableDispatcher(tracer).dispatch({ kind: 'no-summary' });
+      expect(lines).toEqual([]);
+   });
+
+   it('logs an edge check with its verdict by default', async () => {
+      const { tracer, lines } = makeCapturingTracer();
+      await new TestableDispatcher(tracer).dispatch(
+         CheckEdgeResultAction.create({
+            isValid: false,
+            edgeType: 'edge:one',
+            sourceElementId: 'a',
+            targetElementId: 'b',
+            responseId: 'r1'
+         })
+      );
+      expect(lines).toEqual([
+         {
+            level: 'debug',
+            message: `Dispatch action 'checkEdgeTargetResult' → client [edgeType=edge:one source=a target=b isValid=false]`
+         }
+      ]);
+   });
+
+   it('logs a source-only edge check with no target', async () => {
+      const { tracer, lines } = makeCapturingTracer();
+      await new TestableDispatcher(tracer).dispatch(
+         CheckEdgeResultAction.create({ isValid: true, edgeType: 'edge:one', sourceElementId: 'a', responseId: 'r1' })
+      );
+      expect(lines).toEqual([
+         {
+            level: 'debug',
+            message: `Dispatch action 'checkEdgeTargetResult' → client [edgeType=edge:one source=a target=none isValid=true]`
+         }
+      ]);
    });
 });
