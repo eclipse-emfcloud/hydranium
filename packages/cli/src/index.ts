@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './commands/delete.js';
 export * from './commands/generate-ast-builder.js';
 export * from './commands/generate-transfer-model.js';
 export * from './commands/projects.js';

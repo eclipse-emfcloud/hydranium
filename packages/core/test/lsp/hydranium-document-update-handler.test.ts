@@ -46,16 +46,14 @@ const WATCHED_FS_PATH = URI.parse(WATCHED_URI).fsPath;
 const STUB_MTIME_MS = 1_700_000_000_000;
 
 /**
- * Flush the `dispatch` promise chain (`workspaceManager.ready.then`, and
- * `filterSelfSaves`' `Promise.all` on the `mtimeMs` seam). Five iterations
- * clears the deepest chain in this file with room to spare; because every stub
- * resolves immediately there is no I/O to wait on, so this is deterministic
- * rather than a timing guess.
+ * Flush the `dispatch` promise chain (`workspaceManager.ready.then`, and the
+ * watched-file filters on the provider seams). Every stub resolves
+ * immediately, so one macrotask runs every microtask queued before it,
+ * however deep the chain; a count of microtask turns breaks whenever a filter
+ * is added.
  */
 async function flushMicrotasks(): Promise<void> {
-   for (let i = 0; i < 5; i++) {
-      await Promise.resolve();
-   }
+   await new Promise(resolve => setImmediate(resolve));
 }
 
 /**
@@ -179,7 +177,9 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
             onDidSaveInLanguageClient: (opts.languageClientSaved ?? new Emitter<{ uri: string }>()).event,
             reloadDiskBaseline: async (uri: string) => {
                opts.reloadedBaselines?.push(uri);
-            }
+            },
+            // No document created, so the stale-deletion filter asks the disk.
+            isUnsavedCreation: () => false
          },
          SelfSaveRegistry: { isRegistered: selfSaveRegistered },
          FileSystemTaskQueue: fileSystemTaskQueue,
@@ -187,7 +187,8 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
          // seam, so these tests need no filesystem at all; the Node provider's
          // own stat behaviour is covered by its own tests.
          FileSystemProvider: {
-            mtimeMs: opts.mtimeMs ?? (async () => STUB_MTIME_MS)
+            mtimeMs: opts.mtimeMs ?? (async () => STUB_MTIME_MS),
+            exists: async () => false
          }
       }
    } as unknown as ServerSharedServices;

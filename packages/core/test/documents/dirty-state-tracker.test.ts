@@ -24,6 +24,29 @@ function makeTracker(): { tracker: DefaultDirtyStateTracker; events: DocumentDir
 }
 
 describe('DefaultDirtyStateTracker', () => {
+   it('keeps a created mark through a baseline lost and drops it at a baseline with text', () => {
+      const { tracker } = makeTracker();
+      const created = documentAt(1, 'a');
+      tracker.markCreated(KEY, created);
+      const untracked = tracker.isUnsavedCreation(KEY);
+      tracker.track(KEY, created, 'a');
+      tracker.markCreated(KEY, created);
+      const marked = { unsaved: tracker.isUnsavedCreation(KEY), dirty: tracker.isDirty(KEY) };
+      tracker.setDiskBaseline(KEY, created, undefined);
+      const afterLoss = tracker.isUnsavedCreation(KEY);
+      tracker.setDiskBaseline(KEY, created, 'a');
+      const afterSave = tracker.isUnsavedCreation(KEY);
+      tracker.markCreated(KEY, created);
+      tracker.track(KEY, created, 'a');
+      expect({ untracked, marked, afterLoss, afterSave, retracked: tracker.isUnsavedCreation(KEY) }).toEqual({
+         untracked: false,
+         marked: { unsaved: true, dirty: true },
+         afterLoss: true,
+         afterSave: false,
+         retracked: false
+      });
+   });
+
    it('ignores a document it does not track', () => {
       const { tracker, events } = makeTracker();
       tracker.refreshDirty(KEY, documentAt(1, 'b'));

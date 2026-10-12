@@ -63,6 +63,18 @@ export interface DirtyStateTracker {
     */
    hasDiskBaseline(key: CanonicalUri): boolean;
    /**
+    * `key` was created from a session's text, so no file is assumed: no
+    * baseline, and {@link isUnsavedCreation} answers `true`. A no-op for a
+    * document not tracked.
+    */
+   markCreated(key: CanonicalUri, document: TextDocument): void;
+   /**
+    * Whether `key` is marked created and no baseline with text has been set
+    * since, by a save or a reload that found the file. A reload that finds no
+    * file leaves the mark. `false` for a document not tracked.
+    */
+   isUnsavedCreation(key: CanonicalUri): boolean;
+   /**
     * The store released `key`. Answers the clean announcement a document
     * released dirty now owes; `undefined` for one released clean.
     */
@@ -70,7 +82,7 @@ export interface DirtyStateTracker {
 }
 
 export class DefaultDirtyStateTracker implements DirtyStateTracker {
-   protected readonly states = new Map<CanonicalUri, { baseline: string | undefined; dirty: boolean }>();
+   protected readonly states = new Map<CanonicalUri, { baseline: string | undefined; dirty: boolean; created: boolean }>();
    /** Per document released dirty, the token of the announcement it owes. */
    protected readonly owedClean = new Map<CanonicalUri, object>();
    protected readonly dirtyChangedEmitter = new Emitter<DocumentDirtyChangedEvent>();
@@ -87,7 +99,7 @@ export class DefaultDirtyStateTracker implements DirtyStateTracker {
    }
 
    track(key: CanonicalUri, document: TextDocument, diskText: string | undefined): void {
-      this.states.set(key, { baseline: diskText, dirty: this.owedClean.delete(key) });
+      this.states.set(key, { baseline: diskText, dirty: this.owedClean.delete(key), created: false });
       this.refreshDirty(key, document);
    }
 
@@ -111,11 +123,26 @@ export class DefaultDirtyStateTracker implements DirtyStateTracker {
          return;
       }
       state.baseline = text;
+      state.created &&= text === undefined;
       this.refreshDirty(key, document);
    }
 
    hasDiskBaseline(key: CanonicalUri): boolean {
       return this.states.get(key)?.baseline !== undefined;
+   }
+
+   markCreated(key: CanonicalUri, document: TextDocument): void {
+      const state = this.states.get(key);
+      if (!state) {
+         return;
+      }
+      state.baseline = undefined;
+      state.created = true;
+      this.refreshDirty(key, document);
+   }
+
+   isUnsavedCreation(key: CanonicalUri): boolean {
+      return this.states.get(key)?.created ?? false;
    }
 
    release(key: CanonicalUri): CleanAnnouncement | undefined {

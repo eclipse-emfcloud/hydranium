@@ -24,6 +24,7 @@ import { type AstNode, DocumentState, type LangiumDocument, type LangiumDocument
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
+import { ReentrantWriteLockError, isInsideWriteLock } from '../langium/workspace/write-lock-scope.js';
 import { Disposable } from 'vscode-languageserver';
 import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languageserver-protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
@@ -151,6 +152,33 @@ export interface AstDocumentManager<TAst extends AstNode, TDiagnostic extends As
     * wrote.
     */
    save(uri: string, clientId: string): Promise<TextVersion>;
+   /**
+    * Remove the document's file through `FileSystemTaskQueue`, then the
+    * document, in a build that closes every open of it but the editor's.
+    * Resolves once that build has run, also when it fails after removing the
+    * document; rejects, having changed nothing, when the file cannot be
+    * removed.
+    *
+    * From the call until it settles, {@link isDeleting} answers `true`, which
+    * refuses every session's write of the document: one landing before the
+    * build would be lost with it, or, as a save, write the file back. Marked
+    * before the first await, so checks a caller runs in the same step as the
+    * call hold up to the removal. A second delete of the document while one is
+    * under way is refused, and so is a delete from inside a holder of the write
+    * lock, with `ReentrantWriteLockError`, since its builds take that lock.
+    *
+    * A change requested before the build starts merges over the deletion, and
+    * the document lives on with every open but `clientId`'s, which is closed.
+    */
+   delete(uri: string, clientId: string): Promise<void>;
+   /** Whether a {@link delete} of `uri` is under way. */
+   isDeleting(uri: string): boolean;
+   /**
+    * The client a deletion event for `uri` names: the one whose {@link delete}
+    * of it is under way, or the unknown-client id for a file removed outside
+    * any, as a file watcher reports one.
+    */
+   attributeDeletion(uri: string): string;
 
    getDocument(uri: string): LangiumDocument | undefined;
 
@@ -224,10 +252,11 @@ export class DefaultAstDocumentManager<
    /**
     * Whose writes the build under way carries, set when it starts: the author
     * of every open document's undelivered version, and the unknown-client id
-    * for a change no write explains, such as a deletion, a document no client
-    * has open, or a write that changed nothing. An undelivered version is one
-    * whose build has not validated it yet, so a write whose build was
-    * cancelled stays a cause of the build that takes over.
+    * for a change no write explains, such as a deletion no session's delete
+    * made, a document no client has open, or a write that changed nothing.
+    * An undelivered version is one whose build has not validated it yet, so a
+    * write whose build was cancelled stays a cause of the build that takes
+    * over.
     *
     * Errs toward more than one cause, and so toward the unknown client, which
     * a reader treats as foreign: an answer it repeats, never one it misses.
@@ -239,6 +268,9 @@ export class DefaultAstDocumentManager<
     * skips, stays undelivered, so it is a cause of every build while open.
     */
    protected readonly buildCauses = new Set<string>();
+
+   /** Per canonical URI, the client whose {@link delete} of it is under way. */
+   protected readonly deletions = new Map<CanonicalUri, string>();
 
    /** Per canonical URI, the newest save queued for it, which {@link coalesceSaves} lets older queued saves defer to. */
    protected readonly newestSaves = new Map<CanonicalUri, Promise<TextVersion>>();
@@ -279,9 +311,10 @@ export class DefaultAstDocumentManager<
             const textDocument = this.textDocuments.get(uri.toString());
             return textDocument === undefined || this.isDelivered(textDocument.uri, textDocument.version);
          });
-         if (unexplained || deleted.length > 0) {
+         if (unexplained) {
             this.buildCauses.add(UNKNOWN_CLIENT_ID);
          }
+         deleted.forEach(uri => this.buildCauses.add(this.attributeDeletion(uri.toString())));
          // The only place a deletion is observable: `DocumentBuilder.update`
          // removes a deleted document before it builds anything, so no phase
          // listener ever sees it.
@@ -440,7 +473,7 @@ export class DefaultAstDocumentManager<
             // Text the caller supplies was not read from the file, so no file
             // is assumed: the document is dirty until its first save, whatever
             // the file holds.
-            this.textDocuments.setDiskBaseline(args.uri, undefined);
+            this.textDocuments.markCreated(args.uri);
          }
          const built = this.getDocument(args.uri);
          if (creates && built) {
@@ -526,6 +559,53 @@ export class DefaultAstDocumentManager<
          });
       this.newestSaves.set(canonical, saved);
       return saved;
+   }
+
+   async delete(uri: string, clientId: string): Promise<void> {
+      const canonical = this.uriPolicy.canonicalUri(uri);
+      const target = UriUtils.toUri(canonical);
+      // The builds below wait for a holder of the write lock, which would be
+      // waiting for this delete.
+      if (isInsideWriteLock()) {
+         throw new ReentrantWriteLockError(canonical);
+      }
+      // The mark holds one client: a second delete would share it, and the
+      // first to settle would clear it under the other.
+      if (this.deletions.has(canonical)) {
+         throw new Error(`Cannot delete ${uri}: a delete of it is under way`);
+      }
+      this.deletions.set(canonical, clientId);
+      try {
+         // A document no build has reached yet is not registered, and the
+         // deletion build would remove nothing and leave every open of it.
+         if (!this.langiumDocs.getDocument(target)) {
+            await this.documentBuilder.scheduleUpdate([target], []);
+         }
+         await this.services.workspace.FileSystemTaskQueue.enqueue(canonical, () => this.fileSystemProvider.deleteFile(target));
+         // Langium removes the document before the build's first await, so a
+         // failure is the dependents' build, and reaches no one else.
+         await this.documentBuilder
+            .scheduleUpdate([], [target])
+            .catch((error: unknown) =>
+               this.tracer.with(canonical).error(`The build after a deletion failed. ${describeErrorWithStack(error)}`)
+            );
+         // A change requested before that build started merges over the
+         // deletion, and the document lives on; the deleting client takes it as
+         // gone, so its open ends here.
+         if (this.textDocuments.isOpenInClient(canonical, clientId)) {
+            await this.close({ uri: canonical, clientId });
+         }
+      } finally {
+         this.deletions.delete(canonical);
+      }
+   }
+
+   isDeleting(uri: string): boolean {
+      return this.deletions.has(this.uriPolicy.canonicalUri(uri));
+   }
+
+   attributeDeletion(uri: string): string {
+      return this.deletions.get(this.uriPolicy.canonicalUri(uri)) ?? UNKNOWN_CLIENT_ID;
    }
 
    /** Write `text` to `uri` unless the file already holds it, then announce the save. Runs inside the file's task queue. */

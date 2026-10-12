@@ -51,7 +51,7 @@ import type {
 } from '@hydranium/protocol/data';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { type CancellationToken, FileChangeType } from 'vscode-languageserver';
-import { readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
@@ -877,6 +877,48 @@ describe('DataSession when its document is deleted', () => {
 
          expect(port.reported.map(report => report.message.code)).toEqual([]);
          expect(services.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+      } finally {
+         connection.dispose();
+         servers.forEach(server => server.dispose());
+         pairs.forEach(pair => pair.dispose());
+         port.dispose();
+      }
+   });
+
+   it('deletes a document through one session, which another session forgets, and a reconnect re-opens it in neither', async () => {
+      const { services, uri, path } = await boot();
+      const pairs: DuplexConnectionPair[] = [];
+      const servers: WatchProbeServer[] = [];
+      const port = makeFakeDataPort({
+         connect: () => {
+            const pair = makeDuplexConnectionPair();
+            pairs.push(pair);
+            servers.push(new WatchProbeServer(pair.left, services.shared));
+            return pair.right;
+         }
+      });
+      const connection = new DataConnectionWithEvents<DomainModel>(port);
+      const deletedBy: string[] = [];
+      connection.events.onDidDeleteDocument(event => deletedBy.push(event.sourceClientId));
+      const form = connection.createSession('form');
+      const tree = connection.createSession('tree');
+      try {
+         await form.openDocument({ uri });
+         await tree.openDocument({ uri });
+         await tree.updateDocument({ uri, model: EDITED, baseVersion: 'any' });
+
+         await form.deleteDocument({ uri, baseVersion: 'any' });
+         await waitFor(() => !servers[0].isWatching(uri, tree.clientId), { message: 'the other session kept its watch' });
+
+         expect(existsSync(path(FILE))).toBe(false);
+         expect(deletedBy).toEqual([form.clientId]);
+         expect(servers[0].isWatching(uri, form.clientId)).toBe(false);
+         port.fireDispose();
+         await form.connected();
+         await tree.connected();
+         expect(port.reported.map(report => report.message.code)).toEqual([]);
+         const store = services.shared.workspace.TextDocuments;
+         expect([store.isOpenInClient(uri, form.clientId), store.isOpenInClient(uri, tree.clientId)]).toEqual([false, false]);
       } finally {
          connection.dispose();
          servers.forEach(server => server.dispose());

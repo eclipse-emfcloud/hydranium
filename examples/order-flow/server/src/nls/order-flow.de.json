@@ -14,6 +14,7 @@
   "hydranium/core/no-such-file": "Datei nicht gefunden: {uri}",
   "hydranium/core/no-such-path": "Datei oder Verzeichnis nicht gefunden: {uri}",
   "hydranium/core/unsupported-write": "{uri} kann nicht geschrieben werden: Das URI-Schema verweist auf keinen Speicherort im Dateisystem",
+  "hydranium/core/unsupported-delete": "{uri} kann nicht gelöscht werden: Das URI-Schema verweist auf keinen Speicherort im Dateisystem",
   "hydranium/protocol/session-closed": "Die Bearbeitungssitzung ist beendet.",
   "hydranium/protocol/stale-base-version-update": "Die Änderung an {uri} wurde nicht übernommen: Sie wurde an einer älteren Version des Dokuments vorgenommen.",
   "hydranium/protocol/document-not-open": "Das Dokument {uri} ist in dieser Bearbeitungssitzung nicht geöffnet.",

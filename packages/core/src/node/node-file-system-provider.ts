@@ -14,11 +14,12 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
+import { isFileNotFound } from '../langium/workspace/file-not-found.js';
 import { type SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
 import { RENAME_GAP_BUDGET_MS, renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
+import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
 
 /**
  * Node-based default {@link WritableFileSystemProvider}. Extends Langium's
@@ -249,6 +250,26 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       const mtimeMs = await this.mtimeMs(uri);
       if (mtimeMs !== undefined) {
          this.selfSaveRegistry.register(uri.fsPath, mtimeMs);
+      }
+   }
+
+   /**
+    * Unlink `uri`, which removes a symlink rather than the file it points at
+    * and leaves a parent directory it empties in place. A file already gone is
+    * no error; a directory is refused, as `unlink` refuses it.
+    */
+   async deleteFile(uri: URI): Promise<void> {
+      // Before the path is derived, for the reason `writeFile` gives: `fsPath`
+      // would name an unrelated file for a URI naming no disk location.
+      if (!this.servesFromDisk(uri)) {
+         throw new Error(UNSUPPORTED_DELETE.format({ uri: uri.toString() }));
+      }
+      try {
+         await fsp.unlink(uri.fsPath);
+      } catch (error: unknown) {
+         if (!isFileNotFound(error, uri)) {
+            throw error;
+         }
       }
    }
 

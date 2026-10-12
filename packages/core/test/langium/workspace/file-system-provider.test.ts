@@ -46,8 +46,9 @@ describe('DefaultEmptyFileSystemProvider', () => {
       await expect(files.stat(uri)).rejects.toThrow();
    });
 
-   it('drops writes without failing', async () => {
+   it('drops writes and deletes without failing', async () => {
       await expect(provider().writeFile(uri, 'content')).resolves.toBeUndefined();
+      await expect(provider().deleteFile(uri)).resolves.toBeUndefined();
    });
 });
 
@@ -58,11 +59,15 @@ describe('DefaultEmptyFileSystemProvider', () => {
  */
 class LabelledProvider implements WritableFileSystemProvider {
    readonly written: string[] = [];
+   readonly deleted: string[] = [];
 
    constructor(readonly label: string) {}
 
    async writeFile(uri: URI, content: string): Promise<void> {
       this.written.push(`${uri.toString()}=${content}`);
+   }
+   async deleteFile(uri: URI): Promise<void> {
+      this.deleted.push(uri.toString());
    }
    async stat(uri: URI): Promise<FileSystemNode> {
       return this.statSync(uri);
@@ -157,6 +162,16 @@ describe('DefaultFileSystemProviderRegistry', () => {
       await files.writeFile(unclaimed, 'two');
       expect(custom.written).toEqual([`${registered.toString()}=one`]);
       expect(host.written).toEqual([`${unclaimed.toString()}=two`]);
+   });
+
+   it('deletes through the provider of the scheme', async () => {
+      const custom = new LabelledProvider('custom');
+      const host = new LabelledProvider('host');
+      const files = registry({ custom }, host);
+      await files.deleteFile(registered);
+      await files.deleteFile(unclaimed);
+      expect(custom.deleted).toEqual([registered.toString()]);
+      expect(host.deleted).toEqual([unclaimed.toString()]);
    });
 
    it('sends a scheme that names a prototype key to the host', () => {

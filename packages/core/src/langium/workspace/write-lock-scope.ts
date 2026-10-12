@@ -79,22 +79,24 @@ export function isWriteLockScopeInstalled(): boolean {
 /**
  * Thrown when the model facade is reached from inside a workspace write-lock
  * holder — typically an integrity rule or build-phase pass writing through
- * a session's `update` / `save` or `ModelService.rebuild` during a build.
+ * a session's `update` / `save` / `delete` or `ModelService.rebuild` during a
+ * build.
  *
  * Named rather than a bare `Error` because the remedy is specific and worth
  * pointing at: either move the write out of the build (integrity rules that
  * persist repairs should write through `FileSystemProvider.writeFile`, which
  * takes no lock), or set `ModelServiceOptions.allowReentrantBuilds: true`,
  * which keeps the facade's build from cancelling the holder but not its wait
- * from stalling on a document that needs a re-queue.
+ * from stalling on a document that needs a re-queue. A delete is refused on
+ * either value.
  */
 export class ReentrantWriteLockError extends Error {
    constructor(readonly uri: string) {
       super(
          `Model facade reached for '${uri}' from inside a workspace write-lock holder. ` +
             'Acquiring the write lock would cancel the enclosing build and may stall this call. ' +
-            'Write through FileSystemProvider.writeFile from a build-phase pass, or set ' +
-            'ModelServiceOptions.allowReentrantBuilds: true to build without the lock from inside it.'
+            'Write through FileSystemProvider.writeFile from a build-phase pass, or, for an update, save or rebuild, ' +
+            'set ModelServiceOptions.allowReentrantBuilds: true to build without the lock from inside it.'
       );
       this.name = 'ReentrantWriteLockError';
    }

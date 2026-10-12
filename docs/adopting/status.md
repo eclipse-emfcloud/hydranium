@@ -111,9 +111,9 @@ only within one process, and takes no filesystem lock. Two processes over one
 workspace do not coordinate: the later write wins.
 
 - Run one server process per workspace, with all its heads in that process.
-- `hydranium-cli save` spawns its own data server. Run it only on a workspace
-  nothing else is editing, or accept that the later write wins. The other
-  subcommands only read.
+- `hydranium-cli save` and `hydranium-cli delete` spawn their own data server.
+  Run them only on a workspace nothing else is editing, or accept that the
+  later write wins. The other subcommands only read.
 - If you need writes from several processes, coordinate them yourself, above
   the framework.
 

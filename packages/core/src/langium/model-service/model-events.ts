@@ -60,6 +60,11 @@ export interface ModelsBuiltEvent {
  */
 export interface ModelDeletedEvent {
    readonly uri: CanonicalUri;
+   /**
+    * The session whose `delete` removed the file; the unknown-client id for a
+    * file removed outside any session, as a file watcher reports one.
+    */
+   readonly sourceClientId: string;
 }
 
 /** A document was saved: the AST manager's event, as `ModelService` hands it out. */

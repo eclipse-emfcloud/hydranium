@@ -80,7 +80,8 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  *
  *  1. **Self-save filter** ({@link filterSelfSaves}) — drops
  *     watched-file-change echoes for the server's own writes via
- *     {@link SelfSaveRegistry}, keyed by `fsPath` + mtime.
+ *     {@link SelfSaveRegistry}, keyed by `fsPath` + mtime, and
+ *     ({@link filterStaleDeletions}) deletions the disk contradicts.
  *  2. **Trailing-edge debouncing** — collapses rapid
  *     `didChangeContent` calls into one rebuild on the trailing
  *     edge of the configured window. Non-language-client author
@@ -218,6 +219,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
 
    override didChangeWatchedFiles(params: DidChangeWatchedFilesParams): void {
       void this.filterSelfSaves(params)
+         .then(unsaved => this.filterStaleDeletions(unsaved))
          .then(filtered => {
             if (filtered.changes.length === 0) {
                return;
@@ -343,6 +345,33 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
                return undefined;
             }
             return change;
+         })
+      );
+      return { changes: kept.filter((change): change is FileEvent => change !== undefined) };
+   }
+
+   /**
+    * Drop a deletion the disk contradicts: the file is there, or the document
+    * at the URI was created from a session's text and its file not seen since,
+    * as one created again after a delete. A watcher reports a delete late, the
+    * server's own included, and applied to a document created again since, it
+    * would close every open of it. A missing disk baseline cannot stand in for
+    * the creation: a report that finds the file gone clears it too. A record
+    * of the server's own unlinks could not tell its echo from a later real
+    * delete, since a delete leaves no mtime to match. A miss the provider
+    * reports in error keeps the deletion.
+    */
+   protected async filterStaleDeletions(params: DidChangeWatchedFilesParams): Promise<DidChangeWatchedFilesParams> {
+      const kept = await Promise.all(
+         params.changes.map(async change => {
+            if (change.type !== FileChangeType.Deleted) {
+               return change;
+            }
+            if (this.textDocuments.isUnsavedCreation(change.uri)) {
+               return undefined;
+            }
+            const exists = await this.fileSystemProvider.exists(UriUtils.toUri(change.uri)).catch(() => false);
+            return exists ? undefined : change;
          })
       );
       return { changes: kept.filter((change): change is FileEvent => change !== undefined) };

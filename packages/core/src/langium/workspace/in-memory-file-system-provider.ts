@@ -43,6 +43,12 @@ export const UNSUPPORTED_WRITE = defineMessage(
    'Cannot write {uri}: the scheme names no location on disk'
 );
 
+/** A delete addressed a URI the provider cannot reach on disk, as {@link UNSUPPORTED_WRITE} a write. */
+export const UNSUPPORTED_DELETE = defineMessage(
+   'hydranium/core/unsupported-delete',
+   'Cannot delete {uri}: the scheme names no location on disk'
+);
+
 /**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
  *
@@ -136,9 +142,13 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       this.files.set(normalize(uri), content);
    }
 
-   /** Remove the file at `uri`. A no-op when nothing is there. */
-   deleteFile(uri: URI): void {
-      this.files.delete(normalize(uri));
+   /** Remove the file at `uri`. A no-op when nothing is there; a directory is refused. */
+   async deleteFile(uri: URI): Promise<void> {
+      const key = normalize(uri);
+      if (this.hasChildren(key)) {
+         throw new Error(`Cannot delete ${uri.toString()}: it is a directory`);
+      }
+      this.files.delete(key);
    }
 
    async writeFile(uri: URI, content: string): Promise<void> {

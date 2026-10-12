@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { TransferDocument } from '@hydranium/protocol';
 import type { DataServerProtocol, TransferSaveDocumentArgs, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
 import { runQuery } from '../src/commands/query.js';
+import { runDelete } from '../src/commands/delete.js';
 import { runSave } from '../src/commands/save.js';
 
 interface FakeRoot {
@@ -29,7 +30,7 @@ interface StubCalls {
 
 function makeStubProxy(
    calls: StubCalls,
-   options: { failSave?: boolean; failEnd?: boolean; noFile?: boolean; failCreate?: string; failOpen?: string } = {}
+   options: { failSave?: boolean; failDelete?: boolean; failEnd?: boolean; noFile?: boolean; failCreate?: string; failOpen?: string } = {}
 ): DataServerProtocol<FakeRoot> {
    return {
       async getModelDocument(args) {
@@ -58,6 +59,12 @@ function makeStubProxy(
          return { ...saved, persisted: { version: 1 } };
       },
       persistModelDocument: () => Promise.reject(new Error('not exercised')),
+      async deleteModelDocument(args) {
+         calls.sequence.push(`delete ${args.clientId} ${args.uri} ${String(args.baseVersion)}`);
+         if (options.failDelete) {
+            throw new Error('disk refused');
+         }
+      },
       async openModelDocument(args) {
          calls.sequence.push(`open ${args.clientId} ${args.uri}`);
          if (options.failOpen) {
@@ -237,5 +244,62 @@ describe('runSave', () => {
          __proxyForTest: makeStubProxy(calls)
       });
       expect(calls.saveModelDocument[0].model).toBe('@literal-at-prefix');
+   });
+});
+
+describe('runDelete', () => {
+   it('deletes through a session that opens the document first and ends afterwards, also when the delete fails', async () => {
+      const deleted = emptyCalls();
+      await runDelete({ serverCommand: 'unused', uri: 'file:///workspace/A.fake', __proxyForTest: makeStubProxy(deleted) });
+      const failed = emptyCalls();
+      await expect(
+         runDelete({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            __proxyForTest: makeStubProxy(failed, { failDelete: true })
+         })
+      ).rejects.toThrow('disk refused');
+
+      const expected = [
+         'session hydranium-cli',
+         'open hydranium-cli file:///workspace/A.fake',
+         'delete hydranium-cli file:///workspace/A.fake any',
+         'end hydranium-cli'
+      ];
+      expect(deleted.sequence).toEqual(expected);
+      expect(failed.sequence).toEqual(expected);
+   });
+
+   it('deletes under the client id it is given', async () => {
+      const calls = emptyCalls();
+      await runDelete({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/A.fake',
+         clientId: 'tester',
+         __proxyForTest: makeStubProxy(calls)
+      });
+      expect(calls.sequence).toContain('delete tester file:///workspace/A.fake any');
+   });
+
+   it("reports a failed open's error, deletes nothing and ends the session", async () => {
+      const calls = emptyCalls();
+      await expect(
+         runDelete({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            __proxyForTest: makeStubProxy(calls, { failOpen: 'open refused' })
+         })
+      ).rejects.toThrow('open refused');
+      expect(calls.sequence).toEqual(['session hydranium-cli', 'open hydranium-cli file:///workspace/A.fake', 'end hydranium-cli']);
+   });
+
+   it("reports a failed delete's error, not the failing session end after it", async () => {
+      await expect(
+         runDelete({
+            serverCommand: 'unused',
+            uri: 'file:///workspace/A.fake',
+            __proxyForTest: makeStubProxy(emptyCalls(), { failDelete: true, failEnd: true })
+         })
+      ).rejects.toThrow('disk refused');
    });
 });

@@ -32,13 +32,14 @@ way to take a live id is its resume token (see
 Every disk write a session makes goes through `DefaultClientSession`'s
 protected `persistDocument`: a `save`, a `persist`, and a diagram's save,
 whichever head asked; an editor's own save and an integrity repair written
-straight to disk do not. An override that awaits before calling the base lets a
-diagram save take its documents' texts at different moments, and a diagram
-that ends during the await fails the documents not yet taken with
-`DocumentNotOpenError`. An override that writes the text elsewhere instead of
-calling the base announces the save itself, through
-`TextDocuments.notifyDidSaveTextDocument` with the text it wrote: the disk
-baseline, and with it the dirty state, follows that announcement.
+straight to disk do not. A `delete` goes through the protected
+`deleteDocument` (see [Deletion](#deletion)). An override of `persistDocument`
+that awaits before calling the base lets a diagram save take its documents'
+texts at different moments, and a diagram that ends during the await fails the
+documents not yet taken with `DocumentNotOpenError`. An override that writes
+the text elsewhere instead of calling the base announces the save itself,
+through `TextDocuments.notifyDidSaveTextDocument` with the text it wrote: the
+disk baseline, and with it the dirty state, follows that announcement.
 
 ## Open and close
 
@@ -48,13 +49,14 @@ two participants that each need a document open use two sessions.
 
 ## Writes need an open
 
-`update`, `save` and `persist` never open a document. Each fails with
-`DocumentNotOpenError` unless the session has the URI open in the synchronous
-step that applies or takes the text, and the `baseVersion` gate, which fails
-with `ConflictError`, runs in that same step. A check an await separates from
-the apply lets a write land on a document the session closed meanwhile, and
-two writes based on one version both apply. So a write either lands while the
-document is open or fails, and a document is never reopened behind a write.
+`update`, `save`, `persist` and `delete` never open a document. Each fails
+with `DocumentNotOpenError` unless the session has the URI open in the
+synchronous step that applies or takes the text, or marks the document for
+deletion, and the `baseVersion` gate, which fails with `ConflictError`, runs in
+that same step. A check an await separates from the apply lets a write land on
+a document the session closed meanwhile, and two writes based on one version
+both apply. So a write either lands while the document is open or fails, and a
+document is never reopened behind a write.
 
 A write answers with the document once it is validated, in whichever build
 carried it: its update event names the writer, so a client that drops its own
@@ -102,10 +104,14 @@ release grace (see [Last close and release](#last-close-and-release)).
 
 ## `DataSession`
 
-`DataSession` is the client side of such a session. `closeDocument` and
-`dispose` first wait for its calls in flight, up to `settleBeforeCloseMs`, so a
-save sent just before a close reaches the server first; a client without it
-that closes without awaiting its save gets the `DocumentNotOpenError` code.
+`DataSession` is the client side of such a session. `closeDocument`,
+`deleteDocument` and `dispose` first wait for its calls in flight, up to
+`settleBeforeCloseMs`, so a save sent just before a close reaches the server
+first; a client without it that closes without awaiting its save gets the
+`DocumentNotOpenError` code. An open or create of a URI called while a close or
+delete of it is under way is sent once that has answered, so the server takes
+them in the order they were called; sent at once, an open called after a close
+could reach the server first, and the document would end closed.
 A participant that only follows a document uses `connection.watchDocument`,
 since an open would hold the document for as long as it follows.
 
@@ -123,6 +129,15 @@ that loss, so unsaved text the document took with it, written since its last
 save or never saved since the session created it, goes into the
 `DATA_SESSION_UNSAVED_LOST` report; a deletion the session heard is only
 logged, since the client hears it too.
+
+The session's own `deleteDocument` ends the same way: the server sends the
+deletion before it answers, and the session forgets the document on hearing
+it, or on the answer when its client binds no `onDocumentDeleted`. It neither
+unwatches, since the server released its watch with the delete, nor logs the
+unsaved text as dropped, since its caller chose to drop it. A delete the server
+refuses leaves the document open, records and all. A delete whose answer a drop
+lost is unknown to the session, so its restore treats the document as any
+document gone while the connection was down.
 
 An answer counts only for the open its call was sent under. One that arrives
 after a close or a deletion ended that open records nothing, even when the
@@ -325,6 +340,39 @@ When a build reports a file deleted, every open of that file closes, except the
 editor's: an editor keeps the buffer of a deleted file and goes on sending
 changes for it. A session that writes the file afterwards gets
 `DocumentNotOpenError`.
+
+A session's `delete` takes that same path: it removes the file in the file's
+disk queue, then has a build remove the document, and resolves once that build
+has run. The open check and the `baseVersion` gate run in the step that marks
+the document for deletion, and from then until the delete settles every
+session's write of the document fails as not open. Without the mark, a write
+landing before the build would be lost with the document, a persist queued
+behind the removal would write the file back, and an update before the build
+starts would turn the deletion into a change, leaving the document and every
+open of it. A file that cannot be removed fails the delete and changes nothing;
+a build that fails after the removal is logged, since the document is gone. The
+deletion names the deleting session, and every other deletion the unknown
+client. A document no build has reached yet is built first, since a build
+removes only a document it has. The file removed is the one the store keys the
+document by, so under `RealpathDocumentUriPolicy` a delete through a symlink
+removes its target and leaves the link. A watch ends under the key its URI
+resolved to when it was made, since the link no longer resolves once the target
+is gone.
+
+The mark refuses session writes only. A change the editor, a file watcher or a
+recovery build requests before the build starts merges over the deletion, and
+the document lives on with every open but the deleting session's, which the
+delete closes, since its client takes the document as gone. A delete from
+inside a holder of the write lock fails with `ReentrantWriteLockError` whatever
+`ModelServiceOptions.allowReentrantBuilds` says, since its builds take that
+lock and would wait for the holder.
+
+A file watcher reports a deletion late, the server's own included, so a
+report applies only where the disk agrees: the file is gone, and the document
+at the URI is not one created from a session's text whose file the store has
+not seen since. Otherwise it would remove a document created again at the URI,
+closing every open of it. A missing disk baseline cannot stand in for that
+mark, since a report that finds the file gone clears the baseline too.
 
 A subclass calling `TextDocuments.delete(uri)` closes every open of the URI, the
 editor's included, before the document is removed.

@@ -149,11 +149,18 @@ export type TransferDocumentDirtyChangedListener = (event: TransferDocumentDirty
  * A watch survives the deletion, so a file that comes back resumes delivering
  * `onDocumentUpdated` to the same subscribers with no re-subscription. A
  * client that responds by closing its editor releases the watch through
- * `closeModelDocument` as usual.
+ * `closeModelDocument` as usual, and `deleteModelDocument` releases the
+ * deleting session's own.
  */
 export interface TransferDocumentDeletedEvent {
    /** Canonical URI of the removed document, keyed as the subscription is. */
    readonly uri: string;
+   /**
+    * The session whose `deleteModelDocument` removed the file, so it can tell
+    * its own deletion from another's; the unknown-client id for a file
+    * removed outside any session, as a file watcher reports one.
+    */
+   readonly sourceClientId: string;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentDeleted`. */

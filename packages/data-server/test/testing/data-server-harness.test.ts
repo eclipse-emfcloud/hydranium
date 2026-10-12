@@ -151,7 +151,7 @@ describe('makeDataServerHarness capture arrays', () => {
 
       harness.server.clientProxy.onDocumentUpdated(updated(URI_ONE));
       harness.server.clientProxy.onDocumentSaved(saved(URI_ONE));
-      harness.server.clientProxy.onDocumentDeleted({ uri: URI_ONE });
+      harness.server.clientProxy.onDocumentDeleted({ uri: URI_ONE, sourceClientId: 'unknown' });
       harness.server.clientProxy.onDocumentsBuilt({ uris: [URI_ONE] });
       harness.server.clientProxy.onProjectsChanged(projectsChanged());
 

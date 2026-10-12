@@ -72,6 +72,9 @@ export interface TransferSaveDocumentArgs<TTransfer> extends TransferUpdateDocum
 /** Persist the text the server holds for a document the session `clientId` has open, without writing a model. */
 export type TransferPersistDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model'>;
 
+/** Delete a document the session `clientId` has open: its file, then the document. */
+export type TransferDeleteDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model'>;
+
 /** Register a client session on the connection. */
 export interface CreateSessionArgs {
    /** The session's id, minted by the client; unique in the server process while the session is live. */

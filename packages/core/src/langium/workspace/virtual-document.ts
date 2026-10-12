@@ -12,7 +12,7 @@ import { type Tracer } from '@hydranium/protocol';
 import { type WritableFileSystemProvider } from './file-system-provider.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
-import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from './in-memory-file-system-provider.js';
+import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } from './in-memory-file-system-provider.js';
 import { notFound } from './file-not-found.js';
 
 /**
@@ -95,7 +95,7 @@ export function isVirtualUri(uri: URI | string): boolean {
  * always a FILE with no children: a workspace walk handed a directory would try
  * to enumerate children it has none of.
  *
- * Read-only: a write is refused, since nothing backs the scheme.
+ * Read-only: a write or delete is refused, since nothing backs the scheme.
  */
 export class VirtualFileSystemProvider implements WritableFileSystemProvider {
    protected readonly tracer: Tracer;
@@ -109,6 +109,10 @@ export class VirtualFileSystemProvider implements WritableFileSystemProvider {
 
    async writeFile(uri: URI, _content: string): Promise<void> {
       throw new Error(UNSUPPORTED_WRITE.format({ uri: uri.toString() }));
+   }
+
+   async deleteFile(uri: URI): Promise<void> {
+      throw new Error(UNSUPPORTED_DELETE.format({ uri: uri.toString() }));
    }
 
    async readFile(uri: URI): Promise<string> {

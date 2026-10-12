@@ -37,9 +37,9 @@ describe('buildDataChecks', () => {
       expect(skipped[0].skipReason).toContain('`attach`');
    });
 
-   it('plans five server-level checks plus twenty-two grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(27);
-      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(49);
+   it('plans five server-level checks plus twenty-seven grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(32);
+      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(59);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -54,7 +54,7 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(27);
+      expect(checks).toHaveLength(32);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
@@ -74,7 +74,7 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(27);
+      expect(checks).toHaveLength(32);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
@@ -86,7 +86,7 @@ describe('buildDataChecks', () => {
       const { breakingEdit: _breakingEdit, ...withoutBreakingEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutBreakingEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(27);
+      expect(checks).toHaveLength(32);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('credits the dependent')]);
       expect(skipped[0].skipReason).toContain('`breakingEdit`');
@@ -113,11 +113,12 @@ describe('buildDataChecks', () => {
       // invalid-diagnostics, the diagnostic-params check, the session write,
       // save, unregistered-id, connection-end, close and create checks, the
       // write's answer, the unsaved create's last close, the dirty, persist and
-      // text-hash checks, the folder-URI reference query and the dependent's credit, which writes
+      // text-hash checks, the five delete checks, the folder-URI reference
+      // query and the dependent's credit, which writes
       // `breakingEdit` instead — none of which needs an edit. The cascade and
       // set checks need one, so they are not among them even though this
       // fixture supplies a `dependent`.
-      expect(runnable).toHaveLength(21);
+      expect(runnable).toHaveLength(26);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

@@ -104,11 +104,12 @@ describe('VirtualFileSystemProvider', () => {
       await expect(files.stat(missing)).rejects.toThrow();
    });
 
-   it('lists no children and refuses a write', async () => {
+   it('lists no children and refuses a write and a delete', async () => {
       const files = provider();
       expect(files.readDirectorySync(element)).toEqual([]);
       expect(await files.readDirectory(element)).toEqual([]);
       await expect(files.writeFile(element, 'element Other')).rejects.toThrow();
+      await expect(files.deleteFile(element)).rejects.toThrow(`Cannot delete ${element.toString()}`);
       expect(files.readFileSync(element)).toBe('element Element');
    });
 });

@@ -29,6 +29,12 @@ import { type ServerSharedServicesMinimal } from '../shared-services.js';
 export interface WritableFileSystemProvider extends FileSystemProvider {
    writeFile(uri: URI, content: string): Promise<void>;
    /**
+    * Remove the file at `uri`: the name the URI gives, never the file a
+    * symlink there points at, leaving a parent directory it empties in place.
+    * A no-op when nothing is there; a directory is refused.
+    */
+   deleteFile(uri: URI): Promise<void>;
+   /**
     * Last-modified time (ms) of the file at `uri`, or `undefined` if it can't
     * be determined (missing file, or a provider with no disk — in-memory /
     * browser). Optional: the only consumer is self-save echo suppression
@@ -78,11 +84,11 @@ export interface WritableFileSystemProvider extends FileSystemProvider {
 
 /**
  * Empty-filesystem {@link WritableFileSystemProvider}. For browser / test / CLI
- * hosts that don't have a real filesystem. All writes are no-ops. On the
- * portable `.` entry it is the {@link FileSystemProviderRegistry.host} when
- * `context.fileSystemProvider` gives no writable provider; the Node-backed
- * `DefaultFileSystemProvider` lives in `@hydranium/core/node` (it pulls
- * `node:fs`).
+ * hosts that don't have a real filesystem. All writes and deletes are no-ops.
+ * On the portable `.` entry it is the
+ * {@link FileSystemProviderRegistry.host} when `context.fileSystemProvider`
+ * gives no writable provider; the Node-backed `DefaultFileSystemProvider`
+ * lives in `@hydranium/core/node` (it pulls `node:fs`).
  */
 export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider implements WritableFileSystemProvider {
    protected readonly tracer: Tracer;
@@ -96,6 +102,10 @@ export class DefaultEmptyFileSystemProvider extends EmptyFileSystemProvider impl
    }
 
    async writeFile(_uri: URI, _content: string): Promise<void> {
+      // no-op
+   }
+
+   async deleteFile(_uri: URI): Promise<void> {
       // no-op
    }
 
@@ -198,6 +208,10 @@ export class DefaultFileSystemProviderRegistry<
    // one still rejects, for the reason `DefaultEmptyFileSystemProvider` gives.
    async writeFile(uri: URI, content: string): Promise<void> {
       return this.providerFor(uri).writeFile(uri, content);
+   }
+
+   async deleteFile(uri: URI): Promise<void> {
+      return this.providerFor(uri).deleteFile(uri);
    }
 
    async mtimeMs(uri: URI): Promise<number | undefined> {

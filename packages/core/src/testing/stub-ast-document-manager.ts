@@ -41,7 +41,18 @@ import type { StubLangiumDocuments } from './stub-langium-documents.js';
  */
 export interface StubAstDocumentManager<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> extends Pick<
    AstDocumentManager<TAst, TDiagnostic>,
-   'open' | 'close' | 'isOpen' | 'update' | 'save' | 'getAuthor' | 'getDocument' | 'toAstDocument' | 'attributeUpdate'
+   | 'open'
+   | 'close'
+   | 'isOpen'
+   | 'update'
+   | 'save'
+   | 'delete'
+   | 'isDeleting'
+   | 'attributeDeletion'
+   | 'getAuthor'
+   | 'getDocument'
+   | 'toAstDocument'
+   | 'attributeUpdate'
 > {
    readonly openClients: Map<string, Set<string>>;
 }
@@ -95,6 +106,16 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
          await fileSystem.writeFile(UriUtils.toUri(uri), text);
          textDocuments.notifyDidSaveTextDocument({ textDocument: { uri }, text }, clientId);
          return version;
+      },
+      delete(): Promise<void> {
+         return notSupported('delete');
+      },
+      // The stub deletes nothing, so no delete is ever under way.
+      isDeleting(): boolean {
+         return false;
+      },
+      attributeDeletion(): string {
+         return UNKNOWN_CLIENT_ID;
       },
       getAuthor(): string {
          return notSupported('getAuthor');

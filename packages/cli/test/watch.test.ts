@@ -95,7 +95,7 @@ function makeHarness(options: { readonly withChild?: boolean } = {}): WatchHarne
          if (!boundClient) {
             throw new Error('WatchHarness.fireDeleted called before runWatch bound its local client');
          }
-         boundClient.onDocumentDeleted({ uri });
+         boundClient.onDocumentDeleted({ uri, sourceClientId: 'unknown' });
       },
       killChild(signal) {
          if (!rejectTerminated) {
@@ -210,7 +210,7 @@ describe('runWatch', () => {
       // never come, which is why it is in band where a save is not.
       expect(written).toHaveLength(1);
       const line = JSON.parse(written[0]);
-      expect(line).toEqual({ uri: 'file:///workspace/A.fake' });
+      expect(line).toEqual({ uri: 'file:///workspace/A.fake', sourceClientId: 'unknown' });
    });
 
    /**
