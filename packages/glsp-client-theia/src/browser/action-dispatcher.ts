@@ -9,6 +9,7 @@
 
 import {
    type Action,
+   CheckEdgeResultAction,
    ComputedBoundsAction,
    GLSPActionDispatcher,
    GLSPModelSource,
@@ -17,6 +18,7 @@ import {
    RejectAction,
    RequestAction,
    RequestBoundsAction,
+   RequestCheckEdgeAction,
    RequestContextActions,
    RequestModelAction,
    RequestTypeHintsAction,
@@ -53,7 +55,9 @@ export const HYDRANIUM_DEFAULT_LOGGED_KINDS: ReadonlySet<string> = new Set<strin
    RejectAction.KIND,
    RequestContextActions.KIND,
    RequestModelAction.KIND,
-   RequestTypeHintsAction.KIND
+   RequestTypeHintsAction.KIND,
+   RequestCheckEdgeAction.KIND,
+   CheckEdgeResultAction.KIND
 ]);
 
 /** Default request → response kind pairs for GLSP 'flow' actions that do NOT
@@ -255,6 +259,15 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       if (RequestContextActions.is(action)) {
          return `contextId=${action.contextId}`;
       }
+      if (RequestCheckEdgeAction.is(action) || CheckEdgeResultAction.is(action)) {
+         return this.formatEdgeCheck(action);
+      }
       return '';
+   }
+
+   /** An edge check and, on the result, its verdict, so the channel shows why an edge tool refused a target. */
+   protected formatEdgeCheck(action: RequestCheckEdgeAction | CheckEdgeResultAction): string {
+      const verdict = CheckEdgeResultAction.is(action) ? ` isValid=${action.isValid}` : '';
+      return `edgeType=${action.edgeType} source=${action.sourceElementId} target=${action.targetElementId ?? 'none'}${verdict}`;
    }
 }

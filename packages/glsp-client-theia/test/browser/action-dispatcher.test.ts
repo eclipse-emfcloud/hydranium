@@ -19,10 +19,12 @@ vi.mock('@hydranium/client-theia/browser', () => ({
 import { describe, expect, it, vi } from 'vitest';
 import {
    type Action,
+   CheckEdgeResultAction,
    ComputedBoundsAction,
    MessageAction,
    RejectAction,
    RequestBoundsAction,
+   RequestCheckEdgeAction,
    RequestContextActions,
    RequestModelAction,
    RequestTypeHintsAction,
@@ -59,6 +61,12 @@ class TestableDispatcher extends HydraniumGlspActionDispatcher {
    }
    exposeRegisterInitTiming(): void {
       this.registerInitTiming();
+   }
+   exposeLogAction(action: Action): void {
+      this.logAction(action);
+   }
+   setActionHandlerRegistry(registry: unknown): void {
+      (this as unknown as { actionHandlerRegistry: unknown }).actionHandlerRegistry = registry;
    }
    setTracer(tracer: unknown): void {
       (this as unknown as { tracer: unknown }).tracer = tracer;
@@ -263,7 +271,68 @@ describe('HydraniumGlspActionDispatcher.summarize defaults', () => {
       ).toBe('contextId=menu');
    });
 
+   it('an edge check summarises its edge type, source and target, and its result the verdict too', () => {
+      const check = {
+         kind: RequestCheckEdgeAction.KIND,
+         requestId: 'r1',
+         edgeType: 'edge:one',
+         sourceElementId: 'a',
+         targetElementId: 'b'
+      };
+      expect(dispatcher.exposeSummarize(asAction(check))).toBe('edgeType=edge:one source=a target=b');
+      expect(dispatcher.exposeSummarize(asAction({ ...check, targetElementId: undefined }))).toBe('edgeType=edge:one source=a target=none');
+      expect(
+         dispatcher.exposeSummarize(
+            asAction({
+               kind: CheckEdgeResultAction.KIND,
+               responseId: 'r1',
+               isValid: false,
+               edgeType: 'edge:one',
+               sourceElementId: 'a',
+               targetElementId: 'b'
+            })
+         )
+      ).toBe('edgeType=edge:one source=a target=b isValid=false');
+   });
+
    it('unknown action kinds summarise to empty string', () => {
       expect(dispatcher.exposeSummarize({ kind: 'unknown-action' })).toBe('');
+   });
+});
+
+describe('HydraniumGlspActionDispatcher logging an edge check', () => {
+   it('logs the check and its verdict to the channel as one timed request and response', () => {
+      const dispatcher = new TestableDispatcher();
+      const channel = { trace: vi.fn() };
+      dispatcher.setChannel(channel);
+      dispatcher.setActionHandlerRegistry({ get: () => [] });
+      const check = asAction({
+         kind: RequestCheckEdgeAction.KIND,
+         requestId: 'r1',
+         edgeType: 'edge:one',
+         sourceElementId: 'a',
+         targetElementId: 'b'
+      });
+      const result = asAction({
+         kind: CheckEdgeResultAction.KIND,
+         responseId: 'r1',
+         isValid: false,
+         edgeType: 'edge:one',
+         sourceElementId: 'a',
+         targetElementId: 'b'
+      });
+
+      expect(dispatcher.exposeLoggedKinds().has(check.kind)).toBe(true);
+      expect(dispatcher.exposeLoggedKinds().has(result.kind)).toBe(true);
+      dispatcher.exposeLogAction(check);
+      dispatcher.exposeLogAction(result);
+
+      const lines = channel.trace.mock.calls.map(([line]) => String(line));
+      expect(lines[0]).toMatch(
+         /^Process action 'requestCheckEdge' \[client → client] \[edgeType=edge:one source=a target=b] \[request #1]$/
+      );
+      expect(lines[1]).toMatch(
+         /^Process action 'checkEdgeTargetResult' \[client → client] \[edgeType=edge:one source=a target=b isValid=false] \[response #1, \d+ms]$/
+      );
    });
 });
