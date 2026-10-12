@@ -22,6 +22,13 @@ import { isConnectionGoneError } from '../util/connection-liveness.js';
  */
 export interface ReleasedDocument {
    readonly uri: CanonicalUri;
+   /**
+    * Whether the store last knew a file behind the document: `false` for one
+    * created from a session's text and never saved, or whose file a reload
+    * found gone; any other open counts as on disk. Unlike the queries, a
+    * snapshot taken at the release, since the store forgets it there.
+    */
+   readonly wasOnDisk: boolean;
    /** Whether `uri` names this document, under the store's own keying. */
    isFor(uri: string): boolean;
    /**
@@ -102,20 +109,22 @@ export type DocumentReleaseOutcome =
 /**
  * Rebuilds a released document from the file system provider, so the build
  * stops carrying the unsaved text of its last client. Override
- * `decideRelease` or `applyReleaseDecision` to change the policy and keep the
- * locking and the wait for the build.
+ * `decideRelease`, `redecideRelease` or `applyReleaseDecision` to change the
+ * policy and keep the locking and the wait for the build.
  *
- * The provider decides, for every scheme, by `exists`: a document it can
- * serve is rebuilt from its text, and any other — an editor's `untitled:`
- * buffer, a file never saved, or one deleted meanwhile — is removed
- * from the workspace. A `virtual:` document survives, since the framework's
- * provider for that scheme serves it from the index, whatever provider the
- * host passes as `context.fileSystemProvider`; an edited one therefore keeps
- * its last client's text, and keeping it read-only is the client's job.
+ * The provider decides, for every scheme, by `exists`, with a miss confirmed
+ * by `existsSettled`: a document it can serve is rebuilt from its text, and
+ * any other — an editor's `untitled:` buffer, a file never saved, or one
+ * deleted meanwhile — is removed from the workspace. A `virtual:` document
+ * survives, since the framework's provider for that scheme serves it from the
+ * index, whatever provider the host passes as `context.fileSystemProvider`;
+ * an edited one therefore keeps its last client's text, and keeping it
+ * read-only is the client's job.
  *
  * The answer is read in the document's disk queue, so the rebuild follows
  * any save still queued rather than reverting past it; a file that goes
- * after that read is removed when its rebuild finds none.
+ * after that read is removed when its rebuild finds none and the provider
+ * confirms it gone.
  *
  * Whether the document is still released is checked again inside the write
  * lock, as its holder: checked only before waiting for the lock, a client that
@@ -181,9 +190,13 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
 
    /**
     * Decide, then carry the decision out under the write lock unless a client
-    * holds the document again. Answers how that went; a parse of the document
-    * seen meanwhile counts even when the build was cancelled after it, since
-    * the build it yields to does not parse again.
+    * holds the document again. A rebuild that finds no file is redecided by
+    * {@link redecideRelease} within the same lock section: the build has
+    * already reset the document, so a build let in meanwhile would read the
+    * missing file and fail. Its answer is carried out unless a client
+    * reclaimed the document meanwhile. Answers how that went; a parse of the
+    * document seen meanwhile counts even when the build was cancelled after
+    * it, since the build it yields to does not parse again.
     */
    protected async runRelease(released: ReleasedDocument, target: URI): Promise<DocumentReleaseOutcome> {
       const workspace = this.services.workspace;
@@ -211,7 +224,26 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
                parsed ||= released.isFor(document.uri.toString());
             });
             progress = 'building';
-            await this.applyReleaseDecision(target, decided, token);
+            let applied = decided;
+            for (let misses = 1; ; misses++) {
+               try {
+                  await this.applyReleaseDecision(target, applied, token);
+                  break;
+               } catch (err: unknown) {
+                  if (applied !== 'rebuild' || !isFileNotFound(err, target)) {
+                     throw err;
+                  }
+                  applied = await this.redecideRelease(released, target, misses);
+                  if (released.isReclaimed()) {
+                     progress = 'reclaimed';
+                     return;
+                  }
+                  decision = applied;
+                  this.tracer
+                     .with(released.uri)
+                     .debug(`Revert found no file; ${applied === 'rebuild' ? 'rebuilding again' : 'removing the document instead'}`);
+               }
+            }
             progress = 'built';
          });
          // A cancelled build throws inside the write, and the lock resolves.
@@ -219,12 +251,12 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
             return { kind: 'reclaimed' };
          }
          if (progress === 'queued') {
-            return { kind: 'discarded', decision: decided };
+            return { kind: 'discarded', decision };
          }
          if (progress === 'building') {
-            return { kind: 'cancelled', decision: decided, parsed };
+            return { kind: 'cancelled', decision, parsed };
          }
-         return { kind: 'completed', decision: decided, parsed };
+         return { kind: 'completed', decision, parsed };
       } catch (error: unknown) {
          // A revert that finishes after the LSP peer went away fails its
          // diagnostics publish, and one that runs after its workspace was torn
@@ -254,34 +286,47 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
    /**
     * The policy: rebuild a document the file system provider can serve, and
     * remove any other. Read in the document's disk queue, so it follows any
-    * save still queued rather than deciding past it.
+    * save still queued rather than deciding past it. A miss is settled outside
+    * the queue, so waiting it out holds up no write to the file, and only for
+    * a document the store knew on disk: one with no file has none to replace.
     */
-   protected decideRelease(released: ReleasedDocument, target: URI): Promise<DocumentReleaseDecision> {
+   protected async decideRelease(released: ReleasedDocument, target: URI): Promise<DocumentReleaseDecision> {
       const workspace = this.services.workspace;
-      return workspace.FileSystemTaskQueue.enqueue(released.uri, async () =>
-         (await workspace.FileSystemProvider.exists(target)) ? 'rebuild' : 'remove'
-      );
+      const fileSystem = workspace.FileSystemProvider;
+      const served = await workspace.FileSystemTaskQueue.enqueue(released.uri, () => fileSystem.exists(target));
+      if (served || !released.wasOnDisk) {
+         return served ? 'rebuild' : 'remove';
+      }
+      return ((await fileSystem.existsSettled?.(target)) ?? false) ? 'rebuild' : 'remove';
    }
 
    /**
-    * Carry `decision` out under the write lock; a file gone since the decision
-    * is removed instead. An override must rebuild or remove the document:
-    * release settlement waits for its parse or removal, and one that does
-    * neither is followed by a recovery build that rebuilds it.
+    * The policy for a rebuild that found no file, the `misses`-th of this
+    * release: what to carry out instead. Runs inside the release's write, so
+    * every build waits on it. The default settles the first miss through the
+    * provider's `existsSettled`, rebuilding again when the file is back, and
+    * removes the document on any later one. An override answering `rebuild`
+    * on every miss rebuilds for as long as the file stays missing.
+    */
+   protected async redecideRelease(_released: ReleasedDocument, target: URI, misses: number): Promise<DocumentReleaseDecision> {
+      if (misses > 1) {
+         return 'remove';
+      }
+      const fileSystem = this.services.workspace.FileSystemProvider;
+      return (await (fileSystem.existsSettled?.(target) ?? fileSystem.exists(target))) ? 'rebuild' : 'remove';
+   }
+
+   /**
+    * Carry `decision` out under the write lock. A rebuild that finds no file
+    * rejects with that error, and {@link redecideRelease} answers what to
+    * carry out instead. An override must rebuild or remove the document: release settlement
+    * waits for its parse or removal, and one that does neither is followed by a
+    * recovery build that rebuilds it.
     */
    protected async applyReleaseDecision(target: URI, decision: DocumentReleaseDecision, token: CancellationToken): Promise<void> {
       const builder = this.services.workspace.DocumentBuilder;
       builder.markNextReason(HYDRANIUM_BUILD_REASONS.didRelease);
-      try {
-         await (decision === 'rebuild' ? builder.update([target], [], token) : builder.update([], [target], token));
-      } catch (err: unknown) {
-         if (decision !== 'rebuild' || !isFileNotFound(err, target)) {
-            throw err;
-         }
-         this.tracer.with(target.toString()).debug('Revert found no file; removing the document instead');
-         builder.markNextReason(HYDRANIUM_BUILD_REASONS.didRelease);
-         await builder.update([], [target], token);
-      }
+      await (decision === 'rebuild' ? builder.update([target], [], token) : builder.update([], [target], token));
    }
 
    /** The build in place of a release that stopped short; rejects with its error when it was given up. */

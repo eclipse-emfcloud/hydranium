@@ -78,8 +78,8 @@ interface RevertRig {
    holdQueue(): { release: () => void };
    /** Hold the write lock, as a build already running does, until `release()`. */
    holdLock(): { release: () => void };
-   /** Fail the next `DocumentBuilder.update` with `error`. */
-   failNextBuild(error: Error): void;
+   /** Fail the next `DocumentBuilder.update` with `error`, running `before` first. */
+   failNextBuild(error: Error, before?: () => void): void;
    /** Step the wall clock (`now()`) by `ms`, as a time sync does, leaving timers and stopwatches alone. */
    jumpWallClock(ms: number): void;
 }
@@ -98,6 +98,7 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
    const fileSystemTaskQueue = new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } });
    let lockTail: Promise<unknown> = Promise.resolve();
    let nextBuildFailure: Error | undefined;
+   let beforeNextBuildFailure: (() => void) | undefined;
    const onDisk = new Set<string>([FILE, OTHER_FILE]);
    let existenceChecks = 0;
    let wallOffsetMs = 0;
@@ -119,8 +120,11 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
    });
    const update = async (changed: URI[], deleted: URI[]): Promise<void> => {
       const failure = nextBuildFailure;
+      const before = beforeNextBuildFailure;
       nextBuildFailure = undefined;
+      beforeNextBuildFailure = undefined;
       if (failure) {
+         before?.();
          throw failure;
       }
       builds.push({
@@ -186,8 +190,9 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
          lockTail = lockTail.then(() => held);
          return { release };
       },
-      failNextBuild: error => {
+      failNextBuild: (error, before) => {
          nextBuildFailure = error;
+         beforeNextBuildFailure = before;
       },
       jumpWallClock: ms => {
          wallOffsetMs += ms;
@@ -296,6 +301,20 @@ describe('HydraniumTextDocuments revert on release', () => {
    });
 
    it('removes, and logs no error for, a document whose file goes before the rebuild reads it', async () => {
+      const { docs, builds, errors, onDisk, failNextBuild } = makeRig();
+      open(docs, 'form');
+      failNextBuild(Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT', path: URI.parse(FILE).fsPath }), () =>
+         onDisk.delete(FILE)
+      );
+
+      close(docs, 'form');
+      await settle();
+
+      expect(builds).toEqual([{ changed: [], deleted: [FILE], reason: 'didRelease' }]);
+      expect(errors).toEqual([]);
+   });
+
+   it('rebuilds again, rather than removes, a document whose rebuild missed a file still there', async () => {
       const { docs, builds, errors, failNextBuild } = makeRig();
       open(docs, 'form');
       failNextBuild(Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT', path: URI.parse(FILE).fsPath }));
@@ -303,7 +322,7 @@ describe('HydraniumTextDocuments revert on release', () => {
       close(docs, 'form');
       await settle();
 
-      expect(builds).toEqual([{ changed: [], deleted: [FILE], reason: 'didRelease' }]);
+      expect(builds).toEqual([{ changed: [FILE], reason: 'didRelease' }]);
       expect(errors).toEqual([]);
    });
 

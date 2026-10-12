@@ -61,6 +61,17 @@ export interface WritableFileSystemProvider extends FileSystemProvider {
     * browser-neutral (no `node:fs` import).
     */
    realpath?(uri: URI): URI | undefined;
+   /**
+    * Whether a file is at `uri`, where a miss counts only once it has lasted:
+    * on a disk where replacing a file can hide its name for a moment, a single
+    * {@link exists} cannot tell that from a deletion. Ask this before acting on
+    * a miss as a deletion; a caller expecting a miss, such as a create, asks
+    * {@link exists}, since here a real miss costs the whole wait.
+    *
+    * Optional: a provider whose misses are always final omits it, and a caller
+    * takes the answer of {@link exists} as settled.
+    */
+   existsSettled?(uri: URI): Promise<boolean>;
    /** Registry the provider records its own writes against. Optional — providers without watcher integration may omit. */
    readonly selfSaveRegistry?: SelfSaveRegistry;
 }
@@ -152,10 +163,10 @@ export interface FileSystemProviderRegistryOptions<
  * A directory is listed by the provider of its own scheme, so a workspace
  * root's tree comes from that provider alone.
  *
- * `realpath` and `mtimeMs` are always present and forward to the scheme's
- * provider. Where that provider lacks one, `realpath` returns the URI unchanged
- * and `mtimeMs` returns `undefined`: the answers `RealpathDocumentUriPolicy`
- * and the self-save filter already give a provider without them.
+ * `realpath`, `mtimeMs` and `existsSettled` are always present and forward to
+ * the scheme's provider. Where that provider lacks one, `realpath` returns the
+ * URI unchanged, `mtimeMs` returns `undefined` and `existsSettled` answers as
+ * `exists`: the answers their callers already give a provider without them.
  */
 export class DefaultFileSystemProviderRegistry<
    THost extends WritableFileSystemProvider = WritableFileSystemProvider
@@ -196,6 +207,11 @@ export class DefaultFileSystemProviderRegistry<
    realpath(uri: URI): URI | undefined {
       const provider = this.providerFor(uri);
       return provider.realpath ? provider.realpath(uri) : uri;
+   }
+
+   async existsSettled(uri: URI): Promise<boolean> {
+      const provider = this.providerFor(uri);
+      return provider.existsSettled ? provider.existsSettled(uri) : provider.exists(uri);
    }
 
    async stat(uri: URI): Promise<FileSystemNode> {

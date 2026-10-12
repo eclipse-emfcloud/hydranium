@@ -600,6 +600,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // reopening client's declared id.
       this.textLedger.record(uri, syncedDocument);
       this.textLedger.clearAuthors(uri);
+      // Before the tracker's release, which forgets whether a file was behind it.
+      const released = this.toReleasedDocument(uri);
       const cleanAnnouncement = this.dirtyStateTracker.release(uri);
       this.__syncedDocuments.delete(uri);
       this.__openedVersions.delete(uri);
@@ -608,7 +610,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       this.__pendingContent.delete(uri);
       this.documentReleaseScheduler.clearLosses(uri);
       this.documentReleasedEmitter.fire(Object.freeze({ uri }));
-      this.handOverRelease(this.toReleasedDocument(uri), cleanAnnouncement);
+      this.handOverRelease(released, cleanAnnouncement);
    }
 
    /**
@@ -660,6 +662,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    protected toReleasedDocument(uri: CanonicalUri): ReleasedDocument {
       return {
          uri,
+         wasOnDisk: this.dirtyStateTracker.hasDiskBaseline(uri),
          isFor: other => this.documentKey(other) === uri,
          isReclaimed: () => this.isOpenInAnyClient(uri) || this.__syncedDocuments.has(uri)
       };
@@ -1192,20 +1195,29 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    /**
     * Read the file behind `uri` through its disk queue and take it as the
     * baseline. A file that cannot be read counts as none, the side that
-    * leaves the document dirty.
+    * leaves the document dirty, once `existsSettled` confirms it gone: a file
+    * it finds is read again. That wait runs outside the queue, so it holds up
+    * no write to the file.
     */
    async reloadDiskBaseline(uri: DocumentUri): Promise<void> {
       const key = this.documentKey(uri);
       if (!this.__syncedDocuments.has(key)) {
          return;
       }
-      let onDisk: string | undefined;
-      try {
-         onDisk = await this.services.workspace.FileSystemTaskQueue.enqueue(key, () =>
-            this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(key))
-         );
-      } catch (err: unknown) {
-         this.tracer.with(key).debug(`Disk baseline: the file cannot be read. ${describeError(err)}`);
+      const workspace = this.services.workspace;
+      const fileSystem = workspace.FileSystemProvider;
+      const target = UriUtils.toUri(key);
+      const read = async (): Promise<string | undefined> => {
+         try {
+            return await workspace.FileSystemTaskQueue.enqueue(key, () => fileSystem.readFile(target));
+         } catch (err: unknown) {
+            this.tracer.with(key).debug(`Disk baseline: the file cannot be read. ${describeError(err)}`);
+            return undefined;
+         }
+      };
+      let onDisk = await read();
+      if (onDisk === undefined && (await (fileSystem.existsSettled?.(target) ?? fileSystem.exists(target)))) {
+         onDisk = await read();
       }
       this.setDiskBaseline(key, onDisk);
    }

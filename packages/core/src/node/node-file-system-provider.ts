@@ -15,7 +15,7 @@ import { realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import { type SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
-import { renameOverOpenReaders } from './rename-over-open-readers.js';
+import { RENAME_GAP_BUDGET_MS, renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
@@ -122,6 +122,32 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       return this.servesFromDisk(uri) ? super.existsSync(uri) : false;
    }
 
+   /**
+    * On Windows a miss is polled for up to {@link RENAME_GAP_BUDGET_MS}, since a
+    * replacing rename there can hide the name from a reader for a while; it
+    * answers `true` as soon as the file is back. Elsewhere a miss is final.
+    */
+   async existsSettled(uri: URI): Promise<boolean> {
+      if (await this.exists(uri)) {
+         return true;
+      }
+      if (!this.servesFromDisk(uri) || process.platform !== 'win32') {
+         return false;
+      }
+      // A stopwatch, not two `now()` readings: a wall-clock jump would end the
+      // wait early, removing a file that is only being replaced.
+      const waited = this.services.Clock.stopwatch();
+      while (waited.elapsedMs < RENAME_GAP_BUDGET_MS) {
+         // Not `clock.setTimer`: it unrefs its timer, so a process with only
+         // this check pending could exit mid-wait.
+         await new Promise(resolve => setTimeout(resolve, 10));
+         if (await this.exists(uri)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
    // A URI this provider cannot reach on disk has no children rather than an
    // error: a workspace walk enumerates folders it was handed, and failing one
    // aborts the walk where an empty listing simply contributes nothing.
@@ -146,8 +172,9 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
     * good revision. On Windows the replacing rename also leaves the name
     * unresolvable for a moment, so a reader there can find the file missing
     * (`ENOENT`) or refused (`EPERM`), never torn, and must not take either for
-    * a deletion. It does NOT serialise writers: two writers still race, and
-    * the loser's content is replaced wholesale rather than interleaved.
+    * a deletion; {@link existsSettled} waits that moment out. It does NOT
+    * serialise writers: two writers still race, and the loser's content is
+    * replaced wholesale rather than interleaved.
     *
     * The destination is the RESOLVED path, via {@link realpath}: a `rename`
     * onto a symlink replaces the link itself with a regular file and leaves the

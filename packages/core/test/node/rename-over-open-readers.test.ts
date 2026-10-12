@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { makeFakeClock } from '@hydranium/protocol/testing';
+import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
 import { RENAME_CONTENTION_CODES, renameOverOpenReaders } from '../../src/node/rename-over-open-readers.js';
 
@@ -55,6 +55,21 @@ describe('renameOverOpenReaders', () => {
       await expect(renameOverOpenReaders('from', 'to', { rename, budgetMs: 25, clock })).rejects.toThrow(/EPERM/);
       // Exactly three is the whole claim: a budget that rethrew on the first
       // failure would pass a bare "it rejects" assertion.
+      expect(stub.calls()).toBe(3);
+   });
+
+   it('keeps retrying past a wall-clock jump, which spends none of the budget', async () => {
+      const stub = failing(2, 'EPERM');
+      const clock = makeFakeClock();
+      let wallOffsetMs = 0;
+      // Layered over the fake clock rather than spread from it: its methods live on a prototype.
+      const wallClock = Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs });
+      const rename = async (): Promise<void> => {
+         // An hour's jump during the first attempt, after the budget has started.
+         wallOffsetMs += 60 * 60 * 1000;
+         await stub.rename();
+      };
+      await expect(renameOverOpenReaders('from', 'to', { rename, budgetMs: 1_000, clock: wallClock })).resolves.toBeUndefined();
       expect(stub.calls()).toBe(3);
    });
 

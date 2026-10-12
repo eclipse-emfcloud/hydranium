@@ -7,11 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { URI } from '@hydranium/langium';
-import { type CanonicalUri, Logger } from '@hydranium/protocol';
+import { OperationCancelled, URI } from '@hydranium/langium';
+import { type CanonicalUri, Deferred, Logger } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
-import { CancellationToken } from 'vscode-languageserver';
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import {
    DefaultDocumentReleaseHandler,
    type DocumentReleaseDecision,
@@ -22,6 +22,7 @@ import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task
 import { type VersionSyncService } from '../../src/documents/version-sync-service.js';
 import { type ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
+import { notFound } from '../../src/langium/workspace/file-not-found.js';
 import { type CapturedLine, makeCapturingTracer } from '../../src/testing/index.js';
 
 const FILE = URI.file('/hydranium-test/release.a');
@@ -36,9 +37,10 @@ interface Rig {
    /**
     * Faults to inject: a write the lock resolves though its action threw, as a
     * cancelled one; a write the lock resolves without running it, discarded
-    * while queued; an `exists` that rejects; a recovery build given up.
+    * while queued; an `exists` that rejects; a recovery build given up; how
+    * many rebuilds of the document find no file.
     */
-   readonly faults: { cancelWrites?: boolean; dropWrites?: boolean; existsError?: Error; recoveryError?: Error };
+   readonly faults: { cancelWrites?: boolean; dropWrites?: boolean; existsError?: Error; recoveryError?: Error; rebuildMisses?: number };
    /** How many recovery builds were requested. */
    readonly recoveries: () => number;
    /** Whether each recovery build requested asked to remove the document. */
@@ -62,7 +64,7 @@ function subscribe<L>(listeners: Set<L>, listener: L): { dispose(): void } {
  * as Langium's does, and whose recovery build, as the real one, builds nothing
  * for a request no longer needed and removes the document when asked to.
  */
-function makeRig(): Rig {
+function makeRig(fileSystem: { existsSettled?: (uri: URI) => Promise<boolean> } = {}): Rig {
    const builds: Array<{ changed: string[]; deleted: string[] }> = [];
    const onDisk = new Set([KEY as string]);
    const built = new Set([KEY as string]);
@@ -74,6 +76,8 @@ function makeRig(): Rig {
    const recoveryDeletes: boolean[] = [];
    const beforeRecovery: Rig['beforeRecovery'] = {};
    const { tracer, lines: logged } = makeCapturingTracer();
+   let lockTail: Promise<unknown> = Promise.resolve();
+   let latestWrite: CancellationTokenSource | undefined;
    const services = {
       Tracer: { for: () => tracer },
       workspace: {
@@ -84,21 +88,31 @@ function makeRig(): Rig {
                   throw faults.existsError;
                }
                return onDisk.has(uri.toString());
-            }
+            },
+            ...fileSystem
          },
          WorkspaceManager: { ready: Promise.resolve() },
          WorkspaceLock: {
-            write: async (action: (token: CancellationToken) => Promise<void>) => {
-               if (faults.dropWrites) {
-                  return;
-               }
-               try {
-                  await action(CancellationToken.None);
-               } catch (err: unknown) {
-                  if (!faults.cancelWrites) {
-                     throw err;
+            // As Langium's lock: one write at a time, each queued write cancels
+            // the one before it, and a write that stops on its cancellation resolves.
+            write: (action: (token: CancellationToken) => Promise<void>) => {
+               latestWrite?.cancel();
+               const source = new CancellationTokenSource();
+               latestWrite = source;
+               const run = lockTail.then(async () => {
+                  if (faults.dropWrites) {
+                     return;
                   }
-               }
+                  try {
+                     await action(source.token);
+                  } catch (err: unknown) {
+                     if (!faults.cancelWrites && err !== OperationCancelled) {
+                        throw err;
+                     }
+                  }
+               });
+               lockTail = run.catch(() => undefined);
+               return run;
             }
          },
          LangiumDocuments: { getDocument: (uri: URI) => (built.has(uri.toString()) ? { uri } : undefined) },
@@ -126,9 +140,19 @@ function makeRig(): Rig {
          DocumentBuilder: {
             markNextReason: () => undefined,
             onUpdate: (listener: (changed: URI[], deleted: URI[]) => void) => subscribe(updateListeners, listener),
-            update: async (changed: URI[], deleted: URI[]) => {
+            update: async (changed: URI[], deleted: URI[], token: CancellationToken = CancellationToken.None) => {
                builds.push({ changed: changed.map(String), deleted: deleted.map(String) });
                deleted.forEach(uri => built.delete(uri.toString()));
+               // As Langium's update: a cancelled one has deleted and announced,
+               // and stops before it reads a file or parses.
+               if (token.isCancellationRequested) {
+                  [...updateListeners].forEach(listener => listener(changed, deleted));
+                  throw OperationCancelled;
+               }
+               if (faults.rebuildMisses && changed.some(uri => uri.toString() === KEY)) {
+                  faults.rebuildMisses--;
+                  throw notFound(`No file at ${FILE.fsPath}`, FILE);
+               }
                changed.forEach(parse);
                [...updateListeners].forEach(listener => listener(changed, deleted));
             }
@@ -149,8 +173,8 @@ function makeRig(): Rig {
    };
 }
 
-function makeReleased(isReclaimed: () => boolean = () => false): ReleasedDocument {
-   return { uri: KEY, isFor: uri => uri === KEY, isReclaimed };
+function makeReleased(isReclaimed: () => boolean = () => false, wasOnDisk = true): ReleasedDocument {
+   return { uri: KEY, wasOnDisk, isFor: uri => uri === KEY, isReclaimed };
 }
 
 describe('DefaultDocumentReleaseHandler', () => {
@@ -168,6 +192,190 @@ describe('DefaultDocumentReleaseHandler', () => {
       const released = makeReleased();
       await new DefaultDocumentReleaseHandler(services).didReleaseDocument(released);
       expect(builds).toEqual([{ changed: [], deleted: [KEY] }]);
+   });
+
+   it('rebuilds a document whose missed file the provider finds once settled', async () => {
+      const { services, builds, onDisk } = makeRig({ existsSettled: async () => true });
+      onDisk.clear();
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      expect(builds).toEqual([{ changed: [KEY], deleted: [] }]);
+   });
+
+   it('removes at once, without settling, a document the store knew had no file', async () => {
+      let settles = 0;
+      const { services, builds, onDisk } = makeRig({
+         existsSettled: async () => {
+            settles++;
+            return true;
+         }
+      });
+      onDisk.clear();
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased(undefined, false));
+      expect(builds).toEqual([{ changed: [], deleted: [KEY] }]);
+      expect(settles).toBe(0);
+   });
+
+   it('removes a document whose missed file the provider confirms gone', async () => {
+      const { services, builds, onDisk } = makeRig({ existsSettled: async () => false });
+      onDisk.clear();
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      expect(builds).toEqual([{ changed: [], deleted: [KEY] }]);
+   });
+
+   it('settles a miss outside the disk queue, so a write queued for the file runs meanwhile', async () => {
+      const settling = new Deferred<boolean>();
+      const asked = new Deferred();
+      const { services, builds, onDisk } = makeRig({
+         existsSettled: () => {
+            asked.resolve();
+            return settling.promise;
+         }
+      });
+      onDisk.clear();
+      const release = new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      await asked.promise;
+
+      // Would wait on the settle forever if it held the queue.
+      await services.workspace.FileSystemTaskQueue.enqueue(KEY, async () => onDisk.add(KEY));
+      settling.resolve(true);
+      await release;
+
+      expect(builds).toEqual([{ changed: [KEY], deleted: [] }]);
+   });
+
+   it('rebuilds again a document whose rebuild missed a file the provider then finds', async () => {
+      const { services, builds, faults } = makeRig({ existsSettled: async () => true });
+      faults.rebuildMisses = 1;
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [KEY], deleted: [] }
+      ]);
+   });
+
+   it('removes a document whose rebuild missed a file the provider confirms gone', async () => {
+      const { services, builds, faults } = makeRig({ existsSettled: async () => false });
+      faults.rebuildMisses = 1;
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [], deleted: [KEY] }
+      ]);
+   });
+
+   it('removes a document whose rebuild misses its file again after the provider found it back', async () => {
+      const { services, builds, faults } = makeRig({ existsSettled: async () => true });
+      faults.rebuildMisses = 2;
+      await new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [KEY], deleted: [] },
+         { changed: [], deleted: [KEY] }
+      ]);
+   });
+
+   it('carries out what an overridden redecideRelease answers after each missed rebuild', async () => {
+      const { services, builds, faults } = makeRig({ existsSettled: async () => false });
+      faults.rebuildMisses = 2;
+      const asked: number[] = [];
+      class Persisting extends DefaultDocumentReleaseHandler {
+         protected override async redecideRelease(
+            _released: ReleasedDocument,
+            _target: URI,
+            misses: number
+         ): Promise<DocumentReleaseDecision> {
+            asked.push(misses);
+            return 'rebuild';
+         }
+      }
+      await new Persisting(services).didReleaseDocument(makeReleased());
+      expect(asked).toEqual([1, 2]);
+      // The default would have removed it: the provider confirms the file gone.
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [KEY], deleted: [] },
+         { changed: [KEY], deleted: [] }
+      ]);
+   });
+
+   it("settles a rebuild's missed file within its write, so no build reads the reset document meanwhile", async () => {
+      const settling = new Deferred<boolean>();
+      const asked = new Deferred();
+      const { services, builds, faults, recoveryDeletes } = makeRig({
+         existsSettled: () => {
+            asked.resolve();
+            return settling.promise;
+         }
+      });
+      faults.rebuildMisses = 1;
+      const release = new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      await asked.promise;
+
+      // How many builds the release had made when another write got the lock.
+      const seen: number[] = [];
+      const queued = services.workspace.WorkspaceLock.write(async () => {
+         seen.push(builds.length);
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(seen).toEqual([]);
+      settling.resolve(true);
+      await Promise.all([release, queued]);
+
+      expect(seen).toEqual([2]);
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [KEY], deleted: [] }
+      ]);
+      // The queued write cancelled the second rebuild, so a recovery build rebuilds it.
+      expect(recoveryDeletes).toEqual([false]);
+   });
+
+   it('removes a document whose missed file settles gone though a write queued meanwhile cancels the removal', async () => {
+      const settling = new Deferred<boolean>();
+      const asked = new Deferred();
+      const { services, builds, faults, recoveries } = makeRig({
+         existsSettled: () => {
+            asked.resolve();
+            return settling.promise;
+         }
+      });
+      faults.rebuildMisses = 1;
+      const release = new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased());
+      await asked.promise;
+
+      const queued = services.workspace.WorkspaceLock.write(async () => undefined);
+      settling.resolve(false);
+      await Promise.all([release, queued]);
+
+      // A removal deletes before it checks its cancellation, so nothing is left to recover.
+      expect(builds).toEqual([
+         { changed: [KEY], deleted: [] },
+         { changed: [], deleted: [KEY] }
+      ]);
+      expect(services.workspace.LangiumDocuments.getDocument(FILE)).toBeUndefined();
+      expect(recoveries()).toBe(0);
+   });
+
+   it('leaves a document a client reclaims while its missed file settles to that client', async () => {
+      const settling = new Deferred<boolean>();
+      const asked = new Deferred();
+      let reclaimed = false;
+      const { services, builds, faults } = makeRig({
+         existsSettled: () => {
+            asked.resolve();
+            return settling.promise;
+         }
+      });
+      faults.rebuildMisses = 1;
+      const release = new DefaultDocumentReleaseHandler(services).didReleaseDocument(makeReleased(() => reclaimed));
+      await asked.promise;
+
+      reclaimed = true;
+      settling.resolve(false);
+      await release;
+
+      // The missed rebuild alone: no removal of the reclaimed document.
+      expect(builds).toEqual([{ changed: [KEY], deleted: [] }]);
    });
 
    it('leaves a document a client reclaimed to that client', async () => {
