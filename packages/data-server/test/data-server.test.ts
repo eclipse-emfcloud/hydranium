@@ -1427,6 +1427,110 @@ describe('DataServer', () => {
       });
    });
 
+   describe('encodeProject', () => {
+      /** Adds a field no `ProjectManager` produces, so a project that skipped the seam lacks it. */
+      class LabelledProjectServer extends TestDataServer {
+         protected override encodeProject(project: Project): Project {
+            const labelled: Project & { label: string } = { ...project, label: `label-${project.id}` };
+            return labelled;
+         }
+      }
+
+      function makeLabelledHarness(services: ServerSharedServices): DataServerHarness<LabelledProjectServer, FakeRoot, FakeDiagnostic> {
+         return makeDataServerHarness<LabelledProjectServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new LabelledProjectServer(channel, services)
+         });
+      }
+
+      it('shapes each project getProjects answers with', async () => {
+         const bundle = buildBundle();
+         bundle.projectManager.projects.push({ id: 'p1', referenceName: 'p1' });
+         bundle.projectManager.projects.push({ id: 'p2', referenceName: 'p2' });
+         const harness = makeLabelledHarness(bundle.services);
+         try {
+            const result = await harness.proxy.getProjects();
+            expect(result).toEqual([
+               expect.objectContaining({ id: 'p1', label: 'label-p1' }),
+               expect.objectContaining({ id: 'p2', label: 'label-p2' })
+            ]);
+         } finally {
+            harness.dispose();
+         }
+      });
+
+      it('shapes the project getProjectForUri answers with, and answers nothing for a URI no project owns', async () => {
+         const bundle = buildBundle();
+         bundle.projectManager.projects.push({ id: 'p1', referenceName: 'p1' });
+         bundle.projectManager.ownUri(URI_A, 'p1');
+         const harness = makeLabelledHarness(bundle.services);
+         try {
+            expect(await harness.proxy.getProjectForUri({ uri: URI_A })).toEqual(expect.objectContaining({ id: 'p1', label: 'label-p1' }));
+            // vscode-jsonrpc normalises `undefined` to `null` across the wire.
+            expect((await harness.proxy.getProjectForUri({ uri: 'file:///workspace/unowned.fake' })) ?? undefined).toBeUndefined();
+         } finally {
+            harness.dispose();
+         }
+      });
+
+      it('shapes each project a change notification carries, a removed snapshot included', async () => {
+         const bundle = buildBundle();
+         bundle.projectManager.projects.push({ id: 'p1', referenceName: 'p1' });
+         bundle.projectManager.projects.push({ id: 'p2', referenceName: 'p2' });
+         const harness = makeLabelledHarness(bundle.services);
+         try {
+            bundle.projectManager.fireProjectsChanged({
+               added: ['p1'],
+               updated: ['p2'],
+               removed: [{ id: 'p0', snapshot: { id: 'p0', referenceName: 'p0' } }],
+               affectedDocuments: []
+            });
+            await waitFor(() => harness.projectsChanges.length === 3);
+
+            expect(harness.projectsChanges).toEqual([
+               { project: expect.objectContaining({ id: 'p1', label: 'label-p1' }), reason: 'added' },
+               { project: expect.objectContaining({ id: 'p2', label: 'label-p2' }), reason: 'updated' },
+               { project: expect.objectContaining({ id: 'p0', label: 'label-p0' }), reason: 'removed' }
+            ]);
+         } finally {
+            harness.dispose();
+         }
+      });
+
+      it('logs a project whose encodeProject throws and still sends the rest of the batch', async () => {
+         class ThrowingProjectServer extends TestDataServer {
+            protected override encodeProject(project: Project): Project {
+               if (project.id === 'p2') {
+                  throw new Error('cannot encode p2');
+               }
+               return project;
+            }
+         }
+         const { logger, lines } = makeCapturingLogger();
+         const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
+            serialize: (_uri, root) => `name:${root.name}`,
+            logger
+         });
+         for (const id of ['p1', 'p2', 'p3']) {
+            bundle.projectManager.projects.push({ id, referenceName: id });
+         }
+         const harness = makeDataServerHarness<ThrowingProjectServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new ThrowingProjectServer(channel, bundle.services)
+         });
+         try {
+            bundle.projectManager.fireProjectsChanged({ added: ['p1', 'p2', 'p3'], updated: [], removed: [], affectedDocuments: [] });
+            await waitFor(() => harness.projectsChanges.length === 2);
+
+            expect(harness.projectsChanges.map(change => change.project.id)).toEqual(['p1', 'p3']);
+            const errors = lines.filter(line => line.level === 'error');
+            expect(errors).toHaveLength(1);
+            expect(errors[0].message).toContain('Project p2 not sent as added');
+            expect(errors[0].message).toContain('cannot encode p2');
+         } finally {
+            harness.dispose();
+         }
+      });
+   });
+
    describe('dispose', () => {
       it('clears the per-URI state, drops listeners, and is idempotent', async () => {
          const bundle = buildBundle();

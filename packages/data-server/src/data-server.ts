@@ -10,6 +10,7 @@
 import {
    createRpcProxy,
    defineMessage,
+   describeErrorWithStack,
    DisposableCollection,
    HYDRANIUM_ERROR_CODES,
    isDocumentSource,
@@ -63,6 +64,7 @@ import {
    type CreateSessionArgs,
    type GetModelDocumentArgs,
    type GetProjectForUriArgs,
+   type ProjectChangeReason,
    type TransferDeleteDocumentArgs,
    type TransferPersistDocumentArgs,
    type TransferSaveDocumentArgs,
@@ -872,20 +874,17 @@ export class DataServer<
    }
 
    async getProjects(): Promise<readonly TProject[]> {
-      // Pass-through: `ProjectManager<TProject>` already produces `TProject`
-      // (the shared services are parameterised over the same generic).
       // The framework reads `id` for registry identity and `dependencies`
       // for the visibility closure; every other field rides on the
       // JSON-RPC envelope as adopter-defined wire metadata.
-      return this.services.workspace.ProjectManager.getProjects();
+      return this.services.workspace.ProjectManager.getProjects().map(project => this.encodeProject(project));
    }
 
    async getProjectForUri(args: GetProjectForUriArgs): Promise<TProject | undefined> {
-      // Pass-through: `ProjectManager.getProject(uri)` already returns the
-      // adopter's `TProject` shape. Membership logic belongs to the adopter's
-      // `ProjectManager`; the data-server forwards the URI without
-      // interpretation.
-      return this.services.workspace.ProjectManager.getProject(UriUtils.toUri(args.uri));
+      // Membership logic belongs to the adopter's `ProjectManager`; the
+      // data-server forwards the URI without interpretation.
+      const project = this.services.workspace.ProjectManager.getProject(UriUtils.toUri(args.uri));
+      return project && this.encodeProject(project);
    }
 
    /**
@@ -1152,6 +1151,17 @@ export class DataServer<
    protected encodeDocument(astDocument: AstDocument<AstNode, AstDiagnostic>): TransferDocument<TTransfer, TDiagnostic> {
       const encoded = this.encoder.astDocumentToTransferDocument(astDocument);
       return this.withServerState(encoded, this.computeDocumentFingerprint(astDocument.root, encoded));
+   }
+
+   /**
+    * The project a client receives for `project`, unchanged by default. Every
+    * project a request answers with or a change notification carries goes
+    * through here, so a field derived for clients cannot miss one path. The
+    * result crosses as JSON, so a value a client reads goes in a data field,
+    * not a getter.
+    */
+   protected encodeProject(project: TProject): TProject {
+      return project;
    }
 
    /**
@@ -1506,23 +1516,35 @@ export class DataServer<
    /**
     * Fan one internal {@link ProjectChangeEvent} out to per-project wire
     * notifications. Each `removed` entry pairs the id with the pre-removal
-    * snapshot needed for the `'removed'` wire payload.
+    * snapshot needed for the `'removed'` wire payload. A project whose
+    * {@link encodeProject} throws is logged and skipped, so the rest of the
+    * batch still reaches the client.
     */
    protected dispatchProjectChangeEvent(event: ProjectChangeEvent<TProject>): void {
+      const send = (project: TProject, reason: ProjectChangeReason): void => {
+         let encoded: TProject;
+         try {
+            encoded = this.encodeProject(project);
+         } catch (error: unknown) {
+            this.tracer.error(`Project ${project.id} not sent as ${reason}: encodeProject threw: ${describeErrorWithStack(error)}`);
+            return;
+         }
+         this.clientProxy.onProjectsChanged({ project: encoded, reason });
+      };
       for (const id of event.added) {
          const project = this.services.workspace.ProjectManager.getProjectById(id);
          if (project) {
-            this.clientProxy.onProjectsChanged({ project, reason: 'added' });
+            send(project, 'added');
          }
       }
       for (const id of event.updated) {
          const project = this.services.workspace.ProjectManager.getProjectById(id);
          if (project) {
-            this.clientProxy.onProjectsChanged({ project, reason: 'updated' });
+            send(project, 'updated');
          }
       }
       for (const entry of event.removed) {
-         this.clientProxy.onProjectsChanged({ project: entry.snapshot, reason: 'removed' });
+         send(entry.snapshot, 'removed');
       }
    }
 
