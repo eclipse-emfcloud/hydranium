@@ -22,7 +22,7 @@ import { type TheiaApp, TheiaExplorerView } from '@theia/playwright';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { loadOrderFlowApp, test } from './order-flow-app.mjs';
+import { loadOrderFlowApp, ORDER_FLOW_SERVER_LOG_ALLOWLIST, test } from './order-flow-app.mjs';
 
 /** A workspace overlay that raises the server log level to `warn`. */
 function warnLevelOverlay(): string {
@@ -33,6 +33,13 @@ function warnLevelOverlay(): string {
 }
 
 test.describe('order-flow diagram with the server log level at warn', () => {
+   test.use({
+      serverLogAllowlist: {
+         ...ORDER_FLOW_SERVER_LOG_ALLOWLIST,
+         'a level change is announced at the level it enters, so its reader sees it': /Log level info → warn/
+      }
+   });
+
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {

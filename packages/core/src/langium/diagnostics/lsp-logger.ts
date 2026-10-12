@@ -19,6 +19,7 @@ import {
    type LogThreshold,
    ObservableValue,
    type MaybeObservableValue,
+   describeErrorWithStack,
    parseLogLevel
 } from '@hydranium/protocol';
 import { type URI } from '@hydranium/langium';
@@ -308,7 +309,7 @@ function formatLogArg(value: unknown): string {
       return value;
    }
    if (value instanceof Error) {
-      return value.stack ?? value.message;
+      return describeErrorWithStack(value);
    }
    if (typeof value === 'object') {
       try {

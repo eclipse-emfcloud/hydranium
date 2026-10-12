@@ -19,7 +19,9 @@ import {
    OperationActionHandler,
    type OperationHandler
 } from '@eclipse-glsp/server';
+import { describeErrorWithStack } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
+import { logActionFailure } from './diagram-edit-dropped-error.js';
 import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
@@ -96,16 +98,26 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       messages.forEach(message => this.sendToClient(message));
       this.actionDispatcher
          .dispatchAll(actions.filter(action => !MessageAction.is(action)))
-         .catch((error: unknown) => this.logger.warn(`Could not deliver the result of a queued operation: ${String(error)}`));
+         .catch((error: unknown) =>
+            this.logger.warn(`Could not deliver the result of a queued operation: ${describeErrorWithStack(error)}`)
+         );
    }
 
    /**
-    * Log `error` and send the client the error message GLSP sends for a failed
-    * client action.
+    * Log `error` with {@link logActionFailure}, as the server logs a failed
+    * action, and send the client the error message GLSP sends for one. A
+    * queued operation that fails once its diagram has closed, which the
+    * storage's dispose marks by clearing the state's session, is logged at
+    * `debug` and told to no client, as the server treats an ended session.
     */
    protected reportFailure(operation: Operation, error: unknown): void {
+      // Queued only after a load registered the session, so none now means the diagram has closed.
+      if (this.modelState.modelSession === undefined) {
+         this.logger.debug(`Operation '${operation.kind}' ended with its diagram: ${describeErrorWithStack(error)}`);
+         return;
+      }
+      logActionFailure(this.logger, operation, error);
       let message = `Could not process action: '${operation.kind}`;
-      this.logger.error(message, error);
       let details = error instanceof Error ? error.toString() : String(error);
       if (error instanceof GLSPServerError) {
          details = String(error.cause);
@@ -123,7 +135,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       try {
          this.clientProxy.process({ clientId: this.modelState.clientId, action });
       } catch (error: unknown) {
-         this.logger.warn(`Could not send '${action.kind}' to the client: ${String(error)}`);
+         this.logger.warn(`Could not send '${action.kind}' to the client: ${describeErrorWithStack(error)}`);
       }
    }
 }

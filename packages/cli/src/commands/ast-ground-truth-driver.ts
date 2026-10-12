@@ -16,6 +16,7 @@
  */
 
 import * as fs from 'node:fs';
+import { describeError } from '@hydranium/protocol';
 import { loadHeadlessContext, OUT_FILE_FLAG } from './headless-harness.js';
 
 interface DriverArgs {
@@ -76,6 +77,6 @@ async function main(argv: string[]): Promise<void> {
 main(process.argv.slice(2))
    .then(() => process.exit(0))
    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeError(error));
       process.exit(1);
    });

@@ -17,3 +17,4 @@ export {
    type UndoRedoDirection
 } from './hydranium-glsp-operation-command.js';
 export * from './hydranium-glsp-undo-redo-action-handler.js';
+export * from './diagram-edit-dropped-error.js';

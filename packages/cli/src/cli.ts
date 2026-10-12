@@ -9,6 +9,7 @@
  ********************************************************************************/
 
 import { Command } from 'commander';
+import { describeError } from '@hydranium/protocol';
 import { readCliVersion } from './cli-version.js';
 import { runAnalyzeHeapCommand } from './commands/analyze-heap-args.js';
 import { runAstGroundTruthCommand } from './commands/ast-ground-truth-args.js';
@@ -134,6 +135,6 @@ main(process.argv.slice(2)).catch(err => {
    if (err instanceof InitWizardCancelled) {
       process.exit(130);
    }
-   console.error(err instanceof Error ? err.message : String(err));
+   console.error(describeError(err));
    process.exit(1);
 });

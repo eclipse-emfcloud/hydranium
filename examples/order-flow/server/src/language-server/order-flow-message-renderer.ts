@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { DefaultMessageRenderer } from '@hydranium/core/messages';
-import { MessageCatalogue, type Locale } from '@hydranium/protocol';
+import { MessageCatalogue, type Locale, describeErrorWithStack } from '@hydranium/protocol';
 import germanCatalogue from '../nls/order-flow.de.json' with { type: 'json' };
 
 /**
@@ -81,8 +81,9 @@ export class OrderFlowMessageRenderer extends DefaultMessageRenderer {
       try {
          language = new Intl.Locale(locale).language;
       } catch (err: unknown) {
-         const reason = err instanceof Error ? err.message : String(err);
-         this.tracer.warn(`Locale '${locale}' is not a language tag (${reason}); rendering without this server's catalogue`);
+         this.tracer.warn(
+            `Locale '${locale}' is not a language tag; rendering without this server's catalogue. ${describeErrorWithStack(err)}`
+         );
          return undefined;
       }
       return CATALOGUES[language];

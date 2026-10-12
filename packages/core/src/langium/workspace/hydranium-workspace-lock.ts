@@ -18,7 +18,7 @@ import { runInWriteLockScope } from './write-lock-scope.js';
 export interface HydraniumWorkspaceLockOptions extends LogNameOptions {
    /**
     * How long a write may keep running after a later write cancelled it before
-    * the lock logs an error. Every write and read waits behind it meanwhile, so
+    * the lock logs a warning. Every write and read waits behind it meanwhile, so
     * one that never ends stops the server. Defaults to 10 s; `0` turns the
     * check off.
     */
@@ -109,7 +109,7 @@ export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
    }
 
    protected reportStalledWrite(): void {
-      this.tracer.error(
+      this.tracer.warn(
          `A write is still running ${this.stalledWriteWarnMs} ms after it was cancelled, and every write and read waits behind it. ` +
             'Likely causes: a model-service write or rebuild from inside a build in a host with no write-lock scope tracker, ' +
             'which waits for the build it runs in, or a write action that ignores its cancellation token. ' +

@@ -9,6 +9,7 @@
 
 import { URI } from '@hydranium/langium';
 import { type CanonicalUri, Logger } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { describe, expect, it } from 'vitest';
 import { CancellationToken } from 'vscode-languageserver';
 import {
@@ -18,6 +19,7 @@ import {
    type ReleasedDocument
 } from '../../src/documents/document-release-handler.js';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
+import { type VersionSyncService } from '../../src/documents/version-sync-service.js';
 import { type ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { type CapturedLine, makeCapturingTracer } from '../../src/testing/index.js';
@@ -34,9 +36,9 @@ interface Rig {
    /**
     * Faults to inject: a write the lock resolves though its action threw, as a
     * cancelled one; a write the lock resolves without running it, discarded
-    * while queued; an `exists` that rejects.
+    * while queued; an `exists` that rejects; a recovery build given up.
     */
-   readonly faults: { cancelWrites?: boolean; dropWrites?: boolean; existsError?: Error };
+   readonly faults: { cancelWrites?: boolean; dropWrites?: boolean; existsError?: Error; recoveryError?: Error };
    /** How many recovery builds were requested. */
    readonly recoveries: () => number;
    /** Whether each recovery build requested asked to remove the document. */
@@ -102,13 +104,16 @@ function makeRig(): Rig {
          LangiumDocuments: { getDocument: (uri: URI) => (built.has(uri.toString()) ? { uri } : undefined) },
          VersionSyncService: {
             onDidRecordModel: (listener: (document: { uri: URI }) => void) => subscribe(parseListeners, listener),
-            requestRecoveryBuild: async (uri: URI, request: { deleted?: boolean; stillNeeded: () => boolean }) => {
+            requestRecoveryBuild: (async (uri, request) => {
                recoveryDeletes.push(request.deleted === true);
                // Queued, as a real one is: it builds after the handler has started waiting.
                await Promise.resolve();
                beforeRecovery.run?.();
                if (!request.stillNeeded()) {
-                  return true;
+                  return;
+               }
+               if (faults.recoveryError) {
+                  throw faults.recoveryError;
                }
                if (request.deleted) {
                   built.delete(uri.toString());
@@ -116,8 +121,7 @@ function makeRig(): Rig {
                } else {
                   parse(uri);
                }
-               return true;
-            }
+            }) satisfies VersionSyncService['requestRecoveryBuild']
          },
          DocumentBuilder: {
             markNextReason: () => undefined,
@@ -247,7 +251,7 @@ describe('DefaultDocumentReleaseHandler', () => {
          protected override async applyReleaseDecision(): Promise<void> {
             throw new Error('build broke');
          }
-         protected override async requestRecoveryBuild(): Promise<boolean> {
+         protected override async requestRecoveryBuild(): Promise<void> {
             throw new Error('recovery broke');
          }
       }
@@ -276,10 +280,9 @@ describe('DefaultDocumentReleaseHandler', () => {
             throw new Error('build broke');
          }
          // A client opened the document meanwhile, so the build is no longer needed.
-         protected override async requestRecoveryBuild(): Promise<boolean> {
+         protected override async requestRecoveryBuild(): Promise<void> {
             await Promise.resolve();
             reclaimed = true;
-            return true;
          }
       }
       const { services, liveListeners } = makeRig();
@@ -404,21 +407,71 @@ describe('DefaultDocumentReleaseHandler every exit settles and leaves no subscri
       expect(rig.liveListeners()).toBe(0);
    });
 
-   it('logs a recovery build that fails after a parse settled the release', async () => {
+   it('logs a recovery build that fails after a parse settled the release at debug, since the release got its parse', async () => {
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
       const rig = makeRig();
       class LateFailureHandler extends DefaultDocumentReleaseHandler {
          protected override async applyReleaseDecision(): Promise<void> {
             throw new Error('build broke');
          }
-         protected override async requestRecoveryBuild(): Promise<boolean> {
+         protected override async requestRecoveryBuild(): Promise<void> {
             await Promise.resolve();
             rig.parse(FILE);
             throw new Error('late recovery broke');
          }
       }
-      expect(await outcome(new LateFailureHandler(rig.services).didReleaseDocument(makeReleased()))).toBe('resolved');
-      await new Promise<void>(resolve => setImmediate(resolve));
-      expect(rig.logged.some(line => line.level === 'error' && line.message.includes('late recovery broke'))).toBe(true);
+      try {
+         expect(await outcome(new LateFailureHandler(rig.services).didReleaseDocument(makeReleased()))).toBe('resolved');
+         await waitFor(() => rig.logged.some(line => line.message.includes('late recovery broke')));
+         expect(rig.logged.filter(line => line.message.includes('late recovery broke')).map(line => line.level)).toEqual(['debug']);
+         expect(rig.liveListeners()).toBe(0);
+      } finally {
+         Logger.setLevel(previous);
+      }
+   });
+
+   it('logs a recovery build that fails after a revert that parsed and then failed at debug, since the release has its parse', async () => {
+      const previous = Logger.getLevel();
+      Logger.setLevel('debug');
+      const rig = makeRig();
+      rig.faults.recoveryError = new Error('recovery given up');
+      class ParsedThenFailed extends DefaultDocumentReleaseHandler {
+         protected override async applyReleaseDecision(): Promise<void> {
+            rig.parse(FILE);
+            throw new Error('build broke');
+         }
+      }
+      try {
+         expect(await outcome(new ParsedThenFailed(rig.services).didReleaseDocument(makeReleased()))).toBe('resolved');
+         await waitFor(() => rig.logged.some(line => line.message.includes('recovery given up')));
+         expect(rig.logged.filter(line => line.message.includes('recovery given up')).map(line => line.level)).toEqual(['debug']);
+      } finally {
+         Logger.setLevel(previous);
+      }
+   });
+
+   it('warns, with its stack, about a failed revert that a recovery build took over', async () => {
+      const rig = makeRig();
+      const Handler = failingWith(new Error('build broke'));
+      expect(await outcome(new Handler(rig.services).didReleaseDocument(makeReleased()))).toBe('resolved');
+      const lines = rig.logged.filter(line => line.message.includes('build broke'));
+      expect(lines.map(line => line.level)).toEqual(['warn']);
+      expect(lines[0].message).toMatch(/\n\s+at /);
+   });
+
+   it('rejects with a given-up recovery build as the cause, after warning about the revert it took over', async () => {
+      const rig = makeRig();
+      const given = new Error('recovery given up');
+      rig.faults.recoveryError = given;
+      const Handler = failingWith(new Error('build broke'));
+      const failure = await new Handler(rig.services).didReleaseDocument(makeReleased()).then(
+         () => undefined,
+         (error: unknown) => error
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).cause).toBe(given);
+      expect(rig.logged.filter(line => line.level === 'error')).toEqual([]);
       expect(rig.liveListeners()).toBe(0);
    });
 
@@ -464,9 +517,9 @@ describe('DefaultDocumentReleaseHandler every exit settles and leaves no subscri
          protected override async applyReleaseDecision(): Promise<void> {
             throw new Error('build broke');
          }
-         protected override requestRecoveryBuild(): Promise<boolean> {
+         protected override requestRecoveryBuild(): Promise<void> {
             rig.parse(FILE);
-            return Promise.resolve(true);
+            return Promise.resolve();
          }
       }
       const settled = outcome(new SynchronousRecovery(rig.services).didReleaseDocument(makeReleased()));

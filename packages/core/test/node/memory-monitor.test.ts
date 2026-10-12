@@ -48,7 +48,7 @@ describe('startMemoryMonitor', () => {
       stop();
    });
 
-   it('warns on entering the warn band, escalates to error at critical, and recovers with info', () => {
+   it('warns on entering the warn band, warns again at critical, and recovers with info', () => {
       const { logger, lines } = makeCapturingLogger();
       const stop = startMemoryMonitor(makeNoopSharedServices({ Logger: logger }), { intervalMs: 1000, cooldownMs: 5000 });
       memorySpy.mockReturnValue(memoryAtRatio(0.9)); // warn
@@ -57,7 +57,8 @@ describe('startMemoryMonitor', () => {
       vi.advanceTimersByTime(1000);
       memorySpy.mockReturnValue(memoryAtRatio(0.5)); // recovered
       vi.advanceTimersByTime(1000);
-      expect(lines.map(line => line.level)).toEqual(['warn', 'error', 'info']);
+      // Critical is still a warning: nothing has failed yet.
+      expect(lines.map(line => line.level)).toEqual(['warn', 'warn', 'info']);
       expect(lines[1].message).toContain('imminent out-of-memory');
       expect(lines[2].message).toContain('recovered');
       stop();

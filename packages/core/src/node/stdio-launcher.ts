@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Deferred, type Disposable, type Logger } from '@hydranium/protocol';
+import { Deferred, type Disposable, type Logger, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '../launcher/integrated-server.js';
@@ -115,17 +115,21 @@ export function startStdioServer(
       try {
          adopterDisposable.dispose();
       } catch (err: unknown) {
-         logger?.warn(`[${tag}] Adopter disposable threw on cleanup: ${err instanceof Error ? err.message : String(err)}`);
+         logger?.warn(`[${tag}] Adopter disposable threw on cleanup: ${describeErrorWithStack(err)}`);
       }
       connection.dispose();
       stopped.resolve();
    };
    connection.onClose(() => close());
 
+   // The workspace manager logs a failed initialization itself.
+   let initializing = false;
    const begin = async (): Promise<void> => {
       if (options.workspace !== undefined) {
          logger?.info(`[${tag}] Initializing workspace`);
+         initializing = true;
          await initializeWorkspaceProgrammatically(options.shared, options.workspace);
+         initializing = false;
       }
       // Only now attach the reader — see the ordering note in the doc above.
       connection.listen();
@@ -138,7 +142,11 @@ export function startStdioServer(
          // A failed startup must not leave a half-live head: report it on
          // `started` and tear the connection down rather than listening over an
          // uninitialized workspace.
-         logger?.error(`[${tag}] Startup failed: ${err instanceof Error ? err.message : String(err)}`);
+         if (initializing) {
+            logger?.debug(`[${tag}] Startup failed: the workspace did not initialize. ${describeError(err)}`);
+         } else {
+            logger?.error(`[${tag}] Startup failed: ${describeErrorWithStack(err)}`);
+         }
          started.reject(err);
          close();
       }

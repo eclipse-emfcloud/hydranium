@@ -40,7 +40,9 @@ import {
    isDuplicateClientIdError,
    isSessionClosedError,
    RESUME_TOKEN_ARG,
-   SessionClosedError
+   SessionClosedError,
+   describeError,
+   describeErrorWithStack
 } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
 import { type AstNode, type ParseResult } from '@hydranium/langium';
@@ -331,7 +333,8 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          if (!isDuplicateClientIdError(error)) {
             throw error;
          }
-         this.logger.warn(`Client id ${this.state.clientId} is held by another participant: this diagram has no session yet`);
+         // Routine while a reconnecting diagram's old session has not closed yet.
+         this.logger.debug(`Client id ${this.state.clientId} is held by another participant: this diagram has no session yet`);
          return undefined;
       }
    }
@@ -382,13 +385,13 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          if (isSessionClosedError(error)) {
             throw error;
          }
-         this.logger.error(`Client id ${this.state.clientId} is still held by another participant: this diagram does not load`);
+         // The error names the held id, and whoever ends the request logs it.
          this.actionDispatcher
             .dispatch(
                MessageAction.create(this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_SESSION_REFUSED), { severity: 'ERROR' })
             )
             .catch((dispatchError: unknown) =>
-               this.logger.warn(`Could not tell the client the diagram was refused: ${String(dispatchError)}`)
+               this.logger.warn(`Could not tell the client the diagram was refused: ${describeErrorWithStack(dispatchError)}`)
             );
          throw error;
       }
@@ -434,7 +437,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       this.toDispose.push(
          modelService.onClientClosed(
             () => {
-               this.logger.info(`Client detached (${this.state.clientId}) — disposing storage subscriptions for ${rootUri}`);
+               this.logger.debug(`Client detached (${this.state.clientId}) — disposing storage subscriptions for ${rootUri}`);
                this.dispose();
             },
             { uri: rootUri, clientId: this.state.clientId }
@@ -477,7 +480,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
                () =>
                   this.actionDispatcher
                      .dispatchAll(actions)
-                     .catch((error: unknown) => this.logger.warn(`Could not send the settled model of ${rootUri}: ${String(error)}`)),
+                     .catch((error: unknown) =>
+                        this.logger.warn(`Could not send the settled model of ${rootUri}: ${describeErrorWithStack(error)}`)
+                     ),
                0
             )
          );
@@ -535,7 +540,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          return;
       }
       session.open(uri).catch((error: unknown) => {
-         const detail = `Could not open ${uri} for ${this.state.clientId}: ${error instanceof Error ? error.message : String(error)}`;
+         const detail = `Could not open ${uri} for ${this.state.clientId}: ${describeError(error)}`;
          // A session ending while the open reads is the diagram closing.
          if (isSessionClosedError(error)) {
             this.logger.debug(detail);
@@ -623,7 +628,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.sessionManager.getSession(this.state.clientId)) {
          return false;
       }
-      this.logger.warn(`Stale storage (clientId=${this.state.clientId} not in ClientSessionManager) — self-disposing ${context}`);
+      this.logger.debug(`Stale storage (clientId=${this.state.clientId} not in ClientSessionManager) — self-disposing ${context}`);
       this.dispose();
       return true;
    }
@@ -647,8 +652,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          actions =>
             this.actionDispatcher
                .dispatchAll(actions)
-               .catch((error: unknown) => this.logger.warn(`Could not send the resubmitted model of ${rootUri}: ${String(error)}`)),
-         error => this.logger.error(`Update-and-submit failed for ${rootUri}: ${error instanceof Error ? error.message : String(error)}`)
+               .catch((error: unknown) =>
+                  this.logger.warn(`Could not send the resubmitted model of ${rootUri}: ${describeErrorWithStack(error)}`)
+               ),
+         error => this.logger.error(`Update-and-submit failed for ${rootUri}: ${describeErrorWithStack(error)}`)
       );
    }
 
@@ -690,7 +697,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected sendDirtyState(): void {
       this.actionDispatcher
          .dispatch(SetDirtyStateAction.create(this.commandStack.isDirty, { reason: 'external' }))
-         .catch((error: unknown) => this.logger.warn(`Could not send the dirty state of ${this.state.sourceUri}: ${String(error)}`));
+         .catch((error: unknown) =>
+            this.logger.warn(`Could not send the dirty state of ${this.state.sourceUri}: ${describeErrorWithStack(error)}`)
+         );
    }
 
    /**
@@ -884,9 +893,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
          // Log rather than leave an unhandled rejection: the promise is not
          // returned, so nothing else will observe a failure. Named for the
          // diagram, since the document that failed may be a secondary.
-         this.flushWriteSet(uri).catch(error =>
-            this.logger.error(`Diagram save failed for ${uri}: ${error instanceof Error ? error.message : String(error)}`)
-         );
+         this.flushWriteSet(uri).catch(error => this.logger.error(`Diagram save failed for ${uri}: ${describeErrorWithStack(error)}`));
          return undefined;
       }
       // Awaited: any failure propagates to GLSP's save-action handler, which
@@ -941,12 +948,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const results = await Promise.allSettled(targets.map(async target => session.persist({ uri: target, baseVersion: 'any' })));
       const failures = results.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: targets[i], reason: result.reason }] : []));
       if (failures.length > 0) {
-         // Logged per document, since the save fails with the first alone and
-         // its error need not name the document it came from.
-         for (const { uri, reason } of failures) {
-            this.logger.error(`Save failed for ${uri}: ${reason instanceof Error ? reason.message : String(reason)}`);
-         }
-         throw failures[0].reason;
+         // A persist's error need not name its document, so the save's names each one.
+         const named = failures.map(({ uri, reason }) => `${uri} (${describeError(reason)})`).join(', ');
+         throw new Error(`Save failed for ${named}`, { cause: failures[0].reason });
       }
       for (const uri of departed) {
          if (this.departedSecondaries.delete(uri) && uri !== this.state.sourceUri) {
@@ -1073,12 +1077,14 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       try {
          markers = await this.modelValidator.validate([this.state.root], MarkersReason.BATCH);
       } catch (error: unknown) {
-         this.logger.error(`Validation of ${this.state.sourceUri} failed: ${String(error)}`);
+         this.logger.error(`Validation of ${this.state.sourceUri} failed: ${describeErrorWithStack(error)}`);
          return;
       }
       this.actionDispatcher
          .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.BATCH }))
-         .catch((error: unknown) => this.logger.warn(`Could not send the markers of ${this.state.sourceUri}: ${String(error)}`));
+         .catch((error: unknown) =>
+            this.logger.warn(`Could not send the markers of ${this.state.sourceUri}: ${describeErrorWithStack(error)}`)
+         );
    }
 
    sessionDisposed(_clientSession: ClientSession): void {

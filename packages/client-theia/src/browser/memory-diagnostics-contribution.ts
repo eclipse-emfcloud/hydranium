@@ -11,7 +11,8 @@ import {
    formatLatencyReport,
    type DataServerDiagnosticsProtocol,
    type HostDiagnosticsProtocol,
-   type StartProfilingArgs
+   type StartProfilingArgs,
+   describeError
 } from '@hydranium/protocol';
 import { captureBrowserRuntime, formatBrowserRuntime } from './browser-capture';
 import { CommandContribution, MessageService, nls, type Command, type CommandRegistry } from '@theia/core';
@@ -454,7 +455,7 @@ export class MemoryDiagnosticsContribution implements CommandContribution {
    }
 
    protected errorMessage(error: unknown): string {
-      return error instanceof Error ? error.message : String(error);
+      return describeError(error);
    }
 }
 

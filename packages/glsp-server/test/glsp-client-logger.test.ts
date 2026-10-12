@@ -154,10 +154,12 @@ describe('GlspClientLogger', () => {
       it('appends JSON-stringified objects', () => {
          expect(logger.testCombine('payload', [{ kind: 'foo', value: 42 }])).toBe('payload {\n    "kind": "foo",\n    "value": 42\n}');
       });
-      it('formats errors with message and stack', () => {
-         const error = new Error('boom');
+      it('formats an error by its stack, which already holds the message, and follows its cause', () => {
+         const cause = new Error('disk full');
+         cause.stack = 'Error: disk full\n    at write';
+         const error = new Error('boom', { cause });
          error.stack = 'Error: boom\n    at test';
-         expect(logger.testCombine('Failed', [error])).toBe('Failed boom\nError: boom\n    at test');
+         expect(logger.testCombine('Failed', [error])).toBe('Failed Error: boom\n    at test\nCaused by: Error: disk full\n    at write');
       });
       it('joins multiple params with comma-newline', () => {
          expect(logger.testCombine('m', ['a', 'b'])).toBe('m "a",\n"b"');

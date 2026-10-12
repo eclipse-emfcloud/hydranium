@@ -48,7 +48,7 @@
  * `MonacoEnvironment.getWorker` for strings no user sees.
  */
 
-import type { Locale } from '@hydranium/protocol';
+import { describeError, type Locale } from '@hydranium/protocol';
 import { applyBuildStamp } from './build-stamp.js';
 import { requireElement } from './dom.js';
 import { requestedLocale } from './page-nls.js';
@@ -107,5 +107,5 @@ boot().catch((error: unknown) => {
    // `setStatus`: importing that helper would import the module this file exists
    // to load late, and the failure being reported here is most likely that the
    // module never loaded at all.
-   requireElement('status').textContent = `failed: ${error instanceof Error ? error.message : String(error)}`;
+   requireElement('status').textContent = `failed: ${describeError(error)}`;
 });

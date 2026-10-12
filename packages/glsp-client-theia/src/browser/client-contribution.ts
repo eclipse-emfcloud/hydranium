@@ -11,7 +11,7 @@ import { ClientState, type GLSPClient, type InitializeResult } from '@eclipse-gl
 import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
 import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/browser';
-import { sendByMethodName } from '@hydranium/protocol';
+import { sendByMethodName, describeError } from '@hydranium/protocol';
 import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
@@ -138,7 +138,7 @@ export class HydraniumGlspClientContribution extends BaseGLSPClientContribution 
                attempt.cancelled();
                return;
             }
-            attempt.failed(error instanceof Error ? error.message : String(error), () => void this.restart());
+            attempt.failed(describeError(error), () => void this.restart());
             this.scheduleRestart(() => {
                if (this.glspClientDeferred === pending) {
                   void this.restart();

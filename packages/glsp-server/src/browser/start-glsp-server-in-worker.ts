@@ -15,7 +15,13 @@ import {
    createAppModule
 } from '@eclipse-glsp/server/browser.js';
 import { Container, ContainerModule, injectable } from 'inversify';
-import { createMessagePortTransport, sendByMethodName, type Logger, type TransferredMessagePort } from '@hydranium/protocol';
+import {
+   createMessagePortTransport,
+   describeErrorWithStack,
+   sendByMethodName,
+   type Logger,
+   type TransferredMessagePort
+} from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import type { IntegratedServer } from '@hydranium/core';
 import { dropNotificationsToGoneClient } from '../launcher/drop-notifications-to-gone-client.js';
@@ -211,7 +217,7 @@ export function startGlspServerInWorker(options: BrowserGlspServerOptions): Inte
             'startGlspServerInWorker: the launcher built no connection synchronously — ' +
                'WorkerServerLauncher.run has become asynchronous and readiness now needs a real signal'
          );
-         lifecycle?.error(`[GlspServer] ${error.message}`);
+         lifecycle?.error(`[GlspServer] ${describeErrorWithStack(error)}`);
          return { started: Promise.reject(error), stopped: stoppedPromise };
       }
 

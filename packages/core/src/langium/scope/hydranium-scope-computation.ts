@@ -59,6 +59,10 @@ import { type HydraniumAstNodeDescriptionProvider } from './ast-node-description
  * duplicated walks.
  */
 export class HydraniumScopeComputation extends DefaultScopeComputation {
+   /** The framework's name provider, which its language module binds to the slot. */
+   declare protected readonly nameProvider: NameProvider;
+   /** The framework's description provider, which its language module binds to the slot. */
+   declare protected readonly descriptions: HydraniumAstNodeDescriptionProvider;
    protected readonly tracer: Tracer;
 
    constructor(
@@ -155,17 +159,15 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
     * workspace-visible rather than being filtered out everywhere.
     */
    protected exportProject(node: AstNode, exports: AstNodeDescription[], document: LangiumDocument): void {
-      const nameProvider = this.nameProvider as NameProvider;
-      const documentName = nameProvider.getDocumentQualifiedName(node);
+      const documentName = this.nameProvider.getDocumentQualifiedName(node);
       if (!documentName) {
          return;
       }
       const projectId = this.getProjectIdForDocument(document);
-      const descriptions = this.descriptions as HydraniumAstNodeDescriptionProvider;
       exports.push(
          projectId !== undefined
-            ? descriptions.createProject({ node, name: documentName, document, projectId })
-            : descriptions.createUniversal({ node, name: documentName, document })
+            ? this.descriptions.createProject({ node, name: documentName, document, projectId })
+            : this.descriptions.createUniversal({ node, name: documentName, document })
       );
    }
 
@@ -182,16 +184,14 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
     * document-qualified name.
     */
    protected exportPublic(node: AstNode, exports: AstNodeDescription[], document: LangiumDocument): void {
-      const nameProvider = this.nameProvider as NameProvider;
       const projectId = this.getProjectIdForDocument(document);
       if (projectId === undefined) {
          return;
       }
-      const documentName = nameProvider.getDocumentQualifiedName(node);
-      const projectName = nameProvider.getProjectQualifiedName(node);
+      const documentName = this.nameProvider.getDocumentQualifiedName(node);
+      const projectName = this.nameProvider.getProjectQualifiedName(node);
       if (projectName && projectName !== documentName) {
-         const descriptions = this.descriptions as HydraniumAstNodeDescriptionProvider;
-         exports.push(descriptions.createPublic({ node, name: projectName, document, projectId }));
+         exports.push(this.descriptions.createPublic({ node, name: projectName, document, projectId }));
       }
    }
 
@@ -239,9 +239,9 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
       if (!container) {
          return;
       }
-      const name = (this.nameProvider as NameProvider).getOwnName(node);
+      const name = this.nameProvider.getOwnName(node);
       if (name) {
-         symbols.add(container, (this.descriptions as HydraniumAstNodeDescriptionProvider).createLocal({ node, name, document }));
+         symbols.add(container, this.descriptions.createLocal({ node, name, document }));
       }
    }
 }

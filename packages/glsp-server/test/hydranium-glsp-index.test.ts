@@ -24,7 +24,14 @@ import {
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 
-function createIndex(idMap: Map<AstNode, string | undefined>): { index: HydraniumGlspIndex; lines: CapturedLine[] } {
+/** Reaches the protected re-index of a single element. */
+class ReindexingIndex extends HydraniumGlspIndex {
+   reindex(element: GModelElement): void {
+      this.doIndex(element);
+   }
+}
+
+function createIndex(idMap: Map<AstNode, string | undefined>): { index: ReindexingIndex; lines: CapturedLine[] } {
    const elementKeyProvider: Pick<ElementKeyProvider, 'getElementKey'> = {
       getElementKey(node?: AstNode): string | undefined {
          return node ? idMap.get(node) : undefined;
@@ -39,8 +46,8 @@ function createIndex(idMap: Map<AstNode, string | undefined>): { index: Hydraniu
    const sharedServices = makeNoopSharedServices<ServerSharedServices>({ Logger: logger, ServiceRegistry: registry });
    const container = new Container();
    container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(sharedServices);
-   container.bind(HydraniumGlspIndex).toSelf().inSingletonScope();
-   return { index: container.get(HydraniumGlspIndex), lines };
+   container.bind(ReindexingIndex).toSelf().inSingletonScope();
+   return { index: container.get(ReindexingIndex), lines };
 }
 
 /** A node in a routable document — the ordinary case. */
@@ -425,6 +432,19 @@ describe('HydraniumGlspIndex', () => {
          expect(root.children).toEqual([original]);
          // The dropped duplicate took its subtree with it.
          expect(index.find('grandchild')).toBeUndefined();
+      });
+
+      it('skips an element re-indexed under an id already indexed, warning as the prune does', () => {
+         const { index, lines } = createIndex(new Map());
+         const original = makeGModelElement('shared');
+         const root = makeGModelElement('root');
+         root.children = [original];
+         index.indexRoot(root);
+
+         index.reindex(makeGModelElement('shared'));
+
+         expect(index.find('shared')).toBe(original);
+         expect(lines.filter(line => line.level !== 'debug' && line.level !== 'trace').map(line => line.level)).toEqual(['warn']);
       });
 
       it('drops a child colliding with the root id', () => {

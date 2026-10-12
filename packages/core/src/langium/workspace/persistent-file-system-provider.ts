@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { URI } from '@hydranium/langium';
+import { describeErrorWithStack } from '@hydranium/protocol';
 import { type WritableFileSystemProvider } from './file-system-provider.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type FileSystemSeed, InMemoryFileSystemProvider, type InMemoryFileSystemOptions } from './in-memory-file-system-provider.js';
@@ -250,7 +251,7 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
    }
 
    protected reportStoreFailure(operation: string, uri: URI, error: unknown): void {
-      this.tracer.error(`Failed to ${operation} ${uri.toString()}: ${error instanceof Error ? error.message : String(error)}`);
+      this.tracer.error(`Failed to ${operation} ${uri.toString()}: ${describeErrorWithStack(error)}`);
    }
 }
 

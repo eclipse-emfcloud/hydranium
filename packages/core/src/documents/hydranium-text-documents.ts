@@ -54,7 +54,9 @@ import {
    type TextVersion,
    STALE_VERSION,
    type Tracer,
-   UNRECORDED_VERSION
+   UNRECORDED_VERSION,
+   describeError,
+   describeErrorWithStack
 } from '@hydranium/protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { LANGUAGE_CLIENT_ID } from './client-ids.js';
@@ -467,9 +469,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
                return;
             }
          }
-         this.log(
+         // Diagnosis: one comes with every keystroke.
+         this.logUri(
             document.uri,
-            `Update to version ${document.version} by ${this.formatClientId(clientId)}${committed.changed ? '' : ' (content unchanged)'}`
+            `Update to version ${document.version} by ${this.formatClientId(clientId)}${committed.changed ? '' : ' (content unchanged)'}`,
+            'debug'
          );
          this.__onDidChangeContent.fire(Object.freeze({ document, clientId }));
       }
@@ -501,9 +505,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       // Unchanged text calls no update: a configuration may return a new document for one.
       const { document, changed } =
          synced.getText() === text ? { document: synced, changed: false } : this.commitChange(key, synced, [{ text }], clientId);
-      this.log(
+      this.logUri(
          document.uri,
-         `Update to version ${document.version} by ${this.formatClientId(clientId)}${changed ? '' : ' (content unchanged)'}`
+         `Update to version ${document.version} by ${this.formatClientId(clientId)}${changed ? '' : ' (content unchanged)'}`,
+         'debug'
       );
       this.__onDidChangeContent.fire(Object.freeze({ document, clientId }));
       return document.version;
@@ -643,9 +648,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             if (isDocumentReleaseSkippedError(err)) {
                this.tracer.with(released.uri).debug(err.message);
             } else {
-               this.tracer
-                  .with(released.uri)
-                  .error(`Release handler failed. ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+               this.tracer.with(released.uri).error(`Release handler failed. ${describeErrorWithStack(err)}`);
             }
             // Left unsettled, a watcher keeps the document dirty though the store answers clean.
             announceClean(false);
@@ -709,9 +712,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(uri))
          );
       } catch (err: unknown) {
-         this.tracer
-            .with(uri)
-            .debug(`Editor save not announced: reading the file back failed. ${err instanceof Error ? err.message : String(err)}`);
+         this.tracer.with(uri).debug(`Editor save not announced: reading the file back failed. ${describeError(err)}`);
          return;
       }
       // What the file holds, not what the editor meant to write: an editor
@@ -1204,7 +1205,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             this.services.workspace.FileSystemProvider.readFile(UriUtils.toUri(key))
          );
       } catch (err: unknown) {
-         this.tracer.with(key).debug(`Disk baseline: the file cannot be read. ${err instanceof Error ? err.message : String(err)}`);
+         this.tracer.with(key).debug(`Disk baseline: the file cannot be read. ${describeError(err)}`);
       }
       this.setDiskBaseline(key, onDisk);
    }

@@ -415,6 +415,20 @@ export function forwardBrowserConsole(
    });
 }
 
+/** The label a `Warn` or `Error` entry starts with; continuation lines of a stack never do. */
+const WARN_OR_ERROR_LINE = /^\[(Warn|Error)\s*-/;
+
+/**
+ * The `Warn` and `Error` lines of `text` that no pattern of `allowlist`
+ * matches; its keys are the reasons the lines are expected. A clean run logs
+ * neither: `warn` is an anomaly that was handled and `error` is work that
+ * failed, so either one in a passing spec is a defect or a missing allowance.
+ */
+export function findUnexpectedServerLogLines(text: string, allowlist: Readonly<Record<string, RegExp>> = {}): string[] {
+   const patterns = Object.values(allowlist);
+   return text.split('\n').filter(line => WARN_OR_ERROR_LINE.test(line) && !patterns.some(pattern => pattern.test(line)));
+}
+
 /**
  * Per-test server-log capture, called from a spec's `afterEach` with the test's
  * workspace path:

@@ -52,7 +52,7 @@ export class ConnectionDiagnosticsContribution implements FrontendApplicationCon
       }
       // The socket is opened by the preloader, before this contribution exists, so the first
       // `onSocketDidOpen` has already fired; state the current situation instead.
-      this.logger.info(`diagnostics active; socket ${this.socketId()}, backend ${this.statusName(this.connectionStatus.currentStatus)}`);
+      this.logger.debug(`diagnostics active; socket ${this.socketId()}, backend ${this.statusName(this.connectionStatus.currentStatus)}`);
    }
 
    protected handleSocketOpen(): void {
@@ -74,7 +74,7 @@ export class ConnectionDiagnosticsContribution implements FrontendApplicationCon
    protected handleChannelOpen(): void {
       this.channelCount++;
       if (this.channelCount === 1) {
-         this.logger.info(`initial channel opened on socket ${this.socketId()}`);
+         this.logger.debug(`initial channel opened on socket ${this.socketId()}`);
          return;
       }
       this.logger.warn(

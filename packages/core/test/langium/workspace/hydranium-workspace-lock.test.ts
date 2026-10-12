@@ -18,8 +18,8 @@ function makeLock(stalledWriteWarnMs = WARN_MS) {
    const clock = makeFakeClock();
    const { tracer, lines } = makeCapturingTracer(clock);
    const lock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: tracer }, { stalledWriteWarnMs });
-   const errors = (): string[] => lines.filter(line => line.level === 'error').map(line => line.message);
-   return { lock, clock, errors };
+   const warnings = (): string[] => lines.filter(line => line.level === 'warn').map(line => line.message);
+   return { lock, clock, warnings };
 }
 
 /** Start a write on `lock` that runs until `release` is called. */
@@ -36,41 +36,41 @@ async function holdWrite(lock: HydraniumWorkspaceLock): Promise<{ release(): voi
 }
 
 describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
-   it('logs one error for a write still running the configured time after it was cancelled', async () => {
-      const { lock, clock, errors } = makeLock();
+   it('logs one warning for a write still running the configured time after it was cancelled', async () => {
+      const { lock, clock, warnings } = makeLock();
       const { release, held } = await holdWrite(lock);
       const queued = lock.write(() => undefined);
 
       clock.advance(WARN_MS - 1);
-      expect(errors()).toEqual([]);
+      expect(warnings()).toEqual([]);
       clock.advance(1);
-      expect(errors()).toEqual([expect.stringContaining('still running 1000 ms after it was cancelled')]);
+      expect(warnings()).toEqual([expect.stringContaining('still running 1000 ms after it was cancelled')]);
       clock.advance(WARN_MS * 5);
-      expect(errors()).toHaveLength(1);
+      expect(warnings()).toHaveLength(1);
 
       release();
       await Promise.all([held, queued]);
    });
 
    it('logs nothing for a cancelled write that ends in time', async () => {
-      const { lock, clock, errors } = makeLock();
+      const { lock, clock, warnings } = makeLock();
       const { release, held } = await holdWrite(lock);
       const queued = lock.write(() => undefined);
 
       release();
       await Promise.all([held, queued]);
       clock.advance(WARN_MS * 2);
-      expect(errors()).toEqual([]);
+      expect(warnings()).toEqual([]);
       expect(clock.pendingTimers()).toBe(0);
    });
 
    it('times nothing when the check is off', async () => {
-      const { lock, clock, errors } = makeLock(0);
+      const { lock, clock, warnings } = makeLock(0);
       const { release, held } = await holdWrite(lock);
       const queued = lock.write(() => undefined);
 
       clock.advance(WARN_MS * 2);
-      expect(errors()).toEqual([]);
+      expect(warnings()).toEqual([]);
       expect(clock.pendingTimers()).toBe(0);
 
       release();
@@ -81,7 +81,7 @@ describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
       // The shape a model-service call from inside a build takes where no tracker
       // can reject it: the inner write waits for the outer to end, and the outer
       // waits for the inner, so neither settles.
-      const { lock, clock, errors } = makeLock();
+      const { lock, clock, warnings } = makeLock();
       let innerSettled = false;
       void lock.write(async () => {
          await lock.write(() => undefined);
@@ -91,6 +91,6 @@ describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
 
       clock.advance(WARN_MS);
       expect(innerSettled).toBe(false);
-      expect(errors()).toEqual([expect.stringContaining('from inside a build')]);
+      expect(warnings()).toEqual([expect.stringContaining('from inside a build')]);
    });
 });

@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { type Channel, type CommandService, Disposable, type ILogger } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import type { MessageProvider } from '@theia/core/lib/common/message-rpc/channel';
-import type * as net from 'node:net';
+import * as net from 'node:net';
 import {
    AbstractSocketForwardingConnectionHandler,
    type SocketForwardingConnectionHandlerOptions
@@ -143,6 +143,8 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
 
       expect(executeCommand).toHaveBeenCalledTimes(queries);
       expect(logger.error).not.toHaveBeenCalled();
+      // Routine for a frontend that went away, so diagnosis only.
+      expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('the frontend closed the channel'));
       expect(messageService.error).not.toHaveBeenCalled();
    });
 
@@ -208,6 +210,27 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
       expect(connectCalls).toEqual([{ port: 4711, host: '127.0.0.1' }]);
    });
 
+   it('fails a refused dial with the socket error, which it leaves to the caller to log', async () => {
+      // A port that was free a moment ago, so nothing listens on it.
+      const probe = net.createServer();
+      await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
+      const port = (probe.address() as net.AddressInfo).port;
+      await new Promise<void>(resolve => probe.close(() => resolve()));
+      const handler = new TestHandler(baseOptions());
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+      (handler as unknown as { logger: ILogger }).logger = logger;
+      const channel = new ForwardingChannel(
+         'test',
+         () => {},
+         () => {
+            throw new Error('write buffer not needed for this test');
+         }
+      );
+
+      await expect(handler.connect(channel, port)).rejects.toThrow('ECONNREFUSED');
+      expect(logger.error).not.toHaveBeenCalled();
+   });
+
    /**
     * Regression guard for the `initialize`-hang race.
     * `SocketConnectionForwarder` subscribes to `channel.onMessage` in
@@ -224,7 +247,7 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
     */
    describe('pre-forward buffer replay', () => {
       const makeHandler = (): { handler: TestHandler; logger: ILogger } => {
-         const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
+         const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as ILogger;
          const handler = new TestHandler(baseOptions());
          (handler as unknown as { logger: ILogger }).logger = logger;
          return { handler, logger };
@@ -278,22 +301,22 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
          expect(received[0]()).toEqual(provider());
       });
 
-      it('warns and drops rather than throwing when the channel is not a ForwardingChannel', () => {
+      it('logs an error and drops rather than throwing when the channel is not a ForwardingChannel', () => {
          const { handler, logger } = makeHandler();
          const foreign = { onMessage: () => Disposable.create(() => {}) } as unknown as Channel;
 
          expect(() => handler.replay(foreign, [(() => 'payload') as unknown as MessageProvider])).not.toThrow();
-         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not a ForwardingChannel'));
+         expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not a ForwardingChannel'));
       });
 
-      it('warns and drops when Theia renames onMessageEmitter out from under the cast', () => {
+      it('logs an error and drops when Theia renames onMessageEmitter out from under the cast', () => {
          const { handler, logger } = makeHandler();
          const channel = makeChannel();
          // Simulate the upstream rename this workaround is exposed to.
          delete (channel as unknown as Record<string, unknown>).onMessageEmitter;
 
          expect(() => handler.replay(channel, [(() => 'payload') as unknown as MessageProvider])).not.toThrow();
-         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('onMessageEmitter not accessible'));
+         expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('onMessageEmitter not accessible'));
       });
    });
 });

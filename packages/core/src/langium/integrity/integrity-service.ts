@@ -213,8 +213,11 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          await interruptAndCheck(cancelToken);
       }
       const totalMs = Math.round(performance.now() - phaseStart);
-      if (totalMs >= 25 || mutatedCount > 0) {
+      // A repair is the operator's to know of; the timing alone is diagnosis.
+      if (mutatedCount > 0) {
          this.tracer.info(`enforce ${DocumentState[phase]}: docs=${documents.length}, mutated=${mutatedCount} [${totalMs}ms]`);
+      } else if (totalMs >= 25) {
+         this.tracer.debug(`enforce ${DocumentState[phase]}: docs=${documents.length}, mutated=${mutatedCount} [${totalMs}ms]`);
       }
       // One line per rule (count + self-% + self-ms), sorted by cost — only when profiling.
       session?.report('debug');

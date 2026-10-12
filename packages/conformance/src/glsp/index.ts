@@ -28,6 +28,7 @@
 
 import assert from 'node:assert/strict';
 import type { Harness } from '@hydranium/protocol/testing';
+import { describeError } from '@hydranium/protocol';
 import type { ConformanceCheck } from '../conformance-suite.js';
 
 /**
@@ -179,7 +180,7 @@ async function nextOperationReceipt<TAction>(driver: GlspConformanceDriver<TActi
       try {
          dirtyState = await driver.nextAction(SET_DIRTY_STATE_KIND);
       } catch (error: unknown) {
-         const reason = error instanceof Error ? error.message : String(error);
+         const reason = describeError(error);
          throw new Error(
             `Waiting for the operation's receipt, a ${SET_DIRTY_STATE_KIND} with reason '${OPERATION_REASON}', failed: ${reason}. ` +
                `If none arrived in time, either no operation ran or the session does not declare ${SET_DIRTY_STATE_KIND}.`,

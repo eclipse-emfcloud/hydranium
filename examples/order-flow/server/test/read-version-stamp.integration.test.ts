@@ -1074,7 +1074,7 @@ describe('a text change whose builds fail after the parse', () => {
       const { services, uri } = await changeThatFailsAfterParse();
       const sync = services.shared.workspace.VersionSyncService;
       const requestRecoveryBuild = sync.requestRecoveryBuild.bind(sync);
-      sync.requestRecoveryBuild = (target, request) => requestRecoveryBuild(target, request).then(() => true);
+      sync.requestRecoveryBuild = (target, request) => requestRecoveryBuild(target, request).catch(() => undefined);
 
       const settled = await Promise.race([
          outcome(token => services.shared.model.ModelService.settled(uri, token)),

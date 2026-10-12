@@ -32,7 +32,7 @@ import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-gls
  * very first `computedBounds` arrives with a revision the server has already
  * bumped, the subsequent `SetModelAction` response never fires and the diagram
  * stays stuck at "model loading…". Adopters need this initial-handshake case
- * surfaced as a warning so the failure mode is visible in logs.
+ * logged as an error: the diagram stays empty, so the requested load failed.
  *
  * **Handshake detection** uses
  * {@link HydraniumGlspSubmissionHandler.hasPendingInitialRequest} — true
@@ -55,7 +55,7 @@ export class HydraniumGlspComputedBoundsActionHandler extends ComputedBoundsActi
       const model = this.modelState.root;
       if (action.revision !== model.revision) {
          if (this.submissionHandler.hasPendingInitialRequest()) {
-            this.modelState.logger.warn(
+            this.modelState.logger.error(
                `ComputedBounds rejected (initial handshake): action.revision=${action.revision} model.revision=${model.revision} — ` +
                   'initial SetModelAction will not fire (empty diagram)'
             );

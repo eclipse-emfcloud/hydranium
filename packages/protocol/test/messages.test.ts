@@ -13,6 +13,7 @@ import {
    collectMessages,
    defineMessage,
    describeError,
+   describeErrorWithStack,
    hasMessageIdentity,
    interpolate,
    isMessageDeclaration,
@@ -172,6 +173,39 @@ describe('describeError', () => {
       expect(describeError(new Error('boom'))).toBe('boom');
       expect(describeError('boom')).toBe('boom');
       expect(describeError(undefined)).toBe('undefined');
+   });
+});
+
+describe('describeErrorWithStack', () => {
+   it('prefers an Error stack, falls back to its message, and stringifies anything else', () => {
+      const error = new Error('boom');
+      expect(describeErrorWithStack(error)).toBe(error.stack);
+      const stackless = new Error('boom');
+      stackless.stack = undefined;
+      expect(describeErrorWithStack(stackless)).toBe('boom');
+      expect(describeErrorWithStack('boom')).toBe('boom');
+      expect(describeErrorWithStack(undefined)).toBe('undefined');
+   });
+
+   it('follows the cause chain, which a wrapping error would otherwise hide', () => {
+      const cause = new Error('disk full');
+      const wrapper = new Error('save failed', { cause });
+      expect(describeErrorWithStack(wrapper)).toBe(`${wrapper.stack}\nCaused by: ${cause.stack}`);
+      const cyclic = new Error('cyclic');
+      cyclic.cause = cyclic;
+      expect(describeErrorWithStack(cyclic)).toBe(cyclic.stack);
+   });
+
+   it('reads a null cause as none', () => {
+      const error = new Error('boom', { cause: null });
+      expect(describeErrorWithStack(error)).toBe(error.stack);
+   });
+
+   it('shows each error an AggregateError holds, whose own message can be empty', () => {
+      const refused = new Error('connect ECONNREFUSED 127.0.0.1:5007');
+      const cause = new Error('dial failed');
+      const aggregate = new AggregateError([refused], '', { cause });
+      expect(describeErrorWithStack(aggregate)).toBe(`${aggregate.stack}\nIncluding: ${refused.stack}\nCaused by: ${cause.stack}`);
    });
 });
 

@@ -20,7 +20,7 @@ import {
    StatusAction
 } from '@eclipse-glsp/server';
 import { type AstNode } from '@hydranium/langium';
-import { DisposableCollection } from '@hydranium/protocol';
+import { DisposableCollection, describeErrorWithStack } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { type DiagramStatusEntry } from '../state/diagram-status.js';
@@ -66,7 +66,7 @@ export class DefaultDiagramStatusReporter implements DiagramStatusReporter, Clie
    protected send(): void {
       this.actionDispatcher
          .dispatchAll(this.changedActions())
-         .catch((error: unknown) => this.state.logger.warn(`Could not send the diagram status: ${String(error)}`));
+         .catch((error: unknown) => this.state.logger.warn(`Could not send the diagram status: ${describeErrorWithStack(error)}`));
    }
 
    /** The actions that bring the client up to date, recording them as sent. */
@@ -88,7 +88,7 @@ export class DefaultDiagramStatusReporter implements DiagramStatusReporter, Clie
          actions.push(SetEditModeAction.create(this.state.editMode));
       }
       if (actions.length > 0) {
-         this.state.logger.info(
+         this.state.logger.debug(
             `Sending status ${this.sentStatus} (from ${this.state.currentStatusSource ?? 'none'}); ` +
                `edit mode ${this.sentEditMode} (held by ${this.state.readonlyStatuses.join(', ') || 'none'})`
          );

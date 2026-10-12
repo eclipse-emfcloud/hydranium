@@ -8,17 +8,21 @@
  ********************************************************************************/
 
 import {
+   type ActionMessage,
+   ClientAction,
    type ClientSession,
    DefaultGLSPServer,
    GLSPServerError,
    type InitializeClientSessionParameters,
+   MessageAction,
    RejectAction,
-   type RequestAction,
+   RequestAction,
    type ResponseAction,
    SourceModelStorage
 } from '@eclipse-glsp/server';
-import { RequestSaveModelAction } from '@hydranium/protocol';
+import { describeErrorWithStack, RequestSaveModelAction } from '@hydranium/protocol';
 import { injectable } from 'inversify';
+import { logActionFailure } from '../command/diagram-edit-dropped-error.js';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 
 /**
@@ -40,8 +44,9 @@ import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
  * Restating the cause at each throw site is the alternative, and it costs
  * every adopter a rule they must know and cannot apply to `getOrThrow`.
  *
- * Only the REQUEST path needs this. Non-request actions fail through
- * upstream's `handleProcessError`, which reads `message` directly.
+ * Only the REQUEST path needs this. A non-request action fails through
+ * {@link handleProcessError}, which reads `message` directly; it and
+ * {@link process} are lifted for their logging only.
  *
  * An adopter who binds their own GLSP server extends this class rather than
  * {@link DefaultGLSPServer}: the framework's server-container override keeps a
@@ -79,13 +84,44 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
       if (!this.clientSessions.has(params.clientSessionId)) {
          return super.initializeClientSession(params);
       }
-      this.logger.warn(`Client session ${params.clientSessionId} initialized again before its dispose arrived; ending the old one`);
+      this.logger.debug(`Client session ${params.clientSessionId} initialized again before its dispose arrived; ending the old one`);
       // Not awaited before the initialize: both drop and set the session before
       // their first await, and the model request that follows is read without
       // waiting for this one to settle.
       const disposed = this.disposeClientSession({ clientSessionId: params.clientSessionId });
       const initialized = super.initializeClientSession(params);
       await Promise.all([disposed, initialized]);
+   }
+
+   /**
+    * Lifted from `@eclipse-glsp/server` 2.7.0's {@link DefaultGLSPServer.process}:
+    * each action is logged at `debug` rather than `info`, and an action that
+    * fails once its session has ended, which disposing the session's dispatcher
+    * does to every action it holds, is logged at `debug` and told to no client,
+    * since the one that sent it has gone. The accompanying test pins upstream's
+    * source.
+    */
+   override process(message: ActionMessage): void {
+      this.validateServerInitialized();
+      this.logger.debug(`process [action=${message.action.kind}, clientId=${message.clientId}]`);
+      const clientSessionId = message.clientId;
+      const clientSession = this.clientSessions.get(clientSessionId);
+      if (!clientSession) {
+         throw new Error(`No client session has been initialized for client id: ${clientSessionId}`);
+      }
+      const action = message.action;
+      ClientAction.mark(action);
+      if (RequestAction.is(action)) {
+         void this.handleClientRequest(clientSession, action, message.clientId);
+         return;
+      }
+      clientSession.actionDispatcher.dispatch(action).catch((error: unknown) => {
+         if (this.clientSessions.get(clientSessionId) === clientSession) {
+            void this.handleProcessError(message, error);
+         } else {
+            this.logger.debug(`Action '${action.kind}' ended with its session: ${describeErrorWithStack(error)}`);
+         }
+      });
    }
 
    /**
@@ -105,14 +141,40 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    }
 
    /**
-    * Lifted verbatim from `@eclipse-glsp/server` 2.7.0's
+    * Lifted from `@eclipse-glsp/server` 2.7.0's
+    * {@link DefaultGLSPServer.handleProcessError}, logging the failure once
+    * with {@link logActionFailure} where upstream logs the action and the
+    * reason as two lines.
+    *
+    * The notification is upstream's, text and all, and this body does not
+    * track upstream: the accompanying test pins upstream's source as it does
+    * for {@link handleClientRequest}.
+    */
+   protected override handleProcessError(message: ActionMessage, reason: unknown): void {
+      const kind = message.action.kind;
+      logActionFailure(this.logger, message.action, reason);
+      let errorMsg = `Could not process action: '${kind}`;
+      let details = stringifyAsUpstream(reason);
+      if (reason instanceof GLSPServerError) {
+         details = stringifyAsUpstream(reason.cause);
+         errorMsg = reason.message;
+      }
+      this.sendToClient({ clientId: message.clientId, action: MessageAction.create(errorMsg, { severity: 'ERROR', details }) });
+   }
+
+   /**
+    * Lifted from `@eclipse-glsp/server` 2.7.0's
     * {@link DefaultGLSPServer.handleClientRequest}, with the detail computation
-    * delegated to {@link requestFailureDetail}, and one addition: a failed
-    * {@link RequestSaveModelAction} also raises the error notification a failed
-    * `SaveModelAction` raises. A rejection reaches only the client's log, and a
-    * Theia host only logs a rejected save, so without it a save that failed
-    * would tell the user nothing. Nothing else here — the timeout branch, the
-    * response dispatch, the nested send-failure handling — relates to either.
+    * delegated to {@link requestFailureDetail}, the failure logged once with
+    * its stack, a request that fails once its session has ended logged at
+    * `debug` and answered to no client, as {@link process} treats an action,
+    * and one addition: a failed {@link RequestSaveModelAction} also
+    * raises the error notification a failed `SaveModelAction` raises, through
+    * {@link handleProcessError}, which then logs it instead. A rejection
+    * reaches only the client's log, and a Theia host only logs a rejected save,
+    * so without it a save that failed would tell the user nothing. Nothing else
+    * here — the timeout branch, the response dispatch, the nested send-failure
+    * handling — relates to either.
     *
     * **This body does not track upstream.** A release that changes request
     * handling would silently not apply, on the path every request takes. There
@@ -135,22 +197,38 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
             this.sendResponseToClient(clientId, response);
          }
       } catch (error: unknown) {
+         if (this.clientSessions.get(clientSession.id) !== clientSession) {
+            this.logger.debug(`Request '${action.kind}' (${action.requestId}) ended with its session: ${describeErrorWithStack(error)}`);
+            return;
+         }
          const detail = this.requestFailureDetail(error);
-         this.logger.error(`Failed to handle request '${action.kind}' (${action.requestId}):`, detail);
+         const isSave = action.kind === RequestSaveModelAction.KIND;
+         if (!isSave) {
+            this.logger.error(`Failed to handle request '${action.kind}' (${action.requestId}): ${describeErrorWithStack(error)}`);
+         }
+         // Inside the guard: `process` does not await this method, so a throw
+         // here would be an unhandled rejection.
          try {
-            const reject = RejectAction.create(`Failed to handle request '${action.kind}' (${action.requestId})`, {
-               responseId: action.requestId,
-               detail
-            });
-            this.sendResponseToClient(clientId, reject);
-            // Inside the guard: `process` does not await this method, so a
-            // closed connection throwing here would be an unhandled rejection.
-            if (action.kind === RequestSaveModelAction.KIND) {
-               this.handleProcessError({ clientId, action }, error);
+            try {
+               const reject = RejectAction.create(`Failed to handle request '${action.kind}' (${action.requestId})`, {
+                  responseId: action.requestId,
+                  detail
+               });
+               this.sendResponseToClient(clientId, reject);
+            } finally {
+               // Also when the reject could not be sent, since this logs the save's failure.
+               if (isSave) {
+                  this.handleProcessError({ clientId, action }, error);
+               }
             }
          } catch (sendError: unknown) {
-            this.logger.error(`Failed to send rejection for request '${action.requestId}':`, sendError);
+            this.logger.error(`Failed to send rejection for request '${action.requestId}': ${describeErrorWithStack(sendError)}`);
          }
       }
    }
+}
+
+/** `value?.toString?.()`, as upstream projects a reason into a notification's details. */
+function stringifyAsUpstream(value: unknown): string | undefined {
+   return (value as { toString?: () => string } | null | undefined)?.toString?.();
 }

@@ -16,7 +16,7 @@ import {
    defaultSocketLaunchOptions
 } from '@eclipse-glsp/server/node.js';
 import { Container, ContainerModule, injectable } from 'inversify';
-import { Deferred, sendByMethodName, type Logger } from '@hydranium/protocol';
+import { Deferred, describeErrorWithStack, sendByMethodName, type Logger } from '@hydranium/protocol';
 import type * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '@hydranium/core';
@@ -233,7 +233,7 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
          }
       });
       netServer.on('error', (err: Error) => {
-         lifecycle?.error(`[GlspServer] Error: ${err.message}`);
+         lifecycle?.error(`[GlspServer] Error: ${describeErrorWithStack(err)}`);
          started.reject(err);
       });
       if (options.onClientConnection) {

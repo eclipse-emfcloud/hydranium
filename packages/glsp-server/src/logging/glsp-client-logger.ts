@@ -9,7 +9,7 @@
 
 import { type Logger as GlspLogger, LogLevel } from '@eclipse-glsp/server';
 import { LspLogger, type LspLoggerOptions, type ServerSharedServices } from '@hydranium/core';
-import { LEVEL_ORDER, Logger, type LogThreshold } from '@hydranium/protocol';
+import { describeErrorWithStack, LEVEL_ORDER, Logger, type LogThreshold } from '@hydranium/protocol';
 
 /**
  * Options accepted by {@link GlspClientLogger}. Extends
@@ -163,10 +163,10 @@ export class GlspClientLogger extends LspLogger implements GlspLogger {
       return params.length === 0 ? message : `${message} ${params.map(p => this.formatParam(p)).join(',\n')}`;
    }
 
-   /** Format a single param: errors → `message\nstack`; everything else → JSON.stringify(p, undefined, 4). */
+   /** Format a single param: errors → their stack and causes; everything else → JSON.stringify(p, undefined, 4). */
    protected formatParam(param: unknown): string {
       if (param instanceof Error) {
-         return `${param.message}\n${param.stack ?? ''}`;
+         return describeErrorWithStack(param);
       }
       try {
          return JSON.stringify(param, undefined, 4);

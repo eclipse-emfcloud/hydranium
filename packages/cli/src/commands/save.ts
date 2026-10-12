@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { TransferElement } from '@hydranium/protocol';
+import { describeError, type TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
 import * as fs from 'node:fs/promises';
 import { logEnv, type LogOptions } from '../log-level.js';
@@ -88,7 +88,9 @@ async function saveOpened(
       // reports why the create failed too, since that may be the real cause.
       await server.createModelDocument({ uri, clientId, text: model }).catch((created: unknown) =>
          server.openModelDocument({ uri, clientId }).catch((opened: unknown) => {
-            throw new Error(`Cannot save ${uri}: ${describe(opened)} (creating it failed first: ${describe(created)})`, { cause: created });
+            throw new Error(`Cannot save ${uri}: ${describeError(opened)} (creating it failed first: ${describeError(created)})`, {
+               cause: created
+            });
          })
       );
       saved = await server.saveModelDocument({ uri, clientId, model, baseVersion: 'any' });
@@ -98,10 +100,6 @@ async function saveOpened(
    }
    await server.closeSession({ clientId });
    return saved;
-}
-
-function describe(error: unknown): string {
-   return error instanceof Error ? error.message : String(error);
 }
 
 /**

@@ -39,15 +39,15 @@ let fileLevel: LogThreshold | undefined;
  * and every `for` / `sub` / `with` derivation preserves the implementation type.
  */
 export interface Logger {
-   /** Log a message at error level. */
+   /** Requested work failed; logged once, by the code that ends the failure, not by one that rethrows it. */
    error(message?: string, ...args: unknown[]): this;
-   /** Log a message at warn level. */
+   /** An anomaly that was handled, or work declined by design, such as a conflict or a cap; a clean run logs none. */
    warn(message?: string, ...args: unknown[]): this;
-   /** Log a message at info level. */
+   /** A milestone the person running the server would recognise without knowing the internals. */
    info(message?: string, ...args: unknown[]): this;
-   /** Log a message at debug level. */
+   /** Diagnosis; its level decides whether the line is built, never which code runs. */
    debug(message?: string, ...args: unknown[]): this;
-   /** High-volume diagnostic lines, only emitted at the `'trace'` threshold. */
+   /** High-volume diagnosis, emitted only at the `'trace'` threshold; as for `debug`, no code runs only for it. */
    trace(message?: string, ...args: unknown[]): this;
    /** Log a message at info-level threshold with a `Log` label (rather than `Info`). */
    log(message?: string, ...args: unknown[]): this;

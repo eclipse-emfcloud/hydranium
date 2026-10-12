@@ -360,7 +360,8 @@ describe('release grace over the data head', () => {
          other.clientId
       );
       textDocuments.applyContentChange(uri, EDITED, other.clientId);
-      void services.shared.workspace.VersionSyncService.syncTo(URI.parse(uri), textDocuments.version(uri));
+      // Its outcome is the build the test waits for below, so a rejection needs no handling of its own.
+      void services.shared.workspace.VersionSyncService.syncTo(URI.parse(uri), textDocuments.version(uri))?.catch(() => undefined);
 
       await waitFor(() => built() === EDITED && observer.events.length > 0, { timeoutMs: 2000 });
       await outlastRevert();

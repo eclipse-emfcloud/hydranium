@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as net from 'node:net';
-import { Deferred, type Disposable, type Logger } from '@hydranium/protocol';
+import { Deferred, describeErrorWithStack, type Disposable, type Logger } from '@hydranium/protocol';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import type { IntegratedServer } from '../launcher/integrated-server.js';
@@ -131,7 +131,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
          try {
             adopterDisposable.dispose();
          } catch (err) {
-            logger?.warn(`[${tag}] Adopter disposable threw on cleanup: ${(err as Error)?.message ?? err}`);
+            logger?.warn(`[${tag}] Adopter disposable threw on cleanup: ${describeErrorWithStack(err)}`);
          }
          connection.dispose();
          const idx = activeConnections.indexOf(entry);
@@ -164,7 +164,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
       started.resolve();
    });
    netServer.on('error', err => {
-      logger?.error(`[${tag}] Error: ${err.message}`);
+      logger?.error(`[${tag}] Error: ${describeErrorWithStack(err)}`);
       started.reject(err);
    });
    netServer.on('close', () => {
@@ -174,7 +174,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
          try {
             entry.adopterDisposable.dispose();
          } catch (err) {
-            logger?.warn(`[${tag}] Adopter disposable threw on shutdown: ${(err as Error)?.message ?? err}`);
+            logger?.warn(`[${tag}] Adopter disposable threw on shutdown: ${describeErrorWithStack(err)}`);
          }
          entry.connection.dispose();
       }

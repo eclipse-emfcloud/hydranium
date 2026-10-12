@@ -16,6 +16,7 @@
  * baseline / after-build / churn lines to stdout. Never imported — only spawned.
  */
 
+import { describeError } from '@hydranium/protocol';
 import { loadHeadlessContext } from './headless-harness.js';
 import { parseProfileDimensions } from './measure-memory.js';
 
@@ -124,6 +125,6 @@ async function main(argv: string[]): Promise<void> {
 main(process.argv.slice(2))
    .then(() => process.exit(0))
    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeError(error));
       process.exit(1);
    });

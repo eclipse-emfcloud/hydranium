@@ -9,6 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { describeError } from '@hydranium/protocol';
 import type { GenerateTransferModelOptions } from './generate-transfer-model.js';
 
 /** Path-valued option keys — resolved relative to a config/langium-config file's directory. */
@@ -31,7 +32,7 @@ export function loadTransferModelConfig(configPath: string): Partial<GenerateTra
    try {
       raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
    } catch (error: unknown) {
-      throw new Error(`Cannot read transfer-model config '${configPath}': ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Cannot read transfer-model config '${configPath}': ${describeError(error)}`);
    }
    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw new Error(`Transfer-model config '${configPath}' must be a JSON object.`);
@@ -75,7 +76,7 @@ export function deriveAstFileFromLangiumConfig(langiumConfigPath: string): strin
    try {
       raw = JSON.parse(fs.readFileSync(langiumConfigPath, 'utf-8'));
    } catch (error: unknown) {
-      throw new Error(`Cannot read langium-config '${langiumConfigPath}': ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Cannot read langium-config '${langiumConfigPath}': ${describeError(error)}`);
    }
    const out = (raw as { out?: unknown })?.out;
    if (typeof out !== 'string') {

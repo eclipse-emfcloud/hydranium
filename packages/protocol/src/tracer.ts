@@ -12,6 +12,7 @@ import { Format, Logger, type LogThreshold } from './logger';
 import { NoopLogger } from './noop-logger';
 import { DefaultProfileSession, type ProfileSession } from './profile-session';
 import { Disposable } from './util';
+import { describeErrorWithStack } from './messages/primitives';
 
 /** Module-global so nested timers don't reuse ids. */
 let nextTimerId = 0;
@@ -183,7 +184,7 @@ export class DefaultTracer implements Tracer {
          if (status === 'failed') {
             // Reporting the failure is the caller's, who receives it: a line at
             // warn here would exist only while `logLevel` is enabled.
-            const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+            const detail = describeErrorWithStack(error);
             this.logger.debug(`${label} [#${id}] failed: ${detail}`);
          }
       };

@@ -20,6 +20,7 @@ import {
    DEFAULT_BROWSER_LOG_LEVELS_ENV,
    DEFAULT_SERVER_LOG_ATTACH_ENV,
    DEFAULT_SERVER_LOG_DIR_ENV,
+   findUnexpectedServerLogLines,
    forwardBrowserConsole,
    markServerLog,
    renameServerLogs,
@@ -543,5 +544,28 @@ describe('resolveBrowserConsoleLogPath', () => {
             process.env[DEFAULT_SERVER_LOG_DIR_ENV] = previous;
          }
       }
+   });
+});
+
+describe('findUnexpectedServerLogLines', () => {
+   const LOG = [
+      '[Info  - 10:00:00.000] [Component] started',
+      '[Warn  - 10:00:00.001] [Component] something declined',
+      '[Error - 10:00:00.002] [Component] something failed',
+      '    at frame (file.ts:1:1)',
+      '[Debug - 10:00:00.003] [Component] a Warn in the text is not a Warn line',
+      '===== END: a test — passed ====='
+   ].join('\n');
+
+   it('reports every Warn and Error line, and nothing else', () => {
+      expect(findUnexpectedServerLogLines(LOG)).toEqual([
+         '[Warn  - 10:00:00.001] [Component] something declined',
+         '[Error - 10:00:00.002] [Component] something failed'
+      ]);
+   });
+
+   it('leaves out a line an allowance matches', () => {
+      const allowlist = { 'declined on purpose': /something declined/ };
+      expect(findUnexpectedServerLogLines(LOG, allowlist)).toEqual(['[Error - 10:00:00.002] [Component] something failed']);
    });
 });

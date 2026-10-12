@@ -18,9 +18,18 @@ import {
    type TransferElement,
    type TextVersion,
    type Tracer,
-   UNRECORDED_VERSION
+   UNRECORDED_VERSION,
+   describeErrorWithStack
 } from '@hydranium/protocol';
-import { type AstNode, DocumentState, type LangiumDocument, OperationCancelled, UriUtils, type URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   DocumentState,
+   type LangiumDocument,
+   OperationCancelled,
+   isOperationCancelled,
+   UriUtils,
+   type URI
+} from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
@@ -571,23 +580,37 @@ export class DefaultModelService<
     * given up. A `Parsed` phase listener cannot serve: a cancel right after the
     * parse skips it, and the resumed build does not parse again.
     */
-   protected nextParseOrDeletion(
-      uri: URI,
-      cancelToken: CancellationToken = CancellationToken.None,
-      build?: Promise<boolean>
-   ): Promise<void> {
+   protected nextParseOrDeletion(uri: URI, cancelToken: CancellationToken = CancellationToken.None, build?: Promise<void>): Promise<void> {
       const builder = this.services.workspace.DocumentBuilder;
       return new Promise<void>((resolve, reject) => {
+         let ended = false;
+         let cancelled = false;
+         // Handled before any return, so a build given up after the wait ended is not an unhandled rejection.
+         build?.catch((error: unknown) => {
+            const line = `The build that would sync the root to its text failed. ${describeErrorWithStack(error)}`;
+            if (cancelled) {
+               // The waiter has gone, so nothing else reports this.
+               this.tracer.withUri(uri.toString()).error(line);
+            } else if (ended) {
+               // A parse or deletion came first: the waiter goes on and reports its own outcome, and the retry warned.
+               this.tracer.withUri(uri.toString()).debug(line);
+            } else {
+               done(() => reject(new Error(`The build that would sync ${uri.toString()} to its text failed`, { cause: error })));
+            }
+         });
          // A cancelled token's listener runs a macrotask later, after a build
          // that started meanwhile may have parsed.
          if (cancelToken.isCancellationRequested) {
+            ended = true;
+            cancelled = true;
             reject(OperationCancelled);
             return;
          }
          const done = (settle: () => void): void => {
+            ended = true;
             parsed.dispose();
             deleted.dispose();
-            cancelled.dispose();
+            cancelling.dispose();
             settle();
          };
          const parsed = this.services.workspace.VersionSyncService.onDidRecordModel(document => {
@@ -600,11 +623,9 @@ export class DefaultModelService<
                done(resolve);
             }
          });
-         const cancelled = cancelToken.onCancellationRequested(() => done(() => reject(OperationCancelled)));
-         void build?.then(built => {
-            if (!built) {
-               done(() => reject(new Error(`The build that would sync ${uri.toString()} to its text failed`)));
-            }
+         const cancelling = cancelToken.onCancellationRequested(() => {
+            cancelled = true;
+            done(() => reject(OperationCancelled));
          });
       });
    }
@@ -808,8 +829,9 @@ export class DefaultModelService<
     * so every language client reflects the latest content before a save returns.
     * No-op tail for headless adopters — `syncChains` is empty without an LSP
     * client. Bounded by {@link SAVE_SETTLE_TIMEOUT_MS} so a hung build, or an
-    * applyEdit reverse-RPC deadlock, can't freeze the caller; on timeout or a
-    * failed wait it logs a warning and returns rather than throwing.
+    * applyEdit reverse-RPC deadlock, can't freeze the caller; it returns rather
+    * than throwing, warning on timeout. A failed wait is logged at `error`, at
+    * `debug` when cancelled and at `warn` when the document is gone.
     *
     * Adopters with a save flow that must converge editor + disk before returning
     * (e.g. a dual form/code editor that would otherwise show a content-conflict
@@ -824,15 +846,26 @@ export class DefaultModelService<
          await this.waitForDocumentStateCanonical(canonical, IntegrityService.SettledState, cancelToken, { sync: true });
          await this.syncChains.get(key);
       })();
+      // The settle ends a failed wait, so it logs it, at one level whether the wait failed inside the bound or after it.
+      const reportFailedWait = (error: unknown, when: string): void => {
+         const tracer = this.tracer.withUri(key);
+         if (isOperationCancelled(error)) {
+            tracer.debug(`Save settle cancelled ${when}`);
+         } else if (!this.services.workspace.LangiumDocuments.hasDocument(UriUtils.toUri(canonical))) {
+            tracer.warn(`Save settle failed ${when}; the document is gone. ${describeErrorWithStack(error)}`);
+         } else {
+            tracer.error(`Save settle failed ${when}. ${describeErrorWithStack(error)}`);
+         }
+      };
       try {
          if ((await this.services.Clock.raceTimer(settled, SAVE_SETTLE_TIMEOUT_MS)) === TIMED_OUT) {
             this.tracer.withUri(key).warn(`Save settle exceeded ${SAVE_SETTLE_TIMEOUT_MS}ms — returning anyway`);
+            // The race has settled, so a later failure of the wait, such as a given-up sync build, reaches no one else.
+            void settled.catch((error: unknown) => reportFailedWait(error, 'after the timeout'));
          }
       } catch (err: unknown) {
-         // A failed wait, such as a cancelled token or a document the builder
-         // does not hold, gets its own line so it is not blamed on the bound.
-         const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-         this.tracer.withUri(key).warn(`Save settle failed before the timeout — returning anyway. ${detail}`);
+         // Its own line, so the failure is not blamed on the bound.
+         reportFailedWait(err, 'before the timeout — returning anyway');
       }
    }
 
@@ -1123,7 +1156,7 @@ export class DefaultModelService<
             if (isClientGoneError(err)) {
                uriLogger.debug(`applyEdit to ${LANGUAGE_CLIENT_ID} skipped: client disconnected`);
             } else {
-               uriLogger.error(`applyEdit to ${LANGUAGE_CLIENT_ID} failed: ${err}`);
+               uriLogger.error(`applyEdit to ${LANGUAGE_CLIENT_ID} failed: ${describeErrorWithStack(err)}`);
             }
          }
       }
@@ -1162,7 +1195,7 @@ export class DefaultModelService<
          try {
             listener(Object.freeze({ uris: built.map(document => this.uriPolicy.canonicalUri(document.uri.toString())), phase }));
          } catch (err: unknown) {
-            this.tracer.error(`onModelsBuilt listener threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+            this.tracer.error(`onModelsBuilt listener threw: ${describeErrorWithStack(err)}`);
          }
       });
    }
@@ -1267,9 +1300,7 @@ export class DefaultModelService<
          try {
             listener(event);
          } catch (err: unknown) {
-            this.tracer
-               .with(uri)
-               .error(`onModelUpdated listener threw: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+            this.tracer.with(uri).error(`onModelUpdated listener threw: ${describeErrorWithStack(err)}`);
          }
       }
    }

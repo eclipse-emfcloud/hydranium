@@ -487,14 +487,18 @@ describe('HydraniumGlspStorage', () => {
          expect(state.modelSession?.clientId).toBe('client-1');
       });
 
-      it('refuses a load whose token does not match at once, and tells the client', async () => {
+      it('refuses a load whose token does not match at once, and tells the client, leaving the log to whoever ends the request', async () => {
+         const errors: unknown[] = [];
+         const logger = makeNoopGlspLogger();
+         logger.error = (...args: unknown[]): void => void errors.push(args);
          // A clock that never advances: a load that waited for the holder would never settle.
          const { storage, state } = createStorage(
             'client-1',
             makeNoopSharedServices<ServerSharedServices>({
                Clock: makeFakeClock(),
                model: { ModelService: makeSessionModelService({ refuse: true }) }
-            })
+            }),
+            logger
          );
          const dispatch = vi.fn(() => Promise.resolve());
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
@@ -504,6 +508,28 @@ describe('HydraniumGlspStorage', () => {
          );
          expect(state.modelSession).toBeUndefined();
          expect(dispatch).toHaveBeenCalledTimes(1);
+         expect(errors).toEqual([]);
+      });
+
+      it('warns, with its stack, when it cannot tell the client of a refused load', async () => {
+         const warnings: string[] = [];
+         const logger = makeNoopGlspLogger();
+         logger.warn = (message: string): void => void warnings.push(message);
+         const { storage } = createStorage(
+            'client-1',
+            makeNoopSharedServices<ServerSharedServices>({
+               Clock: makeFakeClock(),
+               model: { ModelService: makeSessionModelService({ refuse: true }) }
+            }),
+            logger
+         );
+         (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = {
+            dispatch: () => Promise.reject(new Error('Connection is disposed.'))
+         };
+
+         await expect(storage.callLoadModelSession('token')).rejects.toThrow(DIAGRAM_SESSION_REFUSED.text);
+         await waitFor(() => warnings.length > 0);
+         expect(warnings[0]).toMatch(/Could not tell the client the diagram was refused[\s\S]*\n\s+at /);
       });
    });
 
@@ -1101,16 +1127,21 @@ describe('HydraniumGlspStorage', () => {
          expect(persistMock.mock.calls.map(call => call[0].uri)).toEqual(['file:///x.a', 'file:///x.layout']);
       });
 
-      it('fails with the first document that failed, and logs every failure under its own document', async () => {
+      it('fails naming every document that failed, caused by the first, and leaves the log to whoever ends the save', async () => {
          const { storage, lines } = createPolicyStorage({
             persist: args => Promise.reject(new Error(`refused ${args.uri}`)),
             secondaryUris: ['file:///x.layout']
          });
-         await expect(storage.saveSourceModel(saveAction)).rejects.toThrow('refused file:///x.a');
-         expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
-            'Save failed for file:///x.a: refused file:///x.a',
-            'Save failed for file:///x.layout: refused file:///x.layout'
-         ]);
+         const failure = await Promise.resolve(storage.saveSourceModel(saveAction)).then(
+            () => undefined,
+            (error: unknown) => error
+         );
+         expect(failure).toBeInstanceOf(Error);
+         expect((failure as Error).message).toBe(
+            'Save failed for file:///x.a (refused file:///x.a), file:///x.layout (refused file:///x.layout)'
+         );
+         expect(((failure as Error).cause as Error).message).toBe('refused file:///x.a');
+         expect(lines.filter(line => line.level === 'error')).toEqual([]);
       });
 
       it('settles a failed save only once every other document of the set has been written', async () => {
@@ -1150,7 +1181,7 @@ describe('HydraniumGlspStorage', () => {
       it('await propagates the failure', async () => {
          const failure = new Error('disk full');
          const { storage } = createPolicyStorage({ policy: { kind: 'await' }, persist: () => Promise.reject(failure) });
-         await expect(storage.saveSourceModel(saveAction)).rejects.toBe(failure);
+         await expect(storage.saveSourceModel(saveAction)).rejects.toMatchObject({ cause: failure });
       });
 
       it('fire-and-forget returns undefined, and swallows + logs failures', async () => {
@@ -1185,10 +1216,9 @@ describe('HydraniumGlspStorage', () => {
          storage.saveSourceModel(saveAction);
 
          await waitFor(() => lines.some(line => line.message.startsWith('Diagram save failed')));
-         expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
-            'Save failed for file:///x.layout: disk full',
-            'Diagram save failed for file:///x.a: disk full'
-         ]);
+         const errors = lines.filter(line => line.level === 'error').map(line => line.message);
+         expect(errors).toHaveLength(1);
+         expect(errors[0]).toMatch(/^Diagram save failed for file:\/\/\/x\.a: Error: Save failed for file:\/\/\/x\.layout \(disk full\)/);
       });
    });
 

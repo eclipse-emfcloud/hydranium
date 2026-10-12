@@ -23,7 +23,7 @@ import { OrderFlowPropertiesPanel } from './properties-panel';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE, OrderFlowProcessDiagramEditorProvider } from './process-diagram-editor';
 import { OrderFlowGlspVscodeServer } from './process-diagram-server';
 import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
-import { ConsoleLogger } from '@hydranium/protocol';
+import { ConsoleLogger, describeError } from '@hydranium/protocol';
 // The MODULE, not a barrel: this package is a VS Code extension with no public
 // API surface of its own, so the servers extension is consumed by path.
 import { startOrderFlowLanguageClient } from '@hydranium/example-order-flow-vscode-servers/out/language-client';
@@ -76,7 +76,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
    // rejection when no diagram is ever opened to await it.
    void glspServer.start();
    void glspServer.onReady.catch((error: unknown) => {
-      void window.showErrorMessage(`Order Flow diagram unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      void window.showErrorMessage(`Order Flow diagram unavailable: ${describeError(error)}`);
    });
    context.subscriptions.push(
       window.registerCustomEditorProvider(

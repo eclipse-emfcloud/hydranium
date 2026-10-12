@@ -114,7 +114,7 @@ function makeStore(): {
          LangiumDocuments: makeStubLangiumDocuments(),
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
-         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) },
+         VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
          WorkspaceManager: { workspaceInitialized: Promise.resolve() }
       }
    } as unknown as ServerSharedServices;
@@ -186,7 +186,8 @@ describe('HydraniumTextDocuments write while the editor has not opened the docum
       editor.type(URI, { range: Range.create(3, 0, 3, 0), text: 'x\n' });
 
       expect(docs.get(URI)?.getText()).toBe('a\nb\nc\nx\n');
-      expect(lines.filter(line => line.level === 'warn')).toEqual([]);
+      // The stub gives the release no file system, so its revert fails; that is not under test.
+      expect(lines.filter(line => line.level === 'warn' && !line.message.startsWith('Revert on release'))).toEqual([]);
    });
 });
 

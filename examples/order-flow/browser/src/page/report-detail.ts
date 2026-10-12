@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { describeError } from '@hydranium/protocol';
 import { requireElement } from './dom.js';
 
 /**
@@ -180,7 +181,7 @@ export class ReportDetail {
          try {
             return await provider();
          } catch (error: unknown) {
-            return `failed: ${error instanceof Error ? error.message : String(error)}`;
+            return `failed: ${describeError(error)}`;
          }
       }
       // A category that has not reported says so, rather than opening empty: an

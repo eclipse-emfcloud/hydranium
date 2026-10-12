@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { SystemClock } from '@hydranium/protocol';
+import { SystemClock, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import {
    type Channel,
    CommandService,
@@ -128,12 +128,11 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
       } catch (error) {
          bufferSub.dispose();
          if (closed.signal.aborted) {
-            this.logger.info(`[${this.logComponent}] Stopped connecting to ${this.serverName}: the frontend closed the channel.`);
+            this.logger.debug(`[${this.logComponent}] Stopped connecting to ${this.serverName}: the frontend closed the channel.`);
             return;
          }
-         const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
-         this.logger.error(`[${this.logComponent}] Could not connect to ${this.serverName}: ${message}`);
-         this.reportConnectFailure(message);
+         this.logger.error(`[${this.logComponent}] Could not connect to ${this.serverName}: ${describeErrorWithStack(error)}`);
+         this.reportConnectFailure(describeError(error));
          // Closed so the frontend learns of it: left open, the channel has no
          // server behind it, and every request on it waits for good.
          channel.close();
@@ -176,7 +175,7 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
                pendingContent.resolve(port);
             } catch (error) {
                counter++;
-               const message = error instanceof Error ? error.message : String(error);
+               const message = describeError(error);
                this.logger.debug(`[${this.logComponent}] Port command '${this.portCommand}' attempt ${counter} failed: ${message}`);
                if (this.findPortAttempts >= 0 && counter > this.findPortAttempts) {
                   pendingContent.reject(error);
@@ -198,9 +197,20 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
       const connected = new Deferred<void>();
       const socket = new net.Socket();
       this.onSocketCreated?.(socket);
-      socket.on('ready', () => connected.resolve());
+      let ready = false;
+      socket.on('ready', () => {
+         ready = true;
+         connected.resolve();
+      });
       socket.on('close', () => connected.reject(`Socket to ${this.serverName} was closed.`));
-      socket.on('error', error => this.logger.error(`Error occurred with the ${this.serverName} socket: ${error.name}; ${error.message}`));
+      // Before `ready` the error fails the connect, whose caller logs it; the `close` that follows rejects too late to count.
+      socket.on('error', error => {
+         if (ready) {
+            this.logger.error(`Error occurred with the ${this.serverName} socket: ${describeErrorWithStack(error)}`);
+         } else {
+            connected.reject(error);
+         }
+      });
       // Synchronous hand-off: dispose the pre-forward buffer FIRST, then wire the
       // forwarder, then replay buffered messages. The event loop cannot
       // interleave between these synchronous statements, so no message is both
@@ -242,21 +252,23 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
     *
     * `AbstractChannel.onMessageEmitter` is `protected` in `@theia/core` but
     * reachable at runtime; the cast is the workaround. A future Theia rename
-    * surfaces as a clear warning here.
+    * surfaces as an error here, since the dropped messages are lost.
     */
    protected replayBufferedMessages(channel: Channel, buffered: MessageProvider[]): void {
       if (!(channel instanceof ForwardingChannel)) {
-         this.logger.warn(`[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — channel is not a ForwardingChannel`);
+         this.logger.error(
+            `[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — channel is not a ForwardingChannel`
+         );
          return;
       }
       const internals = channel as unknown as { onMessageEmitter?: { fire(provider: MessageProvider): void } };
       if (!internals.onMessageEmitter) {
-         this.logger.warn(
+         this.logger.error(
             `[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — ForwardingChannel.onMessageEmitter not accessible`
          );
          return;
       }
-      this.logger.info(`[${this.logComponent}] replaying ${buffered.length} pre-forward message(s) onto the wired socket forwarder`);
+      this.logger.debug(`[${this.logComponent}] replaying ${buffered.length} pre-forward message(s) onto the wired socket forwarder`);
       for (const provider of buffered) {
          internals.onMessageEmitter.fire(provider);
       }

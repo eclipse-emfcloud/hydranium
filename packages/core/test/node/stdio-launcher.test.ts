@@ -23,6 +23,7 @@
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type ResponseMessage } from 'vscode-jsonrpc/node';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Logger } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import { makeAttributingLogger } from '../../src/testing/index.js';
@@ -56,7 +57,12 @@ interface Harness {
  * Wire a client and a launcher back to back over two `PassThrough` streams.
  * `onRequest` reports what the server saw at the moment the request ran.
  */
-function makeHarness(options: { initialized: () => Promise<void>; workspace?: string; onRequest?: () => string }): Harness {
+function makeHarness(options: {
+   initialized: () => Promise<void>;
+   workspace?: string;
+   onRequest?: () => string;
+   logger?: Logger;
+}): Harness {
    const toServer = new PassThrough();
    const toClient = new PassThrough();
 
@@ -64,6 +70,7 @@ function makeHarness(options: { initialized: () => Promise<void>; workspace?: st
       {
          shared: makeStubShared(options.initialized),
          workspace: options.workspace,
+         logger: options.logger,
          input: toServer,
          output: toClient
       },
@@ -166,6 +173,18 @@ describe('startStdioServer', () => {
       // A half-live head is worse than a dead one: it would answer against an
       // empty registry, so a failed startup must tear the connection down.
       await expect(harness.server.stopped).resolves.toBeUndefined();
+   });
+
+   it('logs no error for a failed workspace initialization, which the workspace manager reports', async () => {
+      const { logger, lines } = makeAttributingLogger();
+      harness = makeHarness({
+         workspace: '/some/workspace',
+         initialized: () => Promise.reject(new Error('discovery blew up')),
+         logger
+      });
+
+      await expect(harness.server.started).rejects.toThrow(/discovery blew up/);
+      expect(lines.filter(line => line.level === 'error')).toEqual([]);
    });
 
    it("logs the connection's protocol faults through the logger, under the head's tag", async () => {

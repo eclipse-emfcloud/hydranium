@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { describeError } from '@hydranium/protocol';
 import {
    exitWithUsage,
    HARNESS_VALUE_FLAGS,
@@ -97,7 +98,7 @@ function validatedProfile(csv: string | undefined, onError: UsageError): string 
    try {
       parseProfileDimensions(csv);
    } catch (err: unknown) {
-      onError(`Option --profile: ${err instanceof Error ? err.message : String(err)}`);
+      onError(`Option --profile: ${describeError(err)}`);
    }
    return csv;
 }

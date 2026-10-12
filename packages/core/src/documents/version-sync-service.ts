@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { DocumentState, type LangiumDocument, type URI } from '@hydranium/langium';
-import { type Tracer, UNRECORDED_VERSION } from '@hydranium/protocol';
+import { type Tracer, UNRECORDED_VERSION, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import { Disposable, Emitter, type Event } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServices } from '../langium/module.js';
@@ -46,20 +46,21 @@ export interface VersionSyncService {
    /**
     * Build `uri` from a `WorkspaceLock` read, so the build queues behind a
     * running one rather than cancelling it. Requests made while one for `uri`
-    * is pending share its next build. Resolves `true` once a build that carried
-    * this request completed, or once a check before a build found it no longer
+    * is pending share its next build. Resolves once a build that carried this
+    * request completed, or once a check before a build found it no longer
     * needed or deferred. A build a later write cancelled does not count: the
-    * request rides the next one. Resolves `false` once builds carrying this
-    * request have failed more often than it may retry, so a caller waiting on
-    * the build can stop. Never rejects.
+    * request rides the next one. Rejects with the last build's error once builds
+    * carrying this request have failed more often than it may retry, so a
+    * caller waiting on the build can stop; the caller ends that failure, and
+    * logs it if nothing else reports it.
     */
-   requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<boolean>;
+   requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void>;
    /**
     * Build `uri` unless it is {@link isSyncedTo synced to} `textVersion`, asked
     * again inside the lock. `undefined` when no build is needed, else the
-    * {@link requestRecoveryBuild} answer.
+    * {@link requestRecoveryBuild} promise.
     */
-   syncTo(uri: URI, textVersion: number): Promise<boolean> | undefined;
+   syncTo(uri: URI, textVersion: number): Promise<void> | undefined;
    /**
     * Whether `uri`'s root was parsed from text at `textVersion` or later; requests
     * nothing. A root with no recorded version or a placeholder counts as synced,
@@ -85,7 +86,10 @@ export interface VersionSyncService {
 export interface QueuedRecoveryBuild {
    readonly request: RecoveryBuildRequest;
    failures: number;
-   readonly answer: (built: boolean) => void;
+   /** Settles the request once a build carried it or it was no longer needed. */
+   readonly resolve: () => void;
+   /** Settles the request once it has used its retries, with the last build's error. */
+   readonly reject: (error: unknown) => void;
 }
 
 /** The requests waiting on one URI's builds in {@link DefaultVersionSyncService}. */
@@ -102,7 +106,7 @@ export class DefaultVersionSyncService implements VersionSyncService {
    protected readonly recordedEmitter = new Emitter<LangiumDocument>();
    protected readonly deferredBuildChecks = new Set<(uri: URI) => boolean>();
    protected readonly pendingBuilds = new Map<string, PendingRecoveryBuilds>();
-   /** Retries of each request after a failed build before it is answered `false`. */
+   /** Retries of each request after a failed build before it is rejected. */
    protected readonly maxBuildRetries: number = 1;
 
    constructor(
@@ -142,19 +146,22 @@ export class DefaultVersionSyncService implements VersionSyncService {
          }
          ledger.record(root, version, origin.text);
       }
-      void this.syncTo(document.uri, store.version(uri));
+      // Nothing waits on this build, so its failure ends here.
+      this.syncTo(document.uri, store.version(uri))?.catch((error: unknown) =>
+         this.tracer.withUri(uri).error(`The build that would sync the root to its text failed. ${describeErrorWithStack(error)}`)
+      );
       this.recordedEmitter.fire(document);
    }
 
-   syncTo(uri: URI, textVersion: number): Promise<boolean> | undefined {
+   syncTo(uri: URI, textVersion: number): Promise<void> | undefined {
       const behind = (): boolean => !this.isSyncedTo(uri, textVersion);
       return behind() ? this.requestRecoveryBuild(uri, { stillNeeded: behind }) : undefined;
    }
 
-   requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<boolean> {
-      return new Promise<boolean>(answer => {
+   requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void> {
+      return new Promise<void>((resolve, reject) => {
          const key = uri.toString();
-         const queued: QueuedRecoveryBuild = { request, failures: 0, answer };
+         const queued: QueuedRecoveryBuild = { request, failures: 0, resolve, reject };
          const pending = this.pendingBuilds.get(key);
          if (pending) {
             // Not dropped: the pending build may have read the text before this request's change.
@@ -189,8 +196,8 @@ export class DefaultVersionSyncService implements VersionSyncService {
 
    /**
     * Run `entry`'s requests, one build per batch, until none is queued, and
-    * answer each. A request a failed build carried is queued again
-    * {@link maxBuildRetries} times, then answered `false`; one a cancelled
+    * settle each. A request a failed build carried is queued again
+    * {@link maxBuildRetries} times, then rejected; one a cancelled
     * build carried is queued again without counting. The entry is dropped
     * in the same tick as the last check of the queue, so no request lands in
     * an entry nothing runs any more.
@@ -210,7 +217,7 @@ export class DefaultVersionSyncService implements VersionSyncService {
             await lock.read(() => {
                carried = entry.queued.splice(0);
                const needed = carried.filter(queued => this.isStillNeeded(uri, queued.request));
-               carried.filter(queued => !needed.includes(queued)).forEach(queued => queued.answer(true));
+               carried.filter(queued => !needed.includes(queued)).forEach(queued => queued.resolve());
                carried = needed;
                if (needed.length > 0) {
                   build = this.scheduleBatch(
@@ -227,18 +234,19 @@ export class DefaultVersionSyncService implements VersionSyncService {
                entry.queued.unshift(...carried);
                continue;
             }
-            carried.forEach(queued => queued.answer(true));
+            carried.forEach(queued => queued.resolve());
          } catch (err: unknown) {
-            const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
             const retried = carried.filter(queued => queued.failures++ < this.maxBuildRetries);
             const givenUp = carried.filter(queued => !retried.includes(queued));
             if (retried.length > 0) {
-               tracer.warn(`Requested build failed; retrying. ${detail}`);
+               // The only line about this failure when the retry succeeds.
+               tracer.warn(`Requested build failed; retrying. ${describeErrorWithStack(err)}`);
                entry.queued.unshift(...retried);
             }
             if (givenUp.length > 0) {
-               tracer.error(`Requested build failed again; giving up. ${detail}`);
-               givenUp.forEach(queued => queued.answer(false));
+               // Each requester ends the failure, so the log line is theirs.
+               tracer.debug(`Requested build failed again; giving up. ${describeError(err)}`);
+               givenUp.forEach(queued => queued.reject(err));
             }
          }
       }

@@ -62,7 +62,7 @@ function realStore(): HydraniumTextDocuments<TextDocument> {
          LangiumDocuments: makeStubLangiumDocuments(),
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
-         VersionSyncService: { requestRecoveryBuild: async () => true, onDidRecordModel: () => ({ dispose: () => undefined }) }
+         VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) }
       }
    });
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);

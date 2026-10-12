@@ -20,7 +20,9 @@
  *   primarily by tests waiting for tidy teardown.
  *
  * Either promise may reject if startup or shutdown encounters an error
- * the head can't recover from.
+ * the head can't recover from. A launcher given a logger logs its own startup
+ * failure, so a rejected `started` is control flow: the caller stops what
+ * depends on it without logging the failure again.
  */
 export interface IntegratedServer {
    readonly started: Promise<void>;
