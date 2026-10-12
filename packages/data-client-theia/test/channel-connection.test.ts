@@ -44,13 +44,9 @@ class FakeConnectionProvider {
  */
 async function nextListen(provider: FakeConnectionProvider): Promise<void> {
    const before = provider.listenCalls;
-   const deadline = performance.now() + 5_000;
-   while (provider.listenCalls === before) {
-      if (performance.now() > deadline) {
-         throw new Error('the handle never asked for a replacement channel');
-      }
-      await new Promise(resolve => setTimeout(resolve, 5));
-   }
+   await waitFor(() => provider.listenCalls !== before, {
+      message: 'the handle never asked for a replacement channel'
+   });
 }
 
 /** The reconnect schedule these tests run on — one short delay, repeated. */

@@ -29,7 +29,8 @@ import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testin
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { type AstNode } from '@hydranium/langium';
 import { type TextVersion } from '@hydranium/protocol';
-import { readFileSync, statSync } from 'node:fs';
+import { waitFor } from '@hydranium/protocol/testing';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
@@ -92,14 +93,11 @@ function idOf(diagram: GlspHarness<OrderFlowGlspState>, name: string): string {
  * disk. A check on the other file has to wait for both announcements first —
  * see {@link waitForSaveAnnouncements}.
  */
-async function waitForFileToContain(path: string, needle: string): Promise<void> {
-   for (let attempt = 0; attempt < 200; attempt++) {
-      if (readFileSync(path, 'utf8').includes(needle)) {
-         return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-   }
-   throw new Error(`${path} never came to contain ${needle}`);
+function waitForFileToContain(path: string, needle: string): Promise<void> {
+   return waitFor(() => readFileSync(path, 'utf8').includes(needle), {
+      message: () =>
+         existsSync(path) ? `${path} never came to contain ${needle}; it holds:\n${readFileSync(path, 'utf8')}` : `${path} does not exist`
+   });
 }
 
 /**
@@ -112,14 +110,10 @@ async function waitForFileToContain(path: string, needle: string): Promise<void>
  * sees a short list — under load, not deterministically, which is what makes
  * the file barrier look sufficient.
  */
-async function waitForSaveAnnouncements(count: number): Promise<void> {
-   for (let attempt = 0; attempt < 200; attempt++) {
-      if (savedUris.length >= count) {
-         return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-   }
-   throw new Error(`only ${savedUris.length} of ${count} saves announced: ${savedUris.join(', ')}`);
+function waitForSaveAnnouncements(count: number): Promise<void> {
+   return waitFor(() => savedUris.length >= count, {
+      message: () => `only ${savedUris.length} of ${count} saves announced: ${savedUris.join(', ')}`
+   });
 }
 
 describe('order-flow .process save', () => {

@@ -26,6 +26,7 @@
 
 import { DefaultIntegrityService } from '@hydranium/core';
 import { DocumentState, URI } from '@hydranium/langium';
+import { waitFor } from '@hydranium/protocol/testing';
 import type { ApplyWorkspaceEditParams, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -48,17 +49,6 @@ afterEach(() => {
    scratch?.workspace.dispose();
    scratch = undefined;
 });
-
-/** Poll until `predicate` holds, so a coalesced sync is awaited rather than raced. */
-async function until(predicate: () => boolean, what: string): Promise<void> {
-   for (let attempt = 0; attempt < 200; attempt++) {
-      if (predicate()) {
-         return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-   }
-   throw new Error(`Timed out waiting for ${what}`);
-}
 
 describe('a staged integrity correction reaches the client that opens the file', () => {
    it('sends the repaired text to a client whose buffer is the unrepaired file', async () => {
@@ -115,7 +105,7 @@ describe('a staged integrity correction reaches the client that opens the file',
          textDocument: { uri: uri.toString(), languageId: 'domain', version: 1, text: ON_DISK }
       });
       await harness.shared.workspace.DocumentBuilder.waitUntil(DocumentState.Validated, uri);
-      await until(() => recorded.length > 0, 'the open to be mirrored to the language client');
+      await waitFor(() => recorded.length > 0, { message: 'the open was never mirrored to the language client' });
 
       // Applying what was sent to what the client actually holds must land it on
       // the repaired text; edits keyed to the staged text instead would splice.

@@ -50,6 +50,7 @@ import { HydraniumGlspAppModule, HydraniumGlspModelValidator } from '@hydranium/
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI, type LangiumDocument } from '@hydranium/langium';
+import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { Diagnostic } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -183,19 +184,24 @@ function messageOf(diagnostic: Diagnostic): string {
  * fan-out on the LSP side wants exactly the same treatment.
  */
 async function waitForPushedMarkers(diagram: OpenDiagram, since: number, timeoutMs = 2000): Promise<Marker[]> {
-   const deadline = performance.now() + timeoutMs;
-   while (performance.now() < deadline) {
-      const markers = diagram.harness.actions
-         .slice(since)
-         .filter(SetMarkersAction.is)
-         .flatMap(action => action.markers);
-      if (markers.length > 0) {
-         return markers;
+   let markers: Marker[] = [];
+   await waitFor(
+      () => {
+         markers = diagram.harness.actions
+            .slice(since)
+            .filter(SetMarkersAction.is)
+            .flatMap(action => action.markers);
+         return markers.length > 0;
+      },
+      {
+         timeoutMs,
+         message: () => {
+            const kinds = diagram.harness.actions.slice(since).map(action => action.kind);
+            return `no non-empty SetMarkersAction within ${timeoutMs}ms — captured since: ${kinds.join(', ') || '(nothing)'}`;
+         }
       }
-      await new Promise(resolve => setTimeout(resolve, 25));
-   }
-   const kinds = diagram.harness.actions.slice(since).map(action => action.kind);
-   throw new Error(`no non-empty SetMarkersAction within ${timeoutMs}ms — captured since: ${kinds.join(', ') || '(nothing)'}`);
+   );
+   return markers;
 }
 
 describe('order-flow .process diagram markers', () => {

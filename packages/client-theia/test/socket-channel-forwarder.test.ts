@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { makeFakeClock, tick } from '@hydranium/protocol/testing';
+import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Channel, type ChannelCloseEvent, Emitter, type MessageProvider, type WriteBuffer } from '@theia/core';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
@@ -73,13 +73,7 @@ async function socketPair(): Promise<{ near: net.Socket; far: net.Socket; server
 
 /** Resolve once `predicate` holds, so a case never outlives a lost message. */
 async function until(predicate: () => boolean, what: string): Promise<void> {
-   const deadline = performance.now() + 2_000;
-   while (!predicate()) {
-      if (performance.now() > deadline) {
-         throw new Error(`timed out waiting for ${what}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, 5));
-   }
+   await waitFor(predicate, { message: `timed out waiting for ${what}` });
 }
 
 const REQUEST: Message = { jsonrpc: '2.0', id: 1, method: 'ns/one', params: { value: 'a' } } as Message;

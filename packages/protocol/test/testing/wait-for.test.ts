@@ -88,6 +88,69 @@ describe('waitFor', () => {
    it('rejects with the supplied message when the predicate never becomes true', async () => {
       await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 1, message: 'no event arrived' })).rejects.toThrow('no event arrived');
    });
+
+   it('calls a message function when it rejects, so the message reports state set after the call', async () => {
+      let seen = 'nothing';
+      const waiting = waitFor(() => false, { timeoutMs: 20, intervalMs: 1, message: () => `saw ${seen}` });
+      seen = 'one event';
+
+      await expect(waiting).rejects.toThrow('saw one event');
+   });
+
+   it('calls a message function only when it rejects', async () => {
+      let calls = 0;
+      const message = (): string => {
+         calls++;
+         return 'no event arrived';
+      };
+      let flag = false;
+      setTimeout(() => {
+         flag = true;
+      }, 20);
+
+      await waitFor(() => flag, { timeoutMs: 1000, intervalMs: 1, message });
+      expect(calls).toBe(0);
+
+      await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 1, message })).rejects.toThrow('no event arrived');
+      expect(calls).toBe(1);
+   });
+
+   it('rejects with the default text, caused by the throw, when the message function throws', async () => {
+      const throwing = (): string => {
+         throw new Error('message threw');
+      };
+
+      // A throw escaping the deadline's timer would leave the wait unsettled.
+      await expect(waitFor(() => false, { timeoutMs: 10, intervalMs: 1, message: throwing })).rejects.toMatchObject({
+         message: 'Timed out after 10ms waiting for a condition',
+         cause: { message: 'message threw' }
+      });
+   });
+
+   it('rejects with the message function, caused by the throw, when the predicate throws', async () => {
+      const throwing = (): boolean => {
+         throw new Error('predicate threw');
+      };
+
+      await expect(waitFor(throwing, { message: () => 'built' })).rejects.toMatchObject({
+         message: 'built',
+         cause: { message: 'predicate threw' }
+      });
+   });
+
+   it("keeps the predicate's throw as cause when the message function throws too", async () => {
+      const throwingPredicate = (): boolean => {
+         throw new Error('predicate threw');
+      };
+      const throwingMessage = (): string => {
+         throw new Error('message threw');
+      };
+
+      await expect(waitFor(throwingPredicate, { message: throwingMessage })).rejects.toMatchObject({
+         message: 'Timed out after 2000ms waiting for a condition',
+         cause: { message: 'predicate threw' }
+      });
+   });
 });
 
 describe('tick', () => {

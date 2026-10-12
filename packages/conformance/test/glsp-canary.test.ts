@@ -19,6 +19,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { waitFor } from '@hydranium/protocol/testing';
 import { buildGlspChecks, type GlspConformanceDriver, type GlspFixture } from '../src/glsp/index.js';
 import type { ConformanceCheck } from '../src/conformance-suite.js';
 
@@ -85,21 +86,26 @@ class CanaryGlspServer implements GlspConformanceDriver<CanaryAction> {
    }
 
    async nextAction<T extends CanaryAction = CanaryAction>(kind: string, timeoutMs: number = RESPONSE_TIMEOUT_MS): Promise<T> {
-      const deadline = performance.now() + timeoutMs;
       // Polls rather than registering a waiter because `dispatch` is
       // synchronous here, so the action is normally already delivered by the
-      // time the check awaits — the loop exists only for the silent defects.
-      for (;;) {
-         const index = this.delivered.findIndex(action => action.kind === kind);
-         if (index >= 0) {
-            const [action] = this.delivered.splice(index, 1);
-            return action as T;
+      // time the check awaits — the wait exists only for the silent defects.
+      // Found and removed in one step, so no other wait can take it in between.
+      let found: CanaryAction | undefined;
+      await waitFor(
+         () => {
+            const index = this.delivered.findIndex(action => action.kind === kind);
+            if (index >= 0) {
+               [found] = this.delivered.splice(index, 1);
+            }
+            return found !== undefined;
+         },
+         {
+            timeoutMs,
+            message: () =>
+               `the canary delivered no ${kind} action; still held: ${this.delivered.map(action => action.kind).join(', ') || '(nothing)'}`
          }
-         if (performance.now() >= deadline) {
-            throw new Error(`the canary delivered no ${kind} action`);
-         }
-         await new Promise(resolve => setTimeout(resolve, 5));
-      }
+      );
+      return found as T;
    }
 
    dispose(): void {

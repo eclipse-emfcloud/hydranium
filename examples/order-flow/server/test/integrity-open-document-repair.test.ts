@@ -34,7 +34,7 @@ import { DefaultFileSystemProviderRegistry, DefaultIntegrityService, HydraniumTe
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import { asModelVersion, isConflictError } from '@hydranium/protocol';
-import { tick } from '@hydranium/protocol/testing';
+import { tick, waitFor } from '@hydranium/protocol/testing';
 import { readFileSync, writeFileSync } from 'node:fs';
 import type { ApplyWorkspaceEditParams, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -114,17 +114,6 @@ class StageRecordingTextDocuments extends HydraniumTextDocuments<TextDocument> {
       staged.push(text);
       super.stagePendingContent(uri, text);
    }
-}
-
-/** Poll until `predicate` holds, so a coalesced sync is awaited rather than raced. */
-async function until(predicate: () => boolean, what: string): Promise<void> {
-   for (let attempt = 0; attempt < 200; attempt++) {
-      if (predicate()) {
-         return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-   }
-   throw new Error(`Timed out waiting for ${what}`);
 }
 
 /**
@@ -297,14 +286,16 @@ for (const syncMode of ['editor', 'silent'] as const) {
          // the builder without a real LSP connection wired to it.
          await builder.update([uri], []);
          await builder.waitUntil(DocumentState.Validated, uri);
-         await until(() => declarationNames(harness, uri).includes('Twin__1'), 'the duplicate to be repaired');
+         await waitFor(() => declarationNames(harness, uri).includes('Twin__1'), {
+            message: () => `the duplicate was never repaired; declarations: ${declarationNames(harness, uri).join(', ')}`
+         });
 
          const document = harness.shared.workspace.LangiumDocuments.getDocument(uri)!;
          expect(textDocuments.get(uriString)?.getText()).toContain('Twin__1');
          expect(document.textDocument.getText()).toContain('Twin__1');
          expect(document.parseResult.value.$cstNode?.root.fullText).toBe(textDocuments.get(uriString)?.getText());
 
-         await until(() => recorded.length > 0, 'the repair to be mirrored to the language client');
+         await waitFor(() => recorded.length > 0, { message: 'the repair was never mirrored to the language client' });
          expect(clientTextAfterEdits(uri, DUPLICATES)).toBe(textDocuments.get(uriString)?.getText());
 
          // An open editor owns the buffer; persisting underneath it would make
@@ -341,7 +332,7 @@ for (const syncMode of ['editor', 'silent'] as const) {
             textDocuments.get(uriString)?.getText()
          );
 
-         await until(() => recorded.length > 0, 'the repair to be mirrored to the language client');
+         await waitFor(() => recorded.length > 0, { message: 'the repair was never mirrored to the language client' });
          expect(clientTextAfterEdits(uri, DUPLICATES)).toBe(textDocuments.get(uriString)?.getText());
 
          expect(readFileSync(workspace.resolve(UNINDEXED), 'utf8')).toBe(DUPLICATES);

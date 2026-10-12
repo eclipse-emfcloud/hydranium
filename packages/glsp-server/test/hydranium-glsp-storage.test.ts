@@ -1193,18 +1193,11 @@ describe('HydraniumGlspStorage', () => {
          expect(result).toBeUndefined();
          // Wait for the line rather than for a fixed number of microtasks: how
          // many ticks separate the flush from the rejection depends on what the
-         // save path awaits, which this assertion must not encode.
-         const logged = async (): Promise<boolean> => {
-            for (let attempt = 0; attempt < 50; attempt++) {
-               if (lines.some(line => line.level === 'error' && line.message.includes('Diagram save failed for file:///x.a'))) {
-                  return true;
-               }
-               await new Promise(resolve => setTimeout(resolve, 1));
-            }
-            return false;
-         };
-         // Caught and logged, never rethrown.
-         expect(await logged()).toBe(true);
+         // save path awaits, which this assertion must not encode. Caught and
+         // logged, never rethrown.
+         await waitFor(() => lines.some(line => line.level === 'error' && line.message.includes('Diagram save failed for file:///x.a')), {
+            message: () => `no save-failure line logged; lines: ${lines.map(line => line.message).join(' | ') || '(none)'}`
+         });
       });
 
       it('fire-and-forget names the document that failed, then the diagram, when only a secondary failed', async () => {
