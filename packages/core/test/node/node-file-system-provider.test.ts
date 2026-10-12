@@ -26,7 +26,9 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { URI, UriUtils } from '@hydranium/langium';
+import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
 import { DefaultFileSystemProvider } from '../../src/node/node-file-system-provider.js';
+import { RENAME_GAP_BUDGET_MS } from '../../src/node/rename-over-open-readers.js';
 import { makeNoopSharedServices } from '../../src/testing/index.js';
 import { makeStubSelfSaveRegistry } from '../../src/testing/stub-self-save-registry.js';
 
@@ -148,6 +150,102 @@ describe('DefaultFileSystemProvider.mtimeMs', () => {
       // Parent directory is created on demand, and the content landed.
       expect(statSync(file).isFile()).toBe(true);
       expect(selfSaveRegistry.registerCalls).toEqual([{ fsPath: URI.file(file).fsPath, mtimeMs: statSync(file).mtimeMs }]);
+   });
+});
+
+/**
+ * The Windows wait has no Windows in it: the platform is stubbed and `exists`
+ * scripted, so these run and discriminate on every platform, and the budget
+ * runs on a fake clock's stopwatch, which each answer advances.
+ */
+describe('DefaultFileSystemProvider.existsSettled', () => {
+   const FILE = URI.file('/hydranium-test/settled.a');
+
+   /**
+    * A provider whose `exists` gives `answers` in turn, each taking `stepMs` of
+    * the clock and first running `onCall` with its index; `jumpWallClock`
+    * moves `now()` alone, as a time sync does.
+    */
+   const makeScripted = (answers: boolean[], stepMs = 0, onCall?: (call: number) => void) => {
+      const clock = makeFakeClock();
+      let wallOffsetMs = 0;
+      let calls = 0;
+      class ScriptedFileSystemProvider extends DefaultFileSystemProvider {
+         override async exists(): Promise<boolean> {
+            onCall?.(calls);
+            clock.advance(stepMs);
+            return answers[Math.min(calls++, answers.length - 1)];
+         }
+      }
+      // Layered over the fake clock rather than spread from it: its methods live on a prototype.
+      const wallClock = Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs });
+      const provider = new ScriptedFileSystemProvider(
+         makeNoopSharedServices({ Clock: wallClock, workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } })
+      );
+      return {
+         provider,
+         calls: () => calls,
+         jumpWallClock: (ms: number) => {
+            wallOffsetMs += ms;
+         }
+      };
+   };
+
+   const onPlatform = async (platform: NodeJS.Platform, run: () => Promise<void>): Promise<void> => {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      try {
+         await run();
+      } finally {
+         if (original) {
+            Object.defineProperty(process, 'platform', original);
+         }
+      }
+   };
+
+   it('answers true at once for a file that is there', async () => {
+      const { provider, calls } = makeScripted([true]);
+      await onPlatform('win32', async () => expect(await provider.existsSettled(FILE)).toBe(true));
+      expect(calls()).toBe(1);
+   });
+
+   it('takes a miss as final off Windows', async () => {
+      const { provider, calls } = makeScripted([false, true]);
+      await onPlatform('linux', async () => expect(await provider.existsSettled(FILE)).toBe(false));
+      expect(calls()).toBe(1);
+   });
+
+   it('answers true on Windows as soon as a missed file is back', async () => {
+      const { provider, calls } = makeScripted([false, false, true]);
+      await onPlatform('win32', async () => expect(await provider.existsSettled(FILE)).toBe(true));
+      expect(calls()).toBe(3);
+   });
+
+   it('answers false on Windows once a miss outlasts the budget, rather than waiting on', async () => {
+      // Each answer takes a quarter of the budget: the stopwatch starts after
+      // the first miss, and the four polls after it spend the budget.
+      const { provider, calls } = makeScripted([false], RENAME_GAP_BUDGET_MS / 4);
+      await onPlatform('win32', async () => expect(await provider.existsSettled(FILE)).toBe(false));
+      // Exactly five is the whole claim: one poll short gives up early, and an
+      // unbounded wait never answers.
+      expect(calls()).toBe(5);
+   });
+
+   it('keeps waiting out a miss on Windows when the wall clock jumps forward', async () => {
+      // An hour's jump on the first poll, after the wait has started.
+      const scripted = makeScripted([false, false, true], 0, call => {
+         if (call === 1) {
+            scripted.jumpWallClock(60 * 60 * 1000);
+         }
+      });
+      await onPlatform('win32', async () => expect(await scripted.provider.existsSettled(FILE)).toBe(true));
+      expect(scripted.calls()).toBe(3);
+   });
+
+   it('takes a miss as final for a URI that names no disk location, on Windows too', async () => {
+      const { provider, calls } = makeScripted([false, true]);
+      await onPlatform('win32', async () => expect(await provider.existsSettled(URI.parse('memory:///settled.a'))).toBe(false));
+      expect(calls()).toBe(1);
    });
 });
 

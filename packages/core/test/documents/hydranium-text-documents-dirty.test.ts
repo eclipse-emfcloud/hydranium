@@ -12,7 +12,7 @@
  * state read from it. The store is real; the disk behind it is a map.
  */
 
-import { textHash } from '@hydranium/protocol';
+import { Deferred, textHash } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor, type FakeClock } from '@hydranium/protocol/testing';
 import { type Event, isOperationCancelled, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
 import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
@@ -60,6 +60,12 @@ interface DirtyRig {
    readonly clock: FakeClock;
    /** What the fake disk holds, by URI; a missing entry is a missing file. */
    readonly files: Map<string, string>;
+   /** The bound file system provider; it has no `existsSettled` until a test gives it one. */
+   readonly fileSystem: { existsSettled?: (uri: URI) => Promise<boolean> };
+   /** The disk queue the store reads and writes the file through. */
+   readonly diskQueue: DefaultFileSystemTaskQueue;
+   /** Fail the next read of a present file as missing, as a replace on Windows can. */
+   missNextRead(): void;
    /** Every dirty flip, as `uri dirty`, in delivery order; `undefined` for a flip without text. */
    readonly flips: string[];
    /** The version of each flip in {@link flips} that carries text. */
@@ -88,6 +94,7 @@ function makeRig(releaseGraceMs = 0): DirtyRig {
    let locksReleased = 0;
    let nextBuildError: unknown;
    let beforeNextBuildError: (() => void) | undefined;
+   let readMisses = 0;
    const updateListeners: Array<(changed: URI[], deleted: URI[]) => void> = [];
    const langiumDocuments = makeStubLangiumDocuments([{ uri: FILE, root: makeFakeAstNode({ $type: 'Root' }) }]);
    const heldBuilds: Promise<void>[] = [];
@@ -128,13 +135,28 @@ function makeRig(releaseGraceMs = 0): DirtyRig {
          sync.modelProduced(langiumDocuments.set(uri, makeFakeAstNode({ $type: 'Root' }), { textDocument }));
       }
    };
+   const diskQueue = new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } });
+   const fileSystem: DirtyRig['fileSystem'] & { exists(uri: URI): Promise<boolean>; readFile(uri: URI): Promise<string> } = {
+      exists: async (uri: URI) => files.has(uri.toString()),
+      readFile: async (uri: URI) => {
+         const text = files.get(uri.toString());
+         const missed = readMisses > 0;
+         if (missed) {
+            readMisses--;
+         }
+         if (text === undefined || missed) {
+            throw Object.assign(new Error(`ENOENT: ${uri.fsPath}`), { code: 'ENOENT', path: uri.fsPath });
+         }
+         return text;
+      }
+   };
    const services = {
       Clock: clock,
       Tracer: { for: () => makeNoopTracer() },
       workspace: {
          DocumentUriPolicy: uriPolicy,
          LangiumDocuments: langiumDocuments,
-         FileSystemTaskQueue: new DefaultFileSystemTaskQueue({ workspace: { DocumentUriPolicy: uriPolicy } }),
+         FileSystemTaskQueue: diskQueue,
          WorkspaceManager: { ready: Promise.resolve() },
          WorkspaceLock: { write, read: async (action: () => unknown) => action() },
          ModelLedger: new DefaultModelLedger(),
@@ -149,16 +171,7 @@ function makeRig(releaseGraceMs = 0): DirtyRig {
                return { dispose: () => updateListeners.splice(updateListeners.indexOf(listener), 1) };
             }
          },
-         FileSystemProvider: {
-            exists: async (uri: URI) => files.has(uri.toString()),
-            readFile: async (uri: URI) => {
-               const text = files.get(uri.toString());
-               if (text === undefined) {
-                  throw Object.assign(new Error(`ENOENT: ${uri.fsPath}`), { code: 'ENOENT', path: uri.fsPath });
-               }
-               return text;
-            }
-         }
+         FileSystemProvider: fileSystem
       }
    } as unknown as ServerSharedServices;
    const sync = new CountingVersionSyncService(services);
@@ -185,6 +198,8 @@ function makeRig(releaseGraceMs = 0): DirtyRig {
       documents: langiumDocuments,
       clock,
       files,
+      fileSystem,
+      diskQueue,
       flips,
       flipVersions,
       flipHashes,
@@ -193,6 +208,9 @@ function makeRig(releaseGraceMs = 0): DirtyRig {
       },
       get updateListeners() {
          return updateListeners.length;
+      },
+      missNextRead: () => {
+         readMisses++;
       },
       failNextBuild: (error: unknown = new Error('build failed'), before?: () => void) => {
          nextBuildError = error;
@@ -543,6 +561,41 @@ describe('HydraniumTextDocuments disk baseline and dirty state', () => {
 
       expect(docs.isDirty(FILE)).toBe(true);
       expect(flips).toEqual([`${FILE} true`, `${FILE} false`, `${FILE} true`]);
+   });
+
+   it('reads again a file whose read missed while it exists, rather than counting it as none', async () => {
+      const { docs, files, flips, missNextRead } = makeRig();
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+
+      files.set(FILE, EDITED);
+      missNextRead();
+      await docs.reloadDiskBaseline(FILE);
+
+      expect(docs.isDirty(FILE)).toBe(false);
+      expect(flips).toEqual([`${FILE} true`, `${FILE} false`]);
+   });
+
+   it('settles a missed read outside the disk queue, so a write queued for the file runs meanwhile', async () => {
+      const { docs, files, fileSystem, diskQueue, missNextRead } = makeRig();
+      const settling = new Deferred<boolean>();
+      const asked = new Deferred();
+      fileSystem.existsSettled = () => {
+         asked.resolve();
+         return settling.promise;
+      };
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      missNextRead();
+      const reload = docs.reloadDiskBaseline(FILE);
+      await asked.promise;
+
+      // Would wait on the settle forever if it held the queue.
+      await diskQueue.enqueue(FILE, async () => files.set(FILE, EDITED));
+      settling.resolve(true);
+      await reload;
+
+      expect(docs.isDirty(FILE)).toBe(false);
    });
 
    it('takes the read-back of an editor save as the baseline, whether or not it matches the store', async () => {

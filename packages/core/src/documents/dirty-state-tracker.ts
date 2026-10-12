@@ -57,6 +57,12 @@ export interface DirtyStateTracker {
    /** The file behind `key` holds `text`, `undefined` for none. A no-op for a document not tracked. */
    setDiskBaseline(key: CanonicalUri, document: TextDocument, text: string | undefined): void;
    /**
+    * Whether `key` has a baseline: `false` for none, which a document created
+    * from a session's text starts with and a reload that finds no file sets,
+    * and for a document not tracked. A first open takes the opener's text.
+    */
+   hasDiskBaseline(key: CanonicalUri): boolean;
+   /**
     * The store released `key`. Answers the clean announcement a document
     * released dirty now owes; `undefined` for one released clean.
     */
@@ -106,6 +112,10 @@ export class DefaultDirtyStateTracker implements DirtyStateTracker {
       }
       state.baseline = text;
       this.refreshDirty(key, document);
+   }
+
+   hasDiskBaseline(key: CanonicalUri): boolean {
+      return this.states.get(key)?.baseline !== undefined;
    }
 
    release(key: CanonicalUri): CleanAnnouncement | undefined {

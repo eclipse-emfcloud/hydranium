@@ -53,8 +53,8 @@ describe('DefaultEmptyFileSystemProvider', () => {
 
 /**
  * A provider that answers every read with its own label, so a test can see
- * which provider a call reached. `realpath` and `mtimeMs` are left off, as a
- * provider with no disk leaves them.
+ * which provider a call reached. `realpath`, `mtimeMs` and `existsSettled` are
+ * left off, as a provider with no disk leaves them.
  */
 class LabelledProvider implements WritableFileSystemProvider {
    readonly written: string[] = [];
@@ -113,8 +113,9 @@ function registry(
  * - every call goes to the provider registered for the URI's scheme, and to
  *   the host for a scheme with none, whatever that scheme is, one named like
  *   a prototype key included;
- * - `realpath` and `mtimeMs` forward to the scheme's provider; where it lacks
- *   one, `realpath` returns the URI and `mtimeMs` returns `undefined`;
+ * - `realpath`, `mtimeMs` and `existsSettled` forward to the scheme's
+ *   provider; where it lacks one, `realpath` returns the URI, `mtimeMs`
+ *   returns `undefined` and `existsSettled` answers as `exists`;
  * - a provider that throws synchronously from an async method still rejects.
  */
 describe('DefaultFileSystemProviderRegistry', () => {
@@ -167,21 +168,26 @@ describe('DefaultFileSystemProviderRegistry', () => {
       }
    });
 
-   it('passes a URI through realpath, and reports no mtime, for a provider without them', async () => {
-      const files = registry({}, new LabelledProvider('host'));
+   it('passes a URI through realpath, reports no mtime, and settles existence as exists, for a provider without them', async () => {
+      const files = registry({ custom: new LabelledProvider('custom') }, new LabelledProvider('host'));
       expect(files.realpath(unclaimed)).toBe(unclaimed);
       expect(await files.mtimeMs(unclaimed)).toBeUndefined();
+      expect(await files.existsSettled(unclaimed)).toBe(true);
+      expect(await files.existsSettled(registered)).toBe(false);
    });
 
-   it("answers realpath and mtimeMs from the scheme's provider when it has them", async () => {
+   it("answers realpath, mtimeMs and existsSettled from the scheme's provider when it has them", async () => {
       const resolved = URI.parse('file:///real/a.a');
+      // Its `exists` answers false, so a settled true can only come from its own method.
       const disk = Object.assign(new LabelledProvider('disk'), {
          realpath: (): URI | undefined => resolved,
-         mtimeMs: async (): Promise<number | undefined> => 42
+         mtimeMs: async (): Promise<number | undefined> => 42,
+         existsSettled: async (): Promise<boolean> => true
       });
       const files = registry({}, disk);
       expect(files.realpath(URI.parse('file:///link/a.a'))).toBe(resolved);
       expect(await files.mtimeMs(URI.parse('file:///link/a.a'))).toBe(42);
+      expect(await files.existsSettled(URI.parse('file:///link/a.a'))).toBe(true);
    });
 
    it("keeps the scheme's provider's absent answer from realpath", () => {

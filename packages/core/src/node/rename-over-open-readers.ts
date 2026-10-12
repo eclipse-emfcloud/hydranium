@@ -34,6 +34,14 @@ export const RENAME_CONTENTION_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
  */
 export const RENAME_BUDGET_MS = 10_000;
 
+/**
+ * How long a miss is waited out on Windows before it counts as an absence,
+ * since a replacing rename there can hide the name from a reader for a while.
+ * Bounded: a real deletion differs only by never ending, so it pays the whole
+ * budget. The figure is a judgement, not an established bound.
+ */
+export const RENAME_GAP_BUDGET_MS = 2_000;
+
 /** Seams for the test, which cannot make a real rename fail on demand. */
 export interface RenameOverOpenReadersOptions {
    readonly rename?: (from: string, to: string) => Promise<void>;
@@ -63,14 +71,17 @@ export async function renameOverOpenReaders(
 ): Promise<void> {
    const rename = options.rename ?? fsp.rename;
    const clock = options.clock ?? new SystemClock();
-   const deadline = clock.now() + (options.budgetMs ?? RENAME_BUDGET_MS);
+   const budgetMs = options.budgetMs ?? RENAME_BUDGET_MS;
+   // A stopwatch, not two `now()` readings: a wall-clock jump would end the
+   // budget early or stretch it.
+   const waited = clock.stopwatch();
    for (let attempt = 0; ; attempt++) {
       try {
          await rename(staging, destination);
          return;
       } catch (err: unknown) {
          const code = err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
-         if (code === undefined || !RENAME_CONTENTION_CODES.has(code) || clock.now() >= deadline) {
+         if (code === undefined || !RENAME_CONTENTION_CODES.has(code) || waited.elapsedMs >= budgetMs) {
             throw err;
          }
          // Backs off to keep a long contention window from spinning, capped so

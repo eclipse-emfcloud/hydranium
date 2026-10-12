@@ -2431,6 +2431,28 @@ describe('HydraniumTextDocuments release settle', () => {
    });
 });
 
+describe('HydraniumTextDocuments hands over whether a file was behind a released document', () => {
+   it.each<[string, string | undefined, boolean]>([
+      ['as on disk when its baseline is a file', 'a\n', true],
+      ['as not on disk when its baseline is no file', undefined, false]
+   ])('hands it over %s', async (_name, baseline, wasOnDisk) => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const handedOver: boolean[] = [];
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: async released => {
+            handedOver.push(released.wasOnDisk);
+         }
+      };
+      const docs = new HydraniumTextDocuments(services);
+      openInLanguageClient(docs, 'a\n');
+      docs.setDiskBaseline(URI, baseline);
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+
+      expect(handedOver).toEqual([wasOnDisk]);
+   });
+});
+
 describe('HydraniumTextDocuments release skipped at teardown', () => {
    // The handler says it skipped: an error that merely looks like teardown is a failure.
    it.each([
