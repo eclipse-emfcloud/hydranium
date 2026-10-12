@@ -26,6 +26,7 @@ import {
    isSessionClosedError,
    ReferenceSource,
    SyntheticStep,
+   SystemClock,
    TransferDocument,
    type TransferDiagnostic,
    type TransferElement,
@@ -192,13 +193,13 @@ async function registerWithin<TTransfer extends TransferElement, TDiagnostic ext
    clientId: string,
    boundMs: number
 ): Promise<void> {
-   const deadline = Date.now() + boundMs;
+   const waited = new SystemClock().stopwatch();
    for (;;) {
       const refusal = await rejectionOf(driver.proxy.createSession({ clientId }));
       if (refusal === undefined) {
          return;
       }
-      if (!isDuplicateClientIdError(refusal) || Date.now() >= deadline) {
+      if (!isDuplicateClientIdError(refusal) || waited.elapsedMs >= boundMs) {
          throw refusal;
       }
       await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
@@ -223,9 +224,9 @@ async function readUntil<TTransfer extends TransferElement, TDiagnostic extends 
    settled: (document: TransferDocument<TTransfer, TDiagnostic> | undefined) => boolean,
    message: string
 ): Promise<void> {
-   const deadline = Date.now() + 2_000;
+   const waited = new SystemClock().stopwatch();
    while (!settled(await driver.proxy.getModelDocument({ uri }).catch(() => undefined))) {
-      assert.ok(Date.now() < deadline, message);
+      assert.ok(waited.elapsedMs < 2_000, message);
       await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
    }
 }

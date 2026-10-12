@@ -26,7 +26,7 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { URI, UriUtils } from '@hydranium/langium';
-import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { DefaultFileSystemProvider } from '../../src/node/node-file-system-provider.js';
 import { RENAME_GAP_BUDGET_MS } from '../../src/node/rename-over-open-readers.js';
 import { makeNoopSharedServices } from '../../src/testing/index.js';
@@ -163,12 +163,10 @@ describe('DefaultFileSystemProvider.existsSettled', () => {
 
    /**
     * A provider whose `exists` gives `answers` in turn, each taking `stepMs` of
-    * the clock and first running `onCall` with its index; `jumpWallClock`
-    * moves `now()` alone, as a time sync does.
+    * the clock and first running `onCall` with its index.
     */
    const makeScripted = (answers: boolean[], stepMs = 0, onCall?: (call: number) => void) => {
       const clock = makeFakeClock();
-      let wallOffsetMs = 0;
       let calls = 0;
       class ScriptedFileSystemProvider extends DefaultFileSystemProvider {
          override async exists(): Promise<boolean> {
@@ -177,18 +175,10 @@ describe('DefaultFileSystemProvider.existsSettled', () => {
             return answers[Math.min(calls++, answers.length - 1)];
          }
       }
-      // Layered over the fake clock rather than spread from it: its methods live on a prototype.
-      const wallClock = Object.assign(Object.create(clock) as FakeClock, { now: () => clock.now() + wallOffsetMs });
       const provider = new ScriptedFileSystemProvider(
-         makeNoopSharedServices({ Clock: wallClock, workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } })
+         makeNoopSharedServices({ Clock: clock, workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } })
       );
-      return {
-         provider,
-         calls: () => calls,
-         jumpWallClock: (ms: number) => {
-            wallOffsetMs += ms;
-         }
-      };
+      return { provider, clock, calls: () => calls };
    };
 
    const onPlatform = async (platform: NodeJS.Platform, run: () => Promise<void>): Promise<void> => {
@@ -235,7 +225,7 @@ describe('DefaultFileSystemProvider.existsSettled', () => {
       // An hour's jump on the first poll, after the wait has started.
       const scripted = makeScripted([false, false, true], 0, call => {
          if (call === 1) {
-            scripted.jumpWallClock(60 * 60 * 1000);
+            scripted.clock.jumpWallClock(60 * 60 * 1000);
          }
       });
       await onPlatform('win32', async () => expect(await scripted.provider.existsSettled(FILE)).toBe(true));

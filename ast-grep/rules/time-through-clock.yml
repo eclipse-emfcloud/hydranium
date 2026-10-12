@@ -1,0 +1,20 @@
+# Time is read through a `Clock`, so a platform quirk is worked around in one place and a
+# test can drive it. A duration is a `stopwatch()`: two wall-clock readings measure a
+# time sync or a manual clock change along with it. `SystemClock` is the one reader of
+# the platform. A destructured `const { now } = performance`, `new Date()` and a duration
+# taken from two `clock.now()` readings escape this rule.
+id: time-through-clock
+language: typescript
+severity: error
+message: Read time through a Clock (`stopwatch()` for a duration, `now()` for a timestamp), not the platform directly.
+files:
+  - packages/*/src/**/*.ts
+  - examples/**/src/**/*.ts
+ignores:
+  - packages/protocol/src/clock.ts
+rule:
+  any:
+    - pattern: Date.now
+    - pattern: performance.now
+    - pattern: $GLOBAL.Date.now
+    - pattern: $GLOBAL.performance.now

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Format } from '@hydranium/protocol';
+import { Format, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import * as v8 from 'node:v8';
 import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 
@@ -52,8 +52,10 @@ export function startMemoryMonitor(shared: ServerSharedServicesMinimal, options:
    const criticalThreshold = options.criticalThreshold ?? DEFAULT_MEMORY_CRITICAL_THRESHOLD;
    const intervalMs = options.intervalMs ?? DEFAULT_MEMORY_INTERVAL_MS;
    const cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
+   // Not `shared.Clock`, which a test may fake: the samples come on a real interval, so the cooldown runs on real time too.
+   const clock = new SystemClock();
    let lastSeverity: Severity = 'ok';
-   let lastEmittedAt = 0;
+   let sinceEmitted: Stopwatch | undefined;
 
    const severityFor = (ratio: number): Severity => {
       if (ratio >= criticalThreshold) {
@@ -73,8 +75,7 @@ export function startMemoryMonitor(shared: ServerSharedServicesMinimal, options:
       if (severity === 'ok' && lastSeverity === 'ok') {
          return;
       }
-      const now = Date.now();
-      const shouldEmit = severity !== lastSeverity || now - lastEmittedAt >= cooldownMs;
+      const shouldEmit = severity !== lastSeverity || sinceEmitted === undefined || sinceEmitted.elapsedMs >= cooldownMs;
       if (!shouldEmit) {
          return;
       }
@@ -93,7 +94,7 @@ export function startMemoryMonitor(shared: ServerSharedServicesMinimal, options:
          logger.info(message);
       }
       lastSeverity = severity;
-      lastEmittedAt = now;
+      sinceEmitted = clock.stopwatch();
    };
 
    const interval = setInterval(check, intervalMs);

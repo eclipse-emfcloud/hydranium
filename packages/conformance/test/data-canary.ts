@@ -235,6 +235,8 @@ export interface CanaryDefects {
     * as a server behind a socket does once it has read the close.
     */
    readonly endsSessionsLate?: boolean;
+   /** Not a defect: the last close goes back to the file only a moment after it answered. */
+   readonly releasesLate?: boolean;
 }
 
 interface StoredDocument {
@@ -388,6 +390,14 @@ export class CanaryDataServer {
 
    /** Once no session has `uri` open, go back to what its last save wrote, or drop it when none did. */
    private releaseIfClosed(uri: string): void {
+      if (this.defects.releasesLate) {
+         setTimeout(() => this.release(uri), 50);
+      } else {
+         this.release(uri);
+      }
+   }
+
+   private release(uri: string): void {
       if (!this.defects.releaseOnAnyClose && [...this.sessions.values()].some(opens => opens.has(uri))) {
          return;
       }

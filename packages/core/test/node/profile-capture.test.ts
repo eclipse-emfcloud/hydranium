@@ -202,8 +202,8 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       // this state, which is why it could not witness the guard.
       const { report } = await profileWorkload({ eventLoopDelay: true, directory: dir, label: 'eld-sync' }, async () => {
          let acc = 0;
-         const until = Date.now() + 30;
-         while (Date.now() < until) {
+         const until = performance.now() + 30;
+         while (performance.now() < until) {
             acc++;
          }
          return acc;

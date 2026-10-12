@@ -102,8 +102,8 @@ const EXPECTED_DEPENDENT_ERROR = "Could not resolve reference to Field named 'st
  * regression it is meant to prove.
  */
 async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
-   const deadline = Date.now() + timeoutMs;
-   while (!predicate() && Date.now() < deadline) {
+   const deadline = performance.now() + timeoutMs;
+   while (!predicate() && performance.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 10));
    }
 }

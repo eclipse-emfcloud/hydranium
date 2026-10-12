@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Clock, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { type Channel, DisposableCollection, Emitter, type Event, type MessageProvider } from '@theia/core';
 import { type ServiceConnectionProvider } from '@theia/core/lib/browser';
 import { Deferred } from '@theia/core/lib/common/promise-util';
@@ -122,6 +123,8 @@ export interface OpenChannelConnectionOptions {
    whenReady?: Promise<void>;
    /** Where the connection logs its protocol faults; without one they leave no trace. */
    logger: Logger;
+   /** Times the escalation reset. Default a `SystemClock`. */
+   clock?: Clock;
    /**
     * Re-establish the connection whenever the live one is lost, by RE-OPENING
     * the channel on `path` — not merely by rebuilding over a channel Theia hands
@@ -283,8 +286,9 @@ export function openChannelConnection(
    let awaitingReplacement = false;
    /** Consecutive losses, indexing `reconnectDelays`. */
    let losses = 0;
-   /** When the live connection was built, for the escalation reset. `0` before the first. */
-   let liveSince = 0;
+   const clock = options.clock ?? new SystemClock();
+   /** Running since the live connection was built, for the escalation reset. */
+   let sinceLive: Stopwatch | undefined;
    let reopenTimer: ReturnType<typeof setTimeout> | undefined;
    // Own synchronous flag, deliberately NOT `deferred.state`. Theia's
    // `Deferred` sets `state` inside a `.then()` on its own promise, so it is
@@ -298,7 +302,7 @@ export function openChannelConnection(
    let built = false;
 
    const scheduleReopen = (): void => {
-      if (liveSince > 0 && Date.now() - liveSince >= RECONNECT_ESCALATION_RESET_MS) {
+      if (sinceLive !== undefined && sinceLive.elapsedMs >= RECONNECT_ESCALATION_RESET_MS) {
          losses = 0;
       }
       const delay = reconnectDelays[Math.min(losses, reconnectDelays.length - 1)];
@@ -355,7 +359,7 @@ export function openChannelConnection(
       built = true;
       awaitingReplacement = false;
       generation++;
-      liveSince = Date.now();
+      sinceLive = clock.stopwatch();
       if (reconnect) {
          // Registered AFTER `createChannelConnection`, so the connection's own
          // reader and writer see the close first and `connection.onClose` still

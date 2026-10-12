@@ -49,7 +49,7 @@ import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { createMessagePortTransport, type Logger, sendByMethodName } from '@hydranium/protocol';
+import { createMessagePortTransport, type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -335,13 +335,13 @@ async function frameDiagram(container: Container): Promise<void> {
  * diagram that finished rendering before this ran would never say.
  */
 async function waitForAnyRenderedShape(): Promise<boolean> {
-   const deadline = performance.now() + RENDER_DEADLINE_MS;
+   const waited = new SystemClock().stopwatch();
    for (;;) {
       const mount = document.getElementById(PROCESS_DIAGRAM_ELEMENT_ID);
       if ((mount?.querySelectorAll('.sprotty-node').length ?? 0) > 0) {
          return true;
       }
-      if (performance.now() >= deadline) {
+      if (waited.elapsedMs >= RENDER_DEADLINE_MS) {
          return false;
       }
       await new Promise(resolve => setTimeout(resolve, 100));

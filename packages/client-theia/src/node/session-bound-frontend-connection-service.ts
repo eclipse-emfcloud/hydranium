@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { AbstractChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { type WriteBuffer } from '@theia/core/lib/common/message-rpc/message-buffer';
@@ -14,7 +15,8 @@ import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/com
 import { BackendApplicationConfigProvider } from '@theia/core/lib/node/backend-application-config-provider';
 import { SocketWriteBuffer } from '@theia/core/lib/common/messaging/socket-write-buffer';
 import { WebsocketFrontendConnectionService } from '@theia/core/lib/node/messaging/websocket-frontend-connection-service';
-import { injectable, type interfaces } from '@theia/core/shared/inversify';
+import { inject, injectable, optional, type interfaces } from '@theia/core/shared/inversify';
+import { Clock } from '../common/clock';
 import { type ConnectionResilienceOptions } from '../common/connection-resilience-options';
 import {
    CONNECTION_LOG_PREFIX as PREFIX,
@@ -137,19 +139,21 @@ export class AcknowledgedSocketChannel extends AbstractChannel {
  */
 @injectable()
 export class SessionBoundFrontendConnectionService extends WebsocketFrontendConnectionService {
-   /** Socket each frontend's channel is currently bound to, with the time it was bound. */
-   protected readonly bindings = new Map<string, { socketId: string; boundAt: number }>();
-   /** When a frontend's live socket went away, so the reconnect gap can be reported. */
-   protected readonly offlineSince = new Map<string, number>();
+   /** Times the gaps the log reports: the container's {@link Clock}, or a `SystemClock`. */
+   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
+   /** Socket each frontend's channel is currently bound to, with how long it has been. */
+   protected readonly bindings = new Map<string, { socketId: string; sinceBound: Stopwatch }>();
+   /** Running since a frontend's live socket went away, so the reconnect gap can be reported. */
+   protected readonly sinceOffline = new Map<string, Stopwatch>();
 
    override handleSocketDisconnect(socket: FrontendSocket, channel: FrontendChannel, frontEndId: string): void {
       const previous = this.bindings.get(frontEndId);
-      this.bindings.set(frontEndId, { socketId: socket.id, boundAt: Date.now() });
+      this.bindings.set(frontEndId, { socketId: socket.id, sinceBound: this.clock.stopwatch() });
 
-      const wentOfflineAt = this.offlineSince.get(frontEndId);
-      this.offlineSince.delete(frontEndId);
+      const sinceOffline = this.sinceOffline.get(frontEndId);
+      this.sinceOffline.delete(frontEndId);
       const replacing = previous ? `, replacing socket ${previous.socketId}` : '';
-      const gap = wentOfflineAt === undefined ? '' : `, after ${Date.now() - wentOfflineAt} ms offline`;
+      const gap = sinceOffline === undefined ? '' : `, after ${Math.round(sinceOffline.elapsedMs)} ms offline`;
       console.info(`${PREFIX} frontend ${frontEndId} channel bound to socket ${socket.id}${replacing}${gap}`);
 
       socket.on('disconnect', reason => {
@@ -159,14 +163,14 @@ export class SessionBoundFrontendConnectionService extends WebsocketFrontendConn
             // deletes the binding. Neither owns the channel, so neither may disconnect it, arm a close
             // timeout, or close a connection that is no longer in `connectionsByFrontend`.
             const owner = bound
-               ? `socket ${bound.socketId} owns it (bound ${Date.now() - bound.boundAt} ms ago)`
+               ? `socket ${bound.socketId} owns it (bound ${Math.round(bound.sinceBound.elapsedMs)} ms ago)`
                : 'the connection is already closed';
             console.info(`${PREFIX} ignoring disconnect of stale socket ${socket.id} (frontend ${frontEndId}, ${reason}); ${owner}`);
             return;
          }
 
          // From here on: Theia's own handler body, unchanged apart from naming the socket.
-         this.offlineSince.set(frontEndId, Date.now());
+         this.sinceOffline.set(frontEndId, this.clock.stopwatch());
          console.info(`${PREFIX} socket ${socket.id} (frontend ${frontEndId}) disconnected: ${reason}`);
          channel.disconnect();
          const timeout = this.connectionTimeout();
@@ -214,7 +218,7 @@ export class SessionBoundFrontendConnectionService extends WebsocketFrontendConn
    protected override closeConnection(frontEndId: string, reason: string): void {
       console.info(`${PREFIX} closing frontend ${frontEndId}: ${reason}`);
       this.bindings.delete(frontEndId);
-      this.offlineSince.delete(frontEndId);
+      this.sinceOffline.delete(frontEndId);
       super.closeConnection(frontEndId, reason);
    }
 

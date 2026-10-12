@@ -177,6 +177,26 @@ const cases: Case[] = [
       dir: 'packages/core/src',
       source: 'export function makeNoopLogger(): void {}\n'
    },
+   {
+      name: 'platform time read in framework code',
+      tool: 'ast-grep',
+      dir: 'packages/core/src',
+      source: 'export const start = performance.now();\n',
+      rule: 'time-through-clock'
+   },
+   {
+      name: 'platform time read in example code',
+      tool: 'ast-grep',
+      dir: 'examples/order-flow/browser/src',
+      source: 'export const stamp = Date.now();\n',
+      rule: 'time-through-clock'
+   },
+   {
+      name: 'platform time read in a test is allowed',
+      tool: 'ast-grep',
+      dir: 'packages/core/test',
+      source: 'export const start = performance.now();\n'
+   },
    { name: 'neutral global', dir: 'packages/core/src', source: 'export const pid = process.pid;\n', rule: 'eslint(no-restricted-globals)' },
    { name: 'Node testing globals are exempt', dir: 'packages/core/src/testing/node', source: 'export const pid = process.pid;\n' }
 ];

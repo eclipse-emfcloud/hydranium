@@ -41,11 +41,11 @@ async function connect(port) {
 }
 
 async function waitFor(find, what) {
-   const deadline = Date.now() + 20_000;
+   const deadline = performance.now() + 20_000;
    for (;;) {
       const found = find();
       if (found !== undefined) return found;
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`);
       await new Promise(done => setTimeout(done, 100));
    }
 }

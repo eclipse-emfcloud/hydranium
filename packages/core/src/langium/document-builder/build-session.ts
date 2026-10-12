@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { type URI } from '@hydranium/langium';
+import { type Stopwatch } from '@hydranium/protocol';
 
 /** What a build is about, handed to `HydraniumDocumentBuilder.createBuildSession`. */
 export interface BuildSessionContext {
@@ -59,14 +60,14 @@ export class BuildSession {
    traceId?: number;
    /** Set when the build ended in `OperationCancelled`, so the successor can tag itself "cancels #N". */
    cancelled = false;
-   /** Phase-reached lines produced so far; the first one measures from {@link startMs} rather than from the previous phase. */
+   /** Phase-reached lines produced so far; the first one measures from {@link sinceStart} rather than from the previous phase. */
    phasesLogged = 0;
    /** Lines held back by {@link detailThresholdMs}; flushed or dropped when the build ends. */
    readonly bufferedLines: string[] = [];
 
    constructor(
-      /** Millisecond timestamp the build started at, on the same clock as `performance.now()`. */
-      readonly startMs: number,
+      /** Running since the build started. */
+      readonly sinceStart: Stopwatch,
       /** What caused this build — a formatted URI, a count summary, or an adopter label. */
       readonly trigger: string,
       /** True when {@link trigger} already states the document count, so a phase line must not repeat it. */

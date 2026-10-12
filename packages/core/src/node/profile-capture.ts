@@ -17,17 +17,10 @@
  * `ProfileSession` (aggregate self-time spans).
  */
 
-import { Format, type ProfileCaptureOptions } from '@hydranium/protocol';
+import { type Clock, Format, type ProfileCaptureOptions, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import * as fs from 'node:fs';
 import { Session } from 'node:inspector';
-import {
-   constants,
-   monitorEventLoopDelay,
-   PerformanceObserver,
-   performance,
-   type IntervalHistogram,
-   type PerformanceEntry
-} from 'node:perf_hooks';
+import { constants, monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram, type PerformanceEntry } from 'node:perf_hooks';
 import { snapshotFilePath, writeHeapSnapshotToDir } from '@hydranium/protocol/node';
 
 export const DEFAULT_CPU_INTERVAL_MICROS = 1000;
@@ -181,7 +174,9 @@ let active: ProfileCapture | undefined;
  * session at a time); prefer {@link profileWorkload} for the common wrap-a-block case.
  */
 export class ProfileCapture {
-   protected startedAt = 0;
+   /** Times the window: real time, since what it frames is real CPU and memory. */
+   protected readonly clock: Clock = new SystemClock();
+   protected sinceStart: Stopwatch = this.clock.stopwatch();
    protected startCpu: NodeJS.CpuUsage = { user: 0, system: 0 };
    protected startMem: NodeJS.MemoryUsage = process.memoryUsage();
    protected session?: InspectorSessionLike;
@@ -214,7 +209,7 @@ export class ProfileCapture {
    }
 
    protected async begin(): Promise<void> {
-      this.startedAt = performance.now();
+      this.sinceStart = this.clock.stopwatch();
       this.startCpu = process.cpuUsage();
       this.startMem = process.memoryUsage();
       if (this.options.cpu || this.options.allocation) {
@@ -254,7 +249,7 @@ export class ProfileCapture {
       if (active !== this) {
          throw new Error('ProfileCapture.stop called on an inactive capture.');
       }
-      const durationMs = performance.now() - this.startedAt;
+      const durationMs = this.sinceStart.elapsedMs;
       // Sample cpu + memory at the workload boundary (alongside durationMs), NOT
       // after teardown: the synchronous profile write inflates RSS and the heap
       // snapshot forces a full GC, so a post-teardown read would fold the

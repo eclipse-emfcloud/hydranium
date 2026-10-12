@@ -73,9 +73,9 @@ async function socketPair(): Promise<{ near: net.Socket; far: net.Socket; server
 
 /** Resolve once `predicate` holds, so a case never outlives a lost message. */
 async function until(predicate: () => boolean, what: string): Promise<void> {
-   const deadline = Date.now() + 2_000;
+   const deadline = performance.now() + 2_000;
    while (!predicate()) {
-      if (Date.now() > deadline) {
+      if (performance.now() > deadline) {
          throw new Error(`timed out waiting for ${what}`);
       }
       await new Promise(resolve => setTimeout(resolve, 5));

@@ -14,9 +14,11 @@ import { Disposable } from './util';
  * there is no `start` — you create it at the moment timing begins.
  *
  * Backed by a monotonic source (`performance.now`), so it is sub-millisecond
- * precise and immune to wall-clock jumps (NTP/DST adjustments can make a
- * `Date.now` delta go backwards; a stopwatch cannot). Use this for durations
- * and {@link Clock.now} for "what time is it" (timestamps, TTLs).
+ * precise and immune to wall-clock steps (a time sync or a manual change can
+ * make a `Date.now` delta go backwards; a stopwatch cannot). In Node on Linux
+ * it also leaves out time the system spends suspended, so a duration spanning
+ * a suspend reads as the awake time only. Use this for every duration, a TTL
+ * included, and {@link Clock.now} for "what time is it".
  *
  * It holds no scheduled resource and is therefore NOT a {@link Disposable} —
  * the disposable thing is a {@link Clock.setTimer}. Reads are lazy, so a fake
@@ -45,16 +47,16 @@ export interface Stopwatch {
  * testable instead of waiting on real wall-clock. The {@link SystemClock}
  * default delegates to the platform; tests bind `makeFakeClock`.
  *
- * Two distinct readings on purpose: {@link now} is wall-clock (for timestamps
- * and TTLs that compare against a file's mtime), while {@link stopwatch}
- * measures durations off a monotonic source. They are different clocks; do not
- * subtract two {@link now} readings to measure a duration.
+ * Two distinct readings on purpose: {@link now} is wall-clock, for a
+ * timestamp, while {@link stopwatch} measures durations off a monotonic
+ * source. They are different clocks; do not subtract two {@link now} readings
+ * to measure a duration. Framework code reads time only through a `Clock`, so
+ * a platform workaround lives in one place.
  *
  * A cross-head contract, so it carries no platform or DI-framework coupling.
  *
- * Note: the runtime health monitors (event-loop, memory) intentionally keep
- * the real wall-clock rather than taking a `Clock` — faking the time they
- * measure would invert their meaning.
+ * Note: code that measures real CPU, heap or event-loop time never takes the
+ * bound `Clock`: faking the time it measures would invert its meaning.
  */
 export interface Clock {
    /** Current wall-clock time in milliseconds (the `Date.now` reading). */

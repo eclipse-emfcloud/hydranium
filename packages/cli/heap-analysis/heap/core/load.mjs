@@ -24,10 +24,10 @@ const mb = bytes => bytes / (1024 * 1024);
  * @param {(msg: string) => void} [log] timestamped progress sink (defaults to stderr)
  */
 export async function loadHeap(file, log = progress) {
-   const t0 = Date.now();
+   const t0 = performance.now();
    log(`Loading ${file} ...`);
    const heap = await getFullHeapFromFile(file);
-   const loadSeconds = (Date.now() - t0) / 1000;
+   const loadSeconds = (performance.now() - t0) / 1000;
 
    let totalShallow = 0;
    heap.nodes.forEach(node => {

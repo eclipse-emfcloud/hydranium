@@ -45,6 +45,7 @@ import { type Channel } from '@theia/core';
 import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
 import { Deferred } from '@theia/core/lib/common/promise-util';
+import { tick } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NotificationType, ParameterStructures, RAL, type MessageConnection } from 'vscode-jsonrpc';
 import { DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS, HydraniumGlspClientContribution } from '../../src/browser/client-contribution';
@@ -331,6 +332,30 @@ describe('HydraniumGlspClientContribution', () => {
       await contribution.glspClient;
       contribution.clients[1].setState(ClientState.ServerError);
       await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(contribution.clients).toHaveLength(2);
+   });
+
+   it('keeps backing off when the wall clock jumps forward while a client is up', async () => {
+      const contribution = make();
+      Object.assign(contribution, { restartDelaysMs: [1, 1_000] });
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      contribution.nextConnection().resolve(makeConnection());
+      await contribution.begin();
+      await contribution.glspClient;
+
+      contribution.clients[0].setState(ClientState.ServerError);
+      await vi.waitFor(() => expect(contribution.clients).toHaveLength(2));
+      await contribution.glspClient;
+      const realNow = Date.now();
+      const wallClock = vi.spyOn(Date, 'now').mockReturnValue(realNow + 3_600_000);
+      try {
+         contribution.clients[1].setState(ClientState.ServerError);
+         await tick(50);
+      } finally {
+         wallClock.mockRestore();
+      }
 
       expect(contribution.clients).toHaveLength(2);
    });
