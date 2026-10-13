@@ -88,6 +88,10 @@ const SNIPPET_TARGETS = [
       readme: 'packages/protocol/src/rpc/README.md',
       host: 'packages/protocol'
    },
+   {
+      readme: 'packages/glsp-client/README.md',
+      host: 'packages/glsp-client'
+   },
    // Every fence here is a skip, so nothing compiles — the entry exists because
    // discovery requires one, and it will start earning its keep the moment a
    // compilable fence is added.

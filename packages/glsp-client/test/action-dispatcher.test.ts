@@ -7,15 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The SUT injects `ChannelLogger` from `@hydranium/client-theia/browser`, whose real
-// module loads `@theia/output` → `@theia/monaco` → `@lumino/widgets` (DOM globals at
-// module load, unavailable in the node test env). The dispatcher tests never resolve a
-// container, so a bare token stand-in is enough.
-vi.mock('@hydranium/client-theia/browser', () => ({
-   ChannelLogger: class ChannelLogger {},
-   ChannelTracer: Symbol('ChannelTracer')
-}));
-
 import { describe, expect, it, vi } from 'vitest';
 import {
    type Action,
@@ -35,11 +26,7 @@ import {
    SetTypeHintsAction,
    StatusAction
 } from '@eclipse-glsp/client';
-import {
-   HYDRANIUM_DEFAULT_KIND_PAIRS,
-   HYDRANIUM_DEFAULT_LOGGED_KINDS,
-   HydraniumGlspActionDispatcher
-} from '../../src/browser/action-dispatcher';
+import { HYDRANIUM_DEFAULT_KIND_PAIRS, HYDRANIUM_DEFAULT_LOGGED_KINDS, HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 
 // Test subclass exposes protected members for assertion + skips the inherited
 // initialise pipeline (which needs a full GLSP container).
@@ -71,8 +58,8 @@ class TestableDispatcher extends HydraniumGlspActionDispatcher {
    setTracer(tracer: unknown): void {
       (this as unknown as { tracer: unknown }).tracer = tracer;
    }
-   setChannel(channel: unknown): void {
-      (this as unknown as { channel: unknown }).channel = channel;
+   setLogger(logger: unknown): void {
+      (this as unknown as { hydraniumLogger: unknown }).hydraniumLogger = logger;
    }
 }
 
@@ -139,15 +126,15 @@ describe('HydraniumGlspActionDispatcher.registerInitTiming', () => {
 
    it('swallows + logs a tracer failure so instrumentation cannot abort diagram init', () => {
       const dispatcher = new TestableDispatcher();
-      const channel = { error: vi.fn() };
-      dispatcher.setChannel(channel);
+      const logger = { error: vi.fn() };
+      dispatcher.setLogger(logger);
       dispatcher.setTracer({
          time: () => {
             throw new Error('stale tracer API');
          }
       });
       expect(() => dispatcher.exposeRegisterInitTiming()).not.toThrow();
-      expect(channel.error).toHaveBeenCalledWith('Failed to register model-initialized timing instrumentation', expect.any(Error));
+      expect(logger.error).toHaveBeenCalledWith('Failed to register model-initialized timing instrumentation', expect.any(Error));
    });
 });
 
@@ -301,10 +288,10 @@ describe('HydraniumGlspActionDispatcher.summarize defaults', () => {
 });
 
 describe('HydraniumGlspActionDispatcher logging an edge check', () => {
-   it('logs the check and its verdict to the channel as one timed request and response', () => {
+   it('logs the check and its verdict as one timed request and response', () => {
       const dispatcher = new TestableDispatcher();
-      const channel = { trace: vi.fn() };
-      dispatcher.setChannel(channel);
+      const logger = { trace: vi.fn() };
+      dispatcher.setLogger(logger);
       dispatcher.setActionHandlerRegistry({ get: () => [] });
       const check = asAction({
          kind: RequestCheckEdgeAction.KIND,
@@ -327,7 +314,7 @@ describe('HydraniumGlspActionDispatcher logging an edge check', () => {
       dispatcher.exposeLogAction(check);
       dispatcher.exposeLogAction(result);
 
-      const lines = channel.trace.mock.calls.map(([line]) => String(line));
+      const lines = logger.trace.mock.calls.map(([line]) => String(line));
       expect(lines[0]).toMatch(
          /^Process action 'requestCheckEdge' \[client → client] \[edgeType=edge:one source=a target=b] \[request #1]$/
       );

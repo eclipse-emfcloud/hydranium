@@ -12,11 +12,16 @@
 // `@theia/monaco` → `@lumino/widgets` (DOM globals at module load). Mocking the
 // cross-head logger surface also scopes these cases to what this module owns:
 // that it forwards to `bindChannelLogger`, not what that function then binds.
+// `getRequestParentName` is restated rather than loaded, since the real one
+// sits in the same DOM-bound module.
 const { bindChannelLoggerMock } = vi.hoisted(() => ({ bindChannelLoggerMock: vi.fn() }));
 vi.mock('@hydranium/client-theia/browser', () => ({
    bindChannelLogger: bindChannelLoggerMock,
    ChannelLogger: class ChannelLogger {},
-   ChannelTracer: Symbol('ChannelTracer')
+   ChannelTracer: Symbol('ChannelTracer'),
+   getRequestParentName: (context: interfaces.Context) =>
+      (context.currentRequest.parentRequest?.bindings[0] as { implementationType?: { name?: string } } | undefined)?.implementationType
+         ?.name
 }));
 // Importing the real `@eclipse-glsp/theia-integration` resolves back into
 // `@eclipse-glsp/client`'s TypeScript *sources* via its exports map, which the node
@@ -26,18 +31,81 @@ vi.mock('@eclipse-glsp/theia-integration', () => ({
    TheiaGLSPMessageService: class TheiaGLSPMessageService {}
 }));
 
-import { DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater, StatusOverlay } from '@eclipse-glsp/client';
+import 'reflect-metadata';
+import {
+   createDiagramOptionsModule,
+   DiagramLoader,
+   GLSPActionDispatcher,
+   GLSPHiddenBoundsUpdater,
+   initializeDiagramContainer,
+   StatusOverlay,
+   TYPES
+} from '@eclipse-glsp/client';
 import { TheiaGLSPMessageService } from '@eclipse-glsp/theia-integration';
+import { ChannelLogger, ChannelTracer } from '@hydranium/client-theia/browser';
+import { Clock } from '@hydranium/client-theia/common';
+import {
+   HydraniumClientTypes,
+   HydraniumGlspActionDispatcher,
+   HydraniumHiddenBoundsUpdater,
+   SprottyLoggerAdapter
+} from '@hydranium/glsp-client';
+import { type BindRecorder, type BindRecorderOptions, makeBindRecorder } from '@hydranium/glsp-client/testing';
+import { SystemClock } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/testing';
+import { Container, ContainerModule, inject, injectable, type interfaces } from '@theia/core/shared/inversify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { HydraniumGlspActionDispatcher } from '../../src/browser/action-dispatcher';
-import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
 import { createGlspClientTheiaModule, type GlspClientTheiaModuleOptions } from '../../src/browser/glsp-client-theia-module';
 import { HydraniumGlspMessageService } from '../../src/browser/glsp-message-service';
-import { HydraniumHiddenBoundsUpdater } from '../../src/browser/hidden-bounds-updater';
-import { HydraniumStatusOverlay } from '../../src/browser/status-overlay';
-import { type BindRecorder, type BindRecorderOptions, makeBindRecorder } from '../../src/testing/bind-recorder';
+import { HydraniumGlspTheiaDiagramLoader } from '../../src/browser/theia-diagram-loader';
 
 const CHANNEL = { channelName: 'Test' };
+
+/** A channel logger double whose derived loggers remember their component. */
+class TaggingLogger {
+   constructor(readonly component?: string) {}
+   for(component: string): TaggingLogger {
+      return new TaggingLogger(component);
+   }
+}
+
+/** A class injecting the neutral logger token, so the per-class tag has a requester. */
+@injectable()
+class LoggerConsumer {
+   @inject(HydraniumClientTypes.Logger) readonly logger!: TaggingLogger;
+}
+
+/**
+ * A real container with GLSP's default tokens and the channel logger bound as
+ * their modules would have, so the token bindings are checked by resolving
+ * them. `bindChannelLogger` is mocked away, so its two bindings are stood in.
+ */
+function makeContainer(): Container {
+   const container = new Container();
+   const glspTokens: interfaces.ServiceIdentifier<unknown>[] = [
+      GLSPActionDispatcher,
+      DiagramLoader,
+      GLSPHiddenBoundsUpdater,
+      StatusOverlay,
+      TYPES.ILogger,
+      TheiaGLSPMessageService
+   ];
+   for (const token of glspTokens) {
+      container.bind(token).toConstantValue({});
+   }
+   container.bind(ChannelLogger).toConstantValue(new TaggingLogger() as unknown as ChannelLogger);
+   container.bind(ChannelTracer).toConstantValue({ time: () => undefined });
+   createGlspClientTheiaModule(
+      {
+         bind: container.bind.bind(container),
+         unbind: container.unbind.bind(container),
+         isBound: container.isBound.bind(container),
+         rebind: container.rebind.bind(container)
+      },
+      { channelLogger: CHANNEL }
+   );
+   return container;
+}
 
 describe('createGlspClientTheiaModule', () => {
    beforeEach(() => {
@@ -58,27 +126,20 @@ describe('createGlspClientTheiaModule', () => {
       expect(bindChannelLoggerMock).toHaveBeenCalledWith(recorder.bind, CHANNEL);
    });
 
-   it('binds HydraniumGlspActionDispatcher as a self-bound singleton', () => {
-      expect(record().find('bind', HydraniumGlspActionDispatcher)?.chain).toEqual(['toSelf()', 'inSingletonScope()']);
-   });
-
-   it('rebinds GLSPActionDispatcher to point at HydraniumGlspActionDispatcher', () => {
-      expect(record().find('rebind', GLSPActionDispatcher)?.chain).toEqual([`toService(<${HydraniumGlspActionDispatcher.name}>)`]);
-   });
-
-   it('rebinds DiagramLoader to the framework loader', () => {
-      expect(record().find('rebind', DiagramLoader)?.chain).toEqual([`to(<${HydraniumDiagramLoader.name}>)`, 'inSingletonScope()']);
-   });
-
-   it('rebinds GLSPHiddenBoundsUpdater to the instrumented updater', () => {
+   it('binds the neutral classes through createGlspClientModule', () => {
       expect(record().find('rebind', GLSPHiddenBoundsUpdater)?.chain).toEqual([
          `to(<${HydraniumHiddenBoundsUpdater.name}>)`,
          'inSingletonScope()'
       ]);
    });
 
-   it('rebinds StatusOverlay to the one that keeps its element on the page', () => {
-      expect(record().find('rebind', StatusOverlay)?.chain).toEqual([`to(<${HydraniumStatusOverlay.name}>)`, 'inSingletonScope()']);
+   it('rebinds DiagramLoader last to the loader that renders through the catalogue', () => {
+      const rebinds = record().captured.filter(entry => entry.kind === 'rebind' && entry.token === DiagramLoader);
+      expect(rebinds.at(-1)?.chain).toEqual([`to(<${HydraniumGlspTheiaDiagramLoader.name}>)`, 'inSingletonScope()']);
+   });
+
+   it('binds the neutral tracer token to the channel tracer', () => {
+      expect(record().find('bind', HydraniumClientTypes.Tracer)?.chain).toEqual([`toService(${ChannelTracer.toString()})`]);
    });
 
    it('rebinds the Theia message service so the duplicate model-loading toast is dropped', () => {
@@ -97,5 +158,50 @@ describe('createGlspClientTheiaModule', () => {
          `to(<${HydraniumGlspMessageService.name}>)`,
          'inSingletonScope()'
       ]);
+   });
+
+   describe('resolved in a container', () => {
+      it('gives the neutral logger token the channel logger, tagged with the requesting class', () => {
+         const container = makeContainer();
+         container.bind(LoggerConsumer).toSelf();
+         expect(container.get(LoggerConsumer).logger.component).toBe(LoggerConsumer.name);
+      });
+
+      it('gives the neutral logger token the untagged channel logger when nothing requests it', () => {
+         expect(makeContainer().get<TaggingLogger>(HydraniumClientTypes.Logger).component).toBeUndefined();
+      });
+
+      it('binds no console logger of its own, since the channel is bound first', () => {
+         expect(makeContainer().get(HydraniumClientTypes.Logger)).toBeInstanceOf(TaggingLogger);
+      });
+
+      it('gives the neutral clock token a system clock when the Theia clock is unbound', () => {
+         expect(makeContainer().get(HydraniumClientTypes.Clock)).toBeInstanceOf(SystemClock);
+      });
+
+      it('gives the neutral clock token the Theia clock, even one bound after this module', () => {
+         const container = makeContainer();
+         const clock = makeFakeClock();
+         container.bind(Clock).toConstantValue(clock);
+         expect(container.get(HydraniumClientTypes.Clock)).toBe(clock);
+      });
+
+      it('resolves the real classes in a GLSP container, the loader being the Theia one', () => {
+         // GLSP's own default modules, so the `@inject` tokens are exercised by
+         // resolution rather than asserted as recorder strings.
+         const theiaModule = new ContainerModule((bind, unbind, isBound, rebind) => {
+            bind(ChannelLogger).toConstantValue(new TaggingLogger() as unknown as ChannelLogger);
+            bind(ChannelTracer).toConstantValue({ time: () => undefined });
+            createGlspClientTheiaModule({ bind, unbind, isBound, rebind }, { channelLogger: CHANNEL });
+         });
+         const container = initializeDiagramContainer(
+            new Container(),
+            createDiagramOptionsModule({ clientId: 'one', diagramType: 'diagram-one', glspClientProvider: async () => ({}) as never }),
+            theiaModule
+         );
+         expect(container.get(DiagramLoader)).toBeInstanceOf(HydraniumGlspTheiaDiagramLoader);
+         expect(container.get(GLSPActionDispatcher)).toBeInstanceOf(HydraniumGlspActionDispatcher);
+         expect(container.get(TYPES.ILogger)).toBeInstanceOf(SprottyLoggerAdapter);
+      });
    });
 });

@@ -19,15 +19,14 @@ import {
    ServerAction,
    isRoutable
 } from '@eclipse-glsp/client';
-import { ChannelLogger } from '@hydranium/client-theia/browser';
-import { Clock } from '@hydranium/client-theia/common';
-import { SystemClock } from '@hydranium/protocol';
-import { inject, injectable, optional } from '@theia/core/shared/inversify';
+import { type Clock, type Logger, SystemClock } from '@hydranium/protocol';
+import { inject, injectable, optional } from 'inversify';
 import { type VNode } from 'snabbdom';
+import { HydraniumClientTypes } from './types';
 
 /** How many scoped element ids the log line names before summarising the rest.
  *  A scoped request names one element in practice; the cap only stops a
- *  pathological caller from writing a thousand ids into the channel. */
+ *  pathological caller from writing a thousand ids into the log. */
 const SCOPE_ID_CAP = 3;
 
 /**
@@ -66,14 +65,14 @@ const SCOPE_ID_CAP = 3;
  * paired `[#N start]` line per request. This is a per-occurrence record, so it
  * measures and composes its own line.
  *
- * Bound by `createGlspClientTheiaModule` via `rebind(GLSPHiddenBoundsUpdater)`.
+ * Bound by `createGlspClientModule` via `rebind(GLSPHiddenBoundsUpdater)`.
  */
 @injectable()
 export class HydraniumHiddenBoundsUpdater extends GLSPHiddenBoundsUpdater {
-   @inject(ChannelLogger) protected readonly channel!: ChannelLogger;
+   @inject(HydraniumClientTypes.Logger) protected readonly hydraniumLogger!: Logger;
 
    /** The diagram container's {@link Clock}, or a `SystemClock`; it only measures. */
-   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
+   @inject(HydraniumClientTypes.Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    /**
     * Scope description for the in-flight request, read from the `cause` in
@@ -139,7 +138,7 @@ export class HydraniumHiddenBoundsUpdater extends GLSPHiddenBoundsUpdater {
       // Read before the pass: the base class clears the map on its way out.
       const measured = this.getElement2BoundsData().size;
       const { elapsedMs } = this.clock.measure(() => super.getBoundsFromDOM());
-      this.channel.trace(this.formatBoundsRequest(this.currentScope, measured, elapsedMs));
+      this.hydraniumLogger.trace(this.formatBoundsRequest(this.currentScope, measured, elapsedMs));
    }
 
    /** Format the per-request line. Override to change the wording. */

@@ -9,7 +9,7 @@
 
 import { BaseJsonrpcGLSPClient, type DisposeClientSessionParameters } from '@eclipse-glsp/client';
 
-/** The GLSP client of `HydraniumGlspClientContribution`. */
+/** The GLSP client a host builds over its connection to the GLSP head. */
 export class HydraniumGlspClient extends BaseJsonrpcGLSPClient {
    /** Resolves at once when the connection is gone: the session went with its
     *  server, and upstream would throw, which a diagram disposed after its

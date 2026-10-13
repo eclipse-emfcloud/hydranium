@@ -55,7 +55,7 @@
       <title>Diagram client</title>
       <rect x="540" y="62" width="200" height="54" rx="7" fill="#e0d6f2" stroke="#8a6fce"/>
       <text x="640" y="84" text-anchor="middle" class="title" fill="#2e2150">Diagram client</text>
-      <text x="640" y="104" text-anchor="middle" class="pkg" fill="#2e2150">glsp-client-theia</text>
+      <text x="640" y="104" text-anchor="middle" class="pkg" fill="#2e2150">glsp-client(-theia)</text>
     </g>
 
     <g id="client-custom" class="node">

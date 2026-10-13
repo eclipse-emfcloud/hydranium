@@ -9,8 +9,10 @@ order-flow-client        diagram definition + the properties model
       |      both halves of the post-message hop)
       | adapter
 Theia   -> @hydranium/glsp-client-theia / data-client-theia / client-theia
-VS Code -> @eclipse-glsp/vscode-integration, plus a hand-rolled data hop
-Browser -> MessagePorts to heads in a web worker, no host framework
+VS Code -> @eclipse-glsp/vscode-integration + @hydranium/glsp-client,
+           plus a hand-rolled data hop
+Browser -> MessagePorts to heads in a web worker + @hydranium/glsp-client,
+           no host framework
       |
 order-flow-theia / order-flow-vscode / order-flow-browser   thin shells
 ```

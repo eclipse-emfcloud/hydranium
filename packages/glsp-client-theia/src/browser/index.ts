@@ -7,22 +7,20 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// Browser-side framework primitives for GLSP-on-Theia adopters.
-// The cross-head Output-channel logger lives in `@hydranium/client-theia/browser`.
-export * from './action-dispatcher';
+// Browser-side framework primitives for GLSP-on-Theia adopters. The
+// host-neutral classes (the dispatcher, loader, updater, overlay and client)
+// are `@hydranium/glsp-client`'s; the cross-head Output-channel logger lives
+// in `@hydranium/client-theia/browser`.
 export * from './client-contribution';
-export * from './diagram-loader';
 export * from './diagram-only-marker-manager';
 export * from './diagram-widget';
-export * from './glsp-client';
 export * from './glsp-client-theia-module';
 export * from './glsp-diagram-manager';
 export * from './glsp-message-service';
 export * from './glsp-saveable';
 export * from './glsp-theia-frontend-module';
-export * from './hidden-bounds-updater';
 export * from './hydranium-glsp-diagram-configuration';
-export * from './status-overlay';
+export * from './theia-diagram-loader';
 export * from './window-session';
 
 // Upstream's root entry is its browser tier and re-exports no `lib/common`, so the

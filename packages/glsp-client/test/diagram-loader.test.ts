@@ -7,23 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The real `@hydranium/client-theia/browser` module loads `@theia/output` → DOM
-// globals unavailable in the node test env. A bare class stand-in is enough since
-// the loader is constructed directly, never via a container.
-vi.mock('@hydranium/client-theia/browser', () => ({
-   ChannelLogger: class ChannelLogger {}
-}));
-
 import { type Action, StatusAction } from '@eclipse-glsp/client';
-import { nls } from '@theia/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
+import { DIAGRAM_LOAD_FAILED } from '../src/diagram-load-failed';
+import { HydraniumDiagramLoader } from '../src/diagram-loader';
 
 /** Exposes the protected reporting hook and lets the test wire the protected
  *  injected collaborators without resolving a GLSP container. */
 class TestableLoader extends HydraniumDiagramLoader {
-   setChannel(channel: unknown): void {
-      (this as unknown as { channel: unknown }).channel = channel;
+   setLogger(logger: unknown): void {
+      (this as unknown as { hydraniumLogger: unknown }).hydraniumLogger = logger;
    }
    setActionDispatcher(dispatcher: unknown): void {
       (this as unknown as { actionDispatcher: unknown }).actionDispatcher = dispatcher;
@@ -58,15 +51,15 @@ class TestableLoader extends HydraniumDiagramLoader {
 }
 
 describe('HydraniumDiagramLoader', () => {
-   let channel: { error: ReturnType<typeof vi.fn> };
+   let logger: { error: ReturnType<typeof vi.fn> };
    let dispatch: ReturnType<typeof vi.fn>;
    let loader: TestableLoader;
 
    beforeEach(() => {
-      channel = { error: vi.fn() };
+      logger = { error: vi.fn() };
       dispatch = vi.fn().mockResolvedValue(undefined);
       loader = new TestableLoader();
-      loader.setChannel(channel);
+      loader.setLogger(logger);
       loader.setActionDispatcher({ dispatch });
    });
 
@@ -75,11 +68,11 @@ describe('HydraniumDiagramLoader', () => {
       await expect(loader.load()).resolves.toBeUndefined();
    });
 
-   it('routes a load failure to the Output channel', async () => {
+   it('routes a load failure to the logger', async () => {
       const err = new Error('connection refused');
       loader.makeSuperLoadThrow(err);
       await loader.load();
-      expect(channel.error).toHaveBeenCalledWith('Diagram failed to load: connection refused', err);
+      expect(logger.error).toHaveBeenCalledWith('Diagram failed to load: connection refused', err);
    });
 
    it('surfaces a persistent ERROR StatusAction on the status overlay', async () => {
@@ -97,7 +90,7 @@ describe('HydraniumDiagramLoader', () => {
 
    it('stringifies non-Error rejection values', async () => {
       await loader.exposeReportLoadFailure('boom');
-      expect(channel.error).toHaveBeenCalledWith('Diagram failed to load: boom', 'boom');
+      expect(logger.error).toHaveBeenCalledWith('Diagram failed to load: boom', 'boom');
       const status = dispatch.mock.calls[0][0] as StatusAction;
       expect(status.message).toBe('Diagram failed to load: boom');
    });
@@ -106,8 +99,8 @@ describe('HydraniumDiagramLoader', () => {
       dispatch.mockRejectedValueOnce(new Error('dispatcher down'));
       await expect(loader.exposeReportLoadFailure(new Error('connection refused'))).resolves.toBe(false);
       // Primary failure + secondary (status-surface) failure are both logged.
-      expect(channel.error).toHaveBeenCalledWith('Diagram failed to load: connection refused', expect.any(Error));
-      expect(channel.error).toHaveBeenCalledWith('Failed to surface the diagram-load failure on the status overlay', expect.any(Error));
+      expect(logger.error).toHaveBeenCalledWith('Diagram failed to load: connection refused', expect.any(Error));
+      expect(logger.error).toHaveBeenCalledWith('Failed to surface the diagram-load failure on the status overlay', expect.any(Error));
    });
 
    it('reports whether the failure reached the status overlay', async () => {
@@ -115,25 +108,15 @@ describe('HydraniumDiagramLoader', () => {
    });
 
    /**
-    * The KEY, not the sentence. Every assertion above reads the English default,
-    * which `nls.localize` returns unchanged when no catalogue is loaded — so all
-    * of them pass just as well with the key renamed, or with the call removed
-    * entirely. The code is the contract and the English is the fallback, so the
-    * contract needs an assertion of its own.
-    *
-    * The parameter is asserted here too, because `{0}` is what makes this one
-    * entry rather than one per error text: a catalogue cannot hold a translation
-    * for a sentence whose detail is baked into the key's default.
+    * The CODE, not the sentence. Every assertion above reads the English, which
+    * passes just as well with the declaration renamed. The code is what a host
+    * with a locale renders through, so it needs an assertion of its own, and
+    * the placeholder is what makes this one entry rather than one per error.
     */
-   it('renders the failure through its catalogue key, with the detail as a parameter', async () => {
-      const localize = vi.spyOn(nls, 'localize');
-      loader.loadFailureLabel(new Error('connection refused'));
-      expect(localize).toHaveBeenCalledWith(
-         'hydranium/glsp-client-theia/diagram-load-failed',
-         'Diagram failed to load: {0}',
-         'connection refused'
-      );
-      localize.mockRestore();
+   it('reports the failure as the declared message with the detail as its parameter', () => {
+      expect(DIAGRAM_LOAD_FAILED.code).toBe('hydranium/glsp-client/diagram-load-failed');
+      expect(DIAGRAM_LOAD_FAILED.text).toBe('Diagram failed to load: {reason}');
+      expect(loader.loadFailureLabel(new Error('connection refused'))).toBe(DIAGRAM_LOAD_FAILED.format({ reason: 'connection refused' }));
    });
 
    describe('load outcome', () => {

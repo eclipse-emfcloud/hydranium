@@ -8,10 +8,10 @@
  ********************************************************************************/
 
 import { DiagramLoader, type DiagramLoadingOptions, StatusAction } from '@eclipse-glsp/client';
-import { ChannelLogger } from '@hydranium/client-theia/browser';
-import { Deferred, describeError } from '@hydranium/protocol';
-import { nls } from '@theia/core';
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { Deferred, describeError, type Logger } from '@hydranium/protocol';
+import { inject, injectable } from 'inversify';
+import { DIAGRAM_LOAD_FAILED } from './diagram-load-failed';
+import { HydraniumClientTypes } from './types';
 
 /**
  * How a diagram load ended. A discriminated union rather than a boolean or a
@@ -38,8 +38,8 @@ export interface DiagramLoadFailure {
     * dispatcher is the thing that could not initialize. A consumer that covers
     * the canvas must then render the failure itself: it is the only surface
     * left, and removing its overlay would leave a blank diagram whose only
-    * explanation is a line in the Output channel — the exact failure mode this
-    * loader exists to prevent.
+    * explanation is a line in the log — the exact failure mode this loader
+    * exists to prevent.
     */
    readonly surfaced: boolean;
 }
@@ -52,7 +52,7 @@ export interface DiagramLoadFailure {
  * `RequestModelAction`, and the model-initialization constraint. Of these only
  * the `IDiagramStartup` hooks are wrapped by the base loader (it logs them to
  * `console.error`); the dispatcher-init / connection / request-model steps are
- * not. The widget that drives loading
+ * not. The Theia widget that drives loading
  * (`@eclipse-glsp/theia-integration`'s `GLSPDiagramWidget.onAfterAttach`)
  * calls `load()` *without awaiting or catching it*, so any rejection becomes an
  * uncaught promise rejection visible only in the browser devtools console —
@@ -60,24 +60,24 @@ export interface DiagramLoadFailure {
  * diagram just stays blank.
  *
  * This subclass closes that gap: it catches every load failure, routes it to
- * the framework Output channel (the same {@link ChannelLogger} sink the server
- * log and action traffic share, so it is discoverable where a developer already
- * looks), and surfaces a persistent error to the user via a `severity: 'ERROR'`
+ * the host's logger (in Theia the Output channel the server log and action
+ * traffic share, so it is discoverable where a developer already looks), and
+ * surfaces a persistent error to the user via a `severity: 'ERROR'`
  * {@link StatusAction} on the diagram's status overlay. It deliberately does
  * **not** rethrow — the caller drops the promise, so rethrowing would only
  * reproduce the uncaught rejection this exists to prevent.
  *
  * It also publishes the load's terminal state ({@link loadOutcome} /
  * {@link onceLoadSettled}) so a pending indicator has one authority to key on.
- * `HydraniumGlspDiagramWidget` uses it to cover the canvas while loading; see
+ * The Theia diagram widget uses it to cover the canvas while loading; see
  * {@link settle} for why the signal cannot be derived from the error
  * `StatusAction` instead.
  *
- * Bound by `createGlspClientTheiaModule` via `rebind(DiagramLoader)`.
+ * Bound by `createGlspClientModule` via `rebind(DiagramLoader)`.
  */
 @injectable()
 export class HydraniumDiagramLoader extends DiagramLoader {
-   @inject(ChannelLogger) protected readonly channel!: ChannelLogger;
+   @inject(HydraniumClientTypes.Logger) protected readonly hydraniumLogger!: Logger;
 
    protected readonly settled = new Deferred<DiagramLoadOutcome>();
    protected outcome?: DiagramLoadOutcome;
@@ -128,25 +128,25 @@ export class HydraniumDiagramLoader extends DiagramLoader {
    }
 
    /**
-    * Route a diagram-load failure to the Output channel and the status overlay.
+    * Route a diagram-load failure to the host's logger and the status overlay.
     * The status dispatch is itself guarded: when the action dispatcher is the
     * thing that failed to initialize, dispatching may throw too, and a failure
     * to *report* the failure must not re-escape as an uncaught rejection.
     *
     * @returns whether the `StatusAction` reached the dispatcher — i.e. whether the
-    * user can see this failure on the diagram. The channel line always happens, so
+    * user can see this failure on the diagram. The log line always happens, so
     * the return value is specifically about the *user-visible* report; a `false`
     * makes {@link DiagramLoadFailure.surfaced} false and hands the job to whoever
     * is covering the canvas.
     */
    protected async reportLoadFailure(err: unknown): Promise<boolean> {
       const label = this.loadFailureLabel(err);
-      this.channel.error(label, err);
+      this.hydraniumLogger.error(label, err);
       try {
          await this.actionDispatcher.dispatch(StatusAction.create(label, { severity: 'ERROR' }));
          return true;
       } catch (statusErr) {
-         this.channel.error('Failed to surface the diagram-load failure on the status overlay', statusErr);
+         this.hydraniumLogger.error('Failed to surface the diagram-load failure on the status overlay', statusErr);
          return false;
       }
    }
@@ -156,23 +156,16 @@ export class HydraniumDiagramLoader extends DiagramLoader {
     * it. Public because the canvas overlay is one of those surfaces and lives in
     * another class, where a second copy of the sentence would drift.
     *
-    * **The seam and the catalogue key answer different questions, so it carries
-    * both.** Overriding this method changes the WORDING for every user of one
-    * adopter's product; the key is what gives a reader the sentence in their own
-    * language, and no override can supply that without an adopter writing a
-    * subclass per locale — which is the thing a catalogue exists to avoid. Two
-    * of the three surfaces this reaches are user-visible, so the audience
-    * triage answers it: a host-bound string a user sees takes an inline key.
-    *
-    * The Output-channel line is therefore localized too, which is deliberate
-    * rather than overlooked — the alternative is a second English copy of one
-    * sentence, and the reason for a single source here has not changed.
+    * English, formatted from {@link DIAGRAM_LOAD_FAILED}: this tier knows no
+    * locale. A host that does renders the code through its own mechanism by
+    * overriding this method, so every surface, the log line included, carries
+    * the one sentence the user reads.
     */
    loadFailureLabel(err: unknown): string {
-      return nls.localize('hydranium/glsp-client-theia/diagram-load-failed', 'Diagram failed to load: {0}', this.formatError(err));
+      return DIAGRAM_LOAD_FAILED.format({ reason: this.formatError(err) });
    }
 
-   /** Render a thrown value as a message. Shared so the channel line, the status
+   /** Render a thrown value as a message. Shared so the log line, the status
     *  overlay and any consumer rendering {@link DiagramLoadFailure.error} agree. */
    protected formatError(err: unknown): string {
       return describeError(err);

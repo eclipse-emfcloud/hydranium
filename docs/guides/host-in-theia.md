@@ -20,7 +20,8 @@ them.
 - `@hydranium/client-theia`: what every head shares, such as the output-channel
   logger, the editor's save handling, and the backend's socket bridge;
 - `@hydranium/data-client-theia`: the data head's connection;
-- `@hydranium/glsp-client-theia`: the diagram.
+- `@hydranium/glsp-client-theia`: the diagram, over `@hydranium/glsp-client`,
+  whose classes it binds for you.
 
 Each head gets a frontend module and a backend module. The backend forwards
 the frontend's channel to the head's socket on the server, so the server runs

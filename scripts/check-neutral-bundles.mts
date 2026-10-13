@@ -132,6 +132,12 @@ const TARGETS = [
    // adopter's language module imports it directly on the way into a worker.
    { name: '@hydranium/core (./lsp)', entry: 'packages/core/lib/lsp/index.js', resolvePackages: [] },
 
+   // The host-neutral GLSP client: what a Theia frontend, a VS Code webview and
+   // a browser page all load, so a `node:*` import breaks every host at once.
+   { name: '@hydranium/glsp-client', entry: 'packages/glsp-client/lib/index.js', resolvePackages: [] },
+   { name: '@hydranium/glsp-client (./messages)', entry: 'packages/glsp-client/lib/messages/index.js', resolvePackages: [] },
+   { name: '@hydranium/glsp-client (./testing)', entry: 'packages/glsp-client/lib/testing/index.js', resolvePackages: [] },
+
    // The Theia client packages. A Theia frontend IS a browser, so `node:*` here
    // breaks the form rather than merely bloating it — the same argument the
    // webview entries make. Each `.` and `./browser` pair is listed because the
@@ -177,11 +183,6 @@ const TARGETS = [
       resolvePackages: ['@eclipse-glsp/server']
    },
    { name: '@hydranium/client-theia (./testing)', entry: 'packages/client-theia/lib/testing/index.js', resolvePackages: [] },
-   {
-      name: '@hydranium/glsp-client-theia (./testing)',
-      entry: 'packages/glsp-client-theia/lib/testing/index.js',
-      resolvePackages: []
-   },
    { name: '@hydranium/conformance', entry: 'packages/conformance/lib/index.js', resolvePackages: [] },
 
    // The example's remaining client-side modules, gated module-by-module rather

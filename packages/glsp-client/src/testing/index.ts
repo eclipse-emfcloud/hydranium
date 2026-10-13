@@ -7,9 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// Subpath barrel for `@hydranium/glsp-client-theia/testing` — the
-// GLSP-module-specific Inversify test double. The cross-head doubles
-// (`makeStubOutputChannelManager`, `makeStubInversifyContext`) live in
-// `@hydranium/client-theia/testing`, alongside the logger they double for.
+// Subpath barrel for `@hydranium/glsp-client/testing` — the Inversify binding
+// recorder for testing a module factory without a container.
 
 export * from './bind-recorder';

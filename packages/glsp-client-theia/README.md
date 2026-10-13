@@ -3,8 +3,8 @@
 The Theia integration for the
 [Hydranium](https://github.com/eclipse-emfcloud/hydranium) GLSP head, the
 companion of `@hydranium/glsp-server`. Install it to mount a Hydranium diagram
-in a Theia application. It builds on `@eclipse-glsp/theia-integration` and
-`@hydranium/client-theia`.
+in a Theia application. It builds on `@eclipse-glsp/theia-integration`,
+`@hydranium/glsp-client` and `@hydranium/client-theia`.
 
 ## What it gives you
 
@@ -30,6 +30,7 @@ npm install @hydranium/glsp-client-theia
 | `@eclipse-glsp/client`            | `^2.6.0`      |
 | `@eclipse-glsp/theia-integration` | `^2.6.0`      |
 | `@hydranium/client-theia`         | `^1.0.0-next` |
+| `@hydranium/glsp-client`          | `^1.0.0-next` |
 | `@hydranium/protocol`             | `^1.0.0-next` |
 | `@theia/core`                     | `^1.70.0`     |
 | `@theia/process`                  | `^1.70.0`     |
@@ -52,8 +53,10 @@ them, one frontend and backend pair per diagram.
   `AbstractHydraniumGlspDiagramConfiguration` and calls
   `createGlspClientTheiaModule` from its `configureContainer`, not from the
   frontend module: called earlier, GLSP's own bindings silently replace its
-  rebinds. Set `propagateMarkersToProblemsView` to `false` when the LSP head
-  already reports the same problems.
+  rebinds. It binds `@hydranium/glsp-client`'s classes over the Output
+  channel, so you call nothing from that package yourself. Set
+  `propagateMarkersToProblemsView` to `false` when the LSP head already
+  reports the same problems.
 - One frontend module calls `bindEditorDiskSync` from
   `@hydranium/client-theia`, since a diagram save writes a file an editor can
   have open.
@@ -73,7 +76,6 @@ For the whole setup, see *Host in Theia* in
 | `.`                           | The same as `./browser`                              | Theia frontend  |
 | `./browser`                   | The frontend module, configuration and manager bases | Theia frontend  |
 | `./node`                      | The connection handler and its backend module        | Theia backend   |
-| `./testing`                   | A binding recorder for testing your modules          | browser-neutral |
 | `./style/diagram-loading.css` | The loading overlay's stylesheet, imported for you   | browser         |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`

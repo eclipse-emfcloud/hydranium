@@ -31,6 +31,7 @@
     "@hydranium/client-theia": "^1.0.0-next",
     "@hydranium/data-client-theia": "^1.0.0-next",
     "@hydranium/example-order-flow-client": "0.0.0",
+    "@hydranium/glsp-client": "^1.0.0-next",
     "@hydranium/glsp-client-theia": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "@theia/core": "^1.72.0",

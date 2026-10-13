@@ -356,6 +356,7 @@ const policyOverrides = [
          'packages/langium/src/**/*.ts',
          'packages/conformance/src/**/*.ts',
          'packages/client-browser/src/**/*.ts',
+         'packages/glsp-client/src/**/*.ts',
          'packages/client-theia/src/**/*.ts',
          'packages/glsp-client-theia/src/**/*.ts',
          'packages/data-client-theia/src/**/*.ts'

@@ -21,7 +21,9 @@ its worker launcher. Run all heads in one worker, so they share one workspace.
    imports it for a seam a browser never calls. Alias nothing else. A real Node
    import anywhere then fails your build, which is the check you want, rather
    than failing at runtime in a worker with no console. If you mount a diagram,
-   add `loader: { '.ttf': 'dataurl' }` for GLSP's font.
+   add `loader: { '.ttf': 'dataurl' }` for GLSP's font. If you minify, keep
+   class names (`keepNames`): the log tags the framework's and sprotty's
+   classes by name.
 
 2. **Give every head its own `MessagePort`.** In the page, build the `Worker`
    and hand it to `connectWorkerHeads` from `@hydranium/client-browser`, which
@@ -134,11 +136,14 @@ const fileSystem = await persistentFileSystem({
    before the connection listens, so you also see the first build, and keep
    only the newest lines. See `src/page/log-panel.ts`.
 
-8. **Mount the diagram.** Connect GLSP's `BaseJsonrpcGLSPClient` over the GLSP
-   head's connection from `connectWorkerHeads`, wrapped with
-   `sendByMethodName` from `@hydranium/protocol`. Upstream's
-   `GLSPWebWorkerProvider` starts a worker of its own, so it is not the piece
-   to use. Then supply what a shell would:
+8. **Mount the diagram.** Connect `HydraniumGlspClient` from
+   `@hydranium/glsp-client` over the GLSP head's connection from
+   `connectWorkerHeads`, wrapped with `sendByMethodName` from
+   `@hydranium/protocol`. Upstream's `GLSPWebWorkerProvider` starts a worker of
+   its own, so it is not the piece to use. Add a container module after
+   `STANDALONE_MODULE_CONFIG` that calls `createGlspClientModule` with your
+   logger, so a failed load and sprotty's own errors reach it instead of
+   vanishing. Then supply what a shell would:
    - size the `<svg>` to its mount, as in `#mount > svg { width: 100%; height:
      100% }`, or the diagram draws only what fits in 300×150;
    - give the mount a height and `position: relative`, so the tool palette

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "//lib": "DOM, because the status overlay reattaches an `HTMLElement`; the neutrality gate reports the grant per entry.",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src"],
+  "references": [{ "path": "../protocol" }]
+}

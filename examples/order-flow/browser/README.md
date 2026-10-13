@@ -115,7 +115,8 @@ npm --prefix examples/order-flow/browser run test:e2e
 ```
 
 It asserts all three heads against the oracles' document, diagnostic, node and
-edge counts, and that the console stays silent. It asserts that a drag and a
+edge counts, and that the console carries nothing but the GLSP client's
+model-initialized timing. It asserts that a drag and a
 palette create reach the `.layout` document, read back through the data head
 rather than from the rendered diagram, since sprotty draws a dragged node at
 the drop point whether or not the write landed. Further Playwright projects

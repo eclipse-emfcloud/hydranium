@@ -32,13 +32,12 @@ import {
    StatusAction,
    UpdateModelAction
 } from '@eclipse-glsp/client';
-import { ChannelLogger, ChannelTracer } from '@hydranium/client-theia/browser';
-import { Clock } from '@hydranium/client-theia/common';
-import { type Stopwatch, SystemClock, type Tracer } from '@hydranium/protocol';
-import { inject, injectable, optional, unmanaged } from '@theia/core/shared/inversify';
+import { type Clock, type Logger, type Stopwatch, SystemClock, type Tracer } from '@hydranium/protocol';
+import { inject, injectable, optional, unmanaged } from 'inversify';
+import { HydraniumClientTypes } from './types';
 
 /** Default subset of action kinds the framework dispatcher will log: the GLSP
- *  traffic an observer reading the Output channel typically wants to see. All
+ *  traffic an observer reading the log typically wants to see. All
  *  are standard `@eclipse-glsp/client` kinds; adopters with custom action kinds
  *  extend via `extraLoggedKinds`. */
 export const HYDRANIUM_DEFAULT_LOGGED_KINDS: ReadonlySet<string> = new Set<string>([
@@ -81,8 +80,9 @@ export interface HydraniumGlspActionDispatcherOptions {
 }
 
 /**
- * Wraps every dispatch so action traffic appears in the framework Output
- * channel, interleaved with server log lines. Instrumenting the dispatcher
+ * Wraps every dispatch so action traffic appears in the host's log, the Theia
+ * Output channel or a page's console, interleaved with server log lines where
+ * the host shows both. Instrumenting the dispatcher
  * (rather than per-kind handlers) catches ResponseActions that bypass the
  * handler pipeline.
  *
@@ -93,10 +93,10 @@ export interface HydraniumGlspActionDispatcherOptions {
  */
 @injectable()
 export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
-   @inject(ChannelLogger) protected readonly channel!: ChannelLogger;
-   @inject(ChannelTracer) protected readonly tracer!: Tracer;
+   @inject(HydraniumClientTypes.Logger) protected readonly hydraniumLogger!: Logger;
+   @inject(HydraniumClientTypes.Tracer) protected readonly tracer!: Tracer;
    /** Times each request to its response: the diagram container's {@link Clock}, or a `SystemClock`. */
-   @inject(Clock) @optional() protected readonly clock: Clock = new SystemClock();
+   @inject(HydraniumClientTypes.Clock) @optional() protected readonly clock: Clock = new SystemClock();
 
    protected readonly loggedKinds: ReadonlySet<string>;
    protected readonly kindPairs: ReadonlyMap<string, string>;
@@ -142,7 +142,7 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       try {
          this.tracer.time('Model initialized', () => this.onceModelInitialized(), 'info', { logAfterMs: 0 });
       } catch (err) {
-         this.channel.error('Failed to register model-initialized timing instrumentation', err);
+         this.hydraniumLogger.error('Failed to register model-initialized timing instrumentation', err);
       }
    }
 
@@ -164,7 +164,7 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       if (timing) {
          parts.push(timing);
       }
-      this.channel.trace(parts.join(' '));
+      this.hydraniumLogger.trace(parts.join(' '));
    }
 
    protected classify(action: Action): { verb: string; direction: string } {
@@ -265,7 +265,7 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       return '';
    }
 
-   /** An edge check and, on the result, its verdict, so the channel shows why an edge tool refused a target. */
+   /** An edge check and, on the result, its verdict, so the log shows why an edge tool refused a target. */
    protected formatEdgeCheck(action: RequestCheckEdgeAction | CheckEdgeResultAction): string {
       const verdict = CheckEdgeResultAction.is(action) ? ` isValid=${action.isValid}` : '';
       return `edgeType=${action.edgeType} source=${action.sourceElementId} target=${action.targetElementId ?? 'none'}${verdict}`;

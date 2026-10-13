@@ -4,7 +4,8 @@ The graphical-editing head of
 [Hydranium](https://github.com/eclipse-emfcloud/hydranium): a
 [GLSP](https://eclipse.dev/glsp/) server that draws diagrams from your model
 and writes their edits back to it. Install it in the server that composes
-`@hydranium/core`; in Theia, `@hydranium/glsp-client-theia` is its client.
+`@hydranium/core`; `@hydranium/glsp-client` is its client in any host, and
+`@hydranium/glsp-client-theia` in Theia.
 
 ## What it gives you
 

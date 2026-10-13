@@ -318,15 +318,22 @@ test.describe('order-flow in a web worker', () => {
       // inside it both carry the class.
       await expect(page.locator(`${GRAPH} g.sprotty-edge`)).toHaveCount(EXPECTED_EDGE_COUNT);
 
-      // SILENT, not merely error-free, and that stricter form is affordable
-      // because it is currently true: the page binds the one host service GLSP
-      // would otherwise warn about on every container build. The console is this
-      // host's only log — the worker posts its failures on the global channel and
-      // the language server's lines arrive over the LSP one — so a warning that
-      // means nothing is worse here than elsewhere: it trains the reader to skim
-      // the one place real failures appear. A new dependency that warns should
-      // have to be looked at rather than absorbed.
-      expect(consoleOutput).toEqual([]);
+      // EXACTLY the framework's two milestone lines, not merely error-free, and
+      // that stricter form is affordable because it is currently true: the page
+      // binds the one host service GLSP would otherwise warn about on every
+      // container build. The console is this host's only log — the worker posts
+      // its failures on the global channel and the language server's lines
+      // arrive over the LSP one — so a warning that means nothing is worse here
+      // than elsewhere: it trains the reader to skim the one place real failures
+      // appear. A new dependency that warns should have to be looked at rather
+      // than absorbed. The two lines are the GLSP client's model-initialized
+      // timing, written through the page's logger under the client's own tag,
+      // apart from the head's; they are asserted rather than filtered, so a
+      // framework line that stops arriving is seen too.
+      expect(consoleOutput).toEqual([
+         expect.stringMatching(/^info: \[Info {2}- [\d:.]+\] \[GLSP client\] Model initialized \[#\d+ start\]$/),
+         expect.stringMatching(/^info: \[Info {2}- [\d:.]+\] \[GLSP client\] Model initialized \[#\d+ done, [\d.]+m?s\]$/)
+      ]);
    });
 
    test('the narrow layout leaves no control behind on a workbench viewport', async ({ page }) => {

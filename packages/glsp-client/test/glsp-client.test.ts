@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it, vi } from 'vitest';
-import { HydraniumGlspClient } from '../../src/browser/glsp-client';
+import { HydraniumGlspClient } from '../src/glsp-client';
 
 const params = { clientSessionId: 'test_0' };
 
