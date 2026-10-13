@@ -71,7 +71,7 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 | Page entry: Monaco's locale, loaded before Monaco, and the dialog a failed start opens | [src/page/order-flow-page.ts](src/page/order-flow-page.ts), [monaco-editor-core-nls.d.ts](src/page/monaco-editor-core-nls.d.ts) |
 | Page wiring: the heads from `@hydranium/client-browser`, save, dialogs, theme switch | [src/page/workbench.ts](src/page/workbench.ts) |
 | DOM lookups and the element builder | [src/page/dom.ts](src/page/dom.ts) |
-| Monaco's LSP client and editor themes | [src/page/monaco-lsp-adapter.ts](src/page/monaco-lsp-adapter.ts) |
+| Monaco's worker location, the language table, editor themes and options; the LSP client itself is `@hydranium/client-browser`'s | [src/page/monaco-setup.ts](src/page/monaco-setup.ts) |
 | Monaco's editor worker | [src/page/monaco-editor-worker.ts](src/page/monaco-editor-worker.ts), [monaco-editor-core-worker.d.ts](src/page/monaco-editor-core-worker.d.ts) |
 | The pinned editor pair and the lookup editor | [src/page/editor-area.ts](src/page/editor-area.ts) |
 | The GLSP client over the head's connection, `mountGlspDiagram` and the graph report | [src/page/process-diagram.ts](src/page/process-diagram.ts) |

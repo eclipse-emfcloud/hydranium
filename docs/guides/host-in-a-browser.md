@@ -137,9 +137,13 @@ const fileSystem = persistentFileSystem({
 
 6. **Save through the data head.** An editor's `didSave` writes nothing: LSP
    leaves the write to the client, and a page has no disk. Open a
-   `DataConnection` on the port `connectWorkerHeads` hands you and save with
-   `saveModelDocument`, which writes in the worker. A diagram edit reaches the
-   editor first, so one save covers both.
+   `DataConnection` on the port `connectWorkerHeads` hands you, and save the
+   unsaved documents of the `MonacoLspClient` you build in step 9 with
+   `saveDirtyDocuments`, from the same `@hydranium/client-browser/monaco`,
+   through one of its sessions: it persists, in the worker, the text every
+   `didChange` already gave the server, and refuses a document whose server
+   text is not the buffer's it read, which stays unsaved for the next save. A
+   diagram edit reaches the editor first, so one save covers both.
 
 7. **Show the server's log.** The server logs every head over LSP
    `window/logMessage`, and a page with no handler loses all of it. Pass the
@@ -167,11 +171,17 @@ const fileSystem = persistentFileSystem({
    `initializeLanguageClient` from `@hydranium/client-browser`: it answers the
    server's capability registrations and its configuration request, which the
    server sends while the workspace comes up, then sends `initialize` and
-   `initialized`. Register your diagnostics handler in its `beforeInitialized`
-   hook, once the server's answer is known; a second handler for the same
-   notification replaces the first. In the example, Monaco talks LSP over the
-   LSP port (`src/page/monaco-lsp-adapter.ts`). What a shell would otherwise
-   do:
+   `initialized`. Pass it `MONACO_CLIENT_CAPABILITIES` from
+   `@hydranium/client-browser/monaco` as `capabilities`, which declares what
+   the Monaco client renders. In its `beforeInitialized` hook, once the
+   server's answer is known, build a `MonacoLspClient` from
+   `@hydranium/client-browser/monaco` over the connection with your language
+   table and register your diagnostics handler, which hands each notification
+   to the client's `applyDiagnostics`; a second handler for the same
+   notification replaces the first. The client registers the languages and
+   the providers, answers `workspace/applyEdit`, and sends `didOpen`,
+   `didChange` and `didClose` for the documents you open through it. What
+   stays yours (`src/page/monaco-setup.ts`):
    - Tell Monaco where its editor worker is. Assign `self.MonacoEnvironment`
      with a `getWorker` that builds the worker from a path your build gives
      you, at module scope, before any editor or model exists.
@@ -180,20 +190,15 @@ const fileSystem = persistentFileSystem({
      script no bundle emits, and the error appears only on the first edit.
    - Without a TextMate grammar, turn on `highlightKeywords` and
      `highlightComments` in your semantic token provider's options, so the
-     server colours those too. A host with a grammar leaves them off.
-   - Go-to-definition needs `monaco.editor.registerEditorOpener` to open a
-     target in another document. Read both answer shapes, `Location` and
-     `LocationLink`, and put the caret on `targetSelectionRange`. For a target
-     with no text behind it, such as a built-in library, tell the user and stay
-     put: an editor opened on made-up text would overwrite the server's copy.
-   - Register a document-highlight provider, and map its kinds: LSP numbers
-     them from 1 and Monaco from 0. Without the provider, Monaco's own
-     whole-word highlighting stands in and differs only in the cases that
-     matter, such as a name inside a comment.
-   - Handle `workspace/applyEdit`: the server sends one for every change a
-     diagram or another client makes to an open document. Answer
-     `applied: false` with a reason for an edit you will not apply, and echo
-     applied edits as incremental `didChange`s, as any LSP client does.
+     server colours those too, and add theme rules named by your server's
+     token types. A host with a grammar leaves them off.
+   - Open each editor's document with `openDocument`, on the text the worker
+     holds, and create the editor with `createEditor`, which keeps the
+     settings a server-driven language needs under your theme and layout.
+   - Go-to-definition needs an opener for a target in another document: pass
+     yours to `registerEditorOpener`. For a target with no text behind it,
+     such as a built-in library, answer `false` and tell the user: an editor
+     opened on made-up text would overwrite the server's copy.
 
 ## When something stays silent
 

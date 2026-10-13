@@ -34,11 +34,12 @@
  * relationship visible, and this page already competes for space with a diagram.
  */
 
-import type * as monaco from 'monaco-editor-core';
+import type { MonacoLspClient } from '@hydranium/client-browser/monaco';
+import * as monaco from 'monaco-editor-core';
 import { requireElement } from './dom.js';
+import { editorOptions } from './monaco-setup.js';
 import { isNarrowViewport } from './responsive.js';
 import type { VisibleDocuments } from './workspace-panel.js';
-import type { MonacoLspAdapter } from './monaco-lsp-adapter.js';
 
 /** One editor: its title element, its Monaco instance, and what is in it. */
 interface Pane {
@@ -49,7 +50,7 @@ interface Pane {
 }
 
 export interface EditorAreaOptions {
-   readonly adapter: MonacoLspAdapter;
+   readonly client: MonacoLspClient;
    /** Content by path, as the worker's filesystem holds it. */
    readonly files: Readonly<Record<string, string>>;
    readonly rootUri: string;
@@ -210,6 +211,9 @@ export class EditorArea {
       if (!uri.startsWith(prefix)) {
          return false;
       }
+      // Not decoded: the opener hands over Monaco's form, which encodes a
+      // space, and the worker keys its files by that same form, the suffix of
+      // each walked node's `uri.toString()`.
       const path = uri.slice(prefix.length);
       if (this.options.files[path] === undefined) {
          return false;
@@ -248,17 +252,17 @@ export class EditorArea {
     * and announce the same set to whoever else shows it.
     *
     * Public because a SAVE clears the state and the save does not happen here:
-    * `markSaved` is recorded on the adapter by whoever performed it, and nothing
+    * `markSaved` is recorded on the client by whoever performed it, and nothing
     * on an editor fires when that happens, so the page says when to look again.
     *
-    * Read from the adapter rather than tracked here, so one definition of dirty
+    * Read from the client rather than tracked here, so one definition of dirty
     * serves both the marks and what a save actually writes — a second definition
     * would eventually disagree with the button. The announcement carries that
     * same set for the same reason, rather than letting a second reader compute
     * one of its own.
     */
    refreshDirtyMarks(): void {
-      const dirty = new Set(this.options.adapter.dirtyDocuments().map(document => document.uri));
+      const dirty = new Set(this.options.client.dirtyDocuments().map(document => document.uri));
       for (const pane of [...this.fixed, this.selected]) {
          pane.title.classList.toggle('is-dirty', dirty.has(this.uriOf(pane.path)));
       }
@@ -274,7 +278,7 @@ export class EditorArea {
    private mount(containerId: string, titleId: string, path: string): Pane {
       const pane: Pane = {
          title: requireElement(titleId),
-         editor: this.options.adapter.createEditor(requireElement(containerId), this.modelFor(path)),
+         editor: this.options.client.createEditor(requireElement(containerId), this.modelFor(path), editorOptions()),
          path
       };
       // Saved on blur as well as on swap, because a reader can move a document
@@ -329,7 +333,7 @@ export class EditorArea {
          return;
       }
       this.revealed.add(uri);
-      this.options.adapter.revealDeclaration(pane.editor);
+      revealDeclaration(pane.editor);
    }
 
    /**
@@ -345,7 +349,7 @@ export class EditorArea {
          throw new Error(`The worker's filesystem has no ${path}`);
       }
       const uri = this.uriOf(path);
-      const model = this.options.adapter.openDocument(uri, text);
+      const model = this.options.client.openDocument(uri, text);
       if (!this.watched.has(uri)) {
          this.watched.add(uri);
          // Every content change, not only a keystroke: a diagram drag reaches
@@ -367,11 +371,74 @@ export class EditorArea {
       return model;
    }
 
+   /** The document's URI in Monaco's form, which the client's dirty records carry. */
    private uriOf(path: string): string {
-      return `${this.options.rootUri}/${path}`;
+      return monaco.Uri.parse(`${this.options.rootUri}/${path}`).toString();
    }
 
    private announce(): void {
       this.options.onVisibleChanged(this.visible());
    }
+}
+
+/**
+ * The 1-based line of `text`'s first declaration — the first line that is
+ * neither blank nor a line comment.
+ *
+ * DERIVED rather than configured per document, because the alternative is a
+ * literal line number in the page that a fixture edit silently invalidates:
+ * adding a sentence to `fulfillment.layout`'s header would leave the editor
+ * scrolled into the middle of a comment with nothing to say it had. All three
+ * order-flow grammars comment with `//` and none has a block-comment form, so
+ * one predicate covers them.
+ *
+ * Falls back to line 1 for a file that is nothing but comments — the honest
+ * answer, and the only line such a file has.
+ */
+function declarationLine(text: string): number {
+   const lines = text.split('\n');
+   const index = lines.findIndex(line => {
+      const trimmed = line.trim();
+      return trimmed.length > 0 && !trimmed.startsWith('//');
+   });
+   return index < 0 ? 1 : index + 1;
+}
+
+/**
+ * Scroll `editor` so its model's declaration sits at the top of the viewport.
+ *
+ * **A demonstration requirement rather than a nicety.** Every fixture in this
+ * workspace opens with a comment block written for a reader of the repository —
+ * `fulfillment.layout`'s runs past thirty lines, so its `layout` block starts
+ * below the fold of any editor that fits on a page beside a diagram. Left at
+ * the top, the editor a diagram write lands in shows nothing but prose and the
+ * write appears to change nothing.
+ *
+ * Scrolled by SCROLL OFFSET rather than through `revealLine*`, and the
+ * difference is not cosmetic. Every `reveal` variant, `revealLineNearTop`
+ * included, keeps several lines of context above the target — measured, it
+ * left the declaration in the middle of the viewport and the file's closing
+ * brace and last entries below the fold, which is precisely the region a
+ * diagram write appends to. Putting the declaration exactly at the top is
+ * the only form that guarantees everything AFTER it is on screen.
+ *
+ * `scrollBeyondLastLine: false` then does the rest, and it is what makes one
+ * anchor right for every file: the offset is clamped to the last screenful of
+ * content, so a file whose declaration sits near the end settles on its tail
+ * with the brace and room for an appended entry in view, while one with a
+ * longer body gets its declaration at the top exactly.
+ *
+ * **Measure the result rather than trusting it, because Monaco OVER-RENDERS.**
+ * Lines just outside the viewport stay in the DOM, so a line that has been
+ * scrolled off is still found by a selector and still reports a box — which
+ * means neither a query nor a Playwright locator can tell "on screen" from
+ * "one line above the top edge", and an automated hover on such a line lands
+ * on whatever sits behind the editor.
+ */
+function revealDeclaration(editor: monaco.editor.IStandaloneCodeEditor): void {
+   const model = editor.getModel();
+   if (model === null) {
+      return;
+   }
+   editor.setScrollTop(editor.getTopForLineNumber(declarationLine(model.getValue())));
 }

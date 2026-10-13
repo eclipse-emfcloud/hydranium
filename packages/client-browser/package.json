@@ -1,13 +1,14 @@
 {
   "name": "@hydranium/client-browser",
   "version": "1.0.0-next",
-  "description": "The page side of a hydranium host that runs its heads in a web worker: the worker bootstrap that hands each head its own MessagePort, the page's LSP handshake, the data head's port, and the rejection of what is pending when the worker dies.",
+  "description": "The page side of a hydranium host that runs its heads in a web worker: the worker bootstrap that hands each head its own MessagePort, the page's LSP handshake, a Monaco LSP client, the data head's port, and the rejection of what is pending when the worker dies.",
   "keywords": [
     "browser",
     "hydranium",
     "langium",
     "language-server",
     "lsp",
+    "monaco",
     "web-worker"
   ],
   "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/client-browser",
@@ -35,6 +36,10 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./monaco": {
+      "types": "./lib/monaco/index.d.ts",
+      "default": "./lib/monaco/index.js"
     }
   },
   "publishConfig": {
@@ -52,6 +57,7 @@
   "devDependencies": {
     "@hydranium/protocol": "1.0.0-next",
     "@types/node": "^22.0.0",
+    "monaco-editor-core": "0.56.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vscode-jsonrpc": "9.0.0",
@@ -59,12 +65,19 @@
   },
   "peerDependencies": {
     "@hydranium/protocol": "^1.0.0-next",
+    "monaco-editor-core": ">=0.56.0 <1.0.0",
     "vscode-jsonrpc": "^9.0.0",
     "vscode-languageserver-protocol": "~3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "monaco-editor-core": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.13"
   },
+  "//monaco-editor-core": "An optional peer: only the `./monaco` subpath reaches it, so a page without a Monaco editor, and a host's Node test of the `.` entry, installs none. A peer rather than a dependency because Monaco's model store is per copy: a second `monaco-editor-core` in the page would hold models `getModel` on the other never finds, and a push to a document the page shows would be refused as open nowhere. The range runs to 1.0 rather than one minor: Monaco moves its minor on every release, so a caret would fail the peer for every adopter on the next Monaco, and the API used here is years old. The dev pin mirrors the example's.",
   "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`.",
   "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
 }

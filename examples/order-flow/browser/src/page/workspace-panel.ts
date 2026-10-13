@@ -26,6 +26,7 @@
  * behind them. They are shown with the reason instead of a click target.
  */
 
+import * as monaco from 'monaco-editor-core';
 import type { Diagnostic, PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
 import { el, icon, replaceContent, requireElement } from './dom.js';
 
@@ -155,11 +156,12 @@ export class WorkspacePanel {
       replaceContent(
          this.documents,
          [...this.paths].sort().map(path => {
-            const count = diagnosticsByUri.get(`${this.rootUri}/${path}`)?.diagnostics.length ?? 0;
-            const worst = this.worstSeverity(diagnosticsByUri.get(`${this.rootUri}/${path}`));
+            const uri = this.uriOf(path);
+            const count = diagnosticsByUri.get(uri)?.diagnostics.length ?? 0;
+            const worst = this.worstSeverity(diagnosticsByUri.get(uri));
             const pinned = this.visible.fixed.includes(path);
             const selected = this.visible.selected === path;
-            const unsaved = this.dirty.has(`${this.rootUri}/${path}`);
+            const unsaved = this.dirty.has(uri);
             return el(
                'button',
                {
@@ -168,9 +170,7 @@ export class WorkspacePanel {
                   // carry two glyphs at once and neither says which of them the
                   // other is: a pinned document that is also unsaved otherwise
                   // shows a reader two dots and no way to tell them apart.
-                  title: [`${this.rootUri}/${path}`, pinned && 'pinned beside the diagram', unsaved && 'unsaved']
-                     .filter(part => part !== false)
-                     .join(' — '),
+                  title: [uri, pinned && 'pinned beside the diagram', unsaved && 'unsaved'].filter(part => part !== false).join(' — '),
                   attrs: { type: 'button', 'aria-current': selected ? 'true' : 'false' },
                   onClick: () => this.handlers.onOpenDocument(path)
                },
@@ -266,6 +266,11 @@ export class WorkspacePanel {
          return;
       }
       this.handlers.onOpenDiagnostic({ uri, line });
+   }
+
+   /** The document's URI in Monaco's form, which the server's diagnostics and the client's dirty records carry. */
+   private uriOf(path: string): string {
+      return monaco.Uri.parse(`${this.rootUri}/${path}`).toString();
    }
 
    /** Workspace documents by their path under the root; anything else in full. */

@@ -167,6 +167,11 @@ const TARGETS = [
    // The browser page's wiring. A page IS a browser, so `node:*` here breaks the
    // form; DOM is granted by its tsconfig and reported as such.
    { name: '@hydranium/client-browser', entry: 'packages/client-browser/lib/index.js', resolvePackages: [] },
+   // The Monaco client, behind its own subpath so the `.` entry stays loadable
+   // without Monaco. `monaco-editor-core` is externalised like every other bare
+   // specifier: it touches the DOM at load, which is the page's business and
+   // not a `node:` slip.
+   { name: '@hydranium/client-browser (./monaco)', entry: 'packages/client-browser/lib/monaco/index.js', resolvePackages: [] },
 
    // The portable half of the test-support surface, so a browser-hosted test
    // tier can load the doubles. Worth saying why these are listed at all:
